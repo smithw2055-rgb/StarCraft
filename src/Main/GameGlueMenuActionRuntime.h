@@ -28,8 +28,8 @@ inline void HandleGlueMenuAction(
         {
             Campaign.SetProgressTarget(Mission.Expansion, Mission.Race, Mission.Mission);
             SetMapPath(Mission.Path);
+            StartGame();
         }
-        StartGame();
     }
     else if (Action == "start_original" || Action == "start_expansion" ||
              Action == "start_custom_game")

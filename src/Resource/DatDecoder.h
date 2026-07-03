@@ -26,6 +26,8 @@ struct UnitEntry
     uint32_t GasCost = 0;
     uint16_t SupplyCost = 1;
     uint16_t FlingyID = 0;
+    uint16_t Subunit1ID = 228;
+    uint16_t Subunit2ID = 228;
     uint16_t WeaponID = 0;
     uint16_t WeaponID2 = 0;
     uint32_t RequiredTech = 0;

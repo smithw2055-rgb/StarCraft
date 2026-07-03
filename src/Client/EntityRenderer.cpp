@@ -333,7 +333,7 @@ void EntityRenderer::DrawSelectionMarker(Core::ECS::EntityManager& Entities, int
     float FrameHalfH = 0.0f;
     if (mSpriteAssets.HasCache())
     {
-        if (const auto* Frames = ResolveFramesFor(mSpriteAssets, (int)RenderComp->ImageID);
+        if (const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->ImageID);
             Frames && !Frames->empty())
         {
             const int FrameIndex = std::clamp(RenderComp->FrameIndex, 0, (int)Frames->size() - 1);
@@ -395,7 +395,9 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
     if (!Trans || !RenderComp)
         return;
 
-    const auto* Frames = ResolveFramesFor(mSpriteAssets, (int)Node.ImageID);
+    const auto* Frames = Node.UseSpriteID ?
+        mSpriteAssets.GetSpriteOverlayFrames(Node.ImageID) :
+        mSpriteAssets.GetDatImageFrames(Node.ImageID);
     if (!Frames || Frames->empty())
         return;
 
@@ -510,7 +512,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
 
-        const auto* Frames = mSpriteAssets.HasCache() ? ResolveFramesFor(mSpriteAssets, (int)RenderComp->ImageID) : nullptr;
+        const auto* Frames = mSpriteAssets.HasCache() ?
+            mSpriteAssets.GetDatImageFrames(RenderComp->ImageID) :
+            nullptr;
         if (Frames && !Frames->empty())
         {
             if (RenderComp->TotalFrames <= 1)
@@ -527,6 +531,30 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                                 0.0f, 0.0f, 1.0f, 1.0f,
                                 RenderComp->Tint, RenderComp->Flipped);
                 DrewSprite = true;
+
+                if (RenderComp->SubunitImageID != UINT32_MAX)
+                {
+                    const auto* SubunitFrames = mSpriteAssets.GetDatImageFrames(RenderComp->SubunitImageID);
+                    if (SubunitFrames && !SubunitFrames->empty())
+                    {
+                        const int SubFrameIndex = std::clamp(
+                            RenderComp->FrameIndex, 0, (int)SubunitFrames->size() - 1);
+                        const auto& SubImg = (*SubunitFrames)[SubFrameIndex];
+                        if (SubImg.Valid())
+                        {
+                            const float SubHW = SubImg.Width * 0.5f;
+                            const float SubHH = SubImg.Height * 0.5f;
+                            Draw.DrawSprite(SubImg,
+                                            Trans->Position.X - SubHW,
+                                            Trans->Position.Y - SubHH,
+                                            (float)SubImg.Width,
+                                            (float)SubImg.Height,
+                                            0.0f, 0.0f, 1.0f, 1.0f,
+                                            RenderComp->Tint,
+                                            RenderComp->Flipped);
+                        }
+                    }
+                }
 
                 if (ShowHealthBar)
                 {

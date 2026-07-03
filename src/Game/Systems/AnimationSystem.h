@@ -91,14 +91,16 @@ private:
                           int OffsetY,
                           bool DrawAbove,
                           bool Flipped,
-                          float Lifetime);
+                          float Lifetime,
+                          bool UseSpriteID = false);
     void AddImageTreeNode(int EntityID,
                           int ParentIndex,
                           int ImageID,
                           Core::Math::Vec2 Offset,
                           bool DrawAbove,
                           bool Flipped,
-                          float Lifetime);
+                          float Lifetime,
+                          bool UseSpriteID = false);
     void StartImageNodeScript(Components::ImageSubnode& Node);
     void ConsumeImageNodeEvents(int EntityID,
                                 int NodeIndex,

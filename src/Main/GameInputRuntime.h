@@ -159,6 +159,11 @@ inline void HandleClientWorldClickCommands(
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
         }
+        else if (Hud.IsPointInHudBand(MouseX, MouseY, ViewportWidth, ViewportHeight))
+        {
+            Client.CancelPointerGesture();
+            ConsumedLeftClick = true;
+        }
 
         if (!ConsumedLeftClick && Session.IsEcsInitialized() && Hud.HasPendingTarget())
         {
@@ -190,9 +195,14 @@ inline void HandleClientWorldClickCommands(
 
     if (Session.IsEcsInitialized() && Core::Platform::IsMouseButtonReleased(1) && !InGui)
     {
+        const bool InHudBand = Hud.IsPointInHudBand(MouseX, MouseY, ViewportWidth, ViewportHeight);
         if (Hud.HasPendingTarget())
         {
             Hud.CancelPendingTarget();
+            Client.CancelPointerGesture();
+        }
+        else if (InHudBand)
+        {
             Client.CancelPointerGesture();
         }
         else

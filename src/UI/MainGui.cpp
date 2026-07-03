@@ -1,6 +1,12 @@
 #include "MainGui.h"
 #include "Game/Components.h"
+#include "Game/Races/RaceDef.h"
 #include "Core/ECS/EntityManager.h"
+#include "UI/HudPortrait.h"
+
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <iostream>
 #include <cmath>
 
@@ -10,6 +16,7 @@ namespace Game::Client::UI
 bool MainGui::Init(const std::string& AssetRoot, int ScreenW, int ScreenH,
                          const std::string& XamlPath)
 {
+    AssetRoot_ = AssetRoot;
     return Host_.Initialize(AssetRoot, ScreenW, ScreenH, XamlPath);
 }
 
@@ -78,7 +85,8 @@ bool MainGui::IsPointInHud(float X, float Y) const
     if (Host_.HitMinimapButton(X, Y) >= 0) return true;
     if (Host_.HitMultiSelection(X, Y) >= 0) return true;
 
-    return Y >= static_cast<float>(Host_.GetHudHeight());
+    const float HudTop = static_cast<float>(std::max(0, Host_.GetViewportHeight() - Host_.GetHudHeight()));
+    return Y >= HudTop;
 }
 
 void MainGui::SetResources(int Minerals, int Gas, int SupplyUsed, int SupplyMax,
@@ -217,8 +225,44 @@ void MainGui::UpdateCommandCard(Core::ECS::EntityManager& Entities,
 
 std::string MainGui::GetPortraitUri(int ChkUnitId) const
 {
-    (void)ChkUnitId;
-    return ""; // No portrait images yet; placeholder
+    const int TerranDefId = Game::Races::GetTerranDefIDByChkUnitID(ChkUnitId);
+    const std::string PortraitKey = ResolvePortraitKeyForSelection(TerranDefId);
+    if (PortraitKey.empty() || AssetRoot_.empty())
+        return {};
+
+    const std::filesystem::path PortraitDir =
+        std::filesystem::path(AssetRoot_) / "portrait" / PortraitKey;
+    if (!std::filesystem::exists(PortraitDir) || !std::filesystem::is_directory(PortraitDir))
+        return {};
+
+    std::vector<std::filesystem::path> IdleClips;
+    for (const auto& Entry : std::filesystem::directory_iterator(PortraitDir))
+    {
+        if (!Entry.is_regular_file())
+            continue;
+
+        std::string FileName = Entry.path().filename().string();
+        std::string Ext = Entry.path().extension().string();
+        std::transform(FileName.begin(), FileName.end(), FileName.begin(),
+            [](unsigned char C) { return (char)std::tolower(C); });
+        std::transform(Ext.begin(), Ext.end(), Ext.begin(),
+            [](unsigned char C) { return (char)std::tolower(C); });
+
+        if (Ext == ".webm" && FileName.find("fid") != std::string::npos)
+            IdleClips.push_back(Entry.path());
+    }
+
+    if (IdleClips.empty())
+        return {};
+
+    std::sort(IdleClips.begin(), IdleClips.end(), [](const auto& A, const auto& B)
+    {
+        return A.filename().string() < B.filename().string();
+    });
+
+    std::string Relative = "portrait/" + PortraitKey + "/" + IdleClips.front().filename().string();
+    std::replace(Relative.begin(), Relative.end(), '\\', '/');
+    return Relative;
 }
 
 } // namespace Game::Client::UI

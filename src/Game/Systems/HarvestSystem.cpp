@@ -33,6 +33,39 @@ namespace
             return Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
+
+    float HarvestInteractionRange(const Core::ECS::EntityManager& EM, int TargetResourceID)
+    {
+        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+        const auto* Resource = MutableEM.GetComponent<ResourceComponent>(TargetResourceID);
+        if (!Resource)
+            return 24.0f;
+        return Resource->Type == ResourceType::VespeneGas ? 64.0f : 40.0f;
+    }
+
+    bool IsWithinHarvestRange(Core::ECS::EntityManager& EM, int HarvesterID, int TargetResourceID)
+    {
+        auto* HarvesterTrans = EM.GetComponent<TransformComponent>(HarvesterID);
+        auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetResourceID);
+        if (!HarvesterTrans || !TargetTrans)
+            return false;
+        return HarvesterTrans->Position.DistanceTo(TargetTrans->Position) <=
+               HarvestInteractionRange(EM, TargetResourceID);
+    }
+
+    void IssueHarvestMove(Core::ECS::EntityManager& EM,
+                          int HarvesterID,
+                          int TargetResourceID,
+                          Core::Math::Vec2 TargetPosition)
+    {
+        CommandSystem::IssueMove(EM, {HarvesterID}, TargetPosition);
+        if (auto* Cmd = EM.GetComponent<CommandComponent>(HarvesterID))
+        {
+            Cmd->CurrentCommand = CommandType::Harvest;
+            Cmd->TargetEntityID = TargetResourceID;
+            Cmd->TargetPosition = TargetPosition;
+        }
+    }
 }
 
 bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
@@ -120,7 +153,7 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         Cmd->TargetEntityID = TargetResourceID;
 
         if (ResTarget)
-            CommandSystem::IssueMove(EM, {ID}, ResTarget->Position);
+            IssueHarvestMove(EM, ID, TargetResourceID, ResTarget->Position);
 
         IssuedAny = true;
     }
@@ -223,13 +256,27 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 break;
             }
 
+            auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID);
+            if (ResTarget && IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID))
+            {
+                Harvest->State = HarvestState::Mining;
+                Harvest->MineTimer = 0.0f;
+                if (auto* PathComp = EM.GetComponent<PathfindingComponent>(ID))
+                {
+                    PathComp->Path.clear();
+                    PathComp->PathIndex = 0;
+                    PathComp->CurrentSpeed = 0.0f;
+                    PathComp->CurrentVelocity = {0.0f, 0.0f};
+                }
+                break;
+            }
+
             auto* Path = EM.GetComponent<PathfindingComponent>(ID);
             if (!Path || Path->Path.empty())
             {
-                auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID);
                 if (ResTarget)
                 {
-                    CommandSystem::IssueMove(EM, {ID}, ResTarget->Position);
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
                 }
                 else
                 {
@@ -238,19 +285,6 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                         Cmd->CurrentCommand = CommandType::Stop;
                 }
                 return;
-            }
-
-            float MiningRange = 24.0f;
-            auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID);
-            if (ResTarget && Trans->Position.DistanceTo(ResTarget->Position) <= MiningRange)
-            {
-                Harvest->State = HarvestState::Mining;
-                Harvest->MineTimer = 0.0f;
-                if (auto* PathComp = EM.GetComponent<PathfindingComponent>(ID))
-                {
-                    PathComp->Path.clear();
-                    PathComp->PathIndex = 0;
-                }
             }
             break;
         }
@@ -293,7 +327,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                         if (auto* DepotTrans =
                                 EM.GetComponent<TransformComponent>(Harvest->ReturnBuildingID))
                         {
-                            CommandSystem::IssueMove(EM, {ID}, DepotTrans->Position);
+                            IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
                         }
                     }
                 }
@@ -314,7 +348,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 if (auto* DepotTrans =
                         EM.GetComponent<TransformComponent>(Harvest->ReturnBuildingID))
                 {
-                    CommandSystem::IssueMove(EM, {ID}, DepotTrans->Position);
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
                 }
                 return;
             }
@@ -349,7 +383,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                         if (auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID))
                         {
                             Harvest->State = HarvestState::MovingToResource;
-                            CommandSystem::IssueMove(EM, {ID}, ResTarget->Position);
+                            IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
                         }
                     }
 
@@ -361,7 +395,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 }
                 else
                 {
-                    CommandSystem::IssueMove(EM, {ID}, DepotTrans->Position);
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
                 }
             }
             break;

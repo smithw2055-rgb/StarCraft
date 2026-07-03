@@ -16,8 +16,10 @@
 namespace Game::Client::GameLoop::GameEntitySpawnRuntime
 {
 
-template <typename ResolveImageIdT>
-inline void SpawnChkEntities(GameSession& Session, ResolveImageIdT&& ResolveImageID)
+template <typename ResolveImageIdT, typename ResolveSubunitImageIdT>
+inline void SpawnChkEntities(GameSession& Session,
+                             ResolveImageIdT&& ResolveImageID,
+                             ResolveSubunitImageIdT&& ResolveSubunitImageID)
 {
     auto& EM = Session.Entities();
     for (const auto& UnitPlacement : Session.GetChkUnits())
@@ -70,6 +72,7 @@ inline void SpawnChkEntities(GameSession& Session, ResolveImageIdT&& ResolveImag
 
         auto& RenderComp = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
         RenderComp.ImageID = (uint32_t)ResolveImageID(UnitPlacement.UnitID);
+        RenderComp.SubunitImageID = (uint32_t)ResolveSubunitImageID(UnitPlacement.UnitID);
         RenderComp.FrameIndex = 0;
         RenderComp.TotalFrames = 1;
         RenderComp.Layer = IsBuildingChkId(UnitPlacement.UnitID) ?
@@ -121,6 +124,13 @@ inline void SpawnChkEntities(GameSession& Session, ResolveImageIdT&& ResolveImag
             Build.TotalBuildTime = 120.0f;
             Build.BuildProgress = Build.TotalBuildTime;
             Build.BuildingDefID = TerranDefID;
+            if (TerranDefID == Game::Races::GetUnitDefID("Refinery"))
+            {
+                auto& Res = EM.AddComponent<Game::Components::ResourceComponent>(EntityID);
+                Res.Type = Game::Components::ResourceType::VespeneGas;
+                Res.Amount = UnitPlacement.ResourceAmount > 0 ? (int)UnitPlacement.ResourceAmount : 5000;
+                Res.MaxAmount = Res.Amount;
+            }
         }
         else
         {

@@ -84,12 +84,6 @@ bool ResourceCache::LoadPortraitClip(const std::string& PortraitKey, PortraitCli
             FramesOpt = DecodeVideoFramesFromFile(ClipPath);
         if (!FramesOpt || FramesOpt->empty())
         {
-            auto FrameOpt = DecodeFirstVideoFrameWithFfmpeg(ClipPath);
-            if (FrameOpt)
-                FramesOpt = std::vector<DecodedVideoFrame>{ std::move(*FrameOpt) };
-        }
-        if (!FramesOpt || FramesOpt->empty())
-        {
             Core::Utils::Logger::Warning("ResourceCache",
                 "Failed to decode portrait clip: " + ClipPath.string());
             continue;

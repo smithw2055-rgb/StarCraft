@@ -19,6 +19,10 @@ class TextBlock;
 class Canvas;
 }
 
+namespace AeroApp {
+class MediaElement;
+}
+
 namespace Game::Client::UI
 {
 
@@ -108,7 +112,8 @@ public:
 
     bool IsActive() const { return Initialized_; }
 
-    int GetHudHeight() const { return kHudHeight; }
+    int GetHudHeight() const { return HudHeight_; }
+    int GetViewportHeight() const { return Height_; }
 
 private:
     static constexpr int kHudHeight = 280;
@@ -118,6 +123,7 @@ private:
     void LogMissingElements() const;
     void CacheRects();
     void ApplyState();
+    void UpdateLayoutMetrics();
 
     ScreenRect GetElementRect(Aero::FrameworkElement* Element) const;
     void SetElementVisibility(Aero::FrameworkElement* Element, bool Visible);
@@ -131,10 +137,12 @@ private:
     Aero::TextBlock* GasText_ = nullptr;
     Aero::TextBlock* SupplyText_ = nullptr;
     Aero::TextBlock* TimeText_ = nullptr;
+    Aero::FrameworkElement* BottomHudScale_ = nullptr;
 
     Aero::FrameworkElement* InfoPanel_ = nullptr;
     Aero::Border* PortraitViewport_ = nullptr;
     Aero::Image* PortraitImage_ = nullptr;
+    AeroApp::MediaElement* PortraitMedia_ = nullptr;
     Aero::TextBlock* UnitNameText_ = nullptr;
 
     Aero::Border* HpFill_ = nullptr;
@@ -190,6 +198,7 @@ private:
     int PhysicalWidth_ = 0;
     int PhysicalHeight_ = 0;
     float DpiScale_ = 1.0f;
+    int HudHeight_ = kHudHeight;
     bool Initialized_ = false;
     bool HasLastUpdateTime_ = false;
     double LastUpdateTime_ = 0.0;
@@ -214,6 +223,7 @@ private:
     std::string QueueTextValue_;
     float QueueProgressRatio_ = 0.0f;
     std::string PortraitIconUri_;
+    std::string AppliedPortraitMediaUri_;
 
     bool TooltipVisible_ = false;
     std::string TooltipValue_;

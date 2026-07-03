@@ -172,10 +172,11 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        int OffsetY,
                                        bool DrawAbove,
                                        bool Flipped,
-                                       float Lifetime)
+                                       float Lifetime,
+                                       bool UseSpriteID)
 {
     AddImageTreeNode(EntityID, -1, ImageID, Core::Math::Vec2{(float)OffsetX, (float)OffsetY},
-                     DrawAbove, Flipped, Lifetime);
+                     DrawAbove, Flipped, Lifetime, UseSpriteID);
 }
 
 void AnimationSystem::AddImageTreeNode(int EntityID,
@@ -184,7 +185,8 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        Core::Math::Vec2 Offset,
                                        bool DrawAbove,
                                        bool Flipped,
-                                       float Lifetime)
+                                       float Lifetime,
+                                       bool UseSpriteID)
 {
     if (ImageID < 0)
         return;
@@ -200,12 +202,13 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             Node.ParentIndex == ParentIndex &&
             Node.Offset.X == Offset.X &&
             Node.Offset.Y == Offset.Y &&
-            Node.DrawAbove == DrawAbove)
+            Node.DrawAbove == DrawAbove &&
+            Node.UseSpriteID == UseSpriteID)
         {
             Node.Visible = true;
             Node.Flipped = Flipped;
             Node.LifetimeRemaining = Lifetime;
-            if (!Node.VM.IsRunning())
+            if (!Node.UseSpriteID && !Node.VM.IsRunning())
                 StartImageNodeScript(Node);
             return;
         }
@@ -221,9 +224,11 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             Node.Offset = Offset;
             Node.DrawAbove = DrawAbove;
             Node.Flipped = Flipped;
+            Node.UseSpriteID = UseSpriteID;
             Node.Visible = true;
             Node.LifetimeRemaining = Lifetime;
-            StartImageNodeScript(Node);
+            if (!Node.UseSpriteID)
+                StartImageNodeScript(Node);
             return;
         }
     }
@@ -239,9 +244,11 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     Node.Offset = Offset;
     Node.DrawAbove = DrawAbove;
     Node.Flipped = Flipped;
+    Node.UseSpriteID = UseSpriteID;
     Node.Visible = true;
     Node.LifetimeRemaining = Lifetime;
-    StartImageNodeScript(Node);
+    if (!Node.UseSpriteID)
+        StartImageNodeScript(Node);
     Tree->Nodes.push_back(Node);
 }
 
@@ -298,10 +305,14 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
-            case Game::IScriptEventType::CreateSpriteOverlay:
                 AddImageTreeNode(EntityID, NodeIndex, Event.A,
                                  Core::Math::Vec2{(float)Event.B, (float)Event.C},
                                  Event.D != 0, false, NodeLifetime);
+                break;
+            case Game::IScriptEventType::CreateSpriteOverlay:
+                AddImageTreeNode(EntityID, NodeIndex, Event.A,
+                                 Core::Math::Vec2{(float)Event.B, (float)Event.C},
+                                 Event.D != 0, false, NodeLifetime, true);
                 break;
             default:
                 break;
@@ -368,7 +379,8 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
             case Game::IScriptEventType::CreateSpriteOverlay:
                 AddImageTreeNode(EntityID, Event.A, Event.B, Event.C,
                                  Event.D != 0, false,
-                                 TransientOverlay ? 0.35f : -1.0f);
+                                 TransientOverlay ? 0.35f : -1.0f,
+                                 true);
                 break;
             case Game::IScriptEventType::WarpOverlay:
                 SpawnIScriptOverlay(EntityID, Trans, Event.A, 0, 0, 1.0f, true);
@@ -419,13 +431,6 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     const bool IsWorking =
         Prod && (Prod->CurrentTrainingUnitDefID >= 0 || !Prod->Queue.empty());
     const bool IsPendingAttack = Combat && Combat->PendingAttackFrame;
-    if (Bldg && !Bldg->UnderConstruction && !IsWorking && !State.WasWorking && !IsPendingAttack)
-    {
-        if (State.AnimID != -1 || State.WasUnderConstruction)
-            ClearImageTree(EntityID);
-        State = EntityScriptState{};
-        return true;
-    }
 
     EnsureIScriptLoaded();
     if (!sIScriptDB.IsLoaded())
@@ -467,14 +472,13 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     {
         TargetAnim = Game::IScriptAnims::Anim_WorkingToIdle;
     }
-    else if (Bldg)
-    {
-        ClearImageTree(EntityID);
-        return false;
-    }
-    else if (HasAnim(Game::IScriptAnims::Anim_Init))
+    else if (Bldg && HasAnim(Game::IScriptAnims::Anim_Init))
     {
         TargetAnim = Game::IScriptAnims::Anim_Init;
+    }
+    else if (Bldg)
+    {
+        return false;
     }
     else
     {
@@ -484,8 +488,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     const bool IsTransientAnim =
         IsPendingAttack ||
         IsWorking ||
-        State.WasWorking ||
-        State.WasUnderConstruction;
+        State.WasWorking;
     if (State.ImageID == (int)Render.ImageID &&
         State.ScriptID == ImageInfo->IScriptID &&
         State.AnimID == TargetAnim &&
@@ -564,7 +567,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     else
     {
         State.WasWorking = IsWorking;
-        if (!Bldg)
+        if (!Bldg || !Bldg->UnderConstruction)
             State.WasUnderConstruction = false;
     }
 

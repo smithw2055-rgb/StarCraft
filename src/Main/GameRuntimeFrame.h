@@ -89,7 +89,8 @@ inline void RenderGameRuntimeFrame(GameRuntimeState& Runtime)
         Runtime.Session.Game,
         Runtime.Session.Campaign,
         Runtime.App.Menu,
-        Runtime.Client.Hud);
+        Runtime.Client.Hud,
+        !(Runtime.App.Gui.UseGui && Runtime.App.Gui.MainGui.IsActive()));
     RenderGuiPresentationLayer(Runtime.App.Gui);
     Runtime.App.Runtime.UpdateFrameStats();
 }

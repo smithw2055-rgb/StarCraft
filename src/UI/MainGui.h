@@ -70,6 +70,7 @@ private:
     std::string GetPortraitUri(int ChkUnitId) const;
 
     GuiHudHost Host_;
+    std::string AssetRoot_;
 
     int Minerals_ = 50;
     int Gas_ = 0;

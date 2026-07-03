@@ -246,8 +246,12 @@ void MovementSystem::Update(float DeltaTime)
             Core::Math::Vec2 ToTarget = {Waypoint.X - Trans->Position.X,
                                          Waypoint.Y - Trans->Position.Y};
             float Dist = ToTarget.Length();
+            const bool IsFinalWaypoint = PathComp->PathIndex >= (int)Path.size() - 1;
+            const float ArrivalTolerance = IsFinalWaypoint
+                ? std::max(PathComp->NodeTolerance, (float)PathComp->CollisionRadius)
+                : PathComp->NodeTolerance;
 
-            if (Dist < PathComp->NodeTolerance)
+            if (Dist < ArrivalTolerance)
             {
                 PathComp->PathIndex++;
                 continue;
@@ -303,6 +307,15 @@ void MovementSystem::Update(float DeltaTime)
                 DidMove = true;
             }
             break;
+        }
+
+        if (PathComp->PathIndex >= (int)Path.size())
+        {
+            Path.clear();
+            PathComp->PathIndex = 0;
+            PathComp->CurrentSpeed = 0.0f;
+            PathComp->CurrentVelocity = {0.0f, 0.0f};
+            DidMove = false;
         }
 
         // Update render facing

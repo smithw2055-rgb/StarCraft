@@ -19,13 +19,15 @@ inline void RenderGameplayUiFrame(
     GameSession& Session,
     CampaignRuntime& Campaign,
     GameMenuRuntime& Menu,
-    UI::Hud& Hud)
+    UI::Hud& Hud,
+    bool DrawNativeHud)
 {
     const int ViewportWidth = Core::Platform::GetWindowWidth();
     const int ViewportHeight = Core::Platform::GetWindowHeight();
 
     Render::g_Draw2D.BeginFrameScreen();
-    RenderNativeHudFrame(Hud, Session, Client, ViewportWidth, ViewportHeight);
+    if (DrawNativeHud)
+        RenderNativeHudFrame(Hud, Session, Client, ViewportWidth, ViewportHeight);
 
     RenderHudMenuButton(ViewportWidth, ViewportHeight, Menu.IsOpen());
 

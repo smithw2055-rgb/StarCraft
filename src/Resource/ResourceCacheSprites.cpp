@@ -34,6 +34,41 @@ const std::vector<GpuImage>* ResourceCache::GetSpriteFrames(uint32_t ImageID)
     std::string GrpPath = mData.Loader.ResolveGrpPath(ImageID);
     if (GrpPath.empty()) return nullptr;
 
+    return LoadSpriteFramesForPath(ImageID, GrpPath);
+}
+
+const std::vector<GpuImage>* ResourceCache::GetDatImageFrames(uint32_t ImageID)
+{
+    constexpr uint32_t kDatImageCacheFlag = 0x80000000u;
+    const uint32_t CacheKey = kDatImageCacheFlag | ImageID;
+    auto It = mSprites.FramesByImageId.find(CacheKey);
+    if (It != mSprites.FramesByImageId.end()) return &It->second;
+
+    if (const auto* Relation = mData.Loader.FindImageRelationByID(ImageID);
+        Relation && Relation->IsShadow())
+    {
+        auto& Out = mSprites.FramesByImageId[CacheKey];
+        return &Out;
+    }
+
+    std::string GrpPath = mData.Loader.ResolveImageGrpPath(ImageID);
+    if (GrpPath.empty()) return nullptr;
+
+    return LoadSpriteFramesForPath(CacheKey, GrpPath, "DAT image");
+}
+
+const std::vector<GpuImage>* ResourceCache::GetSpriteOverlayFrames(uint32_t SpriteID)
+{
+    const auto* Sprite = mData.Loader.FindSpriteByID(SpriteID);
+    if (!Sprite)
+        return nullptr;
+    return GetDatImageFrames(Sprite->ImageID);
+}
+
+const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t CacheKey,
+                                                                    const std::string& GrpPath,
+                                                                    const char* DebugLabel)
+{
     if (GrpPath.size() > 4 && ToLowerCopy(GrpPath.substr(GrpPath.size() - 4)) == ".grp")
     {
         const std::string HdPath = GrpPath.substr(0, GrpPath.size() - 4) + ".dds.grp";
@@ -43,13 +78,14 @@ const std::vector<GpuImage>* ResourceCache::GetSpriteFrames(uint32_t ImageID)
             auto HdFrames = LoadDdsGrpRgbaFrames(*HdData);
             if (HdFrames && !HdFrames->empty())
             {
-                auto& Out = mSprites.FramesByImageId[ImageID];
+                auto& Out = mSprites.FramesByImageId[CacheKey];
                 Out.reserve(HdFrames->size());
                 for (const auto& Frame : *HdFrames)
                     Out.push_back(UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data()));
 
                 Core::Utils::Logger::Info("ResourceCache",
-                    "Loaded HD unit sprite: ImageID=" + std::to_string(ImageID) +
+                    std::string("Loaded HD unit sprite: ") +
+                    (DebugLabel ? DebugLabel : "ImageID") + "=" + std::to_string(CacheKey) +
                     " -> " + HdPath + " (" + std::to_string(Out.size()) + " frames)");
                 return &Out;
             }
@@ -78,7 +114,7 @@ const std::vector<GpuImage>* ResourceCache::GetSpriteFrames(uint32_t ImageID)
     if (!GrpData)
     {
         Core::Utils::Logger::Warning("ResourceCache",
-            "GRP not found: " + GrpPath + " (ImageID=" + std::to_string(ImageID) + ")");
+            "GRP not found: " + GrpPath + " (cacheKey=" + std::to_string(CacheKey) + ")");
         return nullptr;
     }
 
@@ -90,17 +126,18 @@ const std::vector<GpuImage>* ResourceCache::GetSpriteFrames(uint32_t ImageID)
         return nullptr;
     }
 
-    auto& Out = mSprites.FramesByImageId[ImageID];
+    auto& Out = mSprites.FramesByImageId[CacheKey];
     Out.reserve(SpriteOpt->FrameCount());
     for (auto& F : SpriteOpt->Frames)
     {
         Out.push_back(UploadRgbaFull(F.Width, F.Height, F.Rgba.data()));
     }
 
-    if (ImageID >= 100 && ImageID <= 103)
+    if (DebugLabel || (CacheKey >= 100 && CacheKey <= 103))
     {
         Core::Utils::Logger::Info("ResourceCache",
-            "Resource GRP: ImageID=" + std::to_string(ImageID) +
+            "Resource GRP: " + std::string(DebugLabel ? DebugLabel : "ImageID") +
+            "=" + std::to_string(CacheKey) +
             " -> " + GrpPath + " (" + std::to_string(Out.size()) + " frames)");
     }
     return &Out;

@@ -34,16 +34,31 @@ uint32_t SpriteAssetCacheView::ResolveImageID(int ChkUnitID) const
     return mCache ? mCache->ResolveImageID(ChkUnitID) : 0;
 }
 
+uint32_t SpriteAssetCacheView::ResolveSubunitImageID(int ChkUnitID) const
+{
+    return mCache ? mCache->ResolveSubunitImageID(ChkUnitID) : UINT32_MAX;
+}
+
 const std::vector<GpuImage>* SpriteAssetCacheView::GetSpriteFrames(uint32_t ImageID) const
 {
     return mCache ? mCache->GetSpriteFrames(ImageID) : nullptr;
+}
+
+const std::vector<GpuImage>* SpriteAssetCacheView::GetDatImageFrames(uint32_t ImageID) const
+{
+    return mCache ? mCache->GetDatImageFrames(ImageID) : nullptr;
+}
+
+const std::vector<GpuImage>* SpriteAssetCacheView::GetSpriteOverlayFrames(uint32_t SpriteID) const
+{
+    return mCache ? mCache->GetSpriteOverlayFrames(SpriteID) : nullptr;
 }
 
 const std::vector<GpuImage>* SpriteAssetCacheView::GetSpriteFramesForChkUnit(int ChkUnitID) const
 {
     if (!mCache || ChkUnitID < 0)
         return nullptr;
-    return mCache->GetSpriteFrames(mCache->ResolveImageID(ChkUnitID));
+    return mCache->GetDatImageFrames(mCache->ResolveImageID(ChkUnitID));
 }
 
 bool TilesetAssetCacheView::SetTilesetPalette(const std::string& TilesetName) const

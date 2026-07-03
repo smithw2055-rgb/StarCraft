@@ -20,6 +20,8 @@ public:
     void Shutdown();
     void StartGame();
     void SetMapPathOverride(std::string MapPath);
+    void SetInitialCameraOverride(float WorldX, float WorldY);
+    void SetInitialGuiHudEnabled(bool Enabled);
 
     // Public accessors for platform callbacks to reach game state
     bool IsInitialized() const { return mRuntime.App.Runtime.Initialized; }
@@ -46,6 +48,10 @@ private:
     void InitGameSystems();
 
     GameRuntimeState mRuntime;
+    bool mHasInitialCameraOverride = false;
+    float mInitialCameraX = 0.0f;
+    float mInitialCameraY = 0.0f;
+    bool mInitialGuiHudEnabled = false;
 
     // Glue menu
 };

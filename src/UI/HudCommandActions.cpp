@@ -12,6 +12,7 @@ void Hud::CancelPendingTarget()
     mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::None;
     mState.CommandPanel.PendingBuildDefID = -1;
     mState.CommandPanel.PendingCommandId = HudCommandId::None;
+    mState.ActiveCommand = -1;
 }
 
 void Hud::OnButtonInvoked(int ButtonIndex)
@@ -21,16 +22,16 @@ void Hud::OnButtonInvoked(int ButtonIndex)
     auto& Button = mState.CommandPanel.ButtonDefs[(size_t)ButtonIndex];
     if (Button.Label.empty())
         return;
-
-    mState.ActiveCommand = ButtonIndex;
     if (!Button.Enabled)
         return;
 
     CancelPendingTarget();
+    mState.ActiveCommand = ButtonIndex;
 
     if (Button.Kind == ActionKind::OpenSubmenu || Button.Kind == ActionKind::Back)
     {
         mState.CommandPanel.PanelPage = Button.NextMenuPage;
+        mState.ActiveCommand = -1;
         return;
     }
 

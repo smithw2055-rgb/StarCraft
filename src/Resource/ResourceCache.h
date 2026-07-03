@@ -55,6 +55,8 @@ public:
     // Sprite lookup by CHK unit ID. Returns array of GPU images (one per frame).
     // Cached internally. Returns nullptr if the sprite could not be loaded.
     const std::vector<GpuImage>* GetSpriteFrames(uint32_t ImageID);
+    const std::vector<GpuImage>* GetDatImageFrames(uint32_t ImageID);
+    const std::vector<GpuImage>* GetSpriteOverlayFrames(uint32_t SpriteID);
 
     // Current active palette (set by SetTilesetPalette or unit palette)
     const ColorPalette& GetPalette() const { return mData.ActivePalette; }
@@ -102,6 +104,7 @@ public:
 
     // Entity sprite keys now use CHK unit IDs directly.
     uint32_t ResolveImageID(int ChkUnitID);
+    uint32_t ResolveSubunitImageID(int ChkUnitID);
 
     // Read .pal via GameDataLoader convenience
     std::optional<ColorPalette> ReadUnitPalette();
@@ -147,6 +150,9 @@ private:
     bool LoadBlinkGraphics();
     bool LoadCursorGraphics(const GrpDecodeOptions& CursorOptions);
     bool BuildTilesetImages(const std::string& TilesetName);
+    const std::vector<GpuImage>* LoadSpriteFramesForPath(uint32_t CacheKey,
+                                                         const std::string& GrpPath,
+                                                         const char* DebugLabel = nullptr);
     std::optional<std::vector<uint8_t>> ReadExtractedAsset(const std::string& Path);
     std::vector<std::string> BuildExtractedAssetCandidates(const std::string& Path) const;
     bool LoadPortraitClip(const std::string& PortraitKey, PortraitClip& OutClip);

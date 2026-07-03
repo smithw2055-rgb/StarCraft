@@ -18,6 +18,7 @@
 #include <NsGui/SolidColorBrush.h>
 #include <NsGui/InputEnums.h>
 #include <NsDrawing/Color.h>
+#include <NsApp/MediaElement.h>
 #if defined(SOKOL_D3D11)
 #include <NsRender/D3D11Factory.h>
 #include "third_party/sokol/sokol_gfx.h"
@@ -33,15 +34,15 @@ namespace Game::Client::UI
 namespace
 {
 
-int ToLogicalPixels(int Physical, float DpiScale)
+float GetGameUiScale(int LogicalWidth, int LogicalHeight)
 {
-    if (DpiScale <= 1.0f) return Physical;
-    return static_cast<int>(std::lround(static_cast<float>(Physical) / DpiScale));
-}
-
-float GetDpiScale()
-{
-    float Scale = sapp_dpi_scale();
+    const int FbW = std::max(1, sapp_width());
+    const int FbH = std::max(1, sapp_height());
+    const int LogW = std::max(1, LogicalWidth);
+    const int LogH = std::max(1, LogicalHeight);
+    const float ScaleX = static_cast<float>(FbW) / static_cast<float>(LogW);
+    const float ScaleY = static_cast<float>(FbH) / static_cast<float>(LogH);
+    const float Scale = std::min(ScaleX, ScaleY);
     return Scale > 1.0f ? Scale : 1.0f;
 }
 
@@ -79,6 +80,12 @@ uint32_t HealthBarTint(float Ratio)
     return 0xFFFF0000; // red
 }
 
+int ComputeHudHeight(int LogicalHeight)
+{
+    const float Target = static_cast<float>(std::max(1, LogicalHeight)) * 0.235f;
+    return static_cast<int>(std::lround(std::clamp(Target, 128.0f, 220.0f)));
+}
+
 } // namespace
 
 GuiHudHost::~GuiHudHost()
@@ -92,11 +99,12 @@ bool GuiHudHost::Initialize(const std::string& AssetRoot, int Width, int Height,
     if (Initialized_) return true;
 
     AssetRoot_ = AssetRoot;
-    DpiScale_ = GetDpiScale();
-    PhysicalWidth_ = std::max(1, Width);
-    PhysicalHeight_ = std::max(1, Height);
-    Width_ = ToLogicalPixels(Width, DpiScale_);
-    Height_ = ToLogicalPixels(Height, DpiScale_);
+    Width_ = std::max(1, Width);
+    Height_ = std::max(1, Height);
+    DpiScale_ = GetGameUiScale(Width_, Height_);
+    PhysicalWidth_ = std::max(1, static_cast<int>(std::lround(Width_ * DpiScale_)));
+    PhysicalHeight_ = std::max(1, static_cast<int>(std::lround(Height_ * DpiScale_)));
+    HudHeight_ = ComputeHudHeight(Height_);
 
     std::string ResolvedXamlPath = XamlPath.empty() ? "ui/Hud.xaml" : XamlPath;
 
@@ -121,6 +129,8 @@ bool GuiHudHost::Initialize(const std::string& AssetRoot, int Width, int Height,
         std::cerr << "[Gui] Failed to load XAML: " << ResolvedXamlPath << std::endl;
         return false;
     }
+    Root_->SetWidth(static_cast<float>(Width_));
+    Root_->SetHeight(static_cast<float>(Height_));
 
     std::cout << "[Gui] Loaded XAML: " << ResolvedXamlPath << std::endl;
 
@@ -154,6 +164,7 @@ bool GuiHudHost::Initialize(const std::string& AssetRoot, int Width, int Height,
     CacheElements();
     LogMissingElements();
     Initialized_ = true;
+    UpdateLayoutMetrics();
     ApplyState();
     View_->Update(0.0);
     CacheRects();
@@ -184,11 +195,11 @@ void GuiHudHost::Resize(int Width, int Height)
 {
     if (Width <= 0 || Height <= 0 || !View_) return;
 
-    float Scale = GetDpiScale();
-    int LogicalWidth = ToLogicalPixels(Width, Scale);
-    int LogicalHeight = ToLogicalPixels(Height, Scale);
-    int PhysW = std::max(1, Width);
-    int PhysH = std::max(1, Height);
+    int LogicalWidth = std::max(1, Width);
+    int LogicalHeight = std::max(1, Height);
+    float Scale = GetGameUiScale(LogicalWidth, LogicalHeight);
+    int PhysW = std::max(1, static_cast<int>(std::lround(LogicalWidth * Scale)));
+    int PhysH = std::max(1, static_cast<int>(std::lround(LogicalHeight * Scale)));
 
     if (PhysicalWidth_ == PhysW && PhysicalHeight_ == PhysH &&
         Width_ == LogicalWidth && Height_ == LogicalHeight &&
@@ -200,7 +211,14 @@ void GuiHudHost::Resize(int Width, int Height)
     Width_ = LogicalWidth;
     Height_ = LogicalHeight;
     DpiScale_ = Scale;
+    HudHeight_ = ComputeHudHeight(Height_);
 
+    if (Root_)
+    {
+        Root_->SetWidth(static_cast<float>(Width_));
+        Root_->SetHeight(static_cast<float>(Height_));
+    }
+    UpdateLayoutMetrics();
     View_->SetScale(DpiScale_);
     View_->SetSize(static_cast<uint32_t>(PhysicalWidth_),
                    static_cast<uint32_t>(PhysicalHeight_));
@@ -218,6 +236,7 @@ void GuiHudHost::Update(double Time)
 
     ApplyState();
     View_->Update(Time);
+    CacheRects();
     (void)Dt;
 }
 
@@ -244,8 +263,8 @@ bool GuiHudHost::HandleEvent(const void* EventPtr)
     if (!Initialized_ || !View_ || !EventPtr) return false;
 
     const sapp_event* E = static_cast<const sapp_event*>(EventPtr);
-    float X = E->mouse_x;
-    float Y = E->mouse_y;
+    float X = E->mouse_x * DpiScale_;
+    float Y = E->mouse_y * DpiScale_;
 
     switch (E->type)
     {
@@ -425,10 +444,12 @@ void GuiHudHost::CacheElements()
     GasText_ = FindAs<Aero::TextBlock>(RootElement, "GasText");
     SupplyText_ = FindAs<Aero::TextBlock>(RootElement, "SupplyText");
     TimeText_ = FindAs<Aero::TextBlock>(RootElement, "TimeText");
+    BottomHudScale_ = FindAs<Aero::FrameworkElement>(RootElement, "BottomHudScale");
 
     InfoPanel_ = FindAs<Aero::FrameworkElement>(RootElement, "InfoPanel");
     PortraitViewport_ = FindAs<Aero::Border>(RootElement, "PortraitViewport");
     PortraitImage_ = FindAs<Aero::Image>(RootElement, "PortraitImage");
+    PortraitMedia_ = FindAs<AeroApp::MediaElement>(RootElement, "PortraitMedia");
     UnitNameText_ = FindAs<Aero::TextBlock>(RootElement, "UnitNameText");
 
     HpFill_ = FindAs<Aero::Border>(RootElement, "HpFill");
@@ -514,9 +535,10 @@ void GuiHudHost::LogMissingElements() const
     LogMissing("GasText", GasText_);
     LogMissing("SupplyText", SupplyText_);
     LogMissing("TimeText", TimeText_);
+    LogMissing("BottomHudScale", BottomHudScale_);
     LogMissing("InfoPanel", InfoPanel_);
     LogMissing("PortraitViewport", PortraitViewport_);
-    LogMissing("PortraitImage", PortraitImage_);
+    LogMissing("PortraitMedia", PortraitMedia_);
     LogMissing("UnitNameText", UnitNameText_);
     LogMissing("HpFill", HpFill_);
     LogMissing("HpText", HpText_);
@@ -561,6 +583,8 @@ void GuiHudHost::CacheRects()
 
 void GuiHudHost::ApplyState()
 {
+    UpdateLayoutMetrics();
+
     // --- Resource Bar ---
     if (MineralText_)
         MineralText_->SetText(std::to_string(Minerals_).c_str());
@@ -638,16 +662,30 @@ void GuiHudHost::ApplyState()
 
     // --- Portrait ---
     if (PortraitImage_)
+        PortraitImage_->SetVisibility(Aero::Visibility_Collapsed);
+    if (PortraitMedia_)
     {
         if (PortraitIconUri_.empty())
         {
-            PortraitImage_->SetVisibility(Aero::Visibility_Collapsed);
+            PortraitMedia_->SetVisibility(Aero::Visibility_Collapsed);
+            if (!AppliedPortraitMediaUri_.empty())
+            {
+                PortraitMedia_->Close();
+                AppliedPortraitMediaUri_.clear();
+            }
         }
         else
         {
-            PortraitImage_->SetVisibility(Aero::Visibility_Visible);
-            PortraitImage_->SetSource(Aero::MakePtr<Aero::BitmapImage>(
-                Aero::Uri(PortraitIconUri_.c_str())));
+            PortraitMedia_->SetVisibility(Aero::Visibility_Visible);
+            if (PortraitIconUri_ != AppliedPortraitMediaUri_)
+            {
+                AppliedPortraitMediaUri_ = PortraitIconUri_;
+                std::cout << "[Gui] PortraitMedia source: " << AppliedPortraitMediaUri_ << std::endl;
+                PortraitMedia_->SetSource(Aero::Uri(PortraitIconUri_.c_str()));
+                PortraitMedia_->SetPosition(Aero::TimeSpan::Zero());
+                PortraitMedia_->SetIsMuted(true);
+                PortraitMedia_->Play();
+            }
         }
     }
 
@@ -769,14 +807,27 @@ ScreenRect GuiHudHost::GetElementRect(Aero::FrameworkElement* Element) const
     Aero::Point ScreenPos = Element->PointToScreen(Aero::Point{0.0f, 0.0f});
     float W = Element->GetActualWidth();
     float H = Element->GetActualHeight();
+    Aero::Point ScreenBottomRight = Element->PointToScreen(Aero::Point{W, H});
 
-    return {ScreenPos.x, ScreenPos.y, W, H};
+    const float InvScale = DpiScale_ > 0.0f ? 1.0f / DpiScale_ : 1.0f;
+    return {
+        ScreenPos.x * InvScale,
+        ScreenPos.y * InvScale,
+        (ScreenBottomRight.x - ScreenPos.x) * InvScale,
+        (ScreenBottomRight.y - ScreenPos.y) * InvScale
+    };
 }
 
 void GuiHudHost::SetElementVisibility(Aero::FrameworkElement* Element, bool Visible)
 {
     if (!Element) return;
     Element->SetVisibility(Visible ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
+}
+
+void GuiHudHost::UpdateLayoutMetrics()
+{
+    if (BottomHudScale_)
+        BottomHudScale_->SetHeight(static_cast<float>(HudHeight_));
 }
 
 } // namespace Game::Client::UI

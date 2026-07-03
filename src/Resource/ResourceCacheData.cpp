@@ -1,6 +1,7 @@
 #include "Resource/ResourceCache.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace Resource::Graphics
@@ -26,7 +27,21 @@ std::optional<ColorPalette> ResourceCache::ReadUnitPalette()
 
 uint32_t ResourceCache::ResolveImageID(int ChkUnitID)
 {
-    return ChkUnitID >= 0 ? (uint32_t)ChkUnitID : 0u;
+    if (ChkUnitID < 0)
+        return 0u;
+
+    const uint32_t ImageID = mData.Loader.ResolveUnitImageID((uint32_t)ChkUnitID);
+    if (ImageID != std::numeric_limits<uint32_t>::max())
+        return ImageID;
+
+    return (uint32_t)ChkUnitID;
+}
+
+uint32_t ResourceCache::ResolveSubunitImageID(int ChkUnitID)
+{
+    if (ChkUnitID < 0)
+        return std::numeric_limits<uint32_t>::max();
+    return mData.Loader.ResolveUnitSubunitImageID((uint32_t)ChkUnitID);
 }
 
 } // namespace Resource::Graphics

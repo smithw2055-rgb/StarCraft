@@ -67,6 +67,9 @@ inline void EnsurePlayableStart(GameSession& Session,
                                 IsMineralUnitT&& IsMineralUnit,
                                 IsGeyserUnitT&& IsGeyserUnit)
 {
+    (void)IsMineralUnit;
+    (void)IsGeyserUnit;
+
     const Game::Client::StartLocation* ChosenStart = nullptr;
     for (const auto& StartLocation : Session.GetMapData().StartLocations)
     {
@@ -86,7 +89,7 @@ inline void EnsurePlayableStart(GameSession& Session,
 
     const int BaseX = ChosenStart->TileX * 32 + 16;
     const int BaseY = ChosenStart->TileY * 32 + 16;
-    const int CommandCenterChkId = 0x6E;
+    const int CommandCenterChkId = 0x6A;
     const int ScvChkId = 0x07;
     const int ResourceRadius = 448;
     const int ResourceRadiusSq = ResourceRadius * ResourceRadius;
@@ -127,11 +130,11 @@ inline void EnsurePlayableStart(GameSession& Session,
         {
             ++WorkerCount;
         }
-        if (EM.GetComponent<Game::Components::ResourceComponent>(EntityId) &&
-            IsNearStart(Trans->Position))
+        auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityId);
+        if (Resource && IsNearStart(Trans->Position))
         {
-            if (IsMineralUnit(Unit->ChkUnitID)) HasNearbyMinerals = true;
-            if (IsGeyserUnit(Unit->ChkUnitID)) HasNearbyGas = true;
+            if (Resource->Type == Game::Components::ResourceType::Minerals) HasNearbyMinerals = true;
+            if (Resource->Type == Game::Components::ResourceType::VespeneGas) HasNearbyGas = true;
         }
     }
 
@@ -170,7 +173,7 @@ inline void EnsurePlayableStart(GameSession& Session,
     }
     if (!HasNearbyGas)
     {
-        SpawnResourceEntity(103, BaseX + 176 * Facing, BaseY - 32 * Facing, 5000);
+        SpawnResourceEntity(188, BaseX + 176 * Facing, BaseY - 32 * Facing, 5000);
         SpawnedAny = true;
     }
 

@@ -22,7 +22,7 @@ const Resource::Graphics::GpuImage* Hud::GetAnimatedSelectionFallbackImage(Core:
     {
         if (auto* Render = Entities.GetComponent<Game::Components::RenderComponent>(mState.Selection.SelectedEntityId))
         {
-            SelectedFrames = mSpriteAssets.GetSpriteFrames(Render->ImageID);
+            SelectedFrames = mSpriteAssets.GetDatImageFrames(Render->ImageID);
             SelectedFrameIndex = Render->FrameIndex;
         }
     }

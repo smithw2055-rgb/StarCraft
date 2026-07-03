@@ -383,19 +383,36 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
 
     std::vector<int> PickedUnits;
     std::vector<int> PickedSingles;
+    std::vector<int> FallbackUnits;
+    std::vector<int> FallbackSingles;
     for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
                                                  Game::Components::RenderComponent,
                                                  Game::Components::UnitComponent>())
     {
         if (!EntityInRect(Entities, EntityId, RX, RY, RW, RH))
             continue;
-        if (!IsOwnedByLocalPlayer(Entities, EntityId))
-            continue;
 
+        const bool LocalOwned = IsOwnedByLocalPlayer(Entities, EntityId);
         if (IsMultiSelectable(Entities, EntityId))
-            AppendSelectionEntity(Entities, PickedUnits, EntityId);
+        {
+            if (LocalOwned)
+                AppendSelectionEntity(Entities, PickedUnits, EntityId);
+            else
+                AppendSelectionEntity(Entities, FallbackUnits, EntityId);
+        }
         else
-            PickedSingles.push_back(EntityId);
+        {
+            if (LocalOwned)
+                PickedSingles.push_back(EntityId);
+            else
+                FallbackSingles.push_back(EntityId);
+        }
+    }
+
+    if (PickedUnits.empty() && PickedSingles.empty())
+    {
+        PickedUnits = std::move(FallbackUnits);
+        PickedSingles = std::move(FallbackSingles);
     }
 
     if (!PickedUnits.empty())

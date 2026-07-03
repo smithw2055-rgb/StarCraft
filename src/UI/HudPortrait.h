@@ -37,32 +37,9 @@ inline const Resource::Graphics::GpuImage* ResolvePortraitFrameForSelection(
     int TerranDefId,
     const Resource::Graphics::GpuImage* FallbackImage)
 {
-    if (!UIAssets.HasCache())
-        return FallbackImage;
-
-    const std::string PortraitKey = ResolvePortraitKeyForSelection(TerranDefId);
-    if (PortraitKey.empty())
-        return FallbackImage;
-
-    const auto* Clip = UIAssets.GetPortraitClip(PortraitKey);
-    if (!Clip || Clip->Frames.empty())
-        return FallbackImage;
-
-    float TotalDuration = 0.0f;
-    for (const auto& Frame : Clip->Frames)
-        TotalDuration += std::max(1.0f / 30.0f, Frame.DurationSeconds);
-    if (TotalDuration <= 0.0f)
-        TotalDuration = (float)Clip->Frames.size() * (1.0f / 12.0f);
-
-    float Cursor = std::fmod((float)Core::Platform::GetAbsoluteTime(), TotalDuration);
-    for (const auto& Frame : Clip->Frames)
-    {
-        const float Duration = std::max(1.0f / 30.0f, Frame.DurationSeconds);
-        if (Cursor <= Duration)
-            return &Frame.Image;
-        Cursor -= Duration;
-    }
-    return &Clip->Frames.back().Image;
+    (void)UIAssets;
+    (void)TerranDefId;
+    return FallbackImage;
 }
 
 } // namespace Game::Client::UI

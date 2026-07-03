@@ -28,60 +28,34 @@ static inline int32_t ReadI32(const uint8_t* Data, size_t Offset)
 std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 {
     std::vector<UnitEntry> Entries;
-    const size_t EntrySize = 228;
-
-    if (Data.size() % EntrySize != 0)
-    {
-        Core::Utils::Logger::Debug("DatDecoder", "units.dat has trailing bytes");
-    }
-
+    constexpr size_t Count = 228;
     if (Data.empty())
     {
         Core::Utils::Logger::Warning("DatDecoder", "units.dat is empty");
         return Entries;
     }
 
-    size_t Count = Data.size() / EntrySize;
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
+        if (I >= Data.size())
             break;
 
         UnitEntry E;
         E.Id = (uint32_t)I;
 
-        // units.dat format offsets (Brood War):
-        // 0-1: SpriteID
-        E.SpriteID = ReadU16(Data.data(), Off + 0);
-        // 2-3: PortraitID
-        E.PortraitID = ReadU16(Data.data(), Off + 2);
-        // 4-7: HitPoints
-        E.HitPoints = ReadU32(Data.data(), Off + 4);
-        // 8-9: ShieldAmount
-        E.ShieldAmount = ReadU16(Data.data(), Off + 8);
-        // 10: Armor
-        E.Armor = Data[Off + 10];
-        // 11: ArmorUpgrade
-        E.ArmorUpgrade = Data[Off + 11];
-        // 12-13: BuildTime
-        E.BuildTime = ReadU16(Data.data(), Off + 12);
-        // 14-17: MineralCost
-        E.MineralCost = ReadU32(Data.data(), Off + 14);
-        // 18-21: GasCost
-        E.GasCost = ReadU32(Data.data(), Off + 22);
-        // 22-23: FlingyID (offset varies by version, approximate)
-        E.FlingyID = ReadU16(Data.data(), Off + 100);
-        // Armor icon / supply cost
-        E.SupplyCost = ReadU16(Data.data(), Off + 106);
-        // 108-109: Ground weapon
-        E.GroundWeapon = ReadU16(Data.data(), Off + 108);
-        // 110-111: Air weapon
-        E.AirWeapon = ReadU16(Data.data(), Off + 110);
-        // 216: IsBuilding flag
-        E.IsBuilding = (Off + 216 < Data.size()) ? Data[Off + 216] : 0;
+        // Brood War units.dat is column-major. The first column is the
+        // flingy.dat graphics id, which starts the unit->flingy->sprite->image
+        // chain used for both rendering and iscript selection.
+        E.FlingyID = Data[I];
+        E.SpriteID = E.FlingyID;
+        const size_t Subunit1Offset = Count;
+        const size_t Subunit2Offset = Count + Count * 2;
+        if (Subunit1Offset + I * 2 + 2 <= Data.size())
+            E.Subunit1ID = ReadU16(Data.data(), Subunit1Offset + I * 2);
+        if (Subunit2Offset + I * 2 + 2 <= Data.size())
+            E.Subunit2ID = ReadU16(Data.data(), Subunit2Offset + I * 2);
 
         Entries.push_back(E);
     }
@@ -134,27 +108,19 @@ std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& D
 std::vector<FlingyEntry> DatDecoder::DecodeFlingy(const std::vector<uint8_t>& Data)
 {
     std::vector<FlingyEntry> Entries;
-    const size_t EntrySize = 42;
-
-    size_t Count = Data.size() / EntrySize;
+    constexpr size_t Count = 209;
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
+        const size_t Off = I * 2;
+        if (Off + 2 > Data.size())
             break;
 
         FlingyEntry E;
         E.Id = (uint32_t)I;
-        // 0-3: SpriteID
-        E.SpriteID = ReadU32(Data.data(), Off + 0);
-        // 4-7: TopSpeed
-        E.TopSpeed = ReadU32(Data.data(), Off + 4);
-        // 8-11: Acceleration
-        E.Acceleration = ReadU32(Data.data(), Off + 8);
-        // 12-15: TurnRate
-        E.TurnRate = ReadU32(Data.data(), Off + 12);
+        // First column is sprite.dat id.
+        E.SpriteID = ReadU16(Data.data(), Off);
 
         Entries.push_back(E);
     }
@@ -167,25 +133,19 @@ std::vector<FlingyEntry> DatDecoder::DecodeFlingy(const std::vector<uint8_t>& Da
 std::vector<SpriteEntry> DatDecoder::DecodeSprites(const std::vector<uint8_t>& Data)
 {
     std::vector<SpriteEntry> Entries;
-    const size_t EntrySize = 92;
-
-    size_t Count = Data.size() / EntrySize;
+    constexpr size_t Count = 517;
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
+        const size_t Off = I * 2;
+        if (Off + 2 > Data.size())
             break;
 
         SpriteEntry E;
         E.Id = (uint32_t)I;
-        // 0-3: ImageID (first image)
-        E.ImageID = ReadU32(Data.data(), Off + 0);
-        // 4-7: HealthBar
-        E.HealthBar = ReadU32(Data.data(), Off + 4);
-        // 36: VisibilitySize
-        E.VisibilitySize = (Off + 36 < Data.size()) ? Data[Off + 36] : 0;
+        // First column is image.dat id.
+        E.ImageID = ReadU16(Data.data(), Off);
 
         Entries.push_back(E);
     }

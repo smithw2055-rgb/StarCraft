@@ -37,7 +37,10 @@ inline void InitializeGameplayEntitiesAndRuntimeState(
     auto ResolveChkImageID = [&Client](int ChkUnitID) {
         return Client.GetSpriteAssets().ResolveImageID(ChkUnitID);
     };
-    GameEntitySpawnRuntime::SpawnChkEntities(Session, ResolveChkImageID);
+    auto ResolveChkSubunitImageID = [&Client](int ChkUnitID) {
+        return Client.GetSpriteAssets().ResolveSubunitImageID(ChkUnitID);
+    };
+    GameEntitySpawnRuntime::SpawnChkEntities(Session, ResolveChkImageID, ResolveChkSubunitImageID);
 
     auto SpawnResourceForStart = [&Session, &Client](int ChkUnitId, int WorldX, int WorldY, int Amount)
     {

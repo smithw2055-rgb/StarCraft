@@ -16,7 +16,19 @@ void GameController::StartGame()
         mRuntime.App.Menu,
         mRuntime.Session.Campaign,
         mRuntime.Session.Game,
-        [this]() { InitGameSystems(); });
+            [this]() { InitGameSystems(); });
+}
+
+void GameController::SetInitialCameraOverride(float WorldX, float WorldY)
+{
+    mHasInitialCameraOverride = true;
+    mInitialCameraX = WorldX;
+    mInitialCameraY = WorldY;
+}
+
+void GameController::SetInitialGuiHudEnabled(bool Enabled)
+{
+    mInitialGuiHudEnabled = Enabled;
 }
 
 void GameController::InitGameSystems()
@@ -45,6 +57,9 @@ void GameController::InitGameSystems()
                 mRuntime.Session.Campaign,
                 mRuntime.App.Runtime.MapPath);
         });
+
+    if (mHasInitialCameraOverride)
+        mRuntime.Client.Runtime.CenterCamera(mInitialCameraX, mInitialCameraY);
 }
 
 } // namespace Game::Client::GameLoop

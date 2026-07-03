@@ -198,6 +198,7 @@ struct TransformComponent
 struct RenderComponent
 {
     uint32_t ImageID = 0;
+    uint32_t SubunitImageID = UINT32_MAX;
     int FrameIndex = 0;
     Core::Color Tint = Core::Colors::White();
     int TotalFrames = 1;
@@ -225,6 +226,7 @@ struct ImageSubnode
     bool DrawAbove = true;
     bool Visible = true;
     bool Flipped = false;
+    bool UseSpriteID = false;
     float LifetimeRemaining = -1.0f; // negative means persistent until animation changes.
     int ScriptID = -1;
     int AnimID = -1;

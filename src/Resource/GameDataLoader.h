@@ -65,10 +65,12 @@ public:
 
     // Resolve an image.dat image id to its images.tbl GRP path.
     std::string ResolveGrpPath(uint32_t ImageID) const;
+    std::string ResolveImageGrpPath(uint32_t ImageID) const;
 
     // Resolve a CHK unit id through units.dat/sprites.dat to an image.dat id.
     // Returns UINT32_MAX when the data chain is unavailable or invalid.
     uint32_t ResolveUnitImageID(uint32_t ChkUnitID) const;
+    uint32_t ResolveUnitSubunitImageID(uint32_t ChkUnitID) const;
 
     // Kept for compatibility with existing init flow.
     void RebuildImageMappingFromTbl();

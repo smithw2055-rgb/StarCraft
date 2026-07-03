@@ -5,6 +5,7 @@
 #include "Main/GameGlueMenuActionRuntime.h"
 #include "Main/GameGuiBootstrap.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -13,11 +14,19 @@ namespace Game::Client::GameLoop
 
 namespace
 {
-    constexpr bool kDevStartInGame = true;
+    bool ShouldDevStartInGame(const AppRuntime& App)
+    {
+        if (!App.MapPathOverride.empty())
+            return true;
+        const char* DevStart = std::getenv("STARCRAFT_DEV_START_INGAME");
+        return DevStart && std::string(DevStart) == "1";
+    }
 }
 
 bool GameController::Initialize(int Width, int Height)
 {
+    (void)Width;
+    (void)Height;
     std::cout << "StarCraft: init" << std::endl;
 
     if (!InitializeClientShellRuntime())
@@ -26,7 +35,12 @@ bool GameController::Initialize(int Width, int Height)
     mRuntime.Client.Runtime.InitializeWorldEffects(800);
     mRuntime.App.Audio.Initialize();
 
-    InitializeGuiRuntime(mRuntime.App.Gui, mRuntime.App.Runtime.AssetRoot, Width, Height, [this](const std::string& Action) {
+    InitializeGuiRuntime(
+        mRuntime.App.Gui,
+        mRuntime.App.Runtime.AssetRoot,
+        Core::Platform::GetWindowWidth(),
+        Core::Platform::GetWindowHeight(),
+        [this](const std::string& Action) {
         HandleGlueMenuAction(
             Action,
             mRuntime.Session.Campaign,
@@ -34,10 +48,14 @@ bool GameController::Initialize(int Width, int Height)
             [this](const std::string& MapPath) { SetMapPathOverride(MapPath); },
             [this]() { StartGame(); });
     });
+#if ENABLE_GUI_UI
+    if (mInitialGuiHudEnabled && mRuntime.App.Gui.MainGui.IsActive())
+        mRuntime.App.Gui.UseGui = true;
+#endif
 
     mRuntime.App.Runtime.Initialized = true;
     mRuntime.App.Runtime.State = GameState::MainMenu;
-    if (kDevStartInGame)
+    if (ShouldDevStartInGame(mRuntime.App.Runtime))
         StartGame();
     return true;
 }
