@@ -346,7 +346,37 @@ auto& Z = ZergDefs;
     P[PArbiterTribunalID].RequiredBuildings = {PTemplarArchivesID, PStargateID};
     P[PObservatoryID].RequiredBuildings = {PRoboticsFacilityID};
 
-    // Build name->ID map
+    // ---- Hero & Special Units (data-driven alignment with openbw-ref) ----
+    T.push_back({"JimRaynorMarine",    Race::Terran, UnitSize::Small, 100,  0,  0, 3,  1,  0,   0,  24, 12,  0, 5, 1, 2.6f, 7,  false});
+    T.push_back({"JimRaynorVulture",   Race::Terran, UnitSize::Medium,300,  0,  0, 1,  2,  0,   0,  30, 30,  0, 5, 1, 3.2f, 8,  false});
+    T.push_back({"SarahKerrigan",      Race::Terran, UnitSize::Small, 250,  0,50, 1,  1,  0,   0,  30, 30,  0, 6, 1, 2.6f, 9,  false});
+    T.push_back({"EdmundDukeSiege",    Race::Terran, UnitSize::Large, 400,  0,  0, 2,  2,  0,   0,  45, 70,  0, 7, 1, 2.3f, 10, false});
+    T.push_back({"GuiMontag",          Race::Terran, UnitSize::Small, 160,  0,  0, 1,  1,  0,   0,  24, 15,  0, 2, 1, 2.6f, 7,  false});
+    T.push_back({"ArcturusMengsk",     Race::Terran, UnitSize::Large, 500,  0,200, 3,  6,  0,   0,  90, 50, 50, 6, 1, 2.2f, 11, false});
+    T.push_back({"Hyperion",           Race::Terran, UnitSize::Large, 850,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
+    T.push_back({"NoradII",            Race::Terran, UnitSize::Large, 700,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
+
+    Z.push_back({"Torrasque",          Race::Zerg,   UnitSize::Large, 800,  0,  0, 4,  6,  0,   0,  50, 50,  0, 2, 1, 2.8f, 10, false});
+    Z.push_back({"InfestedKerrigan",   Race::Zerg,   UnitSize::Small, 300,  0,50, 2,  1,  0,   0,  30, 50,  0, 5, 1, 2.6f, 9,  false});
+    Z.push_back({"HunterKiller",       Race::Zerg,   UnitSize::Medium,250,  0,  0, 2,  2,  0,   0,  30, 25, 25, 5, 1, 2.8f, 10, false});
+    Z.push_back({"DevouringOne",       Race::Zerg,   UnitSize::Small, 200,  0,  0, 1,  1,  0,   0,  20, 20,  0, 2, 1, 2.6f, 8,  false});
+
+    P.push_back({"FenixZealot",        Race::Protoss, UnitSize::Medium,240, 50,  0, 1,  2,  0,   0,  40, 20,  0, 1, 0, 2.8f, 8,  false});
+    P.push_back({"FenixDragoon",       Race::Protoss, UnitSize::Large, 300,100,  0, 2,  2,  0,   0,  50, 35, 35, 5, 0, 2.5f, 9,  false});
+    P.push_back({"Zeratul",            Race::Protoss, UnitSize::Small, 200, 80,  0, 1,  1,  0,   0,  30, 50,  0, 1, 0, 2.8f, 9,  false});
+    P.push_back({"Tassadar",           Race::Protoss, UnitSize::Small, 200, 80,100, 1,  2,  0,   0,  40, 30,  0, 0, 0, 2.5f, 10, false});
+    P.push_back({"Warbringer",         Race::Protoss, UnitSize::Large, 300,150,  0, 2,  4,  0,   0,  60, 60,  0, 1, 0, 2.5f, 9,  false});
+    P.push_back({"Gantrithor",         Race::Protoss, UnitSize::Large, 500,200,  0, 3,  6,  0,   0,  90, 50, 50, 6, 0, 2.2f, 11, false});
+    P.push_back({"Danimoth",           Race::Protoss, UnitSize::Large, 400,150,  0, 2,  4,  0,   0,  90, 30, 30, 5, 0, 2.5f, 10, false});
+    P.push_back({"Aldaris",            Race::Protoss, UnitSize::Large, 500,150,100, 2,  4,  0,   0,  90, 40, 40, 6, 0, 2.2f, 11, false});
+
+    // Critters
+    T.push_back({"Rhynadon",           Race::Terran,  UnitSize::Large,  60,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T.push_back({"Bengalaas",          Race::Terran,  UnitSize::Large,  60,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T.push_back({"Scantid",            Race::Terran,  UnitSize::Small,  40,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T.push_back({"Kakaru",             Race::Terran,  UnitSize::Small,  40,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T.push_back({"Ragnasaur",          Race::Terran,  UnitSize::Large,  80,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T.push_back({"Ursadon",            Race::Terran,  UnitSize::Large,  80,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     for (int I = 0; I < (int)T.size(); ++I)
         NameToID[T[I].Name] = I;
     for (int I = 0; I < (int)ZergDefs.size(); ++I)

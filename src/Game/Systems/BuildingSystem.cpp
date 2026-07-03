@@ -114,7 +114,7 @@ namespace
         Render.FrameIndex = 0;
         Render.TotalFrames = 1;
         Render.Layer = RenderLayer::Buildings;
-        Render.Tint = UnderConstruction ? Color{255, 255, 255, 180} : Render::Colors::White();
+        Render.Tint = UnderConstruction ? Color{255, 255, 255, 180} : Core::Colors::White();
 
         auto& Building = EM.AddComponent<BuildingComponent>(EntityID);
         Building.IsBuilding = true;
@@ -465,15 +465,26 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
         return;
 
     bool BuilderNearby = false;
-    auto* BuilderTransform = EM.GetComponent<TransformComponent>(Building->BuilderUnitID);
-    if (Building->IsAddon && Building->BuilderUnitID >= 0)
+    bool IsZergOrProtoss = (Unit->UnitRace == Components::Race::Zerg ||
+                             Unit->UnitRace == Components::Race::Protoss);
+
+    // Zerg/Protoss buildings self-construct; no builder proximity required
+    if (IsZergOrProtoss)
     {
         BuilderNearby = true;
     }
-    else if (BuilderTransform)
+    else
     {
-        float Distance = Transform->Position.DistanceTo(BuilderTransform->Position);
-        BuilderNearby = Distance < 48.0f;
+        auto* BuilderTransform = EM.GetComponent<TransformComponent>(Building->BuilderUnitID);
+        if (Building->IsAddon && Building->BuilderUnitID >= 0)
+        {
+            BuilderNearby = true;
+        }
+        else if (BuilderTransform)
+        {
+            float Distance = Transform->Position.DistanceTo(BuilderTransform->Position);
+            BuilderNearby = Distance < 48.0f;
+        }
     }
 
     if (BuilderNearby)
@@ -491,7 +502,7 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     Unit->HitPoints = Unit->MaxHitPoints;
 
     if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
-        Render->Tint = Render::Colors::White();
+        Render->Tint = Core::Colors::White();
 
     int PlayerID = 0;
     if (auto* Player = EM.GetComponent<PlayerComponent>(EntityID))
@@ -505,6 +516,50 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
 
     Core::Utils::Logger::Info("BuildingSystem",
         "Construction complete for entity " + std::to_string(EntityID));
+}
+
+bool BuildingSystem::LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingID)
+{
+    auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
+    auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
+    if (!Bldg || !Unit || !Bldg->CanLiftOff || Bldg->IsLifted) return false;
+    if (Bldg->UnderConstruction) return false;
+
+    Bldg->IsLifted = true;
+    Unit->Speed = 2.0f; // Flying speed
+    Unit->SupplyCost = 0; // Supply freed during flight
+
+    auto& Path = EM.AddComponent<PathfindingComponent>(BuildingID);
+    Path.IsAir = true;
+    Path.CurrentSpeed = 100.0f;
+
+    Core::Utils::Logger::Info("BuildingSystem",
+        "Building " + std::to_string(BuildingID) + " lifted off");
+    return true;
+}
+
+bool BuildingSystem::LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
+                                   Core::Math::Vec2 Position)
+{
+    auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
+    auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
+    if (!Bldg || !Unit || !Bldg->IsLifted) return false;
+
+    // Check placement validity at new position
+    if (!IsPlacementValid(EM, Bldg->BuildingDefID, Position, 0))
+        return false;
+
+    Bldg->IsLifted = false;
+    Unit->Speed = 0.0f;
+    Unit->SupplyCost = Game::Races::GetUnitDefByID(Bldg->BuildingDefID).SupplyCost;
+
+    auto* Trans = EM.GetComponent<TransformComponent>(BuildingID);
+    if (Trans) Trans->Position = Position;
+
+    Core::Utils::Logger::Info("BuildingSystem",
+        "Building " + std::to_string(BuildingID) + " landed at (" +
+        std::to_string((int)Position.X) + "," + std::to_string((int)Position.Y) + ")");
+    return true;
 }
 
 } // namespace Game::Systems

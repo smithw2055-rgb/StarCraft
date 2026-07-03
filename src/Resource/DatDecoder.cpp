@@ -20,6 +20,11 @@ static inline uint32_t ReadU32(const uint8_t* Data, size_t Offset)
            (Data[Offset + 2] << 16) | (Data[Offset + 3] << 24);
 }
 
+static inline int32_t ReadI32(const uint8_t* Data, size_t Offset)
+{
+    return (int32_t)ReadU32(Data, Offset);
+}
+
 std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 {
     std::vector<UnitEntry> Entries;
@@ -193,36 +198,68 @@ std::vector<SpriteEntry> DatDecoder::DecodeSprites(const std::vector<uint8_t>& D
 std::vector<ImageEntry> DatDecoder::DecodeImages(const std::vector<uint8_t>& Data)
 {
     std::vector<ImageEntry> Entries;
-    const size_t EntrySize = 80;
-
-    size_t Count = Data.size() / EntrySize;
+    constexpr size_t Count = 999;
+    constexpr size_t ExpectedSize = Count * 38;
+    if (Data.size() < ExpectedSize)
+    {
+        Core::Utils::Logger::Warning("DatDecoder", "images.dat is too small");
+        return Entries;
+    }
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
-            break;
-
         ImageEntry E;
         E.Id = (uint32_t)I;
 
-        // OpenBW offset layout for images.dat (80 bytes/entry):
-        // 0-3:  grp_filename_index (uint32)
-        // 4-7:  ??? (unknown, maybe flags)
-        // 8-9:  width (uint16)
-        // 10-11: height (uint16)
-        // 12-13: frames (uint16)
-        E.GrpFilenameIndex = ReadU32(Data.data(), Off + 0);
-        E.Width = ReadU16(Data.data(), Off + 8);
-        E.Height = ReadU16(Data.data(), Off + 10);
-        E.Frames = ReadU16(Data.data(), Off + 12);
+        // Brood War images.dat is column-major, 999 entries:
+        // grp index u32[999], six u8 columns, then seven u32 columns.
+        E.GrpFilenameIndex = ReadU32(Data.data(), I * 4);
+        E.HasDirectionalFrames = Data[Count * 4 + I] != 0;
+        E.IsClickable = Data[Count * 5 + I] != 0;
+        E.HasIScriptAnimations = Data[Count * 6 + I] != 0;
+        E.AlwaysVisible = Data[Count * 7 + I] != 0;
+        E.Modifier = Data[Count * 8 + I];
+        E.ColorShift = Data[Count * 9 + I];
+        E.IScriptID = ReadU32(Data.data(), Count * 10 + I * 4);
 
         Entries.push_back(E);
     }
 
     Core::Utils::Logger::Info("DatDecoder",
         "Decoded " + std::to_string(Entries.size()) + " image entries");
+    return Entries;
+}
+
+std::vector<ImageRelationEntry> DatDecoder::DecodeImageRelations(const std::vector<uint8_t>& Data)
+{
+    std::vector<ImageRelationEntry> Entries;
+    constexpr size_t EntrySize = 8;
+    if (Data.empty() || Data.size() < EntrySize)
+    {
+        Core::Utils::Logger::Warning("DatDecoder", "images.rel is empty or too small");
+        return Entries;
+    }
+
+    if (Data.size() % EntrySize != 0)
+    {
+        Core::Utils::Logger::Warning("DatDecoder", "images.rel has trailing bytes");
+    }
+
+    const size_t Count = Data.size() / EntrySize;
+    Entries.reserve(Count);
+    for (size_t I = 0; I < Count; ++I)
+    {
+        const size_t Off = I * EntrySize;
+        ImageRelationEntry E;
+        E.ImageID = (uint32_t)I;
+        E.Kind = ReadI32(Data.data(), Off + 0);
+        E.ParentImageID = ReadI32(Data.data(), Off + 4);
+        Entries.push_back(E);
+    }
+
+    Core::Utils::Logger::Info("DatDecoder",
+        "Decoded " + std::to_string(Entries.size()) + " image relation entries");
     return Entries;
 }
 

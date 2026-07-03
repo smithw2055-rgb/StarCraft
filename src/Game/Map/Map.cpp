@@ -31,7 +31,48 @@ void GameMap::Generate(int Width, int Height)
             T.MegaTileID = 0;
         }
     }
+
+    // Place start locations and resource clusters
     mStartLocations.clear();
+
+    for (int P = 0; P < 2; P++)
+    {
+        int BaseX = (P == 0) ? (Width / 4) : (3 * Width / 4);
+        int BaseY = (P == 0) ? (Height / 4) : (3 * Height / 4);
+
+        mStartLocations.push_back({BaseX, BaseY, P});
+
+        // Mineral patch cluster (8 patches in a C-shape)
+        int MineralPositions[8][2] = {
+            {-2, -2}, {-1, -3}, {1, -3}, {2, -2},
+            {3, -1}, {3, 1}, {2, 2}, {-2, 2}
+        };
+        for (int M = 0; M < 8; M++)
+        {
+            int MX = BaseX + MineralPositions[M][0];
+            int MY = BaseY + MineralPositions[M][1];
+            if (IsInBounds(MX, MY))
+            {
+                Tile& T = mTiles[MY * Width + MX];
+                T.Resource = ResourceType::Minerals;
+                T.ResourceAmount = 1500;
+                T.Walkable = false;
+                T.Buildable = false;
+            }
+        }
+
+        // Vespene geyser
+        int GX = BaseX + 5;
+        int GY = BaseY + 0;
+        if (IsInBounds(GX, GY))
+        {
+            Tile& T = mTiles[GY * Width + GX];
+            T.Resource = ResourceType::VespeneGas;
+            T.ResourceAmount = 5000;
+            T.Walkable = false;
+            T.Buildable = false;
+        }
+    }
 }
 
 void GameMap::SetTile(int X, int Y, const Tile& NewTile)
@@ -144,7 +185,7 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             for (int MI = 0; MI < 16; MI++)
             {
                 size_t Vf4Off = (size_t)MegaIdx * 16 + MI;
-                if (Vf4Off < Vf4Data->size() && (((*Vf4Data)[Vf4Off] & 1) == 0))
+                if (Vf4Off < Vf4Data->size() && (((*Vf4Data)[Vf4Off] & 1) != 0))
                     WalkableCount++;
             }
 

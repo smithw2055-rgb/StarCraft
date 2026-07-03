@@ -44,8 +44,9 @@ namespace
 
 namespace Core::Platform
 {
-    void HandleEvent(const sapp_event* Event)
+    void HandleEvent(const void* EventPtr)
     {
+        const sapp_event* Event = static_cast<const sapp_event*>(EventPtr);
         if (!Event) return;
         const float DpiScale = std::max(1.0f, sapp_dpi_scale());
         const auto ToLogicalCoord = [&](float Value) -> float
@@ -163,6 +164,11 @@ namespace Core::Platform
         g_initialized = false;
     }
 
+    void RequestQuit()
+    {
+        sapp_request_quit();
+    }
+
     void ProcessInput()
     {
         for (int i = 0; i < kKeyCount; ++i)
@@ -181,7 +187,7 @@ namespace Core::Platform
         }
 
         // Frame timing
-        // sokol gives us sapp_frame_duration() from main; we set g_deltaTime explicitly
+        // the platform backend gives us sapp_frame_duration() from main; we set g_deltaTime explicitly
         // from frame_cb before calling ProcessInput. Otherwise default 16ms.
         g_lastFrameTime += static_cast<double>(g_deltaTime);
         g_currentTime = g_lastFrameTime;

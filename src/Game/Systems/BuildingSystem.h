@@ -106,9 +106,13 @@ public:
                                            int ParentBuildingID = -1);
 
     static bool IsPlacementValid(Core::ECS::EntityManager& EM,
-                                 int BuildingDefID,
-                                 Core::Math::Vec2 Position,
-                                 int BuilderPlayerID = 0);
+                                  int BuildingDefID,
+                                  Core::Math::Vec2 Position,
+                                  int BuilderPlayerID = 0);
+
+    static bool LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingID);
+    static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
+                             Core::Math::Vec2 Position);
 
 private:
     void ProcessConstruction(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);

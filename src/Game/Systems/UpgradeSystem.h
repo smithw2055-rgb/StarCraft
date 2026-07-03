@@ -10,31 +10,82 @@
 namespace Game::Systems
 {
 
-enum class TerranResearchId : uint8_t
+enum class ResearchId : uint8_t
 {
     None = 0,
-    InfantryWeapons,
-    InfantryArmor,
-    VehicleWeapons,
-    VehicleArmor,
-    ShipWeapons,
-    ShipArmor,
-    StimPacks,
-    U238Shells,
-    SiegeMode,
-    SpiderMines,
-    CloakingField,
-    IonThrusters,
-    Lockdown,
-    MoebiusReactor,
-    YamatoGun,
-    ColossusReactor,
+
+    // Terran (0-15)
+    Terran_InfantryWeapons,
+    Terran_InfantryArmor,
+    Terran_VehicleWeapons,
+    Terran_VehicleArmor,
+    Terran_ShipWeapons,
+    Terran_ShipArmor,
+    Terran_StimPacks,
+    Terran_U238Shells,
+    Terran_SiegeMode,
+    Terran_SpiderMines,
+    Terran_CloakingField,
+    Terran_IonThrusters,
+    Terran_Lockdown,
+    Terran_MoebiusReactor,
+    Terran_YamatoGun,
+    Terran_ColossusReactor,
+
+    // Zerg (16-33)
+    Zerg_MeleeAttacks,
+    Zerg_MissileAttacks,
+    Zerg_Carapace,
+    Zerg_FlyerAttacks,
+    Zerg_FlyerCarapace,
+    Zerg_AdrenalGlands,
+    Zerg_MetabolicBoost,
+    Zerg_VentralSacs,
+    Zerg_Antennae,
+    Zerg_PneumatizedCarapace,
+    Zerg_Burrow,
+    Zerg_Consume,
+    Zerg_Ensnare,
+    Zerg_Plague,
+    Zerg_SpawnBroodling,
+    Zerg_QueenEnergy,
+    Zerg_DefilerEnergy,
+    Zerg_LurkerMorph,
+
+    // Protoss (34-51)
+    Protoss_GroundWeapons,
+    Protoss_GroundArmor,
+    Protoss_PlasmaShields,
+    Protoss_AirWeapons,
+    Protoss_AirArmor,
+    Protoss_SingularityCharge,
+    Protoss_GraviticDrive,
+    Protoss_ScarabDamage,
+    Protoss_ZealotSpeed,
+    Protoss_KhaydarinAmulet,
+    Protoss_PsionicStorm,
+    Protoss_Hallucination,
+    Protoss_Recall,
+    Protoss_StasisField,
+    Protoss_MindControl,
+    Protoss_Maelstrom,
+    Protoss_DisruptionWeb,
+    Protoss_ReaverCapacity,
+    Protoss_CarrierCapacity,
+
     Count
 };
 
 struct PlayerUpgrades
 {
-    std::array<uint8_t, static_cast<size_t>(TerranResearchId::Count)> Levels = {};
+    std::array<uint8_t, static_cast<size_t>(ResearchId::Count)> Levels = {};
+
+    int GetLevel(ResearchId Id) const
+    {
+        size_t Idx = static_cast<size_t>(Id);
+        if (Idx < Levels.size()) return Levels[Idx];
+        return 0;
+    }
 };
 
 class UpgradeSystem : public Core::ECS::ISystem
@@ -47,17 +98,19 @@ public:
     static PlayerUpgrades& GetUpgrades(int PlayerID = 0);
 
     static bool CanStartResearch(const Core::ECS::EntityManager& EM,
-                                 int BuildingID,
-                                 TerranResearchId ResearchId,
-                                 std::string* OutReason = nullptr);
+                                  int BuildingID,
+                                  ResearchId ResearchId,
+                                  std::string* OutReason = nullptr);
 
     static bool StartResearch(Core::ECS::EntityManager& EM,
-                              int BuildingID,
-                              TerranResearchId ResearchId);
+                               int BuildingID,
+                               ResearchId ResearchId);
 
-    static int GetResearchLevel(int PlayerID, TerranResearchId ResearchId);
-    static bool HasResearch(int PlayerID, TerranResearchId ResearchId);
-    static std::string_view GetResearchDisplayName(TerranResearchId ResearchId);
+    static bool CancelResearch(Core::ECS::EntityManager& EM, int BuildingID);
+
+    static int GetResearchLevel(int PlayerID, ResearchId ResearchId);
+    static bool HasResearch(int PlayerID, ResearchId ResearchId);
+    static std::string_view GetResearchDisplayName(ResearchId ResearchId);
 
     static int GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID);

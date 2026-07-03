@@ -2,13 +2,19 @@
 
 #include <cstdint>
 
-struct sapp_event;
-
 namespace Core::Platform
 {
+    namespace KeyCode
+    {
+        constexpr int Escape = 256;
+        constexpr int F6 = 295;
+        constexpr int F9 = 298;
+    }
+
     bool Initialize();
     void Shutdown();
-    void HandleEvent(const sapp_event* Event);
+    void HandleEvent(const void* Event);
+    void RequestQuit();
 
     // Call once per frame BEFORE game logic to flush deltas and update prev-key state
     void ProcessInput();
@@ -43,6 +49,6 @@ namespace Core::Platform
     float GetDeltaTime();
     double GetAbsoluteTime();
 
-    // Set the per-frame delta externally (driven by sokol's frame_duration)
+    // Set the per-frame delta externally (driven by the backend's frame_duration)
     void SetDeltaTime(float Dt);
 }

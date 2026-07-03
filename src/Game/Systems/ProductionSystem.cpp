@@ -264,7 +264,7 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
     Render.ImageID = ResolveImageID(Def.ChkUnitID);
     Render.FrameIndex = 0;
     Render.TotalFrames = 1;
-    Render.Tint = Render::Colors::White();
+    Render.Tint = Core::Colors::White();
     Render.Layer = RenderLayer::Units;
 
     auto& Unit = EM.AddComponent<UnitComponent>(EntityID);

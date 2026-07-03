@@ -140,7 +140,7 @@ std::optional<std::vector<uint8_t>> CascArchive::ReadFile(const std::string& Fil
 
     // Step 3: Find the file via CascFindFirstFile.
     // SC:R CASC stores tileset paths with mixed case and "ex" suffix,
-    // e.g. "Tileset/badlands.vx4" â†’ find returns "TileSet\badlands.vx4ex".
+    // e.g. "Tileset/badlands.vx4" â†?find returns "TileSet\badlands.vx4ex".
     // Must save ALL find data BEFORE CascFindClose (Windows safety).
     CASC_FIND_DATA FindData;
     HANDLE FindHandle = CascFindFirstFile(mStorageHandle, FilePath.c_str(), &FindData, nullptr);

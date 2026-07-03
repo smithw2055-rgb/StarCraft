@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "Core/ECS/SystemManager.h"
+#include "Core/Math/Vec2.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -17,6 +18,18 @@ enum class FogState : uint8_t
     Visible
 };
 
+struct LastSeenSnapshot
+{
+    int UnitEntityID = -1;
+    int ChkUnitID = 0;
+    Core::Math::Vec2 Position;
+    int HitPoints = 0;
+    int MaxHitPoints = 0;
+    int PlayerID = 0;
+    float TimeStamp = 0.0f;
+    bool Valid = false;
+};
+
 class FogOfWarSystem : public Core::ECS::ISystem
 {
 public:
@@ -28,12 +41,20 @@ public:
     bool IsVisible(int TileX, int TileY, int PlayerID = 0) const;
     bool IsExplored(int TileX, int TileY, int PlayerID = 0) const;
 
+    // Detector visibility
+    bool IsDetected(int TileX, int TileY, int PlayerID = 0) const;
+
+    // Last-seen snapshots for ghost rendering
+    const std::vector<LastSeenSnapshot>& GetLastSeenSnapshots() const { return mLastSeen; }
+    void SetAlliance(int PlayerA, int PlayerB, bool Allied);
+
     int GetWidth() const { return mMapWidth; }
     int GetHeight() const { return mMapHeight; }
 
 private:
-    void RevealAround(int CenterX, int CenterY, int SightRange, uint8_t* Grid);
+    void RevealAround(int CenterX, int CenterY, int SightRange, uint8_t* Grid, uint8_t* DetectorGrid);
     void ResetVisibility();
+    void UpdateLastSeen(Core::ECS::EntityManager& EM);
 
     Core::ECS::SystemManager& mSystemMgr;
     const Game::Map::GameMap* mMap = nullptr;
@@ -41,8 +62,17 @@ private:
     int mMapHeight = 0;
 
     // Per-player fog grids: 0=Unexplored, 1=Explored, 2=Visible
-    // Index: [PlayerID * Width * Height + Y * Width + X]
     std::vector<uint8_t> mFogGrid;
+
+    // Per-player detector coverage grid
+    std::vector<uint8_t> mDetectorGrid;
+
+    // Alliance matrix: [playerA * maxPlayers + playerB] = true if allied
+    std::vector<bool> mAlliance;
+
+    // Last-seen snapshots for ghost rendering
+    std::vector<LastSeenSnapshot> mLastSeen;
+
     int mMaxPlayers = 8;
 };
 

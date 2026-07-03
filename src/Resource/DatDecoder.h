@@ -80,6 +80,36 @@ struct ImageEntry
     uint32_t Height = 0;
     uint32_t Frames = 0;
     uint32_t GrpFilenameIndex = 0;  // index into images.tbl for GRP filename
+    bool HasDirectionalFrames = false;
+    bool IsClickable = false;
+    bool HasIScriptAnimations = false;
+    bool AlwaysVisible = false;
+    uint8_t Modifier = 0;
+    uint8_t ColorShift = 0;
+    uint32_t IScriptID = 0;
+};
+
+enum class ImageRelationKind : int32_t
+{
+    RootOrStandalone = 1,
+    DeathOrTransition = 4,
+    Shadow = 8,
+    GlowOverlay = 16,
+    LinkedVariant = 512
+};
+
+struct ImageRelationEntry
+{
+    uint32_t ImageID = 0;
+    int32_t Kind = 0;
+    int32_t ParentImageID = -1;
+
+    bool HasParent() const { return ParentImageID >= 0; }
+    bool IsRootOrStandalone() const { return Kind == (int32_t)ImageRelationKind::RootOrStandalone; }
+    bool IsDeathOrTransition() const { return Kind == (int32_t)ImageRelationKind::DeathOrTransition; }
+    bool IsShadow() const { return Kind == (int32_t)ImageRelationKind::Shadow; }
+    bool IsGlowOverlay() const { return Kind == (int32_t)ImageRelationKind::GlowOverlay; }
+    bool IsLinkedVariant() const { return Kind == (int32_t)ImageRelationKind::LinkedVariant; }
 };
 
 // images.tbl is a string table: (uint16_t count) + (uint16_t offsets[count]) + strings
@@ -117,6 +147,7 @@ public:
     static std::vector<FlingyEntry> DecodeFlingy(const std::vector<uint8_t>& Data);
     static std::vector<SpriteEntry> DecodeSprites(const std::vector<uint8_t>& Data);
     static std::vector<ImageEntry> DecodeImages(const std::vector<uint8_t>& Data);
+    static std::vector<ImageRelationEntry> DecodeImageRelations(const std::vector<uint8_t>& Data);
     static std::vector<ImageTblEntry> DecodeImageTbl(const std::vector<uint8_t>& Data);
     static std::vector<UpgradeEntry> DecodeUpgrades(const std::vector<uint8_t>& Data);
     static std::vector<TechEntry> DecodeTech(const std::vector<uint8_t>& Data);

@@ -50,9 +50,18 @@ bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
 
     auto* Unit = MutableEM.GetComponent<UnitComponent>(UnitID);
     auto* Transform = MutableEM.GetComponent<TransformComponent>(UnitID);
-    if (!Unit || !Transform || Unit->ChkUnitID != 0x07)
+    if (!Unit || !Transform)
     {
-        SetReason(OutReason, "only SCV can harvest in this Terran flow");
+        SetReason(OutReason, "unit missing components");
+        return false;
+    }
+
+    // Support SCV (0x07), Drone (0x29), Probe (0x2D)
+    bool IsWorker = (Unit->ChkUnitID == 0x07 || Unit->ChkUnitID == 0x29 ||
+                     Unit->ChkUnitID == 0x2D);
+    if (!IsWorker)
+    {
+        SetReason(OutReason, "only worker units can harvest (SCV/Drone/Probe)");
         return false;
     }
 
@@ -69,11 +78,11 @@ bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
     auto* ResourceOwner = MutableEM.GetComponent<PlayerComponent>(TargetResourceID);
     auto* WorkerOwner = MutableEM.GetComponent<PlayerComponent>(UnitID);
     const int WorkerPlayerID = WorkerOwner ? WorkerOwner->PlayerID : 0;
-    const int TargetDefID = ResolveBuildingDefID(EM, TargetResourceID);
-    const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
-    if (!Building || Building->UnderConstruction || TargetDefID != RefineryDefID)
+
+    // Accept Refinery, Extractor, or Assimilator
+    if (!Building || Building->UnderConstruction)
     {
-        SetReason(OutReason, "gas must be harvested from a completed refinery");
+        SetReason(OutReason, "gas must be harvested from a completed refinery/extractor/assimilator");
         return false;
     }
     if (!ResourceOwner || ResourceOwner->PlayerID != WorkerPlayerID)
@@ -140,8 +149,16 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
         return -1;
 
     const int PlayerID = HarvesterPlayer ? HarvesterPlayer->PlayerID : 0;
+    // Multi-race depot support
+    const int NexusDefID = Game::Races::GetUnitDefID("Nexus");
     const int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
+    const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
+    const int LairDefID = Game::Races::GetUnitDefID("Lair");
+    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
+
     const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
+    const int AssimilatorDefID = Game::Races::GetUnitDefID("Assimilator");
+    const int ExtractorDefID = Game::Races::GetUnitDefID("Extractor");
 
     int BestID = -1;
     float BestDist = std::numeric_limits<float>::max();
@@ -158,9 +175,15 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
             continue;
 
         const int DefID = ResolveBuildingDefID(EM, DepotID);
+        const bool IsValidMineralDepot =
+            DefID == CommandCenterDefID || DefID == NexusDefID ||
+            DefID == HatcheryDefID || DefID == LairDefID || DefID == HiveDefID;
+        const bool IsValidGasDepot =
+            DefID == RefineryDefID || DefID == AssimilatorDefID || DefID == ExtractorDefID;
+
         const bool IsValidDepot =
-            (Type == ResourceType::Minerals && DefID == CommandCenterDefID) ||
-            (Type == ResourceType::VespeneGas && DefID == RefineryDefID);
+            (Type == ResourceType::Minerals && IsValidMineralDepot) ||
+            (Type == ResourceType::VespeneGas && IsValidGasDepot);
         if (!IsValidDepot)
             continue;
 

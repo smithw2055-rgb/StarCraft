@@ -1,6 +1,9 @@
-﻿#include "Resource/GameDataLoader.h"
+#include "Resource/GameDataLoader.h"
 #include "Resource/TblDecoder.h"
 #include "Core/Utils/Logger.h"
+
+#include <algorithm>
+#include <cstdint>
 
 namespace Resource
 {
@@ -45,6 +48,7 @@ bool GameDataLoader::LoadFromInstall(const std::string& InstallPath)
     AllOk = LoadFlingyData(*Archive) && AllOk;
     AllOk = LoadSpriteData(*Archive) && AllOk;
     AllOk = LoadImageData(*Archive) && AllOk;
+    LoadImageRelationData(*Archive);
     AllOk = LoadUpgradeData(*Archive) && AllOk;
     AllOk = LoadTechData(*Archive) && AllOk;
     LoadImageTblData(*Archive);
@@ -155,6 +159,14 @@ bool GameDataLoader::LoadImageData(IArchiveReader& Archive)
     if (!Data) return false;
     mImages = DatDecoder::DecodeImages(*Data);
     return true;
+}
+
+bool GameDataLoader::LoadImageRelationData(IArchiveReader& Archive)
+{
+    auto Data = ReadDataFile(Archive, "images.rel");
+    if (!Data) return false;
+    mImageRelations = DatDecoder::DecodeImageRelations(*Data);
+    return !mImageRelations.empty();
 }
 
 bool GameDataLoader::LoadUpgradeData(IArchiveReader& Archive)
@@ -281,6 +293,13 @@ bool GameDataLoader::LoadImageDataRaw(const std::vector<uint8_t>& Data)
     return true;
 }
 
+bool GameDataLoader::LoadImageRelationDataRaw(const std::vector<uint8_t>& Data)
+{
+    if (Data.empty()) return false;
+    mImageRelations = DatDecoder::DecodeImageRelations(Data);
+    return !mImageRelations.empty();
+}
+
 bool GameDataLoader::LoadUpgradeDataRaw(const std::vector<uint8_t>& Data)
 {
     if (Data.empty()) return false;
@@ -374,6 +393,20 @@ const SpriteEntry* GameDataLoader::FindSpriteByID(uint32_t ID) const
     return nullptr;
 }
 
+const ImageEntry* GameDataLoader::FindImageByID(uint32_t ID) const
+{
+    if (ID < mImages.size())
+        return &mImages[ID];
+    return nullptr;
+}
+
+const ImageRelationEntry* GameDataLoader::FindImageRelationByID(uint32_t ID) const
+{
+    if (ID < mImageRelations.size())
+        return &mImageRelations[ID];
+    return nullptr;
+}
+
 const std::string* GameDataLoader::FindStatTxtString(uint32_t ID) const
 {
     if (ID < mStatTxtTbl.size())
@@ -401,42 +434,212 @@ static constexpr ChkUnitGrpMapping kChkUnitGrpMappings[] = {
     {0x01, "unit/terran/ghost.grp"},
     {0x02, "unit/terran/vulture.grp"},
     {0x03, "unit/terran/goliath.grp"},
+    {0x04, "unit/terran/goliatht.grp"},
     {0x05, "unit/terran/tank.grp"},
-    {0x06, "unit/terran/stank.grp"},
+    {0x06, "unit/terran/tankt.grp"},
     {0x07, "unit/terran/scv.grp"},
-    {0x0A, "unit/terran/bomber.grp"},
-    {0x0B, "unit/terran/wessel.grp"},
-    {0x0C, "unit/terran/dropship.grp"},
-    {0x0D, "unit/terran/battlecr.grp"},
-    {0x14, "unit/terran/firebat.grp"},
-    {0x15, "unit/terran/medic.grp"},
+    {0x08, "unit/terran/bomber.grp"},
+    {0x09, "unit/terran/wessel.grp"},
+    {0x0A, "unit/terran/firebat.grp"},
+    {0x0B, "unit/terran/dropship.grp"},
+    {0x0C, "unit/terran/battlecr.grp"},
+    {0x0D, "unit/terran/spider.grp"},
+    {0x0E, "unit/terran/nukemiss.grp"},
+    {0x0F, "unit/neutral/civilian.grp"},
+    {0x10, "unit/terran/ughost.grp"},
+    {0x11, "unit/terran/goliath.grp"},
+    {0x12, "unit/terran/goliatht.grp"},
+    {0x13, "unit/terran/vulture.grp"},
+    {0x14, "unit/terran/marine.grp"},
+    {0x15, "unit/terran/bomber.grp"},
+    {0x16, "unit/terran/wessel.grp"},
+    {0x17, "unit/terran/tank.grp"},
+    {0x18, "unit/terran/tankt.grp"},
+    {0x19, "unit/terran/stank.grp"},
+    {0x1A, "unit/terran/stankt.grp"},
+    {0x1B, "unit/neutral/civilian.grp"},
+    {0x1C, "unit/terran/battlecr.grp"},
+    {0x1D, "unit/terran/battlecr.grp"},
+    {0x1E, "unit/terran/stank.grp"},
+    {0x1F, "unit/terran/stankt.grp"},
+    {0x20, "unit/terran/firebat.grp"},
+    {0x22, "unit/terran/medic.grp"},
+    {0x23, "unit/zerg/larva.grp"},
+    {0x24, "unit/zerg/egg.grp"},
+    {0x25, "unit/zerg/zergling.grp"},
+    {0x26, "unit/zerg/hydra.grp"},
+    {0x27, "unit/zerg/ultra.grp"},
+    {0x28, "unit/zerg/brood.grp"},
+    {0x29, "unit/zerg/drone.grp"},
+    {0x2A, "unit/zerg/overlord.grp"},
+    {0x2B, "unit/zerg/mutalid.grp"},
+    {0x2C, "unit/zerg/guardian.grp"},
+    {0x2D, "unit/zerg/queen.grp"},
+    {0x2E, "unit/zerg/defiler.grp"},
+    {0x2F, "unit/zerg/avenger.grp"},
+    {0x30, "unit/zerg/ultra.grp"},
+    {0x31, "unit/zerg/queen.grp"},
+    {0x32, "unit/zerg/bugguy.grp"},
+    {0x33, "unit/zerg/uikerr.grp"},
+    {0x34, "unit/zerg/defiler.grp"},
+    {0x35, "unit/zerg/hydra.grp"},
+    {0x36, "unit/zerg/zergling.grp"},
+    {0x37, "unit/zerg/mutalid.grp"},
+    {0x38, "unit/zerg/guardian.grp"},
+    {0x39, "unit/zerg/overlord.grp"},
     {0x3A, "unit/terran/phoenix.grp"},
-    {0x64, "unit/neutral/min01.grp"},
-    {0x65, "unit/neutral/min02.grp"},
-    {0x66, "unit/neutral/min03.grp"},
-    {0x67, "unit/neutral/geyser.grp"},
-    {0x6E, "unit/terran/control.grp"},
-    {0x6F, "unit/terran/comsat.grp"},
-    {0x70, "unit/terran/nukesilo.grp"},
-    {0x71, "unit/terran/depot.grp"},
-    {0x72, "unit/terran/refinery.grp"},
-    {0x73, "unit/terran/tbarrack.grp"},
-    {0x74, "unit/terran/academy.grp"},
-    {0x75, "unit/terran/factory.grp"},
-    {0x76, "unit/terran/starport.grp"},
-    {0x77, "unit/terran/controlt.grp"},
-    {0x78, "unit/terran/drydocks.grp"},
-    {0x79, "unit/terran/chemlab.grp"},
-    {0x7A, "unit/terran/physics.grp"},
-    {0x7B, "unit/terran/machines.grp"},
-    {0x7C, "unit/terran/research.grp"},
-    {0x7D, "unit/terran/weaponpl.grp"},
-    {0x82, "unit/terran/missile.grp"},
-    {0x83, "unit/terran/pillbox.grp"},
+    {0x3B, "unit/zerg/cocoon.grp"},
+    {0x3C, "unit/protoss/corsair.grp"},
+    {0x3D, "unit/protoss/dtemplar.grp"},
+    {0x3E, "unit/zerg/devour.grp"},
+    {0x3F, "unit/protoss/darchn.grp"},
+    {0x40, "unit/protoss/probe.grp"},
+    {0x41, "unit/protoss/zealot.grp"},
+    {0x42, "unit/protoss/dragoon.grp"},
+    {0x43, "unit/protoss/templar.grp"},
+    {0x44, "unit/protoss/archon.grp"},
+    {0x45, "unit/protoss/shuttle.grp"},
+    {0x46, "unit/protoss/scout.grp"},
+    {0x47, "unit/protoss/arbiter.grp"},
+    {0x48, "unit/protoss/carrier.grp"},
+    {0x49, "unit/protoss/intercep.grp"},
+    {0x4A, "unit/protoss/dtemplar.grp"},
+    {0x4B, "unit/protoss/dtemplar.grp"},
+    {0x4C, "unit/protoss/archon.grp"},
+    {0x4D, "unit/protoss/zealot.grp"},
+    {0x4E, "unit/protoss/dragoon.grp"},
+    {0x4F, "unit/protoss/templar.grp"},
+    {0x50, "unit/protoss/scout.grp"},
+    {0x51, "unit/protoss/trilob.grp"},
+    {0x52, "unit/protoss/carrier.grp"},
+    {0x53, "unit/protoss/trilob.grp"},
+    {0x54, "unit/protoss/witness.grp"},
+    {0x55, "unit/protoss/sapper.grp"},
+    {0x56, "unit/protoss/arbiter.grp"},
+    {0x57, "unit/protoss/templar.grp"},
+    {0x58, "unit/protoss/scout.grp"},
+    {0x59, "unit/neutral/bcritter.grp"},
+    {0x5A, "unit/neutral/jcritter.grp"},
+    {0x5B, "unit/terran/dropship.grp"},
+    {0x5C, "unit/terran/bomber.grp"},
+    {0x5D, "unit/neutral/SCritter.grp"},
+    {0x5E, "unit/neutral/KCritter.grp"},
+    {0x5F, "unit/neutral/acritter.grp"},
+    {0x60, "unit/neutral/ICritter.grp"},
+    {0x61, "unit/zerg/LurkEgg.grp"},
+    {0x62, "unit/protoss/corsair.grp"},
+    {0x63, "unit/terran/ghost.grp"},
+    {0x64, "unit/terran/ghost.grp"},
+    {0x65, "unit/neutral/maprev.grp"},
+    {0x66, "unit/terran/battlecr.grp"},
+    {0x67, "unit/zerg/lurker.grp"},
+    {0x68, "unit/zerg/uikerr.grp"},
+    {0x69, "unit/thingy/disrupt.grp"},
+    {0x6A, "unit/terran/control.grp"},
+    {0x6B, "unit/terran/comsat.grp"},
+    {0x6C, "unit/terran/nukesilo.grp"},
+    {0x6D, "unit/terran/depot.grp"},
+    {0x6E, "unit/terran/refinery.grp"},
+    {0x6F, "unit/terran/tbarrack.grp"},
+    {0x70, "unit/terran/academy.grp"},
+    {0x71, "unit/terran/factory.grp"},
+    {0x72, "unit/terran/starport.grp"},
+    {0x73, "unit/terran/controlt.grp"},
+    {0x74, "unit/terran/drydocks.grp"},
+    {0x75, "unit/terran/chemlab.grp"},
+    {0x76, "unit/terran/physics.grp"},
+    {0x78, "unit/terran/machines.grp"},
+    {0x7A, "unit/terran/research.grp"},
+    {0x7B, "unit/terran/weaponpl.grp"},
+    {0x7C, "unit/terran/missile.grp"},
+    {0x7D, "unit/terran/pillbox.grp"},
+    {0x7E, "unit/neutral/cbattle.grp"},
+    {0x7F, "unit/neutral/ion.grp"},
+    {0x80, "unit/neutral/Uraj.grp"},
+    {0x81, "unit/neutral/Khalis.grp"},
+    {0x82, "unit/zerg/infest03.grp"},
+    {0x83, "unit/zerg/hatchery.grp"},
+    {0x84, "unit/zerg/lair.grp"},
+    {0x85, "unit/zerg/hive.grp"},
+    {0x86, "unit/zerg/nyduspit.grp"},
+    {0x87, "unit/zerg/snakey.grp"},
+    {0x88, "unit/zerg/mutapit.grp"},
+    {0x89, "unit/zerg/spire.grp"},
+    {0x8A, "unit/zerg/nest.grp"},
+    {0x8B, "unit/zerg/mutacham.grp"},
+    {0x8C, "unit/zerg/ultra.grp"},
+    {0x8D, "unit/zerg/spire.grp"},
+    {0x8E, "unit/zerg/zspawn01.grp"},
+    {0x8F, "unit/zerg/zspawn02.grp"},
+    {0x90, "unit/zerg/fcolony.grp"},
+    {0x92, "unit/zerg/scolony.grp"},
+    {0x93, "unit/zerg/over1.grp"},
+    {0x94, "unit/zerg/over2.grp"},
+    {0x95, "unit/zerg/extract.grp"},
+    {0x96, "unit/neutral/kerrchry.grp"},
+    {0x97, "unit/zerg/cerebrat.grp"},
+    {0x98, "unit/zerg/ucereb.grp"},
+    {0x9A, "unit/protoss/nexus.grp"},
+    {0x9B, "unit/protoss/robotic.grp"},
+    {0x9C, "unit/protoss/pylon.grp"},
+    {0x9D, "unit/protoss/assim.grp"},
+    {0x9F, "unit/protoss/prism.grp"},
+    {0xA0, "unit/protoss/gateway.grp"},
+    {0xA2, "unit/protoss/photon.grp"},
+    {0xA3, "unit/protoss/citadel.grp"},
+    {0xA4, "unit/protoss/gencore.grp"},
+    {0xA5, "unit/protoss/archives.grp"},
+    {0xA6, "unit/protoss/forge.grp"},
+    {0xA7, "unit/protoss/stargate.grp"},
+    {0xA8, "unit/protoss/stasis.grp"},
+    {0xA9, "unit/protoss/prism.grp"},
+    {0xAA, "unit/protoss/warp.grp"},
+    {0xAB, "unit/protoss/robotic.grp"},
+    {0xAC, "unit/protoss/sbattery.grp"},
+    {0xAD, "unit/neutral/khyad01.grp"},
+    {0xAE, "unit/neutral/temple.grp"},
+    {0xAF, "unit/protoss/XelTempl.grp"},
     {0xB0, "unit/neutral/min01.grp"},
     {0xB1, "unit/neutral/min02.grp"},
     {0xB2, "unit/neutral/min03.grp"},
+    {0xB8, "unit/neutral/starbase.grp"},
     {0xBC, "unit/neutral/geyser.grp"},
+    {0xBD, "unit/protoss/XWarpGat.grp"},
+    {0xBE, "unit/neutral/PsiDisr.grp"},
+    {0xC2, "unit/protoss/beacon.grp"},
+    {0xC3, "unit/protoss/beacon.grp"},
+    {0xC4, "unit/protoss/beacon.grp"},
+    {0xC5, "unit/protoss/beacon.grp"},
+    {0xC6, "unit/protoss/beacon.grp"},
+    {0xC7, "unit/protoss/beacon.grp"},
+    {0xC8, "unit/neutral/Generate.grp"},
+    {0xC9, "unit/zerg/cocoon.grp"},
+    {0xCA, "unit/thingy/dswarm.grp"},
+    {0xCB, "unit/neutral/tgnShad.grp"},
+    {0xCC, "unit/neutral/tgnShad.grp"},
+    {0xCD, "unit/neutral/tgnShad.grp"},
+    {0xCE, "unit/neutral/tgnShad.grp"},
+    {0xCF, "unit/neutral/tgnShad.grp"},
+    {0xD0, "unit/neutral/tgnShad.grp"},
+    {0xD1, "unit/neutral/tgnShad.grp"},
+    {0xD2, "unit/neutral/tgnShad.grp"},
+    {0xD3, "unit/neutral/tgnShad.grp"},
+    {0xD4, "unit/neutral/tgnShad.grp"},
+    {0xD5, "unit/neutral/tgnShad.grp"},
+    {0xD6, "unit/thingy/startloc.grp"},
+    {0xD7, "unit/neutral/flag.grp"},
+    {0xD8, "unit/neutral/kerregg.grp"},
+    {0xD9, "unit/neutral/psiemit.grp"},
+    {0xDA, "unit/neutral/datadisk.grp"},
+    {0xDB, "unit/neutral/khchunk.grp"},
+    {0xDC, "unit/neutral/orechunk.grp"},
+    {0xDD, "unit/neutral/orechunk.grp"},
+    {0xDE, "unit/neutral/gasorb.grp"},
+    {0xDF, "unit/neutral/gasorb.grp"},
+    {0xE0, "unit/neutral/gassac.grp"},
+    {0xE1, "unit/neutral/gassac.grp"},
+    {0xE2, "unit/neutral/gastank.grp"},
+    {0xE3, "unit/neutral/gastank.grp"},
 };
 
 static std::string ChkUnitToGrpPath(int ChkUnitID)
@@ -449,15 +652,81 @@ static std::string ChkUnitToGrpPath(int ChkUnitID)
     return {};
 }
 
+static std::string NormalizeGrpPath(std::string Path)
+{
+    std::replace(Path.begin(), Path.end(), '\\', '/');
+    while (!Path.empty() && (Path.front() == '/' || Path.front() == '\\'))
+        Path.erase(Path.begin());
+    return Path;
+}
+
 std::string GameDataLoader::ResolveGrpPath(uint32_t ImageID) const
 {
-    return ChkUnitToGrpPath((int)ImageID);
+    std::string LegacyPath = ChkUnitToGrpPath((int)ImageID);
+    if (!LegacyPath.empty())
+        return LegacyPath;
+
+    if (ImageID < mImages.size())
+    {
+        const uint32_t TblIndex = mImages[(size_t)ImageID].GrpFilenameIndex;
+        if (TblIndex > 0 && TblIndex <= mImageTbl.size())
+        {
+            std::string Path = NormalizeGrpPath(mImageTbl[(size_t)TblIndex - 1].Filename);
+            if (!Path.empty())
+                return Path;
+        }
+    }
+
+    return {};
+}
+
+uint32_t GameDataLoader::ResolveUnitImageID(uint32_t ChkUnitID) const
+{
+    if (ChkUnitID >= mUnits.size())
+        return UINT32_MAX;
+
+    const uint32_t SpriteID = mUnits[(size_t)ChkUnitID].SpriteID;
+    if (SpriteID >= mSprites.size())
+        return UINT32_MAX;
+
+    const uint32_t ImageID = mSprites[(size_t)SpriteID].ImageID;
+    if (ImageID >= mImages.size())
+        return UINT32_MAX;
+
+    if (ResolveGrpPath(ImageID).empty())
+        return UINT32_MAX;
+
+    return ImageID;
 }
 
 void GameDataLoader::RebuildImageMappingFromTbl()
 {
     Core::Utils::Logger::Info("GameDataLoader",
-        "Entity GRP mapping uses explicit CHK-unit table; images.tbl remap disabled");
+        "Entity GRP mapping uses images.dat/images.tbl with CHK-unit fallback markers");
+    if (!mImageRelations.empty())
+    {
+        size_t RootCount = 0;
+        size_t ShadowCount = 0;
+        size_t DeathCount = 0;
+        size_t GlowCount = 0;
+        size_t LinkedCount = 0;
+        for (const auto& Relation : mImageRelations)
+        {
+            if (Relation.IsRootOrStandalone()) ++RootCount;
+            else if (Relation.IsShadow()) ++ShadowCount;
+            else if (Relation.IsDeathOrTransition()) ++DeathCount;
+            else if (Relation.IsGlowOverlay()) ++GlowCount;
+            else if (Relation.IsLinkedVariant()) ++LinkedCount;
+        }
+
+        Core::Utils::Logger::Info("GameDataLoader",
+            "Loaded images.rel relations: total=" + std::to_string(mImageRelations.size()) +
+            " root=" + std::to_string(RootCount) +
+            " shadow=" + std::to_string(ShadowCount) +
+            " death=" + std::to_string(DeathCount) +
+            " glow=" + std::to_string(GlowCount) +
+            " linked=" + std::to_string(LinkedCount));
+    }
 }
 
 } // namespace Resource

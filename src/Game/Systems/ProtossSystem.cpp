@@ -7,6 +7,7 @@ namespace Game::Systems
 {
 
 using namespace Game::Components;
+using Core::Utils::Logger;
 
 Game::Map::GameMap* ProtossSystem::sMap = nullptr;
 
@@ -23,11 +24,16 @@ void ProtossSystem::SetMap(Game::Map::GameMap* Map)
 
 bool ProtossSystem::HasPower(int TileX, int TileY)
 {
-    if (!sMap) return true; // If no map, assume powered
+    if (!sMap) return false;
     if (TileX < 0 || TileX >= sMap->GetWidth() ||
         TileY < 0 || TileY >= sMap->GetHeight())
         return false;
-    return sMap->GetTile(TileX, TileY).Buildable; // Reuse buildable flag for power
+
+    // Check the power grid cache
+    if (TileX >= 0 && TileX < mPowerGridW && TileY >= 0 && TileY < mPowerGridH)
+        return mPowerGrid[TileY * mPowerGridW + TileX];
+
+    return false;
 }
 
 void ProtossSystem::Update(float DeltaTime)
@@ -36,6 +42,25 @@ void ProtossSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr.GetEntityManager();
     UpdatePowerGrid(EM);
     RechargeShields(EM, DeltaTime);
+    CheckPowerStatus(EM);
+}
+
+void ProtossSystem::CheckPowerStatus(Core::ECS::EntityManager& EM)
+{
+    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent, UnitComponent>();
+    for (int Eid : Buildings)
+    {
+        auto* B = EM.GetComponent<BuildingComponent>(Eid);
+        auto* T = EM.GetComponent<TransformComponent>(Eid);
+        auto* U = EM.GetComponent<UnitComponent>(Eid);
+        if (!B || !T || !U) continue;
+        if (U->UnitRace != Race::Protoss) continue;
+        if (!B->RequiresPylon) continue;
+
+        int TX = (int)(T->Position.X / 32.0f);
+        int TY = (int)(T->Position.Y / 32.0f);
+        B->HasPylonPower = HasPower(TX, TY);
+    }
 }
 
 void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
@@ -44,77 +69,176 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
     int W = sMap->GetWidth();
     int H = sMap->GetHeight();
 
-    // Reset all tiles to not powered
-    for (int Y = 0; Y < H; Y++)
-        for (int X = 0; X < W; X++)
-        {
-            auto T = sMap->GetTile(X, Y);
-            T.Buildable = false; // Reset power
-            sMap->SetTile(X, Y, T);
-        }
+    // Initialize/reinit power grid cache
+    if ((int)mPowerGrid.size() != W * H)
+    {
+        mPowerGrid.resize(W * H, false);
+        mPowerGridW = W;
+        mPowerGridH = H;
+    }
 
-    // Find Pylons and provide power in 7x7 area
+    std::fill(mPowerGrid.begin(), mPowerGrid.end(), false);
+
+    // Pylon provides power in a 4-tile radius = 8x8 area around its center
+    // OpenBW psi_field_mask: 5x8 shape, simplified here as radius 4
     auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
     for (int Eid : Units)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
-        if (!U || !T || U->ChkUnitID != 127) continue; // Pylon = 127
+        if (!U || !T) continue;
+        if (U->ChkUnitID != 0x6A) continue; // Pylon = 0x6A
         if (U->HitPoints <= 0) continue;
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-        int Radius = 4;
 
-        for (int DY = -Radius; DY <= Radius; DY++)
-            for (int DX = -Radius; DX <= Radius; DX++)
-            {
-                int X = TX + DX, Y = TY + DY;
-                if (X >= 0 && X < W && Y >= 0 && Y < H)
-                {
-                    auto Tile = sMap->GetTile(X, Y);
-                    Tile.Buildable = true;
-                    sMap->SetTile(X, Y, Tile);
-                }
-            }
+    // Pylon psi_field: ~5 tiles wide × 7 tiles tall, matching SC/BW shape
+    // Centre tile + 4 left/right, 3 up/down (forming a wide diamond-ish area)
+    for (int DY = -3; DY <= 3; DY++)
+    {
+        int MaxDX = 4 - (std::abs(DY) > 2 ? std::abs(DY) - 2 : 0);
+        for (int DX = -MaxDX; DX <= MaxDX; DX++)
+        {
+            int X = TX + DX, Y = TY + DY;
+            if (X >= 0 && X < W && Y >= 0 && Y < H)
+                mPowerGrid[Y * W + X] = true;
+        }
+    }
     }
 
-    // Check all Protoss buildings for power
-    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>();
+    // Update building power status
+    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
-        auto* P = EM.GetComponent<PlayerComponent>(Eid);
-        if (!B || !T || !P || !B->RequiresPylon) continue;
+        if (!B || !T || !B->RequiresPylon) continue;
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-        bool Powered = false;
-        for (int DY = -1; DY <= 1 && !Powered; DY++)
-            for (int DX = -1; DX <= 1 && !Powered; DX++)
-            {
-                int X = TX + DX, Y = TY + DY;
-                if (X >= 0 && X < W && Y >= 0 && Y < H)
-                    if (sMap->GetTile(X, Y).Buildable)
-                        Powered = true;
-            }
-        B->HasPylonPower = Powered;
+        B->HasPylonPower = HasPower(TX, TY);
     }
 }
 
 void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTime)
 {
-    // Shield Battery: recharge nearby units
-    auto Units = EM.GetEntitiesWith<UnitComponent>();
-    for (int Eid : Units)
+    // Shield Battery: consume energy to recharge nearby units
+    auto Batteries = EM.GetEntitiesWith<TransformComponent, UnitComponent, BuildingComponent>();
+    for (int Bid : Batteries)
     {
-        auto* U = EM.GetComponent<UnitComponent>(Eid);
-        if (!U || U->MaxShieldPoints <= 0) continue;
-        if (U->ShieldPoints >= U->MaxShieldPoints) continue;
-        // Natural shield regen (1/sec) is already in CombatSystem
-        // This is just an extra boost near Shield Batteries
+        auto* BU = EM.GetComponent<UnitComponent>(Bid);
+        auto* BT = EM.GetComponent<TransformComponent>(Bid);
+        auto* BB = EM.GetComponent<BuildingComponent>(Bid);
+        if (!BU || !BT || !BB) continue;
+        if (BU->ChkUnitID != 0x6D) continue; // Shield Battery = 0x6D
+        if (BU->EnergyPoints <= 0) continue;
+        if (BB->UnderConstruction) continue;
+
+        // Find nearby friendly units that need shield recharge
+        float RechargeRate = 26.6f * DeltaTime; // ~26.6 shield per second
+        float EnergyDrain = 10.0f * DeltaTime;  // energy cost per second
+
+        auto PlayerComp = EM.GetComponent<PlayerComponent>(Bid);
+        int BatteryOwner = PlayerComp ? PlayerComp->PlayerID : -1;
+        if (BatteryOwner < 0) continue;
+
+        auto AllUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        for (int Uid : AllUnits)
+        {
+            if (Uid == Bid) continue;
+            if (BU->EnergyPoints <= 0) break;
+
+            auto* TU = EM.GetComponent<UnitComponent>(Uid);
+            auto* TT = EM.GetComponent<TransformComponent>(Uid);
+            auto* TP = EM.GetComponent<PlayerComponent>(Uid);
+            if (!TU || !TT || !TP) continue;
+            if (TP->PlayerID != BatteryOwner) continue;
+            if (TU->ShieldPoints >= TU->MaxShieldPoints) continue;
+            if (TU->MaxShieldPoints <= 0) continue;
+
+            float Dist = BT->Position.DistanceTo(TT->Position);
+            if (Dist > 128.0f) continue; // ~4 tile range
+
+            // Recharge shields
+            int RechargeAmount = (int)std::min(RechargeRate, (float)(TU->MaxShieldPoints - TU->ShieldPoints));
+            TU->ShieldPoints = std::min(TU->MaxShieldPoints, TU->ShieldPoints + RechargeAmount);
+            BU->EnergyPoints = std::max(0, BU->EnergyPoints - (int)EnergyDrain);
+        }
     }
+}
+
+bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
+                                  int TemplarAID, int TemplarBID,
+                                  bool IsDarkArchon)
+{
+    auto* UA = EM.GetComponent<UnitComponent>(TemplarAID);
+    auto* UB = EM.GetComponent<UnitComponent>(TemplarBID);
+    auto* PA = EM.GetComponent<PlayerComponent>(TemplarAID);
+    auto* TA = EM.GetComponent<TransformComponent>(TemplarAID);
+    auto* TB = EM.GetComponent<TransformComponent>(TemplarBID);
+    if (!UA || !UB || !PA || !TA || !TB) return false;
+    if (UA->HitPoints <= 0 || UB->HitPoints <= 0) return false;
+
+    Core::Math::Vec2 CenterPos = {(TA->Position.X + TB->Position.X) * 0.5f,
+                                   (TA->Position.Y + TB->Position.Y) * 0.5f};
+
+    // Consume both templars
+    EM.DestroyEntity(TemplarAID);
+    EM.DestroyEntity(TemplarBID);
+
+    // Spawn Archon
+    int ArchonID = EM.CreateEntity();
+    auto& ATrans = EM.AddComponent<TransformComponent>(ArchonID);
+    auto& AUnit = EM.AddComponent<UnitComponent>(ArchonID);
+    auto& APlayer = EM.AddComponent<PlayerComponent>(ArchonID);
+    auto& ACombat = EM.AddComponent<CombatComponent>(ArchonID);
+    auto& ACmd = EM.AddComponent<CommandComponent>(ArchonID);
+
+    ATrans.Position = CenterPos;
+    APlayer.PlayerID = PA->PlayerID;
+
+    if (IsDarkArchon)
+    {
+        AUnit.UnitRace = Race::Protoss;
+        AUnit.ChkUnitID = 0x3C; // Dark Archon
+        AUnit.HitPoints = 250;
+        AUnit.MaxHitPoints = 250;
+        AUnit.ShieldPoints = 250;
+        AUnit.MaxShieldPoints = 250;
+        AUnit.EnergyPoints = 200;
+        AUnit.MaxEnergyPoints = 200;
+        AUnit.Armor = 0;
+        AUnit.SupplyCost = 4;
+        AUnit.Speed = 2.0f;
+        AUnit.SightRange = 8;
+        AUnit.SizeType = UnitSize::Medium;
+        ACombat.GroundDamage = 0;
+    }
+    else
+    {
+        AUnit.UnitRace = Race::Protoss;
+        AUnit.ChkUnitID = 0x3B; // Archon
+        AUnit.HitPoints = 300;
+        AUnit.MaxHitPoints = 300;
+        AUnit.ShieldPoints = 300;
+        AUnit.MaxShieldPoints = 300;
+        AUnit.Armor = 0;
+        AUnit.SupplyCost = 4;
+        AUnit.Speed = 2.0f;
+        AUnit.SightRange = 8;
+        AUnit.SizeType = UnitSize::Medium;
+        ACombat.GroundDamage = 30;
+        ACombat.AirDamage = 30;
+        ACombat.AttackRange = 5.0f;
+        ACombat.AttackCooldown = 1.0f;
+        ACombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
+    }
+
+    Core::Utils::Logger::Info("ProtossSystem",
+        std::string(IsDarkArchon ? "Dark " : "") + "Archon spawned at (" +
+        std::to_string((int)CenterPos.X) + "," + std::to_string((int)CenterPos.Y) + ")");
+    return true;
 }
 
 } // namespace Game::Systems

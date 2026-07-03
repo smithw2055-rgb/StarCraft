@@ -7,7 +7,7 @@ namespace Resource
 {
 
 // ── Raw, raylib-agnostic color and image types ────────────
-// Used by the decoders so the sokol target can link without raylib.
+// Used by the decoders so the graphics target can link without raylib.
 // The raylib-based main game converts to raylib::Color / raylib::Image
 // via the adapters in Resource/raylib/.
 

@@ -1,21 +1,35 @@
 #pragma once
 
-#include <string>
-#include <vector>
-#include <unordered_map>
+#include <array>
+#include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-#include "raylib.h"
-#include "Resource/IArchiveReader.h"
-#include "Resource/GameDataLoader.h"
-#include "Resource/GrpDecoder.h"
-#include "Resource/PalDecoder.h"
-#include "Resource/PcxDecoder.h"
-#include "Resource/GameDetector.h"
+#include "Resource/Cv5Decoder.h"
+#include "Resource/Vx4Decoder.h"
+#include "Resource/Vf4Decoder.h"
+#include "Resource/PcxRegion.h"
+#include "Resource/GrpToGpu.h"
+#include "Resource/ArchiveSourceTypes.h"
+#include "Resource/DataAssetTypes.h"
+#include "Resource/UIAssetTypes.h"
+#include "Resource/SpriteAssetTypes.h"
+#include "Resource/TilesetAssetTypes.h"
 
-namespace Resource
+namespace Resource::Graphics
 {
+
+class ArchiveAssetSourceView;
+class DataAssetCacheView;
+class SpriteAssetCacheView;
+class TilesetAssetCacheView;
+class UIAssetCacheView;
+
+
 
 class ResourceCache
 {
@@ -23,81 +37,149 @@ public:
     ResourceCache();
     ~ResourceCache();
 
+    // Open game data at InstallPath. Returns true on success.
     bool Initialize(const std::string& GameInstallPath);
-
-    // Texture lookup by image/sprite ID
-    const std::vector<Texture2D>* GetSpriteTextures(uint32_t ImageID);
-
-    // Load UI graphics from game\ directory
-    bool LoadUIGraphics();
-    const std::vector<Texture2D>* GetUIIcons() const { return mUIIcons.empty() ? nullptr : &mUIIcons; }
-    Texture2D GetUIBlink() const { return mUIBlink; }
-    Texture2D GetUIConsole() const { return mUIConsole; }
-    Texture2D GetUIConsoleOver() const { return mUIConsoleOver; }
-    const PcxRegions& GetUIRegions() const { return mUIRegions; }
-
-    // Direct file read through archive
-    std::optional<std::vector<uint8_t>> ReadFile(const std::string& Path);
-
-    // Set tileset-specific palette (from WPE file)
-    bool SetTilesetPalette(const std::string& TilesetName);
-
-    // Load and cache tileset megatile textures (from VR4+VX4)
-    const std::vector<Texture2D>* GetTilesetTextures(const std::string& TilesetName);
-
-    // Tileset raw data access
-    struct TilesetData
-    {
-        std::vector<uint8_t> Vr4;
-        std::vector<uint16_t> Vx4;
-        std::vector<uint16_t> Cv5;
-        std::vector<uint16_t> Vf4;     // 16 uint16 per megatile (walkability/height flags)
-        bool Loaded = false;
-    };
-    TilesetData* GetTilesetData(const std::string& TilesetName);
-
-    // Accessors
-    GameDataLoader& GetDataLoader() { return mDataLoader; }
-    IArchiveReader& GetArchive() { return *mArchive; }
+    void Shutdown();
 
     bool IsInitialized() const { return mIsInitialized; }
 
-private:
-    bool LoadSpriteArchive();
+    ArchiveAssetSourceView GetArchiveSource();
+    DataAssetCacheView GetDataAssets();
+    SpriteAssetCacheView GetSpriteAssets();
+    TilesetAssetCacheView GetTilesetAssets();
+    UIAssetCacheView GetUIAssets();
+    // Data table access
+    Resource::GameDataLoader& GetDataLoader() { return mData.Loader; }
+    const Resource::GameDataLoader& GetDataLoader() const { return mData.Loader; }
 
-    std::unique_ptr<IArchiveReader> mArchive;
-    std::unique_ptr<IArchiveReader> mArchive2;
-    std::unique_ptr<IArchiveReader> mArchive3; // Patch_rt.mpq (highest priority)
-    GameDataLoader mDataLoader;
-    RawPalette mPalette;
+    // Sprite lookup by CHK unit ID. Returns array of GPU images (one per frame).
+    // Cached internally. Returns nullptr if the sprite could not be loaded.
+    const std::vector<GpuImage>* GetSpriteFrames(uint32_t ImageID);
+
+    // Current active palette (set by SetTilesetPalette or unit palette)
+    const ColorPalette& GetPalette() const { return mData.ActivePalette; }
+
+    // Set the active tileset (loads .wpe into palette, invalidates tileset cache)
+    bool SetTilesetPalette(const std::string& TilesetName);
+    const TilesetData* GetTilesetData(const std::string& TilesetName);
+    TilesetData* LoadTilesetData(const std::string& TilesetName);
+
+    // Tileset megatile textures: returns array of GPU images (one per megatile index)
+    const std::vector<GpuImage>* GetTilesetImages(const std::string& TilesetName);
+
+    // Direct archive read (for raw files like scenario.chk)
+    std::optional<std::vector<uint8_t>> ReadFile(const std::string& Path);
+    std::vector<std::string> DebugBuildExtractedAssetCandidates(const std::string& Path) const;
+
+    // UI graphics
+    const std::vector<GpuImage>* GetUIIcons();
+    const std::vector<GpuImage>* GetCommandIcons();
+    const std::vector<GpuImage>* GetCommandIconMasks();
+    const std::vector<GpuImage>* GetCommandButtonSkins(CommandButtonSkinSet SkinSet);
+    const std::vector<GpuImage>* GetWireframeFrames();
+    const ImageOpaqueBounds* GetWireframeOpaqueBounds(int FrameIndex) const;
+    const std::vector<GpuImage>* GetCursorFrames(const std::string& CursorName);
+    const PortraitClip* GetPortraitClip(const std::string& PortraitKey);
+    GpuImage GetHudAggIcons();
+    GpuImage GetHudTwireStrip();
+    GpuImage GetHudTunitStrip();
+    GpuImage GetHudHpBarEmptyStrip();
+    GpuImage GetHudHpBarStrip();
+    GpuImage GetUIConsoleLeft();
+    GpuImage GetUIConsoleCenter();
+    GpuImage GetUIConsoleRight();
+    GpuImage GetUIConsolePortraitFrame();
+    GpuImage GetUIConsoleApm();
+    GpuImage GetUIConsoleTime();
+    GpuImage GetUIConsole();
+    GpuImage GetUIConsoleOver();
+    const PcxRegions& GetUIRegions() const { return mUI.Regions; }
+
+    // Helpers
+    bool OpenMpqArchives(const std::string& InstallPath);
+    bool OpenCascStorage(const std::string& StoragePath);
+    bool OpenAssetsDirectory(const std::string& AssetsPath);
+
+    // Entity sprite keys now use CHK unit IDs directly.
+    uint32_t ResolveImageID(int ChkUnitID);
+
+    // Read .pal via GameDataLoader convenience
+    std::optional<ColorPalette> ReadUnitPalette();
+
+    // Read raw file with case-insensitive variants
+    std::optional<std::vector<uint8_t>> ReadWithFallback(const std::string& Path);
+
+private:
+    bool LoadUIGraphics();
+    std::optional<std::vector<uint8_t>> ReadUIFileWithUpperFallback(const std::string& Path);
+    std::optional<std::filesystem::path> FindExtractedUIAssetPath(const std::string& LogicalPath) const;
+    bool LoadWicUIImage(const std::string& LogicalPath, GpuImage& Out, bool TransparentBlack = false);
+    bool LoadNamedConsoleDds(const std::string& FileName, GpuImage& Out, bool TransparentBlack = false);
+    bool BuildConsoleCompositeFromDds(GpuImage& Out);
+    bool LoadHdConsoleGraphics();
+    bool LoadClassicConsoleGraphics();
+    bool UploadDecodedUIFrames(const DecodedSprite& Sprite,
+                               std::vector<GpuImage>& Out,
+                               std::vector<ImageOpaqueBounds>* OutBounds = nullptr,
+                               bool AsMask = false);
+    bool LoadUIGrpFrames(const std::string& Path,
+                         std::vector<GpuImage>& Out,
+                         const GrpDecodeOptions& Options = {},
+                         std::vector<ImageOpaqueBounds>* OutBounds = nullptr,
+                         bool AsMask = false);
+    bool LoadDdsGrpUIFrames(const std::string& Path,
+                            std::vector<GpuImage>& Out,
+                            std::vector<ImageOpaqueBounds>* OutBounds = nullptr,
+                            bool AsMask = false);
+    std::string GetDdsGrpLogicalPath(const std::string& ClassicPath) const;
+    bool LoadPreferredUIFrames(const std::string& ClassicPath,
+                               std::vector<GpuImage>& Out,
+                               const GrpDecodeOptions& Options = {},
+                               std::vector<ImageOpaqueBounds>* OutBounds = nullptr,
+                               bool AsMask = false,
+                               const char* DebugLabel = nullptr);
+    bool LoadCommandButtonGraphics(const GrpDecodeOptions& CommandButtonOptions);
+    bool LoadDdsGrpUIFirstFrame(const std::string& Path, GpuImage& Out);
+    bool LoadPcxUIImage(const std::string& Path, GpuImage& Out, bool TransparentBlack = false);
+    bool LoadUIIconGraphics();
+    bool LoadWireframeGraphics();
+    bool LoadHudChromeGraphics();
+    bool LoadBlinkGraphics();
+    bool LoadCursorGraphics(const GrpDecodeOptions& CursorOptions);
+    bool BuildTilesetImages(const std::string& TilesetName);
+    std::optional<std::vector<uint8_t>> ReadExtractedAsset(const std::string& Path);
+    std::vector<std::string> BuildExtractedAssetCandidates(const std::string& Path) const;
+    bool LoadPortraitClip(const std::string& PortraitKey, PortraitClip& OutClip);
+    void DestroySpriteCache();
+    void DestroyTilesetCache();
+    void DestroyUICache();
+
+    ArchiveSourceState mSources;
+
+    DataAssetCacheState mData;
 
     bool mIsInitialized = false;
 
-    std::unordered_map<uint32_t, std::vector<Texture2D>> mTextureCache;
+    // Sprite cache: ImageID -> frames
+    SpriteAssetCacheState mSprites;
 
-    std::unordered_map<std::string, TilesetData> mTilesetData;
-    std::unordered_map<std::string, std::vector<Texture2D>> mTilesetCache;
+    // Tileset cache: name â†?data + images
+    TilesetAssetCacheState mTilesets;
 
-    std::vector<Texture2D> mUIIcons;
-    Texture2D mUIBlink = {};
-    Texture2D mUIConsole = {};
-    Texture2D mUIConsoleOver = {};
-    PcxRegions mUIRegions;
+    // UI cache
+    UIAssetCacheState mUI;
 
-    TilesetData* LoadTilesetData(const std::string& TilesetName);
-
-    // Helper: open CASC storage
-    bool OpenCascStorage(const std::string& InstallPath,
-                         std::unique_ptr<IArchiveReader>& OutArchive);
-
-    // Helper: open MPQ with priority fallback
-    bool OpenMpqArchives(const std::string& InstallPath);
-
-    // Helper: open assets directory (extracted resources)
-    bool OpenAssetsDirectory(const std::string& AssetsPath);
-
-    bool mIsCasc = false;
-    bool mUseAssets = false;  // Use extracted assets instead of archives
+    // CASC path resolution
+    std::string ResolveCascPath(const std::string& Path);
+    bool mMediaFoundationInitialized = false;
 };
 
-} // namespace Resource
+} // namespace Resource::Graphics
+
+
+
+
+
+
+
+

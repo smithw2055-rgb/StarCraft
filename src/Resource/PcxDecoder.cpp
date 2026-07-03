@@ -128,7 +128,7 @@ PcxResult PcxDecoder::Decode(const std::vector<uint8_t>& Data)
             IsRed(PalStart[Idx * 3 + 0], PalStart[Idx * 3 + 1], PalStart[Idx * 3 + 2]));
     }
 
-    // Find horizontal runs of red pixels â†’ extract region bounds
+    // Find horizontal runs of red pixels â†?extract region bounds
     struct Rect { int X1 = 9999, Y1 = 9999, X2 = 0, Y2 = 0; bool Active = false; };
     std::vector<Rect> Rects;
 

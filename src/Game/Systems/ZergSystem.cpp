@@ -1,14 +1,19 @@
 #include "Game/Systems/ZergSystem.h"
+#include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/ProductionSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
 
 #include <cmath>
+#include <algorithm>
 
 namespace Game::Systems
 {
 
 using namespace Game::Components;
+using Core::Utils::Logger;
 
 Game::Map::GameMap* ZergSystem::sMap = nullptr;
 
@@ -42,7 +47,6 @@ void ZergSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
 
-    // Initialize creep grid from map
     if (!mGridInitialized && sMap)
     {
         mMapWidth = sMap->GetWidth();
@@ -53,52 +57,108 @@ void ZergSystem::Update(float DeltaTime)
 
     if (!sMap || mCreepGrid.empty()) return;
 
-    SpreadCreep(EM);
-    ProcessLarvae(EM, DeltaTime);
-}
-
-void ZergSystem::SpreadCreep(Core::ECS::EntityManager& EM)
-{
-    mCreepTimer += 0.016f; // Approximate per-frame timing
-    if (mCreepTimer < mCreepInterval) return;
-    mCreepTimer = 0.0f;
-
-    // Reset creep grid
-    std::fill(mCreepGrid.begin(), mCreepGrid.end(), (uint8_t)0);
-
-    // Find all organic Zerg buildings
+    // Find all creep sources (organic completed buildings)
+    std::vector<std::pair<int, int>> CreepSources;
     auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
-        if (!B || !T || !B->IsOrganic || B->UnderConstruction) continue;
+        if (!B || !T) continue;
+        if (!B->IsOrganic || B->UnderConstruction) continue;
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-        int Radius = 6; // tiles
+        CreepSources.push_back({TX, TY});
+    }
 
-        for (int DY = -Radius; DY <= Radius; DY++)
-        {
-            for (int DX = -Radius; DX <= Radius; DX++)
+    std::fill(mCreepGrid.begin(), mCreepGrid.end(), (uint8_t)0);
+
+    for (auto& Src : CreepSources)
+    {
+        int CX = Src.first, CY = Src.second;
+        for (int DY = -1; DY <= 1; DY++)
+            for (int DX = -1; DX <= 1; DX++)
             {
-                int X = TX + DX, Y = TY + DY;
-                if (X < 0 || X >= mMapWidth || Y < 0 || Y >= mMapHeight)
-                    continue;
-                if (DX * DX + DY * DY <= Radius * Radius)
-                    mCreepGrid[Y * mMapWidth + X] = 1;
+                int X = CX + DX, Y = CY + DY;
+                if (X >= 0 && X < mMapWidth && Y >= 0 && Y < mMapHeight)
+                    mCreepGrid[Y * mMapWidth + X] = 2;
             }
+    }
+
+    if (!CreepSources.empty())
+    {
+        std::vector<std::pair<int, int>> Queue;
+        for (auto& Src : CreepSources)
+        {
+            int CX = Src.first, CY = Src.second;
+            for (int DY = -1; DY <= 1; DY++)
+                for (int DX = -1; DX <= 1; DX++)
+                {
+                    int X = CX + DX, Y = CY + DY;
+                    if (X >= 0 && X < mMapWidth && Y >= 0 && Y < mMapHeight && mCreepGrid[Y * mMapWidth + X])
+                        Queue.push_back({X, Y});
+                }
+        }
+
+        int MaxSpread = 8;
+        for (size_t I = 0; I < Queue.size() && MaxSpread > 0; I++)
+        {
+            int X = Queue[I].first, Y = Queue[I].second;
+            for (int DY = -1; DY <= 1; DY++)
+                for (int DX = -1; DX <= 1; DX++)
+                {
+                    int NX = X + DX, NY = Y + DY;
+                    if (NX >= 0 && NX < mMapWidth && NY >= 0 && NY < mMapHeight)
+                    {
+                        if (mCreepGrid[NY * mMapWidth + NX] == 0)
+                        {
+                            mCreepGrid[NY * mMapWidth + NX] = 1;
+                            Queue.push_back({NX, NY});
+                        }
+                    }
+                }
         }
     }
 
-    // Sync back to GameMap tiles
+    mCreepRegressionTimer += 1.0f / 30.0f;
+    if (mCreepRegressionTimer >= 1.0f)
+    {
+        mCreepRegressionTimer = 0.0f;
+        for (int Y = 0; Y < mMapHeight; Y++)
+            for (int X = 0; X < mMapWidth; X++)
+            {
+                if (mCreepGrid[Y * mMapWidth + X] == 0)
+                {
+                    auto Tile = sMap->GetTile(X, Y);
+                    if (Tile.HasCreep)
+                    {
+                        Tile.HasCreep = false;
+                        sMap->SetTile(X, Y, Tile);
+                    }
+                }
+            }
+    }
+
     for (int Y = 0; Y < mMapHeight; Y++)
         for (int X = 0; X < mMapWidth; X++)
         {
-            auto Tile = sMap->GetTile(X, Y);
-            Tile.HasCreep = (mCreepGrid[Y * mMapWidth + X] != 0);
-            sMap->SetTile(X, Y, Tile);
+            if (mCreepGrid[Y * mMapWidth + X] > 0)
+            {
+                auto Tile = sMap->GetTile(X, Y);
+                Tile.HasCreep = true;
+                sMap->SetTile(X, Y, Tile);
+            }
         }
+
+    ProcessLarvae(EM, DeltaTime);
+    ProcessMorphs(EM, DeltaTime);
+    ProcessZergRegeneration(EM, DeltaTime);
+}
+
+void ZergSystem::SpreadCreep(Core::ECS::EntityManager& EM)
+{
+    (void)EM;
 }
 
 void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
@@ -109,15 +169,632 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
         if (!B || !B->IsOrganic || B->UnderConstruction) continue;
 
-        // Spawn larvae
-        if (B->LarvaCount < 3)
+        auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+        if (!Unit) continue;
+        int ChkID = Unit->ChkUnitID;
+        if (ChkID != 0x75 && ChkID != 0x76 && ChkID != 0x77) continue;
+
+        // Count existing larva entities belonging to this hatchery
+        int ExistingLarvae = 0;
+        auto AllUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+        for (int Uid : AllUnits)
+        {
+            auto* UU = EM.GetComponent<UnitComponent>(Uid);
+            auto* UP = EM.GetComponent<PlayerComponent>(Uid);
+            auto* UPlayer = EM.GetComponent<PlayerComponent>(Eid);
+            if (UU && UP && UPlayer && UU->ChkUnitID == 0x23 &&
+                UP->PlayerID == UPlayer->PlayerID && UU->HitPoints > 0)
+                ExistingLarvae++;
+        }
+
+        if (ExistingLarvae < 3)
         {
             B->LarvaTimer += DeltaTime;
-            if (B->LarvaTimer >= 15.0f) // 1 larva every 15 seconds
+            if (B->LarvaTimer >= 15.0f)
             {
                 B->LarvaTimer = 0.0f;
                 B->LarvaCount++;
+
+                auto* Trans = EM.GetComponent<TransformComponent>(Eid);
+                if (Trans)
+                {
+                    int LarvaEid = EM.CreateEntity();
+                    auto& LTrans = EM.AddComponent<TransformComponent>(LarvaEid);
+                    auto& LUnit = EM.AddComponent<UnitComponent>(LarvaEid);
+                    auto& LPlayer = EM.AddComponent<PlayerComponent>(LarvaEid);
+
+                    LTrans.Position = Trans->Position;
+                    LTrans.Position.X += (float)((B->LarvaCount % 3) * 24.0f - 24.0f);
+                    LTrans.Position.Y += (float)((B->LarvaCount / 3) * 24.0f);
+                    LUnit.UnitRace = Race::Zerg;
+                    LUnit.ChkUnitID = 0x23;
+                    LUnit.HitPoints = 25;
+                    LUnit.MaxHitPoints = 25;
+                    LUnit.SupplyCost = 0;
+                    LUnit.Speed = 0.0f;
+                    LUnit.SightRange = 4;
+
+                    auto* P = EM.GetComponent<PlayerComponent>(Eid);
+                    if (P) LPlayer = *P;
+
+                    Logger::Debug("ZergSystem", "Spawned larva " + std::to_string(LarvaEid) +
+                        " near hatchery " + std::to_string(Eid));
+                }
             }
+        }
+    }
+}
+
+// ============================================================
+// Drone morph into building
+// ============================================================
+
+bool ZergSystem::CanMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
+                                            int DroneID, int BuildingDefID,
+                                            std::string* OutReason)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(DroneID);
+    auto* Player = EM.GetComponent<PlayerComponent>(DroneID);
+    if (!Unit || !Player) return false;
+    if (Unit->UnitRace != Race::Zerg) return false;
+    if (Unit->ChkUnitID != 0x29) // Drone
+    {
+        if (OutReason) *OutReason = "not a drone";
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        if (OutReason) *OutReason = "drone is dead";
+        return false;
+    }
+
+    const auto& BldgDef = Game::Races::GetUnitDefByID(BuildingDefID);
+    if (BldgDef.Name.empty() || !BldgDef.IsBuilding)
+    {
+        if (OutReason) *OutReason = "not a building";
+        return false;
+    }
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < BldgDef.MineralCost || Res.VespeneGas < BldgDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    // Check required buildings (predecessor tech)
+    for (int ReqID : BldgDef.RequiredBuildings)
+    {
+        bool Found = false;
+        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+        for (int Bid : Buildings)
+        {
+            auto* B = EM.GetComponent<BuildingComponent>(Bid);
+            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
+            if (B && BP && BP->PlayerID == Player->PlayerID &&
+                B->BuildingDefID == ReqID && !B->UnderConstruction)
+            { Found = true; break; }
+        }
+        if (!Found)
+        {
+            if (OutReason) *OutReason = "missing required building: " +
+                Game::Races::GetUnitDefByID(ReqID).Name;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
+                                              int DroneID, int BuildingDefID,
+                                              const Core::Math::Vec2& Position)
+{
+    std::string Reason;
+    if (!CanMorphDroneIntoBuilding(EM, DroneID, BuildingDefID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph drone: " + Reason);
+        return false;
+    }
+
+    auto* Player = EM.GetComponent<PlayerComponent>(DroneID);
+    int PlayerID = Player ? Player->PlayerID : 0;
+
+    const auto& BldgDef = Game::Races::GetUnitDefByID(BuildingDefID);
+
+    // Deduct costs
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= BldgDef.MineralCost;
+    Res.VespeneGas -= BldgDef.GasCost;
+
+    // Create building entity
+    int BldgID = EM.CreateEntity();
+    auto& BTrans = EM.AddComponent<TransformComponent>(BldgID);
+    auto& BUnit = EM.AddComponent<UnitComponent>(BldgID);
+    auto& BPlayer = EM.AddComponent<PlayerComponent>(BldgID);
+    auto& BBuild = EM.AddComponent<BuildingComponent>(BldgID);
+
+    BTrans.Position = Position;
+    BPlayer.PlayerID = PlayerID;
+
+    BUnit.ChkUnitID = BldgDef.ChkUnitID;
+    BUnit.UnitRace = Race::Zerg;
+    BUnit.HitPoints = std::max(1, BldgDef.HitPoints / 10); // 10% HP while building
+    BUnit.MaxHitPoints = BldgDef.HitPoints;
+    BUnit.ShieldPoints = BldgDef.ShieldPoints;
+    BUnit.MaxShieldPoints = BldgDef.ShieldPoints;
+    BUnit.EnergyPoints = BldgDef.EnergyPoints;
+    BUnit.MaxEnergyPoints = BldgDef.EnergyPoints;
+    BUnit.Armor = BldgDef.Armor;
+    BUnit.SupplyCost = 0;
+    BUnit.Speed = 0.0f;
+    BUnit.SightRange = 4;
+    BUnit.SizeType = BldgDef.SizeType;
+
+    BBuild.IsBuilding = true;
+    BBuild.UnderConstruction = true;
+    BBuild.BuildProgress = (float)BldgDef.BuildTime;
+    BBuild.TotalBuildTime = (float)BldgDef.BuildTime;
+    BBuild.RequiresCreep = BldgDef.RequiresCreep;
+    BBuild.RequiresPylon = BldgDef.RequiresPylon;
+    BBuild.IsOrganic = true; // Zerg buildings are organic
+    BBuild.BuildingDefID = BuildingDefID;
+    BBuild.BuildTimeRemaining = (float)BldgDef.BuildTime;
+
+    // Add morph component so ProcessMorphs handles completion
+    auto& DroneMorph = EM.AddComponent<MorphComponent>(BldgID);
+    DroneMorph.MorphTargetDefID = BuildingDefID;
+    DroneMorph.MorphDuration = (float)BldgDef.BuildTime;
+    DroneMorph.MorphTimer = (float)BldgDef.BuildTime;
+    DroneMorph.IsMorphing = true;
+    DroneMorph.SourceUnitID = DroneID;
+
+    // Consume the Drone (destroy it)
+    EM.DestroyEntity(DroneID);
+
+    Logger::Info("ZergSystem",
+        "Player " + std::to_string(PlayerID) + " started morphing " +
+        BldgDef.Name + " at (" + std::to_string((int)Position.X) + "," +
+        std::to_string((int)Position.Y) + "), drone consumed");
+
+    return true;
+}
+
+// ============================================================
+// Larva morph into unit
+// ============================================================
+
+bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
+                                        int LarvaID, int UnitDefID,
+                                        std::string* OutReason)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(LarvaID);
+    auto* Player = EM.GetComponent<PlayerComponent>(LarvaID);
+    if (!Unit || !Player) return false;
+    if (Unit->ChkUnitID != 0x23) // Larva
+    {
+        if (OutReason) *OutReason = "not a larva";
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        if (OutReason) *OutReason = "larva is dead";
+        return false;
+    }
+
+    const auto& UnitDef = Game::Races::GetUnitDefByID(UnitDefID);
+    if (UnitDef.Name.empty() || UnitDef.IsBuilding)
+    {
+        if (OutReason) *OutReason = "not a valid zerg unit";
+        return false;
+    }
+    if (UnitDef.RaceType != Race::Zerg)
+    {
+        if (OutReason) *OutReason = "not a zerg unit";
+        return false;
+    }
+
+    // Don't allow larva, egg, drone (morphed differently), or devolved forms
+    if (UnitDef.Name == "Larva" || UnitDef.Name == "Egg" ||
+        UnitDef.Name == "Drone" || UnitDef.Name == "Overlord")
+    {
+        if (OutReason) *OutReason = "this unit cannot morph from larva";
+        return false;
+    }
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < UnitDef.MineralCost || Res.VespeneGas < UnitDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    // Check supply
+    if (Res.SupplyUsed + UnitDef.SupplyCost > Res.SupplyMax)
+    {
+        if (OutReason) *OutReason = "not enough supply";
+        return false;
+    }
+
+    // Check required buildings
+    for (int ReqID : UnitDef.RequiredBuildings)
+    {
+        bool Found = false;
+        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+        for (int Bid : Buildings)
+        {
+            auto* B = EM.GetComponent<BuildingComponent>(Bid);
+            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
+            if (B && BP && BP->PlayerID == Player->PlayerID &&
+                B->BuildingDefID == ReqID && !B->UnderConstruction)
+            { Found = true; break; }
+        }
+        if (!Found)
+        {
+            if (OutReason) *OutReason = "missing required building: " +
+                Game::Races::GetUnitDefByID(ReqID).Name;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
+                                          int LarvaID, int UnitDefID)
+{
+    std::string Reason;
+    if (!CanMorphLarvaIntoUnit(EM, LarvaID, UnitDefID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph larva: " + Reason);
+        return false;
+    }
+
+    auto* Player = EM.GetComponent<PlayerComponent>(LarvaID);
+    auto* LarvaTrans = EM.GetComponent<TransformComponent>(LarvaID);
+    int PlayerID = Player ? Player->PlayerID : 0;
+
+    const auto& UnitDef = Game::Races::GetUnitDefByID(UnitDefID);
+
+    // Deduct costs
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= UnitDef.MineralCost;
+    Res.VespeneGas -= UnitDef.GasCost;
+    Res.SupplyUsed += UnitDef.SupplyCost;
+
+    // Create egg entity
+    int EggID = EM.CreateEntity();
+    auto& ETrans = EM.AddComponent<TransformComponent>(EggID);
+    auto& EUnit = EM.AddComponent<UnitComponent>(EggID);
+    auto& EPlayer = EM.AddComponent<PlayerComponent>(EggID);
+    auto& EBuild = EM.AddComponent<BuildingComponent>(EggID);
+    auto& EMorph = EM.AddComponent<MorphComponent>(EggID);
+
+    ETrans.Position = LarvaTrans ? LarvaTrans->Position : Core::Math::Vec2();
+    EPlayer.PlayerID = PlayerID;
+
+    EUnit.ChkUnitID = 0x24; // Egg
+    EUnit.UnitRace = Race::Zerg;
+    EUnit.HitPoints = (int)((float)UnitDef.HitPoints * 0.5f);
+    EUnit.MaxHitPoints = UnitDef.HitPoints;
+    EUnit.ShieldPoints = UnitDef.ShieldPoints;
+    EUnit.MaxShieldPoints = UnitDef.ShieldPoints;
+    EUnit.EnergyPoints = UnitDef.EnergyPoints;
+    EUnit.MaxEnergyPoints = UnitDef.EnergyPoints;
+    EUnit.Armor = UnitDef.Armor;
+    EUnit.SupplyCost = 0;
+    EUnit.Speed = 0.0f;
+    EUnit.SightRange = 2;
+    EUnit.SizeType = UnitSize::Medium;
+
+    EBuild.IsBuilding = true;
+    EBuild.UnderConstruction = true;
+    EBuild.BuildProgress = (float)UnitDef.BuildTime;
+    EBuild.TotalBuildTime = (float)UnitDef.BuildTime;
+    EBuild.IsOrganic = true;
+    EBuild.BuildingDefID = -1;
+    EBuild.BuildTimeRemaining = (float)UnitDef.BuildTime;
+
+    EMorph.MorphTargetDefID = UnitDefID;
+    EMorph.MorphDuration = (float)UnitDef.BuildTime;
+    EMorph.MorphTimer = (float)UnitDef.BuildTime;
+    EMorph.IsMorphing = true;
+    EMorph.SourceUnitID = LarvaID;
+
+    // Consume the Larva
+    EM.DestroyEntity(LarvaID);
+
+    Logger::Info("ZergSystem",
+        "Player " + std::to_string(PlayerID) + " started morphing " +
+        UnitDef.Name + " from larva (egg " + std::to_string(EggID) + ")");
+
+    return true;
+}
+
+// ============================================================
+// Building morph (Hatchery→Lair→Hive, Spire→Greater Spire, etc.)
+// ============================================================
+
+bool ZergSystem::CanMorphBuilding(Core::ECS::EntityManager& EM,
+                                   int BuildingID, int TargetDefID,
+                                   std::string* OutReason)
+{
+    auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
+    auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
+    auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
+    if (!Bldg || !Unit || !Player) return false;
+    if (Unit->UnitRace != Race::Zerg) return false;
+    if (Bldg->UnderConstruction)
+    {
+        if (OutReason) *OutReason = "building is still under construction";
+        return false;
+    }
+
+    const auto& TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
+    if (TargetDef.Name.empty() || !TargetDef.IsBuilding)
+    {
+        if (OutReason) *OutReason = "not a valid building morph target";
+        return false;
+    }
+
+    // Check if morph is already in progress
+    auto* Morph = EM.GetComponent<MorphComponent>(BuildingID);
+    if (Morph && Morph->IsMorphing)
+    {
+        if (OutReason) *OutReason = "already morphing";
+        return false;
+    }
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < TargetDef.MineralCost || Res.VespeneGas < TargetDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphBuilding(Core::ECS::EntityManager& EM,
+                                     int BuildingID, int TargetDefID)
+{
+    std::string Reason;
+    if (!CanMorphBuilding(EM, BuildingID, TargetDefID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph building: " + Reason);
+        return false;
+    }
+
+    auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
+    int PlayerID = Player ? Player->PlayerID : 0;
+
+    const auto& TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
+
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= TargetDef.MineralCost;
+    Res.VespeneGas -= TargetDef.GasCost;
+
+    // Set morph state on building
+    auto& Morph = EM.AddComponent<MorphComponent>(BuildingID);
+    Morph.MorphTargetDefID = TargetDefID;
+    Morph.MorphDuration = (float)TargetDef.BuildTime;
+    Morph.MorphTimer = (float)TargetDef.BuildTime;
+    Morph.IsMorphing = true;
+    Morph.SourceUnitID = BuildingID;
+
+    // Set building progress
+    auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
+    if (Bldg)
+    {
+        Bldg->BuildTimeRemaining = (float)TargetDef.BuildTime;
+        Bldg->UnderConstruction = true;
+    }
+
+    Logger::Info("ZergSystem",
+        "Player " + std::to_string(PlayerID) + " started morphing building into " +
+        TargetDef.Name);
+
+    return true;
+}
+
+// ============================================================
+// Morph processing
+// ============================================================
+
+void ZergSystem::ProcessMorphs(Core::ECS::EntityManager& EM, float DeltaTime)
+{
+    auto Entities = EM.GetEntitiesWith<MorphComponent>();
+    for (int Eid : Entities)
+    {
+        auto* Morph = EM.GetComponent<MorphComponent>(Eid);
+        auto* Bldg = EM.GetComponent<BuildingComponent>(Eid);
+        if (!Morph || !Morph->IsMorphing) continue;
+
+        Morph->MorphTimer -= DeltaTime;
+
+        // Update building progress for HP scaling (eggs and buildings)
+        if (Bldg)
+        {
+            Bldg->BuildTimeRemaining = Morph->MorphTimer;
+            Bldg->BuildProgress = Morph->MorphTimer;
+        }
+
+        if (Morph->MorphTimer <= 0.0f)
+        {
+            Morph->MorphTimer = 0.0f;
+            Morph->IsMorphing = false;
+            CompleteMorph(EM, Eid);
+        }
+    }
+}
+
+void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
+{
+    auto* Morph = EM.GetComponent<MorphComponent>(MorphEntityID);
+    if (!Morph) return;
+
+    int TargetDefID = Morph->MorphTargetDefID;
+    const auto& TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
+    if (TargetDef.Name.empty()) return;
+
+    auto* Unit = EM.GetComponent<UnitComponent>(MorphEntityID);
+    auto* Bldg = EM.GetComponent<BuildingComponent>(MorphEntityID);
+    auto* Player = EM.GetComponent<PlayerComponent>(MorphEntityID);
+
+    if (TargetDef.IsBuilding)
+    {
+        // Building morph (e.g. Hatchery→Lair, Spire→Greater Spire)
+        // Update the existing building entity to the new type
+        if (Unit)
+        {
+            Unit->ChkUnitID = TargetDef.ChkUnitID;
+            Unit->MaxHitPoints = TargetDef.HitPoints;
+            Unit->HitPoints = TargetDef.HitPoints;
+            Unit->MaxShieldPoints = TargetDef.ShieldPoints;
+            Unit->ShieldPoints = TargetDef.ShieldPoints;
+            Unit->Armor = TargetDef.Armor;
+            Unit->SupplyCost = TargetDef.SupplyCost;
+            Unit->SightRange = TargetDef.SightRange;
+            Unit->Speed = TargetDef.Speed;
+            Unit->IsDetector = false;
+        }
+        if (Bldg)
+        {
+            Bldg->UnderConstruction = false;
+            Bldg->BuildingDefID = TargetDefID;
+            Bldg->BuildTimeRemaining = 0.0f;
+            Bldg->IsResearching = false;
+        }
+
+        Logger::Info("ZergSystem",
+            "Building morph complete: " + TargetDef.Name +
+            " (entity " + std::to_string(MorphEntityID) + ")");
+    }
+    else
+    {
+        // Unit morph (egg �?unit)
+        // Destroy the egg, spawn the unit
+        if (!Player) return;
+
+        Core::Math::Vec2 SpawnPos;
+        if (auto* Trans = EM.GetComponent<TransformComponent>(MorphEntityID))
+            SpawnPos = Trans->Position;
+
+        int PlayerID = Player->PlayerID;
+
+        // Spawn the morphed unit
+        int NewUnitID = EM.CreateEntity();
+        auto& NTrans = EM.AddComponent<TransformComponent>(NewUnitID);
+        auto& NUnit = EM.AddComponent<UnitComponent>(NewUnitID);
+        auto& NPlayer = EM.AddComponent<PlayerComponent>(NewUnitID);
+        auto& NCmd = EM.AddComponent<CommandComponent>(NewUnitID);
+
+        NTrans.Position = SpawnPos;
+        NPlayer.PlayerID = PlayerID;
+
+        NUnit.ChkUnitID = TargetDef.ChkUnitID;
+        NUnit.UnitRace = Race::Zerg;
+        NUnit.HitPoints = TargetDef.HitPoints;
+        NUnit.MaxHitPoints = TargetDef.HitPoints;
+        NUnit.ShieldPoints = TargetDef.ShieldPoints;
+        NUnit.MaxShieldPoints = TargetDef.ShieldPoints;
+        NUnit.EnergyPoints = TargetDef.EnergyPoints;
+        NUnit.MaxEnergyPoints = TargetDef.EnergyPoints;
+        NUnit.Armor = TargetDef.Armor;
+        NUnit.SupplyCost = TargetDef.SupplyCost;
+        NUnit.Speed = TargetDef.Speed;
+        NUnit.SightRange = TargetDef.SightRange;
+        NUnit.SizeType = TargetDef.SizeType;
+
+        NCmd.CurrentCommand = CommandType::Stop;
+
+        // Add combat component if unit has weapons
+        if (TargetDef.GroundDamage > 0 || TargetDef.AirDamage > 0)
+        {
+            auto& NCombat = EM.AddComponent<CombatComponent>(NewUnitID);
+            NCombat.GroundDamage = TargetDef.GroundDamage;
+            NCombat.AirDamage = TargetDef.AirDamage;
+            NCombat.AttackRange = TargetDef.AttackRange;
+            NCombat.AttackCooldown = TargetDef.AttackCooldown;
+            NCombat.GroundDmgType = TargetDef.GroundDmgType;
+            NCombat.AirDmgType = TargetDef.AirDmgType;
+            NCombat.MyElevation = Elevation::Ground;
+            NCombat.CanTargetAir = TargetDef.AirDamage > 0;
+            NCombat.IsRanged = TargetDef.AttackRange > 1.5f;
+            if (TargetDef.Name == "Mutalisk" || TargetDef.Name == "Guardian" ||
+                TargetDef.Name == "Devourer" || TargetDef.Name == "Scourge" ||
+                TargetDef.Name == "Queen" || TargetDef.Name == "Overlord")
+            {
+                NCombat.MyElevation = Elevation::Air;
+            }
+        }
+
+        // Add burrow component for units that can burrow
+        if (TargetDef.Name == "Zergling" || TargetDef.Name == "Hydralisk" ||
+            TargetDef.Name == "Drone" || TargetDef.Name == "Defiler" ||
+            TargetDef.Name == "Lurker" || TargetDef.Name == "Ultralisk")
+        {
+            auto& NBurrow = EM.AddComponent<BurrowComponent>(NewUnitID);
+            NBurrow.CanBurrow = true;
+        }
+
+        // Destroy the egg
+        EM.DestroyEntity(MorphEntityID);
+
+        Logger::Info("ZergSystem",
+            "Unit morph complete: " + TargetDef.Name +
+            " (entity " + std::to_string(NewUnitID) + ")");
+    }
+}
+
+void ZergSystem::BurrowUnit(Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Burrow || !Unit || !Burrow->CanBurrow) return;
+
+    if (Burrow->IsBurrowed)
+    {
+        Burrow->IsBurrowed = false;
+        Burrow->BurrowTransitionTime = 1.0f;
+        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
+        if (Cloak) Cloak->IsBurrowed = false;
+    }
+    else
+    {
+        Burrow->IsBurrowed = true;
+        Burrow->BurrowTransitionTime = 1.0f;
+        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
+        if (!Cloak)
+            Cloak = &EM.AddComponent<CloakComponent>(EntityID);
+        Cloak->IsBurrowed = true;
+        Cloak->IsCloaked = true;
+    }
+}
+
+void ZergSystem::ProcessZergRegeneration(Core::ECS::EntityManager& EM, float DeltaTime)
+{
+    auto Units = EM.GetEntitiesWith<UnitComponent, TransformComponent>();
+    for (int Eid : Units)
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+        auto* Trans = EM.GetComponent<TransformComponent>(Eid);
+        if (!Unit || !Trans) continue;
+        if (Unit->UnitRace != Race::Zerg) continue;
+        if (Unit->HitPoints <= 0 || Unit->HitPoints >= Unit->MaxHitPoints) continue;
+
+        // Check if on creep (buildings or ground units on creep tiles regen)
+        bool OnCreep = false;
+        int TX = (int)(Trans->Position.X / 32.0f);
+        int TY = (int)(Trans->Position.Y / 32.0f);
+        if (HasCreep(TX, TY)) OnCreep = true;
+
+        if (OnCreep)
+        {
+            // Zerg regen: ~4 HP/sec on creep
+            float RegenAmount = 4.0f * DeltaTime;
+            Unit->HitPoints = std::min(Unit->MaxHitPoints,
+                Unit->HitPoints + (int)std::ceil(RegenAmount));
         }
     }
 }
