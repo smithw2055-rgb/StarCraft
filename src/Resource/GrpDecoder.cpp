@@ -2,11 +2,20 @@
 #include "Resource/PalDecoder.h"
 #include "Core/Utils/Logger.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
 namespace Resource
 {
+namespace
+{
+    bool ShouldLogGrpDecodeDetails()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_GRP");
+        return Value && Value[0] == '1';
+    }
+}
 
 // GRP format:
 //   6 bytes: frameCount(uint16), maxWidth(uint16), maxHeight(uint16)
@@ -48,10 +57,10 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
     for (int I = 0; I < Sprite.FrameCount; ++I)
     {
         size_t HdrOff = ImageHeaderOff + I * 8;
-        uint8_t FrameXOff = GrpData[HdrOff + 0];
-        uint8_t FrameYOff = GrpData[HdrOff + 1];
-        uint8_t FrameWidth = GrpData[HdrOff + 2];
-        uint8_t FrameHeight = GrpData[HdrOff + 3];
+        int FrameXOff = GrpData[HdrOff + 0];
+        int FrameYOff = GrpData[HdrOff + 1];
+        int FrameWidth = GrpData[HdrOff + 2];
+        int FrameHeight = GrpData[HdrOff + 3];
         uint32_t LineOffBase = GrpData[HdrOff + 4] |
                                (GrpData[HdrOff + 5] << 8) |
                                (GrpData[HdrOff + 6] << 16) |
@@ -64,6 +73,8 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
             GrpFrameInfo Info;
             Info.Width = FrameWidth;
             Info.Height = FrameHeight;
+            Info.XOffset = FrameXOff;
+            Info.YOffset = FrameYOff;
             Info.Offset = (int)Sprite.RawFrameData.size();
             Info.Flip = false;
             Sprite.Frames.push_back(Info);
@@ -79,6 +90,8 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
             GrpFrameInfo Info;
             Info.Width = FrameWidth;
             Info.Height = FrameHeight;
+            Info.XOffset = FrameXOff;
+            Info.YOffset = FrameYOff;
             Info.Offset = (int)Sprite.RawFrameData.size();
             Info.Flip = false;
             Sprite.Frames.push_back(Info);
@@ -90,6 +103,8 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
         GrpFrameInfo Info;
         Info.Width = FrameWidth;
         Info.Height = FrameHeight;
+        Info.XOffset = FrameXOff;
+        Info.YOffset = FrameYOff;
         Info.Offset = (int)Sprite.RawFrameData.size();
         Info.Flip = false;
         Sprite.Frames.push_back(Info);
@@ -101,7 +116,7 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
 
         // Decode each scanline into pre-allocated space
         int TotalNonZero = 0;
-        for (uint8_t Y = 0; Y < FrameHeight; ++Y)
+        for (int Y = 0; Y < FrameHeight; ++Y)
         {
             size_t LineOffAddr = LineOffBase + Y * 2;
             if (LineOffAddr + 1 >= GrpData.size())
@@ -155,8 +170,7 @@ std::optional<GrpSprite> GrpDecoder::DecodeGrp(const std::vector<uint8_t>& GrpDa
                 }
             }
         }
-        // Debug: log non-zero pixel count for first frame
-        if (I == 0)
+        if (I == 0 && ShouldLogGrpDecodeDetails())
         {
             Core::Utils::Logger::Info("GrpDecoder", "Frame0 decode: " + 
                 std::to_string(TotalNonZero) + "/" + std::to_string(FrameWidth * FrameHeight) + " non-zero");
@@ -219,7 +233,7 @@ std::optional<std::vector<RawImage>> GrpDecoder::DecodeToRawImages(
 
         RawImage Img = PalDecoder::ApplyPalette(FramePixelsData,
                                                  Info.Width, Info.Height, Pal);
-        if (I == 0)
+        if (I == 0 && ShouldLogGrpDecodeDetails())
         {
             Core::Utils::Logger::Info("GrpDecoder",
                 "Image0: " + std::to_string(Img.Width) + "x" + std::to_string(Img.Height));

@@ -1,4 +1,5 @@
 #include "CursorManager.h"
+#include "CursorTargeting.h"
 #include "EcsSync.h"
 #include "Core/Platform/Platform.h"
 #include "Render/Camera2D.h"
@@ -12,6 +13,7 @@
 #include "Game/Components.h"
 #include "Core/Math/Vec2.h"
 #include <cmath>
+#include <limits>
 
 namespace Game::Client::GameLoop
 {
@@ -84,7 +86,7 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
     ClickTargetContext Context;
     Context.WorldPosition = WorldPosition;
 
-    float BestResourceDist = 32.0f;
+    float BestResourceScore = 1.0f;
     for (int EntityId : EM.GetEntitiesWith<
         Game::Components::TransformComponent,
         Game::Components::ResourceComponent>())
@@ -93,10 +95,15 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
         auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityId);
         if (!Transform || !Resource || Resource->IsDepleted) continue;
 
-        float Distance = Transform->Position.DistanceTo(WorldPosition);
-        if (Distance < BestResourceDist)
+        int ChkUnitID = 0;
+        if (auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId))
+            ChkUnitID = Unit->ChkUnitID;
+
+        const float Score =
+            ResourceClickScore(Transform->Position, WorldPosition, Resource->Type, ChkUnitID);
+        if (Score < BestResourceScore)
         {
-            BestResourceDist = Distance;
+            BestResourceScore = Score;
             Context.ResourceEntityID = EntityId;
         }
     }
@@ -108,7 +115,7 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
             MyPlayerId = Player->PlayerID;
     }
 
-    float BestEntityDist = 32.0f;
+    float BestEntityScore = std::numeric_limits<float>::max();
     for (int EntityId : EM.GetEntitiesWith<
         Game::Components::TransformComponent,
         Game::Components::UnitComponent,
@@ -118,11 +125,12 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
         auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityId);
         if (!Transform || !Unit || !Player || Unit->HitPoints <= 0) continue;
+        if (EM.GetComponent<Game::Components::ResourceComponent>(EntityId)) continue;
 
-        float Distance = Transform->Position.DistanceTo(WorldPosition);
-        if (Distance < BestEntityDist)
+        const float Score = EntityClickScore(EM, EntityId, WorldPosition);
+        if (Score < BestEntityScore)
         {
-            BestEntityDist = Distance;
+            BestEntityScore = Score;
             Context.AnyEntityID = EntityId;
             Context.EnemyEntityID = (Player->PlayerID != MyPlayerId) ? EntityId : -1;
         }
@@ -229,7 +237,9 @@ CursorRenderState CursorManager::ResolveCursorState(int MouseX, int MouseY,
             Camera.ScreenToWorld((float)MouseX, (float)MouseY, WorldX, WorldY);
             auto TargetContext = ResolveClickTargetContext(*EM, EcsIds, {WorldX, WorldY});
 
-            if (AttackKeyDown || (TargetContext.EnemyEntityID >= 0 && HasCombatSelection(*EM, EcsIds)))
+            if (AttackKeyDown ||
+                (TargetContext.EnemyEntityID >= 0 &&
+                 HasAttackCapableSelection(*EM, EcsIds, TargetContext.EnemyEntityID)))
             {
                 State.Kind = GameCursorKind::TargetRed;
                 CursorHotspot(State.Kind, State.HotspotX, State.HotspotY);

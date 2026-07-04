@@ -2,6 +2,8 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/MovementTuning.h"
 #include "Game/Components.h"
+#include "Game/DataEnums.h"
+#include "Game/Map/Map.h"
 #include "Core/Math/Vec2.h"
 
 #include <unordered_map>
@@ -15,57 +17,234 @@ using namespace Game::Components;
 
 namespace
 {
-    struct DirResult
+    static bool IsSiegedTankUnit(int ChkUnitID)
     {
-        int Offset = 0;
-        bool Flipped = false;
+        return ChkUnitID == 30 ||  // Terran Siege Tank Siege Mode
+               ChkUnitID == 25;    // Hero Edmund Duke Siege Mode
+    }
+
+    static bool CanMoveEntity(Core::ECS::EntityManager& EM, Core::ECS::EntityID ID)
+    {
+        auto* Trans = EM.GetComponent<TransformComponent>(ID);
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        if (!Trans || !Unit)
+            return false;
+        if (EM.GetComponent<ResourceComponent>(ID))
+            return false;
+        if (auto* Building = EM.GetComponent<BuildingComponent>(ID))
+            return Building->IsLifted;
+        if (IsSiegedTankUnit(Unit->ChkUnitID))
+            return false;
+        return Unit->Speed > 0.0f;
+    }
+
+    static bool ShouldMoveAsAir(Core::ECS::EntityManager& EM, Core::ECS::EntityID ID)
+    {
+        if (auto* Building = EM.GetComponent<BuildingComponent>(ID))
+            if (Building->IsLifted)
+                return true;
+
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        return Unit && Game::Data::IsAirUnitType(Unit->ChkUnitID);
+    }
+
+    static bool IsStaticGroundBlocker(Core::ECS::EntityManager& EM, Core::ECS::EntityID ID)
+    {
+        if (auto* Building = EM.GetComponent<BuildingComponent>(ID))
+            return !Building->IsLifted;
+        return EM.GetComponent<ResourceComponent>(ID) != nullptr;
+    }
+
+    struct StaticBlockerRect
+    {
+        float Left = 16.0f;
+        float Top = 16.0f;
+        float Right = 16.0f;
+        float Bottom = 16.0f;
     };
 
-    static DirResult DirectionToFrameOffset(Core::Math::Vec2 Dir, int TotalFrames)
+    static int CollisionRadiusFromBounds(const PathfindingComponent& Path)
     {
-        DirResult R;
-        if (TotalFrames <= 1) return R;
+        if (!Path.HasCollisionBounds)
+            return Path.CollisionRadius;
 
-        if (TotalFrames >= 17)
+        const int Width = Path.CollisionLeft + Path.CollisionRight + 1;
+        const int Height = Path.CollisionUp + Path.CollisionDown + 1;
+        return std::max(4, std::max(Width, Height) / 2);
+    }
+
+    static StaticBlockerRect StaticBlockerRectForEntity(const UnitComponent* Unit,
+                                                        const BuildingComponent* Building,
+                                                        const ResourceComponent* Resource,
+                                                        const PathfindingComponent* Path)
+    {
+        if (Path && Path->HasCollisionBounds)
         {
-            const float MirroredX = std::fabs(Dir.X);
-            const float Angle = atan2f(Dir.Y, MirroredX);
-            int FacingIndex = (int)std::lround(((Angle + 1.57079632679f) / 3.14159265359f) * 16.0f);
-            if (FacingIndex < 0) FacingIndex = 0;
-            if (FacingIndex > 16) FacingIndex = 16;
-            R.Offset = FacingIndex;
-            R.Flipped = Dir.X < 0.0f;
+            return {
+                (float)Path->CollisionLeft,
+                (float)Path->CollisionUp,
+                (float)Path->CollisionRight + 1.0f,
+                (float)Path->CollisionDown + 1.0f
+            };
         }
-        else
+
+        Core::Math::Vec2 Half{16.0f, 16.0f};
+        if (Resource)
         {
-            float Deg = atan2f(Dir.Y, Dir.X) * 180.0f / 3.14159f;
-            int FramesPerDir = std::max(1, TotalFrames / 4);
-            int DirIndex = 0;
-            if (Deg >= -45.0f && Deg < 45.0f) DirIndex = 0;
-            else if (Deg >= 45.0f && Deg < 135.0f) DirIndex = 1;
-            else if (Deg >= -135.0f && Deg < -45.0f) DirIndex = 3;
-            else DirIndex = 2;
-            R.Offset = DirIndex * FramesPerDir;
+            Half = {32.0f, 20.0f};
         }
-        return R;
+        else if (Building && Unit)
+        {
+            switch (Unit->ChkUnitID)
+            {
+                case 106: // Terran Command Center
+                    Half = {64.0f, 48.0f};
+                    break;
+                case 111: // Terran Barracks
+                case 113: // Terran Factory
+                case 114: // Terran Starport
+                case 116: // Terran Science Facility
+                    Half = {56.0f, 40.0f};
+                    break;
+                case 107: // Terran Comsat Station
+                case 108: // Terran Nuclear Silo
+                case 109: // Terran Supply Depot
+                case 115: // Terran Control Tower
+                case 120: // Terran Machine Shop
+                case 124: // Terran Missile Turret
+                case 125: // Terran Bunker
+                    Half = {32.0f, 24.0f};
+                    break;
+                default:
+                    Half = Building->IsAddon ? Core::Math::Vec2{32.0f, 24.0f} :
+                        Core::Math::Vec2{48.0f, 32.0f};
+                    break;
+            }
+        }
+
+        return {Half.X, Half.Y, Half.X, Half.Y};
     }
 
-    static float ClampSpeed(float Speed, float MaxSpeed)
+    static void ClearMotion(PathfindingComponent& Path)
     {
-        if (Speed > MaxSpeed) return MaxSpeed;
-        if (Speed < -MaxSpeed) return -MaxSpeed;
-        return Speed;
+        Path.Path.clear();
+        Path.PathIndex = 0;
+        Path.CurrentSpeed = 0.0f;
+        Path.CurrentVelocity = {0.0f, 0.0f};
     }
 
-    static Core::Math::Vec2 ClampVelocity(const Core::Math::Vec2& V, float MaxLen)
+    static bool IsWalkableWorldPosition(const Game::Map::GameMap& Map,
+                                        const Core::Math::Vec2& Position,
+                                        float ClearanceRadius)
     {
-        float Len = V.Length();
-        if (Len > MaxLen && Len > 0.0001f)
-            return V.Normalized() * MaxLen;
-        return V;
+        int TileX = 0;
+        int TileY = 0;
+        Map.WorldToTile(Position, TileX, TileY);
+        if (!Map.IsInBounds(TileX, TileY) || !Map.IsWalkable(TileX, TileY))
+            return false;
+        if (ClearanceRadius <= 16.0f)
+            return true;
+
+        const float R = ClearanceRadius - 1.0f;
+        const Core::Math::Vec2 Samples[] = {
+            {Position.X - R, Position.Y},
+            {Position.X + R, Position.Y},
+            {Position.X, Position.Y - R},
+            {Position.X, Position.Y + R},
+            {Position.X - R, Position.Y - R},
+            {Position.X + R, Position.Y - R},
+            {Position.X - R, Position.Y + R},
+            {Position.X + R, Position.Y + R}
+        };
+        for (const auto& Sample : Samples)
+        {
+            int SX = 0;
+            int SY = 0;
+            Map.WorldToTile(Sample, SX, SY);
+            if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY))
+                return false;
+        }
+        return true;
     }
 
-    static constexpr float kRepulseRadius = 32.0f;   // pixels to check neighbors
+    static Core::Math::Vec2 ResolveMapWalkability(const Game::Map::GameMap* Map,
+                                                  Core::Math::Vec2 Current,
+                                                  Core::Math::Vec2 Proposed,
+                                                  float MovingRadius,
+                                                  bool IsAir)
+    {
+        if (IsAir || !Map || IsWalkableWorldPosition(*Map, Proposed, MovingRadius))
+            return Proposed;
+
+        const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
+        if (IsWalkableWorldPosition(*Map, SlideX, MovingRadius))
+            return SlideX;
+
+        const Core::Math::Vec2 SlideY{Current.X, Proposed.Y};
+        if (IsWalkableWorldPosition(*Map, SlideY, MovingRadius))
+            return SlideY;
+
+        return Current;
+    }
+
+    static Core::Math::Vec2 ResolveStaticBlockers(Core::ECS::EntityManager& EM,
+                                                  Core::ECS::EntityID MovingID,
+                                                  Core::Math::Vec2 Proposed,
+                                                  Core::Math::Vec2 MoveDir,
+                                                  float MovingRadius,
+                                                  bool IsAir)
+    {
+        if (IsAir)
+            return Proposed;
+
+        auto Blockers = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        for (auto BlockerID : Blockers)
+        {
+            if (BlockerID == MovingID || !IsStaticGroundBlocker(EM, BlockerID))
+                continue;
+
+            auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
+            auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
+            auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
+            auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
+            auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+            if (!BlockerTrans || !BlockerUnit)
+                continue;
+
+            const StaticBlockerRect Rect = StaticBlockerRectForEntity(
+                BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
+            const float ExpandedLeft = BlockerTrans->Position.X - Rect.Left - MovingRadius;
+            const float ExpandedRight = BlockerTrans->Position.X + Rect.Right + MovingRadius;
+            const float ExpandedTop = BlockerTrans->Position.Y - Rect.Top - MovingRadius;
+            const float ExpandedBottom = BlockerTrans->Position.Y + Rect.Bottom + MovingRadius;
+            if (Proposed.X <= ExpandedLeft || Proposed.X >= ExpandedRight ||
+                Proposed.Y <= ExpandedTop || Proposed.Y >= ExpandedBottom)
+                continue;
+
+            const float PushLeft = Proposed.X - ExpandedLeft;
+            const float PushRight = ExpandedRight - Proposed.X;
+            const float PushTop = Proposed.Y - ExpandedTop;
+            const float PushBottom = ExpandedBottom - Proposed.Y;
+            const float MinPushX = std::min(PushLeft, PushRight);
+            const float MinPushY = std::min(PushTop, PushBottom);
+            if (MinPushX < MinPushY)
+            {
+                if (PushLeft < PushRight || (PushLeft == PushRight && MoveDir.X >= 0.0f))
+                    Proposed.X = ExpandedLeft;
+                else
+                    Proposed.X = ExpandedRight;
+            }
+            else
+            {
+                if (PushTop < PushBottom || (PushTop == PushBottom && MoveDir.Y >= 0.0f))
+                    Proposed.Y = ExpandedTop;
+                else
+                    Proposed.Y = ExpandedBottom;
+            }
+        }
+        return Proposed;
+    }
+
     static constexpr float kRepulseForce = 80.0f;     // push force scalar
 } // anonymous namespace
 
@@ -86,22 +265,38 @@ void MovementSystem::Update(float DeltaTime)
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
         if (!PathComp) continue;
 
+        if (Unit)
+            PathComp->IsAir = ShouldMoveAsAir(EM, ID);
+
+        if (!CanMoveEntity(EM, ID))
+        {
+            ClearMotion(*PathComp);
+            PathComp->RepulseVector = {0.0f, 0.0f};
+            continue;
+        }
+
         // Set defaults from unit data if not yet initialized
         if (PathComp->TargetSpeed <= 0.0f && Unit)
         {
             PathComp->TargetSpeed = Tuning::ToWorldMoveSpeed(Unit->Speed);
             PathComp->Acceleration = 200.0f;
             PathComp->TurnRate = 8.0f;
-            PathComp->CollisionRadius = 12;
-            if (Unit->SizeType == UnitSize::Large)
-                PathComp->CollisionRadius = 20;
+            if (PathComp->HasCollisionBounds)
+                PathComp->CollisionRadius = CollisionRadiusFromBounds(*PathComp);
+            else
+            {
+                PathComp->CollisionRadius = 12;
+                if (Unit->SizeType == UnitSize::Large)
+                    PathComp->CollisionRadius = 20;
+            }
         }
         else if (PathComp->TargetSpeed <= 0.0f)
         {
             PathComp->TargetSpeed = Tuning::ToWorldMoveSpeed(2.0f);
             PathComp->Acceleration = 200.0f;
             PathComp->TurnRate = 6.0f;
-            PathComp->CollisionRadius = 16;
+            PathComp->CollisionRadius = PathComp->HasCollisionBounds ?
+                CollisionRadiusFromBounds(*PathComp) : 16;
         }
 
         // Per-frame accumulation
@@ -124,7 +319,8 @@ void MovementSystem::Update(float DeltaTime)
             if (!TransB || !PathB || PathB->IsAir) continue;
 
             float Dist = TransA->Position.DistanceTo(TransB->Position);
-            float MinDist = (float)(PathA->CollisionRadius + PathB->CollisionRadius);
+            float MinDist = (float)(CollisionRadiusFromBounds(*PathA) +
+                CollisionRadiusFromBounds(*PathB));
 
             if (Dist < MinDist && Dist > 0.1f)
             {
@@ -134,23 +330,59 @@ void MovementSystem::Update(float DeltaTime)
                 PathA->RepulseVector = PathA->RepulseVector + Push * Force;
             }
         }
+
+        auto Blockers = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        for (auto BlockerID : Blockers)
+        {
+            if (BlockerID == ID || !IsStaticGroundBlocker(EM, BlockerID))
+                continue;
+
+            auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
+            auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
+            auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
+            auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
+            auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+            if (!BlockerTrans || !BlockerUnit)
+                continue;
+
+            const StaticBlockerRect Rect = StaticBlockerRectForEntity(
+                BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
+            const Core::Math::Vec2 Delta = TransA->Position - BlockerTrans->Position;
+            const float NearestX = std::clamp(Delta.X, -Rect.Left, Rect.Right);
+            const float NearestY = std::clamp(Delta.Y, -Rect.Top, Rect.Bottom);
+            const Core::Math::Vec2 Nearest{
+                BlockerTrans->Position.X + NearestX,
+                BlockerTrans->Position.Y + NearestY
+            };
+            const float MinDist = (float)CollisionRadiusFromBounds(*PathA);
+            float Dist = TransA->Position.DistanceTo(Nearest);
+            if (Dist < MinDist && Dist > 0.1f)
+            {
+                Core::Math::Vec2 Push = (TransA->Position - Nearest).Normalized();
+                float Overlap = MinDist - Dist;
+                float Force = Overlap * kRepulseForce * Dt;
+                PathA->RepulseVector = PathA->RepulseVector + Push * Force;
+            }
+        }
     }
 
     // --- Movement update ---
-    static std::unordered_map<Core::ECS::EntityID, Core::Math::Vec2> sLastDir;
-    static std::unordered_map<Core::ECS::EntityID, float> sWalkTimer;
     static std::unordered_map<Core::ECS::EntityID, Core::Math::Vec2> sPatrolStart;
 
     for (auto ID : Entities)
     {
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* PathComp = EM.GetComponent<PathfindingComponent>(ID);
-        auto* Unit = EM.GetComponent<UnitComponent>(ID);
-        auto* Render = EM.GetComponent<RenderComponent>(ID);
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
 
         if (!Trans || !PathComp) continue;
         auto& Path = PathComp->Path;
+
+        if (!CanMoveEntity(EM, ID))
+        {
+            ClearMotion(*PathComp);
+            continue;
+        }
 
         // Stasis / lockdown / maelstrom: frozen, skip all movement
         auto* Status = EM.GetComponent<StatusEffectComponent>(ID);
@@ -165,14 +397,11 @@ void MovementSystem::Update(float DeltaTime)
             continue;
         }
 
-        // HoldPosition: clear path, don't move
-        if (Cmd && Cmd->CurrentCommand == CommandType::HoldPosition)
+        // Stop/HoldPosition: clear path, don't move.
+        if (Cmd && (Cmd->CurrentCommand == CommandType::Stop ||
+                    Cmd->CurrentCommand == CommandType::HoldPosition))
         {
-            Path.clear();
-            PathComp->PathIndex = 0;
-            PathComp->CurrentSpeed = 0.0f;
-            PathComp->CurrentVelocity = {0.0f, 0.0f};
-            if (Render) { Render->FrameIndex = 0; Render->Flipped = false; }
+            ClearMotion(*PathComp);
             continue;
         }
 
@@ -213,21 +442,9 @@ void MovementSystem::Update(float DeltaTime)
 
                 PathComp->CurrentSpeed = 0.0f;
                 PathComp->CurrentVelocity = {0.0f, 0.0f};
-                if (Render)
-                {
-                    auto It = sLastDir.find(ID);
-                    Core::Math::Vec2 LastDir = (It != sLastDir.end()) ? It->second : Core::Math::Vec2{1, 0};
-                    int TotalFrames = Render->TotalFrames > 1 ? Render->TotalFrames : 4;
-                    auto DirRes = DirectionToFrameOffset(LastDir, TotalFrames);
-                    Render->FrameIndex = DirRes.Offset % std::max(1, TotalFrames);
-                    Render->Flipped = DirRes.Flipped;
-                }
             }
             continue;
         }
-
-        int TotalFrames = Render ? Render->TotalFrames : 1;
-        if (TotalFrames <= 1) TotalFrames = 4;
 
         // Record patrol start
         if (Cmd && Cmd->CurrentCommand == CommandType::Patrol &&
@@ -236,7 +453,6 @@ void MovementSystem::Update(float DeltaTime)
             sPatrolStart[ID] = Trans->Position;
         }
 
-        bool DidMove = false;
         Core::Math::Vec2 MoveDir;
 
         // Follow next waypoint
@@ -246,9 +462,10 @@ void MovementSystem::Update(float DeltaTime)
             Core::Math::Vec2 ToTarget = {Waypoint.X - Trans->Position.X,
                                          Waypoint.Y - Trans->Position.Y};
             float Dist = ToTarget.Length();
+            const float MovingRadius = (float)CollisionRadiusFromBounds(*PathComp);
             const bool IsFinalWaypoint = PathComp->PathIndex >= (int)Path.size() - 1;
             const float ArrivalTolerance = IsFinalWaypoint
-                ? std::max(PathComp->NodeTolerance, (float)PathComp->CollisionRadius)
+                ? std::max(PathComp->NodeTolerance, MovingRadius)
                 : PathComp->NodeTolerance;
 
             if (Dist < ArrivalTolerance)
@@ -274,8 +491,12 @@ void MovementSystem::Update(float DeltaTime)
             Core::Math::Vec2 ActualMove = MoveDir;
             if (PathComp->RepulseVector.Length() > 0.0f)
             {
-                ActualMove = ActualMove + PathComp->RepulseVector;
-                ActualMove = ActualMove.Normalized();
+                Core::Math::Vec2 Avoid = PathComp->RepulseVector.Normalized();
+                Core::Math::Vec2 LateralAvoid = Avoid - MoveDir * Avoid.Dot(MoveDir);
+                if (LateralAvoid.Length() > 0.001f)
+                {
+                    ActualMove = (MoveDir + LateralAvoid.Normalized() * 0.45f).Normalized();
+                }
             }
 
             // Turn-rate smoothing
@@ -295,64 +516,48 @@ void MovementSystem::Update(float DeltaTime)
             float MoveAmount = CurSpd * Dt;
             if (MoveAmount > Dist)
             {
-                Trans->Position = Waypoint;
+                Core::Math::Vec2 Proposed = ResolveStaticBlockers(
+                    EM, ID, Waypoint, MoveDir,
+                    MovingRadius, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
+                Trans->Position = Proposed;
+                if (AppliedMove.Length() <= 0.001f && !PathComp->IsAir)
+                {
+                    ClearMotion(*PathComp);
+                    break;
+                }
                 PathComp->PathIndex++;
-                PathComp->CurrentVelocity = MoveDir * PathComp->TargetSpeed;
+                PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
+                    AppliedMove.Normalized() * PathComp->TargetSpeed :
+                    MoveDir * PathComp->TargetSpeed;
             }
             else
             {
-                Trans->Position.X += ActualMove.X * MoveAmount;
-                Trans->Position.Y += ActualMove.Y * MoveAmount;
-                PathComp->CurrentVelocity = ActualMove * CurSpd;
-                DidMove = true;
+                Core::Math::Vec2 Proposed = Trans->Position + ActualMove * MoveAmount;
+                Proposed = ResolveStaticBlockers(
+                    EM, ID, Proposed, ActualMove,
+                    MovingRadius, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
+                Trans->Position = Proposed;
+                if (AppliedMove.Length() <= 0.001f && !PathComp->IsAir)
+                {
+                    ClearMotion(*PathComp);
+                    break;
+                }
+                PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
+                    AppliedMove.Normalized() * CurSpd :
+                    ActualMove * CurSpd;
             }
             break;
         }
 
         if (PathComp->PathIndex >= (int)Path.size())
         {
-            Path.clear();
-            PathComp->PathIndex = 0;
-            PathComp->CurrentSpeed = 0.0f;
-            PathComp->CurrentVelocity = {0.0f, 0.0f};
-            DidMove = false;
-        }
-
-        // Update render facing
-        if (Render && Render->ImageID != 0)
-        {
-            if (!DidMove && sLastDir.find(ID) == sLastDir.end())
-                sLastDir[ID] = {1, 0};
-            auto& LastDir = sLastDir[ID];
-            if (DidMove) LastDir = MoveDir;
-
-            auto DirRes = DirectionToFrameOffset(LastDir, TotalFrames);
-            int FrameOffset = DirRes.Offset % 17;
-            int StripCount = std::max(1, TotalFrames / 17);
-
-            if (DidMove)
-            {
-                sWalkTimer[ID] += Dt * 8.0f;
-                int AnimCycle = ((int)sWalkTimer[ID]) % 2;
-                if (StripCount >= 3)
-                    Render->FrameIndex = FrameOffset + 17 + AnimCycle * 17;
-                else if (StripCount >= 2)
-                    Render->FrameIndex = FrameOffset + 17;
-                else
-                    Render->FrameIndex = FrameOffset;
-                Render->Flipped = DirRes.Flipped;
-            }
-            else
-            {
-                sWalkTimer[ID] = 0;
-                Render->FrameIndex = FrameOffset;
-                Render->Flipped = DirRes.Flipped;
-            }
-        }
-        else if (Render)
-        {
-            Render->FrameIndex = 0;
-            Render->Flipped = false;
+            ClearMotion(*PathComp);
         }
     }
 }

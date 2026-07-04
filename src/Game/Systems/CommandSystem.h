@@ -23,6 +23,10 @@ public:
                           const std::vector<Core::ECS::EntityID>& Entities,
                           const Core::Math::Vec2& Target);
 
+    static bool IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
+                                    Core::ECS::EntityID EntityID,
+                                    const Core::Math::Vec2& Target);
+
     static void IssueAttackMove(Core::ECS::EntityManager& EM,
                                  const std::vector<int>& Units,
                                  Core::Math::Vec2 Target);

@@ -109,6 +109,17 @@ public:
         return Result;
     }
 
+    template<typename... Components, typename Fn>
+    void ForEachEntityWith(Fn&& Func)
+    {
+        ComponentMask RequiredMask = CreateMask<Components...>();
+        for (EntityID Id = 1; Id <= mLastEntityId; ++Id)
+        {
+            if (IsAlive(Id) && (mMasks[Id] & RequiredMask) == RequiredMask)
+                Func(Id);
+        }
+    }
+
 private:
     template<typename T>
     ComponentPool<T>* GetOrCreatePool()

@@ -28,6 +28,12 @@ struct UnitEntry
     uint16_t FlingyID = 0;
     uint16_t Subunit1ID = 228;
     uint16_t Subunit2ID = 228;
+    int16_t PlacementWidth = 0;
+    int16_t PlacementHeight = 0;
+    int16_t DimensionLeft = 0;
+    int16_t DimensionUp = 0;
+    int16_t DimensionRight = 0;
+    int16_t DimensionDown = 0;
     uint16_t WeaponID = 0;
     uint16_t WeaponID2 = 0;
     uint32_t RequiredTech = 0;
@@ -38,6 +44,9 @@ struct UnitEntry
     uint8_t Plagueable = 1;
     uint8_t Hallucinable = 1;
     uint8_t IsBuilding = 0;
+
+    int DimensionWidth() const { return (int)DimensionLeft + (int)DimensionRight + 1; }
+    int DimensionHeight() const { return (int)DimensionUp + (int)DimensionDown + 1; }
 };
 
 struct WeaponEntry
@@ -71,6 +80,7 @@ struct SpriteEntry
     uint32_t HealthBar = 0;
     uint32_t VisibilitySize = 0;
     uint32_t SelectionCircle = 0;
+    uint32_t SelectionCircleVerticalOffset = 0;
 };
 
 struct ImageEntry

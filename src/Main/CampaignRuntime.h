@@ -62,11 +62,13 @@ struct CampaignRuntime
 
     template <typename SetAllianceT,
               typename ResolveImageIdT,
+              typename ResolveCollisionBoundsT,
               typename CenterViewT,
               typename MinimapPingT,
               typename SetGamePausedT>
     void ConfigureTriggerRuntime(SetAllianceT&& SetAlliance,
                                  ResolveImageIdT&& ResolveImageID,
+                                 ResolveCollisionBoundsT&& ResolveCollisionBounds,
                                  CenterViewT&& CenterView,
                                  MinimapPingT&& MinimapPing,
                                  SetGamePausedT&& SetGamePaused)
@@ -78,6 +80,7 @@ struct CampaignRuntime
         Game::Trigger::TriggerRuntimeConfig TriggerConfig;
         TriggerConfig.SetAlliance = std::forward<SetAllianceT>(SetAlliance);
         TriggerConfig.ResolveImageID = std::forward<ResolveImageIdT>(ResolveImageID);
+        TriggerConfig.ResolveCollisionBounds = std::forward<ResolveCollisionBoundsT>(ResolveCollisionBounds);
         TriggerConfig.CenterView = std::forward<CenterViewT>(CenterView);
         TriggerConfig.MinimapPing = std::forward<MinimapPingT>(MinimapPing);
         TriggerConfig.SetGamePaused = std::forward<SetGamePausedT>(SetGamePaused);

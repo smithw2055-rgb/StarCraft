@@ -26,6 +26,9 @@ void ResourceCache::DestroyTilesetCache()
     for (auto& [Name, Frames] : mTilesets.ImagesByName)
         for (auto& F : Frames) DestroyImage(F);
     mTilesets.ImagesByName.clear();
+    for (auto& [Name, Atlas] : mTilesets.AtlasesByName)
+        DestroyImage(Atlas.Image);
+    mTilesets.AtlasesByName.clear();
     mTilesets.DataByName.clear();
 }
 

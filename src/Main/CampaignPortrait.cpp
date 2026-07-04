@@ -1,6 +1,5 @@
 #include "Main/CampaignPortrait.h"
 
-#include "Game/DataEnums.h"
 #include "Resource/GameDataLoader.h"
 #include "Resource/TblDecoder.h"
 
@@ -44,106 +43,105 @@ std::vector<std::string>& GetPortdataStrings(const Resource::Graphics::ArchiveAs
 
 int CampaignPortdataFidIndexForUnitID(uint32_t UnitID)
 {
-    using Game::Data::UnitType;
     switch ((int)UnitID)
     {
-        case (int)UnitType::Terran_Marine: return 1;
-        case (int)UnitType::Terran_Ghost: return 3;
-        case (int)UnitType::Terran_Vulture: return 7;
-        case (int)UnitType::Terran_Goliath:
-        case (int)UnitType::Terran_Goliath_Turret: return 11;
-        case (int)UnitType::Terran_Siege_Tank_Tank_Mode:
-        case (int)UnitType::Terran_Siege_Tank_Tank_Mode_Turret:
-        case (int)UnitType::Terran_Siege_Tank_Siege_Mode:
-        case (int)UnitType::Terran_Siege_Tank_Siege_Mode_Turret: return 13;
-        case (int)UnitType::Terran_SCV: return 15;
-        case (int)UnitType::Terran_Wraith: return 17;
-        case (int)UnitType::Terran_Science_Vessel: return 19;
-        case (int)UnitType::Hero_Gui_Montag:
-        case (int)UnitType::Terran_Firebat: return 5;
-        case (int)UnitType::Terran_Dropship: return 21;
-        case (int)UnitType::Terran_Battlecruiser:
-        case (int)UnitType::Hero_Arcturus_Mengsk:
-        case (int)UnitType::Hero_Hyperion:
-        case (int)UnitType::Hero_Norad_II: return 23;
-        case (int)UnitType::Hero_Sarah_Kerrigan: return 25;
-        case (int)UnitType::Hero_Jim_Raynor_Vulture:
-        case (int)UnitType::Hero_Jim_Raynor_Marine: return 27;
-        case (int)UnitType::Hero_Edmund_Duke_Tank_Mode:
-        case (int)UnitType::Hero_Edmund_Duke_Tank_Mode_Turret:
-        case (int)UnitType::Hero_Edmund_Duke_Siege_Mode:
-        case (int)UnitType::Hero_Edmund_Duke_Siege_Mode_Turret: return 29;
-        case (int)UnitType::Hero_Alan_Schezar:
-        case (int)UnitType::Hero_Alan_Schezar_Turret:
-        case (int)UnitType::Hero_Alexei_Stukov: return 154;
-        case (int)UnitType::Hero_Tom_Kazansky: return 17;
-        case (int)UnitType::Hero_Magellan: return 19;
-        case (int)UnitType::Terran_Medic: return 148;
-        case (int)UnitType::Terran_Valkyrie: return 150;
-        case (int)UnitType::Hero_Samir_Duran:
-        case (int)UnitType::Hero_Infested_Duran: return 156;
-        case (int)UnitType::Hero_Gerard_DuGalle: return 152;
+        case 0: return 1;   // Terran Marine
+        case 1: return 3;   // Terran Ghost
+        case 2: return 7;   // Terran Vulture
+        case 3:
+        case 4: return 11;  // Terran Goliath
+        case 5:
+        case 6:
+        case 30:
+        case 31: return 13; // Terran Siege Tank
+        case 7: return 15;  // SCV
+        case 8:
+        case 21: return 17; // Wraith / Tom Kazansky
+        case 9:
+        case 22: return 19; // Science Vessel / Magellan
+        case 10:
+        case 32: return 5;  // Firebat
+        case 11: return 21; // Dropship
+        case 12:
+        case 27:
+        case 28:
+        case 29: return 23; // Battlecruiser heroes
+        case 16: return 25; // Sarah Kerrigan
+        case 19:
+        case 20: return 27; // Jim Raynor
+        case 23:
+        case 24:
+        case 25:
+        case 26: return 29; // Edmund Duke
+        case 17:
+        case 18:
+        case 100: return 154; // Alan Schezar / Stukov
+        case 34: return 148; // Medic
+        case 58: return 150; // Valkyrie
+        case 99:
+        case 104: return 156; // Duran
+        case 102: return 152; // DuGalle
 
-        case (int)UnitType::Zerg_Larva: return 36;
-        case (int)UnitType::Zerg_Egg: return 38;
-        case (int)UnitType::Zerg_Zergling:
-        case (int)UnitType::Hero_Devouring_One: return 40;
-        case (int)UnitType::Zerg_Hydralisk:
-        case (int)UnitType::Hero_Hunter_Killer: return 42;
-        case (int)UnitType::Zerg_Ultralisk:
-        case (int)UnitType::Hero_Torrasque: return 44;
-        case (int)UnitType::Zerg_Broodling: return 46;
-        case (int)UnitType::Zerg_Drone: return 48;
-        case (int)UnitType::Zerg_Overlord:
-        case (int)UnitType::Hero_Yggdrasill: return 50;
-        case (int)UnitType::Zerg_Mutalisk:
-        case (int)UnitType::Hero_Kukulza_Mutalisk: return 52;
-        case (int)UnitType::Zerg_Guardian:
-        case (int)UnitType::Hero_Kukulza_Guardian: return 54;
-        case (int)UnitType::Zerg_Queen:
-        case (int)UnitType::Hero_Matriarch: return 56;
-        case (int)UnitType::Zerg_Defiler:
-        case (int)UnitType::Hero_Unclean_One: return 58;
-        case (int)UnitType::Zerg_Scourge: return 60;
-        case (int)UnitType::Zerg_Cocoon:
-        case (int)UnitType::Zerg_Lurker_Egg: return 62;
-        case (int)UnitType::Zerg_Infested_Terran: return 64;
-        case (int)UnitType::Hero_Infested_Kerrigan: return 70;
-        case (int)UnitType::Zerg_Devourer: return 162;
-        case (int)UnitType::Zerg_Lurker: return 164;
+        case 35: return 36; // Larva
+        case 36: return 38; // Egg
+        case 37:
+        case 54: return 40; // Zergling
+        case 38:
+        case 53: return 42; // Hydralisk
+        case 39:
+        case 48: return 44; // Ultralisk
+        case 40: return 46; // Broodling
+        case 41: return 48; // Drone
+        case 42:
+        case 57: return 50; // Overlord
+        case 43:
+        case 55: return 52; // Mutalisk
+        case 44:
+        case 56: return 54; // Guardian
+        case 45:
+        case 49: return 56; // Queen
+        case 46:
+        case 52: return 58; // Defiler
+        case 47: return 60; // Scourge
+        case 59:
+        case 97: return 62; // Cocoon / Lurker Egg
+        case 50: return 64; // Infested Terran
+        case 51: return 70; // Infested Kerrigan
+        case 62: return 162; // Devourer
+        case 103: return 164; // Lurker
 
-        case (int)UnitType::Protoss_Probe: return 76;
-        case (int)UnitType::Protoss_Zealot: return 78;
-        case (int)UnitType::Protoss_Dragoon: return 80;
-        case (int)UnitType::Protoss_High_Templar:
-        case (int)UnitType::Hero_Aldaris: return 82;
-        case (int)UnitType::Protoss_Archon:
-        case (int)UnitType::Hero_Tassadar_Zeratul_Archon: return 84;
-        case (int)UnitType::Protoss_Shuttle: return 86;
-        case (int)UnitType::Protoss_Scout:
-        case (int)UnitType::Hero_Mojo: return 88;
-        case (int)UnitType::Protoss_Arbiter:
-        case (int)UnitType::Hero_Danimoth: return 90;
-        case (int)UnitType::Protoss_Carrier:
-        case (int)UnitType::Hero_Gantrithor: return 92;
-        case (int)UnitType::Protoss_Interceptor: return 94;
-        case (int)UnitType::Protoss_Dark_Templar:
-        case (int)UnitType::Hero_Dark_Templar: return 96;
-        case (int)UnitType::Hero_Fenix_Zealot: return 98;
-        case (int)UnitType::Hero_Fenix_Dragoon: return 100;
-        case (int)UnitType::Hero_Zeratul: return 102;
-        case (int)UnitType::Hero_Tassadar: return 104;
-        case (int)UnitType::Protoss_Observer: return 106;
-        case (int)UnitType::Protoss_Dark_Archon: return 166;
-        case (int)UnitType::Protoss_Corsair: return 168;
-        case (int)UnitType::Hero_Artanis: return 158;
+        case 64: return 76; // Probe
+        case 65: return 78; // Zealot
+        case 66: return 80; // Dragoon
+        case 67:
+        case 87: return 82; // High Templar / Aldaris
+        case 68:
+        case 76: return 84; // Archon
+        case 69: return 86; // Shuttle
+        case 70:
+        case 80: return 88; // Scout / Mojo
+        case 71:
+        case 86: return 90; // Arbiter / Danimoth
+        case 72:
+        case 82: return 92; // Carrier / Gantrithor
+        case 73: return 94; // Interceptor
+        case 61:
+        case 74: return 96; // Dark Templar
+        case 77: return 98; // Fenix Zealot
+        case 78: return 100; // Fenix Dragoon
+        case 75: return 102; // Zeratul
+        case 79: return 104; // Tassadar
+        case 84: return 106; // Observer
+        case 63: return 166; // Dark Archon
+        case 60: return 168; // Corsair
+        case 88: return 158; // Artanis
 
-        case (int)UnitType::Critter_Rhynadon: return 110;
-        case (int)UnitType::Special_Mercenary_Gunship: return 114;
-        case (int)UnitType::Critter_Bengalaas: return 116;
-        case (int)UnitType::Critter_Scantid: return 118;
-        case (int)UnitType::Critter_Ragnasaur: return 120;
-        case (int)UnitType::Critter_Ursadon: return 174;
+        case 89: return 110; // Rhynadon
+        case 92: return 114; // Mercenary Gunship
+        case 90: return 116; // Bengalaas
+        case 93: return 118; // Scantid
+        case 95: return 120; // Ragnasaur
+        case 96: return 174; // Ursadon
         default: return 0;
     }
 }

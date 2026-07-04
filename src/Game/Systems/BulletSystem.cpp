@@ -54,6 +54,25 @@ namespace
     {
         return PlayerA != PlayerB;
     }
+
+    static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+            if (Path->IsAir)
+                return true;
+        if (auto* Combat = EM.GetComponent<CombatComponent>(EntityID))
+            return Combat->MyElevation == Elevation::Air;
+        return false;
+    }
+
+    static DamageType WeaponDamageKindForTarget(Core::ECS::EntityManager& EM,
+                                                const CombatComponent& SourceCombat,
+                                                int TargetEntityID)
+    {
+        if (TargetEntityID >= 0 && IsAirTarget(EM, TargetEntityID))
+            return SourceCombat.AirDmgType;
+        return SourceCombat.GroundDmgType;
+    }
 }
 
 int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
@@ -81,7 +100,7 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
     BulletComp.Splash = SourceCombat.Splash;
     BulletComp.SplashRadius = SourceCombat.SplashRadius;
     BulletComp.BaseDamage = BaseDamage;
-    BulletComp.DamageKind = SourceCombat.GroundDmgType;
+    BulletComp.DamageKind = WeaponDamageKindForTarget(EM, SourceCombat, TargetEntityID);
     BulletComp.DamageUpgradeBonus = DamageUpgradeBonus;
     BulletComp.TargetEntityID = TargetEntityID;
     BulletComp.TargetPos = TargetPosIn;
@@ -256,7 +275,8 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
     if (DirectHitID >= 0)
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(DirectHitID);
-        if (TargetUnit && TargetUnit->HitPoints > 0)
+        if (TargetUnit && TargetUnit->HitPoints > 0 &&
+            !EM.GetComponent<ResourceComponent>(DirectHitID))
         {
             float SizeMod = GetSizeDamageModifier(Bullet->DamageKind, TargetUnit->SizeType);
             int Damage = std::max(1, (int)((float)(Bullet->BaseDamage + Bullet->DamageUpgradeBonus) * SizeMod));
@@ -325,6 +345,7 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         auto* UT = EM.GetComponent<TransformComponent>(UID);
         auto* UU = EM.GetComponent<UnitComponent>(UID);
         if (!UP || !UT || !UU || UU->HitPoints <= 0) continue;
+        if (EM.GetComponent<ResourceComponent>(UID)) continue;
         if (UP->PlayerID == SourcePlayerID) continue;
 
         float Dist = UT->Position.DistanceTo(Center);

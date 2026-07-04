@@ -60,6 +60,7 @@ const std::vector<UnitDef>& GetProtossDefs();
 UnitDef GetUnitDefByName(const std::string& Name);
 UnitDef GetUnitDefByID(int ID);
 int GetUnitDefID(const std::string& Name);
+int GetUnitDefIDByChkUnitID(int ChkUnitID);
 int GetTerranDefIDByChkUnitID(int ChkUnitID);
 
 } // namespace Game::Races

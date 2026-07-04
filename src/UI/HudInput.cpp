@@ -3,6 +3,7 @@
 #include <cstddef>
 
 #include "UI/HudLayout.h"
+#include "UI/HudMinimapGeometry.h"
 
 namespace Game::Client::UI
 {
@@ -13,15 +14,7 @@ bool Hud::CheckMinimapClick(int SX, int SY,
                             float& OutWX, float& OutWY) const
 {
     const auto Layout = ResolveHudLayout(VW, VH);
-    const auto& MinimapRect = Layout.MinimapRect;
-    if (!MinimapRect.Contains(SX, SY))
-        return false;
-
-    const float U = (float)(SX - MinimapRect.X) / (float)MinimapRect.W;
-    const float V = (float)(SY - MinimapRect.Y) / (float)MinimapRect.H;
-    OutWX = U * (float)(MW * 32);
-    OutWY = V * (float)(MH * 32);
-    return true;
+    return MinimapScreenToWorld(Layout.MinimapRect, MW, MH, SX, SY, OutWX, OutWY);
 }
 
 int Hud::CheckCommandPanelClick(int SX, int SY, int VW, int VH) const

@@ -6,6 +6,7 @@
 
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/ZergSystem.h"
 
 namespace Game::Client::GameLoop
 {
@@ -14,6 +15,14 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
 {
     Game::Systems::ProductionSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetImageResolver(std::move(Resolver));
+}
+
+inline void ConfigureGameplayCollisionBoundsResolvers(
+    std::function<Game::Components::UnitCollisionBounds(int)> Resolver)
+{
+    Game::Systems::ProductionSystem::SetCollisionBoundsResolver(Resolver);
+    Game::Systems::BuildingSystem::SetCollisionBoundsResolver(Resolver);
+    Game::Systems::ZergSystem::SetCollisionBoundsResolver(std::move(Resolver));
 }
 
 } // namespace Game::Client::GameLoop

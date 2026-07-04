@@ -20,6 +20,21 @@ namespace
 {
     const Game::Map::GameMap* gMap = nullptr;
     BuildingSystem::ImageIDResolver gImageResolver;
+    BuildingSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+
+    struct BuildingFootprintTiles
+    {
+        int W = 3;
+        int H = 2;
+    };
+
+    struct TileRect
+    {
+        int Left = 0;
+        int Top = 0;
+        int Right = 0;
+        int Bottom = 0;
+    };
 
     void SetReason(std::string* OutReason, const std::string& Reason)
     {
@@ -32,6 +47,113 @@ namespace
         return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
     }
 
+    UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
+    {
+        return gCollisionBoundsResolver ? gCollisionBoundsResolver(ChkUnitID) : UnitCollisionBounds{};
+    }
+
+    BuildingFootprintTiles BuildingFootprintSizeForChk(int ChkUnitID)
+    {
+        switch (ChkUnitID)
+        {
+            case 106: // Terran Command Center
+            case 111: // Terran Barracks
+            case 113: // Terran Factory
+            case 114: // Terran Starport
+            case 116: // Terran Science Facility
+            case 131: // Zerg Hatchery
+            case 132: // Zerg Lair
+            case 133: // Zerg Hive
+            case 154: // Protoss Nexus
+            case 160: // Protoss Gateway
+            case 167: // Protoss Stargate
+                return {4, 3};
+            case 109: // Terran Supply Depot
+            case 112: // Terran Academy
+            case 122: // Terran Engineering Bay
+            case 123: // Terran Armory
+            case 125: // Terran Bunker
+            case 134: // Zerg Nydus Canal
+            case 135: // Zerg Hydralisk Den
+            case 136: // Zerg Defiler Mound
+            case 138: // Zerg Queen's Nest
+            case 139: // Zerg Evolution Chamber
+            case 140: // Zerg Ultralisk Cavern
+            case 142: // Zerg Spawning Pool
+            case 155: // Protoss Robotics Facility
+            case 159: // Protoss Observatory
+            case 163: // Protoss Citadel of Adun
+            case 164: // Protoss Cybernetics Core
+            case 165: // Protoss Templar Archives
+            case 166: // Protoss Forge
+            case 169: // Protoss Fleet Beacon
+            case 170: // Protoss Arbiter Tribunal
+            case 171: // Protoss Robotics Support Bay
+                return {3, 2};
+            case 110: // Terran Refinery
+            case 149: // Zerg Extractor
+            case 157: // Protoss Assimilator
+                return {4, 2};
+            case 107: // Terran Comsat Station
+            case 108: // Terran Nuclear Silo
+            case 115: // Terran Control Tower
+            case 117: // Terran Covert Ops
+            case 118: // Terran Physics Lab
+            case 120: // Terran Machine Shop
+            case 124: // Terran Missile Turret
+            case 137: // Zerg Greater Spire
+            case 141: // Zerg Spire
+            case 156: // Protoss Pylon
+            case 162: // Protoss Photon Cannon
+            case 172: // Protoss Shield Battery
+                return {2, 2};
+            default:
+                return {3, 2};
+        }
+    }
+
+    BuildingFootprintTiles BuildingFootprintSizeForDef(int BuildingDefID)
+    {
+        auto Def = Races::GetUnitDefByID(BuildingDefID);
+        return BuildingFootprintSizeForChk(Def.ChkUnitID);
+    }
+
+    TileRect BuildingTileRect(const Game::Map::GameMap& Map,
+                              Core::Math::Vec2 Position,
+                              BuildingFootprintTiles Footprint)
+    {
+        int CenterX = 0;
+        int CenterY = 0;
+        Map.WorldToTile(Position, CenterX, CenterY);
+        const int Left = CenterX - Footprint.W / 2;
+        const int Top = CenterY - Footprint.H / 2;
+        return {Left, Top, Left + Footprint.W - 1, Top + Footprint.H - 1};
+    }
+
+    bool RectsOverlap(const TileRect& A, const TileRect& B)
+    {
+        return !(A.Right < B.Left || A.Left > B.Right ||
+                 A.Bottom < B.Top || A.Top > B.Bottom);
+    }
+
+    void ApplyUnitDefinition(UnitComponent& Unit,
+                             const Races::UnitDef& Def,
+                             bool UnderConstruction)
+    {
+        Unit.ChkUnitID = Def.ChkUnitID;
+        Unit.HitPoints = UnderConstruction ? 1 : Def.HitPoints;
+        Unit.MaxHitPoints = Def.HitPoints;
+        Unit.UnitRace = Def.RaceType;
+        Unit.SizeType = Def.SizeType;
+        Unit.ShieldPoints = UnderConstruction ? 0 : Def.ShieldPoints;
+        Unit.MaxShieldPoints = Def.ShieldPoints;
+        Unit.EnergyPoints = UnderConstruction ? 0 : Def.EnergyPoints;
+        Unit.MaxEnergyPoints = Def.EnergyPoints;
+        Unit.Armor = Def.Armor;
+        Unit.SightRange = Def.SightRange;
+        Unit.SupplyCost = Def.SupplyCost;
+    }
+
     int ResolveDefID(const Core::ECS::EntityManager& EM, int EntityID)
     {
         auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
@@ -41,7 +163,7 @@ namespace
                 return Building->BuildingDefID;
         }
         if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
-            return Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
 
@@ -127,16 +249,13 @@ namespace
         Building.BuildProgress = UnderConstruction ? 0.0f : (float)Def.BuildTime;
 
         auto& Unit = EM.AddComponent<UnitComponent>(EntityID);
-        Unit.ChkUnitID = Def.ChkUnitID;
-        Unit.HitPoints = UnderConstruction ? 1 : Def.HitPoints;
-        Unit.MaxHitPoints = Def.HitPoints;
-        Unit.UnitRace = Def.RaceType;
-        Unit.SizeType = Def.SizeType;
-        Unit.Armor = Def.Armor;
-        Unit.SightRange = Def.SightRange;
+        ApplyUnitDefinition(Unit, Def, UnderConstruction);
 
         auto& Player = EM.AddComponent<PlayerComponent>(EntityID);
         Player.PlayerID = PlayerID;
+
+        auto& Path = EM.AddComponent<PathfindingComponent>(EntityID);
+        ApplyCollisionBounds(Path, ResolveCollisionBounds(Def.ChkUnitID));
 
         if (UnderConstruction)
         {
@@ -184,13 +303,14 @@ namespace
         Building->IsAddon = false;
         Building->BuildProgress = 0.0f;
 
-        Unit->ChkUnitID = Def.ChkUnitID;
-        Unit->HitPoints = 1;
-        Unit->MaxHitPoints = Def.HitPoints;
-        Unit->UnitRace = Def.RaceType;
-        Unit->SizeType = Def.SizeType;
-        Unit->Armor = Def.Armor;
-        Unit->SightRange = Def.SightRange;
+        ApplyUnitDefinition(*Unit, Def, true);
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(TargetEntityID))
+            ApplyCollisionBounds(*Path, ResolveCollisionBounds(Def.ChkUnitID));
+        else
+        {
+            auto& NewPath = EM.AddComponent<PathfindingComponent>(TargetEntityID);
+            ApplyCollisionBounds(NewPath, ResolveCollisionBounds(Def.ChkUnitID));
+        }
 
         Player->PlayerID = PlayerID;
         if (auto* ExistingCommand = EM.GetComponent<CommandComponent>(TargetEntityID))
@@ -221,6 +341,11 @@ void BuildingSystem::SetImageResolver(ImageIDResolver Resolver)
     gImageResolver = std::move(Resolver);
 }
 
+void BuildingSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
+{
+    gCollisionBoundsResolver = std::move(Resolver);
+}
+
 bool BuildingSystem::IsPlacementValid(Core::ECS::EntityManager& EM,
                                       int BuildingDefID,
                                       Core::Math::Vec2 Position,
@@ -237,36 +362,34 @@ bool BuildingSystem::IsPlacementValid(Core::ECS::EntityManager& EM,
     if (Resources.Minerals < Def.MineralCost || Def.GasCost > Resources.VespeneGas)
         return false;
 
-    int TileX = 0;
-    int TileY = 0;
-    int HalfSize = Def.SizeType == UnitSize::Large ? 2 : 1;
-    gMap->WorldToTile(Position, TileX, TileY);
-    TileX -= HalfSize;
-    TileY -= HalfSize;
+    const TileRect CandidateRect =
+        BuildingTileRect(*gMap, Position, BuildingFootprintSizeForDef(BuildingDefID));
 
-    for (int DY = 0; DY <= HalfSize * 2; DY++)
+    for (int TY = CandidateRect.Top; TY <= CandidateRect.Bottom; ++TY)
     {
-        for (int DX = 0; DX <= HalfSize * 2; DX++)
+        for (int TX = CandidateRect.Left; TX <= CandidateRect.Right; ++TX)
         {
-            int TX = TileX + DX;
-            int TY = TileY + DY;
             if (!gMap->IsInBounds(TX, TY) || !gMap->IsBuildable(TX, TY))
                 return false;
-
-            auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
-            for (auto EntityID : Entities)
-            {
-                auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
-                auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
-                if (!Transform || !Building)
-                    continue;
-                int BuildingTileX = 0;
-                int BuildingTileY = 0;
-                gMap->WorldToTile(Transform->Position, BuildingTileX, BuildingTileY);
-                if (std::abs(TX - BuildingTileX) < 2 && std::abs(TY - BuildingTileY) < 2)
-                    return false;
-            }
         }
+    }
+
+    auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+    for (auto EntityID : Entities)
+    {
+        auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
+        auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+        if (!Transform || !Building || Building->IsLifted)
+            continue;
+
+        const int ExistingDefID = ResolveDefID(EM, EntityID);
+        if (ExistingDefID < 0)
+            continue;
+
+        const TileRect ExistingRect =
+            BuildingTileRect(*gMap, Transform->Position, BuildingFootprintSizeForDef(ExistingDefID));
+        if (RectsOverlap(CandidateRect, ExistingRect))
+            return false;
     }
 
     return true;
@@ -500,6 +623,8 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     Building->UnderConstruction = false;
     Building->BuildProgress = Building->TotalBuildTime;
     Unit->HitPoints = Unit->MaxHitPoints;
+    Unit->ShieldPoints = Unit->MaxShieldPoints;
+    Unit->EnergyPoints = Unit->MaxEnergyPoints;
 
     if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
         Render->Tint = Core::Colors::White();
@@ -529,7 +654,8 @@ bool BuildingSystem::LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingI
     Unit->Speed = 2.0f; // Flying speed
     Unit->SupplyCost = 0; // Supply freed during flight
 
-    auto& Path = EM.AddComponent<PathfindingComponent>(BuildingID);
+    auto* PathPtr = EM.GetComponent<PathfindingComponent>(BuildingID);
+    auto& Path = PathPtr ? *PathPtr : EM.AddComponent<PathfindingComponent>(BuildingID);
     Path.IsAir = true;
     Path.CurrentSpeed = 100.0f;
 
@@ -555,6 +681,15 @@ bool BuildingSystem::LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
 
     auto* Trans = EM.GetComponent<TransformComponent>(BuildingID);
     if (Trans) Trans->Position = Position;
+
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(BuildingID))
+    {
+        Path->IsAir = false;
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->CurrentVelocity = {0.0f, 0.0f};
+    }
 
     Core::Utils::Logger::Info("BuildingSystem",
         "Building " + std::to_string(BuildingID) + " landed at (" +

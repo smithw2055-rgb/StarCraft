@@ -25,12 +25,12 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
     {
         const GrpFrameInfo& Info = Sprite.Frames[I];
         DecodedFrame F;
-        F.Width = Info.Width;
-        F.Height = Info.Height;
+        F.Width = Sprite.Width > 0 ? Sprite.Width : Info.Width;
+        F.Height = Sprite.Height > 0 ? Sprite.Height : Info.Height;
         F.OriginX = 0;
         F.OriginY = 0;
         F.Flip = Info.Flip;
-        F.Rgba.resize(static_cast<size_t>(Info.Width) * static_cast<size_t>(Info.Height) * 4, 0);
+        F.Rgba.resize(static_cast<size_t>(F.Width) * static_cast<size_t>(F.Height) * 4, 0);
 
         int Px = Info.Width * Info.Height;
         for (int P = 0; P < Px; ++P)
@@ -45,10 +45,18 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
                                             C.R == Options.TransparentRgb.R &&
                                             C.G == Options.TransparentRgb.G &&
                                             C.B == Options.TransparentRgb.B;
-            F.Rgba[P * 4 + 0] = C.R;
-            F.Rgba[P * 4 + 1] = C.G;
-            F.Rgba[P * 4 + 2] = C.B;
-            F.Rgba[P * 4 + 3] = (TransparentByIndex || TransparentByBlack) ? 0 : C.A;
+            const int LocalX = P % Info.Width;
+            const int LocalY = P / Info.Width;
+            const int OutX = Info.XOffset + LocalX;
+            const int OutY = Info.YOffset + LocalY;
+            if (OutX < 0 || OutY < 0 || OutX >= F.Width || OutY >= F.Height)
+                continue;
+
+            const size_t OutOffset = ((size_t)OutY * (size_t)F.Width + (size_t)OutX) * 4u;
+            F.Rgba[OutOffset + 0] = C.R;
+            F.Rgba[OutOffset + 1] = C.G;
+            F.Rgba[OutOffset + 2] = C.B;
+            F.Rgba[OutOffset + 3] = (TransparentByIndex || TransparentByBlack) ? 0 : C.A;
         }
         Out.Frames.push_back(std::move(F));
     }

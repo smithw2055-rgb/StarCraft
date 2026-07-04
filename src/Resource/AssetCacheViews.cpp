@@ -71,6 +71,11 @@ const std::vector<GpuImage>* TilesetAssetCacheView::GetTilesetImages(const std::
     return mCache ? mCache->GetTilesetImages(TilesetName) : nullptr;
 }
 
+const TilesetAtlas* TilesetAssetCacheView::GetTilesetAtlas(const std::string& TilesetName) const
+{
+    return mCache ? mCache->GetTilesetAtlas(TilesetName) : nullptr;
+}
+
 const TilesetData* TilesetAssetCacheView::GetTilesetData(const std::string& TilesetName) const
 {
     return mCache ? mCache->GetTilesetData(TilesetName) : nullptr;

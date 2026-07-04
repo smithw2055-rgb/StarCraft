@@ -85,7 +85,8 @@ void ClientRuntime::InitializeWorldView(const GameMap& MapData,
                                         int ViewportHeight)
 {
     Tilemap->Init(TilesetName, GetTilesetAssets());
-    EntityView->Init(GetSpriteAssets());
+    EntityView->Init(GetSpriteAssets(), GetDataAssets());
+    Selector->Init(GetDataAssets());
 
     Camera->SetViewport(ViewportWidth, ViewportHeight);
     Camera->SetZoomBounds(0.75f, 2.25f);
@@ -257,7 +258,7 @@ void ClientRuntime::RenderWorldEffects(Render::Draw2D& Draw2D)
 
 void ClientRuntime::RenderSelectionDragOverlay()
 {
-    if (!Selector->IsDragging())
+    if (!Selector->IsDragging() || !Core::Platform::IsMouseButtonDown(0))
         return;
 
     float X = 0.0f;

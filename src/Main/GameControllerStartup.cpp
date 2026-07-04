@@ -55,7 +55,8 @@ void GameController::InitGameSystems()
                 mRuntime.App.Audio,
                 mRuntime.Client.Hud,
                 mRuntime.Session.Campaign,
-                mRuntime.App.Runtime.MapPath);
+                mRuntime.App.Runtime.MapPath,
+                mHasInitialCameraOverride);
         });
 
     if (mHasInitialCameraOverride)

@@ -124,16 +124,7 @@ namespace
                 return Building->BuildingDefID;
         }
         if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
-        {
-            if (Unit->UnitRace == Race::Terran)
-                return Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
-            if (Unit->UnitRace == Race::Zerg)
-                return Game::Races::GetUnitDefID(
-                    Game::Races::GetUnitDefByID(Unit->ChkUnitID).Name);
-            if (Unit->UnitRace == Race::Protoss)
-                return Game::Races::GetUnitDefID(
-                    Game::Races::GetUnitDefByID(Unit->ChkUnitID).Name);
-        }
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
 

@@ -3,9 +3,18 @@
 #include "Core/Utils/Logger.h"
 
 #include <cassert>
+#include <cstdlib>
 
 namespace Game::Map
 {
+namespace
+{
+bool ShouldLogMapTileSamples()
+{
+    const char* Value = std::getenv("STARCRAFT_DEBUG_MAP_TILES");
+    return Value && Value[0] == '1';
+}
+}
 
 GameMap::GameMap()
 {
@@ -201,7 +210,9 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
         " walkable, " + std::to_string(UnwalkableTiles) +
         " unwalkable tiles");
 
-    // Verify with a few random tiles
+    if (!ShouldLogMapTileSamples())
+        return;
+
     for (int Y = 0; Y < mHeight && Y < 5; Y++)
     {
         for (int X = 0; X < mWidth && X < 5; X++)

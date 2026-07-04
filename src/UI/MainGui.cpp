@@ -225,8 +225,8 @@ void MainGui::UpdateCommandCard(Core::ECS::EntityManager& Entities,
 
 std::string MainGui::GetPortraitUri(int ChkUnitId) const
 {
-    const int TerranDefId = Game::Races::GetTerranDefIDByChkUnitID(ChkUnitId);
-    const std::string PortraitKey = ResolvePortraitKeyForSelection(TerranDefId);
+    const int UnitDefId = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitId);
+    const std::string PortraitKey = ResolvePortraitKeyForSelection(UnitDefId);
     if (PortraitKey.empty() || AssetRoot_.empty())
         return {};
 

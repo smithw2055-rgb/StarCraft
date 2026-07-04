@@ -171,10 +171,12 @@ bool IScriptDatabase::LoadImagesDat(const std::string& ImagesDatPath)
     }
 
     mImages.assign(Count, {});
+    const size_t DirectionalOffset = Count * 4;
     const size_t HasIScriptOffset = Count * 4 + Count * 2;
     const size_t IScriptIDOffset = Count * 10;
     for (size_t I = 0; I < Count; ++I)
     {
+        mImages[I].HasDirectionalFrames = Data[DirectionalOffset + I] != 0;
         mImages[I].HasIScriptAnimations = Data[HasIScriptOffset + I] != 0;
         mImages[I].IScriptID = (int)ReadU32(Data, IScriptIDOffset + I * 4);
     }
@@ -429,12 +431,29 @@ std::vector<IScriptEvent> IScriptVM::ConsumeEvents()
     return Out;
 }
 
+void IScriptVM::RefreshDirectionalFrame()
+{
+    if (!mSprite.HasDirectionalFrames)
+    {
+        mSprite.FrameIndex = mSprite.BaseFrameIndex;
+        return;
+    }
+
+    const int Dir32 = ((mSprite.CurrentDirection & 0xff) + 4) / 8;
+    const int ClampedDir32 = Dir32 >= 32 ? 0 : Dir32;
+    const bool Flip = ClampedDir32 > 16;
+    const int DirectionFrame = Flip ? 32 - ClampedDir32 : ClampedDir32;
+    mSprite.FrameIndex = mSprite.BaseFrameIndex + DirectionFrame;
+    mSprite.FlipState = Flip;
+}
+
 void IScriptVM::RegisterDefaultOpcodes()
 {
     using namespace IScriptOpcodes;
 
     mOpcodeHandlers[Opc_PlayFram] = [](IScriptVM& VM) {
-        VM.mSprite.FrameIndex = VM.PeekArg();
+        VM.mSprite.BaseFrameIndex = VM.PeekArg();
+        VM.RefreshDirectionalFrame();
         VM.AdvanceArgs(1);
         return false;
     };
@@ -532,14 +551,30 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(3);
         return false;
     };
+    auto SpriteOverlay3Above = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateSpriteOverlay, VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 1);
+        VM.AdvanceArgs(3);
+        return false;
+    };
+    auto SpriteOverlay3Below = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateSpriteOverlay, VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 0);
+        VM.AdvanceArgs(3);
+        return false;
+    };
     mOpcodeHandlers[Opc_ImgOl] = ImageOverlay3Above;
     mOpcodeHandlers[Opc_ImgUl] = ImageOverlay3Below;
     mOpcodeHandlers[Opc_ImgOlUseLo] = ImageOverlay3Above;
     mOpcodeHandlers[Opc_ImgUlUseLo] = ImageOverlay3Below;
-    mOpcodeHandlers[Opc_HighSprOl] = ImageOverlay3Above;
-    mOpcodeHandlers[Opc_LowSprUl] = ImageOverlay3Below;
-    mOpcodeHandlers[Opc_SprUl] = ImageOverlay3Below;
-    mOpcodeHandlers[Opc_GrdSprOl] = ImageOverlay3Above;
+    mOpcodeHandlers[Opc_HighSprOl] = SpriteOverlay3Above;
+    mOpcodeHandlers[Opc_LowSprUl] = SpriteOverlay3Below;
+    mOpcodeHandlers[Opc_SprUlUseLo] = SpriteOverlay3Below;
+    mOpcodeHandlers[Opc_SprUl] = SpriteOverlay3Below;
+    mOpcodeHandlers[Opc_SprOlUseLo] = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateSpriteOverlay, VM.PeekArg(1), 0, 0, 1);
+        VM.AdvanceArgs(2);
+        return false;
+    };
+    mOpcodeHandlers[Opc_GrdSprOl] = SpriteOverlay3Above;
     mOpcodeHandlers[Opc_ImgOlOrig] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlay, VM.PeekArg(1), 0, 0, 1);
         VM.AdvanceArgs(1);

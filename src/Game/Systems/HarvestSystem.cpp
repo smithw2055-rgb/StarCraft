@@ -1,6 +1,8 @@
 #include "Game/Systems/HarvestSystem.h"
 
 #include <limits>
+#include <cmath>
+#include <array>
 #include <string>
 
 #include "Core/Utils/Logger.h"
@@ -30,7 +32,7 @@ namespace
                 return Building->BuildingDefID;
         }
         if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
-            return Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
 
@@ -56,9 +58,69 @@ namespace
     void IssueHarvestMove(Core::ECS::EntityManager& EM,
                           int HarvesterID,
                           int TargetResourceID,
-                          Core::Math::Vec2 TargetPosition)
+                          Core::Math::Vec2 TargetPosition,
+                          int ApproachEntityID = -1,
+                          float ApproachRange = -1.0f)
     {
-        CommandSystem::IssueMove(EM, {HarvesterID}, TargetPosition);
+        auto* HarvesterTrans = EM.GetComponent<TransformComponent>(HarvesterID);
+        const int ApproachID = ApproachEntityID >= 0 ? ApproachEntityID : TargetResourceID;
+        auto* TargetTrans = EM.GetComponent<TransformComponent>(ApproachID);
+        Core::Math::Vec2 MoveTarget = TargetPosition;
+        if (HarvesterTrans && TargetTrans)
+        {
+            const float Range = ApproachRange >= 0.0f
+                ? ApproachRange
+                : std::max(12.0f, HarvestInteractionRange(EM, TargetResourceID) - 8.0f);
+            Core::Math::Vec2 Delta = HarvesterTrans->Position - TargetTrans->Position;
+            if (Delta.Length() < 0.001f)
+                Delta = {0.0f, 1.0f};
+            MoveTarget = TargetTrans->Position + Delta.Normalized() * Range;
+        }
+
+        auto RestoreHarvestCommand = [&]()
+        {
+            if (auto* Cmd = EM.GetComponent<CommandComponent>(HarvesterID))
+            {
+                Cmd->CurrentCommand = CommandType::Harvest;
+                Cmd->TargetEntityID = TargetResourceID;
+                Cmd->TargetPosition = TargetPosition;
+            }
+        };
+
+        auto TryMove = [&](const Core::Math::Vec2& Candidate)
+        {
+            const bool HasPath = CommandSystem::IssueMoveAndHasPath(EM, HarvesterID, Candidate);
+            RestoreHarvestCommand();
+            return HasPath;
+        };
+
+        bool HasIssuedReachableMove = TryMove(MoveTarget);
+        if (!HasIssuedReachableMove && HarvesterTrans && TargetTrans)
+        {
+            const float Range = ApproachRange >= 0.0f
+                ? ApproachRange
+                : std::max(12.0f, HarvestInteractionRange(EM, TargetResourceID) - 8.0f);
+            const std::array<Core::Math::Vec2, 12> Directions = {{
+                {1.0f, 0.0f}, {-1.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, -1.0f},
+                {0.7071f, 0.7071f}, {-0.7071f, 0.7071f},
+                {0.7071f, -0.7071f}, {-0.7071f, -0.7071f},
+                {0.9239f, 0.3827f}, {-0.9239f, 0.3827f},
+                {0.9239f, -0.3827f}, {-0.9239f, -0.3827f}
+            }};
+            for (const auto& Dir : Directions)
+            {
+                const Core::Math::Vec2 Candidate = TargetTrans->Position + Dir * Range;
+                if (TryMove(Candidate))
+                {
+                    HasIssuedReachableMove = true;
+                    break;
+                }
+            }
+        }
+
+        if (!HasIssuedReachableMove)
+            CommandSystem::IssueMove(EM, {HarvesterID}, MoveTarget);
+
         if (auto* Cmd = EM.GetComponent<CommandComponent>(HarvesterID))
         {
             Cmd->CurrentCommand = CommandType::Harvest;
@@ -189,10 +251,6 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
     const int LairDefID = Game::Races::GetUnitDefID("Lair");
     const int HiveDefID = Game::Races::GetUnitDefID("Hive");
 
-    const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
-    const int AssimilatorDefID = Game::Races::GetUnitDefID("Assimilator");
-    const int ExtractorDefID = Game::Races::GetUnitDefID("Extractor");
-
     int BestID = -1;
     float BestDist = std::numeric_limits<float>::max();
 
@@ -211,12 +269,10 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
         const bool IsValidMineralDepot =
             DefID == CommandCenterDefID || DefID == NexusDefID ||
             DefID == HatcheryDefID || DefID == LairDefID || DefID == HiveDefID;
-        const bool IsValidGasDepot =
-            DefID == RefineryDefID || DefID == AssimilatorDefID || DefID == ExtractorDefID;
 
         const bool IsValidDepot =
-            (Type == ResourceType::Minerals && IsValidMineralDepot) ||
-            (Type == ResourceType::VespeneGas && IsValidGasDepot);
+            (Type == ResourceType::Minerals || Type == ResourceType::VespeneGas) &&
+            IsValidMineralDepot;
         if (!IsValidDepot)
             continue;
 
@@ -276,6 +332,13 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
             {
                 if (ResTarget)
                 {
+                    const float Dist = Trans->Position.DistanceTo(ResTarget->Position);
+                    if (Dist <= HarvestInteractionRange(EM, Harvest->TargetResourceID) + 8.0f)
+                    {
+                        Harvest->State = HarvestState::Mining;
+                        Harvest->MineTimer = 0.0f;
+                        break;
+                    }
                     IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
                 }
                 else
@@ -327,7 +390,9 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                         if (auto* DepotTrans =
                                 EM.GetComponent<TransformComponent>(Harvest->ReturnBuildingID))
                         {
-                            IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
+                            IssueHarvestMove(EM, ID, Harvest->TargetResourceID,
+                                             DepotTrans->Position,
+                                             Harvest->ReturnBuildingID, 28.0f);
                         }
                     }
                 }
@@ -348,7 +413,9 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 if (auto* DepotTrans =
                         EM.GetComponent<TransformComponent>(Harvest->ReturnBuildingID))
                 {
-                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID,
+                                     DepotTrans->Position,
+                                     Harvest->ReturnBuildingID, 28.0f);
                 }
                 return;
             }
@@ -395,7 +462,9 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 }
                 else
                 {
-                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, DepotTrans->Position);
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID,
+                                     DepotTrans->Position,
+                                     Harvest->ReturnBuildingID, 28.0f);
                 }
             }
             break;

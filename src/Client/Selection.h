@@ -3,6 +3,7 @@
 #include "Core/Platform/Platform.h"
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
+#include "Resource/DataAssetCacheView.h"
 #include "Render/Camera2D.h"
 
 #include <vector>
@@ -27,6 +28,7 @@ public:
                 const Render::Camera2D& Camera);
     void PruneAgainst(Core::ECS::EntityManager& Entities);
     void CancelPointerGesture();
+    void Init(Resource::Graphics::DataAssetCacheView DataAssets) { mDataAssets = DataAssets; }
     void SetLocalPlayerId(int PlayerId) { mLocalPlayerId = PlayerId; }
 
     bool IsDragging() const { return mPhase == Phase::Dragging; }
@@ -49,6 +51,7 @@ private:
     int mEndX = 0, mEndY = 0;
     std::vector<int> mSelected;
     int mLocalPlayerId = 0;
+    Resource::Graphics::DataAssetCacheView mDataAssets;
 
     // Control groups: 10 groups of up to 12 entity IDs each
     std::array<std::vector<int>, kNumControlGroups> mControlGroups;

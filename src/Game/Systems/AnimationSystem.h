@@ -3,6 +3,7 @@
 #include "Core/ECS/SystemManager.h"
 #include "Game/Components.h"
 #include "Game/IScriptVM.h"
+#include <functional>
 #include <vector>
 #include <unordered_map>
 
@@ -49,6 +50,15 @@ public:
 
     static void RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
+    static int SelectIScriptAnimationForState(AnimState DesiredState,
+                                              bool IsBuilding,
+                                              bool UnderConstruction,
+                                              bool WasUnderConstruction,
+                                              bool IsWorking,
+                                              bool WasWorking,
+                                              bool WasWalking,
+                                              bool IsPendingAttack,
+                                              const std::function<bool(int)>& HasAnim);
     static AnimState GetAnimStateFromComponents(const Components::CommandComponent* Cmd,
                                                   const Components::CombatComponent* Combat,
                                                   const Components::PathfindingComponent* Path,
@@ -64,6 +74,8 @@ private:
         int AnimID = -1;
         bool WasWorking = false;
         bool WasUnderConstruction = false;
+        bool WasWalking = false;
+        bool HasPlayedBuilt = false;
         float StepAccumulator = 0.0f;
     };
 
@@ -81,6 +93,11 @@ private:
     std::unordered_map<int, EntityScriptState> mScriptStates;
 
     static void EnsureIScriptLoaded();
+    static int DirectionalFrameIndex(int BaseFrame,
+                                     int Direction,
+                                     int TotalFrames,
+                                     bool HasDirectionalFrames,
+                                     bool* OutFlipped = nullptr);
     void UpdateScriptEffects(float DeltaTime);
     void UpdateImageTrees(float DeltaTime);
     void ClearImageTree(int EntityID);
@@ -122,12 +139,86 @@ private:
                               Components::CombatComponent* Combat);
     bool UpdateIScriptAnimation(int EntityID,
                                 float DeltaTime,
+                                AnimState DesiredState,
                                 Components::RenderComponent& Render,
                                 const Components::TransformComponent& Trans,
+                                const Components::PathfindingComponent* Path,
                                 const Components::PlayerComponent* Player,
                                 Components::CombatComponent* Combat,
                                 const Components::BuildingComponent* Bldg,
                                 const Components::ProductionComponent* Prod);
 };
+
+inline int AnimationSystem::SelectIScriptAnimationForState(
+    AnimState DesiredState,
+    bool IsBuilding,
+    bool UnderConstruction,
+    bool WasUnderConstruction,
+    bool IsWorking,
+    bool WasWorking,
+    bool WasWalking,
+    bool IsPendingAttack,
+    const std::function<bool(int)>& HasAnim)
+{
+    if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_GndAttkInit))
+        return Game::IScriptAnims::Anim_GndAttkInit;
+    if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_AirAttkInit))
+        return Game::IScriptAnims::Anim_AirAttkInit;
+
+    if (!IsBuilding)
+    {
+        if (DesiredState == AnimState::Walking && HasAnim(Game::IScriptAnims::Anim_Walking))
+            return Game::IScriptAnims::Anim_Walking;
+        if (WasWalking && HasAnim(Game::IScriptAnims::Anim_WalkingToIdle))
+            return Game::IScriptAnims::Anim_WalkingToIdle;
+        if (DesiredState == AnimState::Idle && HasAnim(Game::IScriptAnims::Anim_Init))
+            return Game::IScriptAnims::Anim_Init;
+        return -1;
+    }
+
+    if (UnderConstruction)
+    {
+        if (HasAnim(Game::IScriptAnims::Anim_AlmostBuilt))
+            return Game::IScriptAnims::Anim_AlmostBuilt;
+        if (HasAnim(Game::IScriptAnims::Anim_Init))
+            return Game::IScriptAnims::Anim_Init;
+        return -1;
+    }
+
+    if (WasUnderConstruction && HasAnim(Game::IScriptAnims::Anim_Built))
+        return Game::IScriptAnims::Anim_Built;
+    if (IsWorking && HasAnim(Game::IScriptAnims::Anim_IsWorking))
+        return Game::IScriptAnims::Anim_IsWorking;
+    if (WasWorking && HasAnim(Game::IScriptAnims::Anim_WorkingToIdle))
+        return Game::IScriptAnims::Anim_WorkingToIdle;
+    if (HasAnim(Game::IScriptAnims::Anim_Init))
+        return Game::IScriptAnims::Anim_Init;
+    return -1;
+}
+
+inline AnimState AnimationSystem::GetAnimStateFromComponents(
+    const Components::CommandComponent* Cmd,
+    const Components::CombatComponent* Combat,
+    const Components::PathfindingComponent* Path,
+    const Components::UnitComponent* Unit,
+    const Components::BuildingComponent* Bldg,
+    const Components::MorphComponent* Morph)
+{
+    (void)Unit;
+    if (Morph && Morph->IsMorphing) return AnimState::Morphing;
+    if (Bldg && Bldg->UnderConstruction) return AnimState::Constructing;
+    if (Path)
+    {
+        if (!Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())
+            return AnimState::Walking;
+        if (Path->CurrentSpeed > 0.1f || Path->CurrentVelocity.Length() > 0.1f)
+            return AnimState::Walking;
+    }
+    if (Combat && Combat->CooldownRemaining > Combat->AttackCooldown * 0.5f)
+        return AnimState::Attacking;
+    if (Cmd && Cmd->CurrentCommand == Components::CommandType::Attack)
+        return AnimState::Attacking;
+    return AnimState::Idle;
+}
 
 } // namespace Game::Systems

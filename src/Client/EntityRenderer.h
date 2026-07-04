@@ -3,6 +3,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
 #include "Client/Entity.h"
+#include "Resource/DataAssetCacheView.h"
 #include "Resource/SpriteAssetCacheView.h"
 #include <vector>
 
@@ -12,7 +13,12 @@ namespace Game::Client
 class EntityRenderer
 {
 public:
-    void Init(Resource::Graphics::SpriteAssetCacheView SpriteAssets) { mSpriteAssets = SpriteAssets; }
+    void Init(Resource::Graphics::SpriteAssetCacheView SpriteAssets,
+              Resource::Graphics::DataAssetCacheView DataAssets)
+    {
+        mSpriteAssets = SpriteAssets;
+        mDataAssets = DataAssets;
+    }
 
     void ResolveFrames(EntityManager& Entities);
     void Render(const EntityManager& Entities, const std::vector<int>& SelectedIds);
@@ -48,8 +54,17 @@ private:
                            float ParentOffsetX = 0.0f,
                            float ParentOffsetY = 0.0f,
                            int Depth = 0) const;
+    float ResolveVisualRadius(Core::ECS::EntityManager& Entities, int EntityId) const;
+    void AccumulateImageNodeVisualRadius(const Game::Components::RenderComponent& RenderComp,
+                                         const std::vector<Game::Components::ImageSubnode>& Nodes,
+                                         int NodeIndex,
+                                         float ParentOffsetX,
+                                         float ParentOffsetY,
+                                         int Depth,
+                                         float& Radius) const;
 
     Resource::Graphics::SpriteAssetCacheView mSpriteAssets;
+    Resource::Graphics::DataAssetCacheView mDataAssets;
     float mCameraX = 0.0f, mCameraY = 0.0f;
     float mViewW = 1280.0f, mViewH = 720.0f;
     float mZoom = 1.0f;

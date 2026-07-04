@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "Core/Utils/Logger.h"
+#include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/HarvestSystem.h"
 
@@ -14,6 +15,7 @@ using namespace Game::Components;
 namespace
 {
     ProductionSystem::ImageIDResolver gImageResolver;
+    ProductionSystem::CollisionBoundsResolver gCollisionBoundsResolver;
 
     void SetReason(std::string* OutReason, const std::string& Reason)
     {
@@ -26,6 +28,11 @@ namespace
         return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
     }
 
+    UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
+    {
+        return gCollisionBoundsResolver ? gCollisionBoundsResolver(ChkUnitID) : UnitCollisionBounds{};
+    }
+
     int ResolveBuildingDefID(const Core::ECS::EntityManager& EM, int BuildingID)
     {
         if (const auto* Building = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<BuildingComponent>(BuildingID))
@@ -34,7 +41,7 @@ namespace
                 return Building->BuildingDefID;
         }
         if (const auto* Unit = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<UnitComponent>(BuildingID))
-            return Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
 
@@ -61,6 +68,11 @@ namespace
 void ProductionSystem::SetImageResolver(ImageIDResolver Resolver)
 {
     gImageResolver = std::move(Resolver);
+}
+
+void ProductionSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
+{
+    gCollisionBoundsResolver = std::move(Resolver);
 }
 
 bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
@@ -159,6 +171,7 @@ bool ProductionSystem::StartTrain(Core::ECS::EntityManager& EM,
     Prod->Queue.push_back(UnitDefID);
     Res.Minerals -= Def.MineralCost;
     Res.VespeneGas -= Def.GasCost;
+    Res.SupplyUsed += Def.SupplyCost;
 
     Core::Utils::Logger::Info("ProductionSystem",
         "Queued " + Def.Name + " in building " + std::to_string(BuildingID) +
@@ -174,13 +187,16 @@ bool ProductionSystem::CancelTrain(Core::ECS::EntityManager& EM,
         return false;
 
     int RefundUnitID = -1;
+    int RemovedIndex = -1;
     if (QueueIndex >= 0 && QueueIndex < (int)Prod->Queue.size())
     {
+        RemovedIndex = QueueIndex;
         RefundUnitID = Prod->Queue[QueueIndex];
         Prod->Queue.erase(Prod->Queue.begin() + QueueIndex);
     }
     else
     {
+        RemovedIndex = (int)Prod->Queue.size() - 1;
         RefundUnitID = Prod->Queue.back();
         Prod->Queue.pop_back();
     }
@@ -191,6 +207,23 @@ bool ProductionSystem::CancelTrain(Core::ECS::EntityManager& EM,
     auto& Res = HarvestSystem::GetResources(PlayerID);
     Res.Minerals += Def.MineralCost;
     Res.VespeneGas += Def.GasCost;
+    Res.SupplyUsed = std::max(0, Res.SupplyUsed - Def.SupplyCost);
+
+    const bool CancelledCurrent =
+        RemovedIndex == 0 &&
+        RefundUnitID == Prod->CurrentTrainingUnitDefID;
+    if (CancelledCurrent)
+    {
+        Prod->CurrentTrainingUnitDefID = -1;
+        Prod->TrainingProgress = 0.0f;
+        Prod->TrainingTimePerUnit = 0.0f;
+        if (!Prod->Queue.empty())
+        {
+            Prod->CurrentTrainingUnitDefID = Prod->Queue.front();
+            auto NextDef = Races::GetUnitDefByID(Prod->CurrentTrainingUnitDefID);
+            Prod->TrainingTimePerUnit = (float)NextDef.BuildTime;
+        }
+    }
     return true;
 }
 
@@ -225,10 +258,7 @@ void ProductionSystem::ProcessTraining(Core::ECS::EntityManager& EM, int EntityI
 
     Prod->TrainingProgress = 0.0f;
     int TrainedDefID = Prod->CurrentTrainingUnitDefID;
-    auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
-    auto& Res = HarvestSystem::GetResources(Player ? Player->PlayerID : 0);
     auto Def = Races::GetUnitDefByID(TrainedDefID);
-    Res.SupplyUsed += Def.SupplyCost;
 
     int NewUnitID = SpawnUnit(EM, EntityID, TrainedDefID);
     if (NewUnitID != -1)
@@ -294,12 +324,19 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
         Combat.AirDmgType = Def.AirDmgType;
         Combat.AttackRange = Def.AttackRange;
         Combat.AttackCooldown = Def.AttackCooldown;
+        Combat.CanTargetGround = Def.GroundDamage > 0;
+        Combat.CanTargetAir = Def.AirDamage > 0;
+        Combat.MyElevation = Game::Data::IsAirUnitType(Unit.ChkUnitID) ?
+            Elevation::Air :
+            Elevation::Ground;
     }
 
     auto& Command = EM.AddComponent<CommandComponent>(EntityID);
     Command.CurrentCommand = CommandType::Stop;
     auto& Path = EM.AddComponent<PathfindingComponent>(EntityID);
     Path.NodeTolerance = 8.0f;
+    Path.IsAir = Game::Data::IsAirUnitType(Unit.ChkUnitID);
+    ApplyCollisionBounds(Path, ResolveCollisionBounds(Unit.ChkUnitID));
     return EntityID;
 }
 

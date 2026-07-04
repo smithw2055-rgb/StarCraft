@@ -6,6 +6,7 @@
 #include "Main/CampaignRuntime.h"
 #include "Main/GameAudioRuntime.h"
 #include "Main/GameSession.h"
+#include "Resource/GameDataLoader.h"
 
 namespace Game::Client::GameLoop
 {
@@ -15,7 +16,8 @@ inline void InitializeCampaignRuntimeForSession(
     GameSession& Session,
     GameAudioRuntime& Audio,
     ClientRuntime& Client,
-    const std::string& MapPath)
+    const std::string& MapPath,
+    bool PreserveManualCamera)
 {
     auto& Entities = Session.Systems().GetEntityManager();
     Campaign.InitializeCampaign(
@@ -38,7 +40,27 @@ inline void InitializeCampaignRuntimeForSession(
         [&Client](int ChkUnitID, auto, int) {
             return (int)Client.GetSpriteAssets().ResolveImageID(ChkUnitID);
         },
-        [&Session, &Client](auto Position) {
+        [&Client](int ChkUnitID) {
+            Game::Components::UnitCollisionBounds Bounds;
+            auto DataAssets = Client.GetDataAssets();
+            if (!DataAssets.HasCache())
+                return Bounds;
+
+            const auto* DataLoader = DataAssets.GetDataLoader();
+            const auto* UnitData = DataLoader ? DataLoader->FindUnitByID((uint32_t)ChkUnitID) : nullptr;
+            if (!UnitData)
+                return Bounds;
+
+            Bounds.IsValid = UnitData->DimensionWidth() > 0 && UnitData->DimensionHeight() > 0;
+            Bounds.Left = UnitData->DimensionLeft;
+            Bounds.Up = UnitData->DimensionUp;
+            Bounds.Right = UnitData->DimensionRight;
+            Bounds.Down = UnitData->DimensionDown;
+            return Bounds;
+        },
+        [&Session, &Client, PreserveManualCamera](auto Position) {
+            if (PreserveManualCamera)
+                return;
             if (!Session.IsMapLoaded())
                 return;
             Client.CenterCamera(Position.X, Position.Y);

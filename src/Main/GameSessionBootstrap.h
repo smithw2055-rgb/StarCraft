@@ -28,6 +28,95 @@
 
 namespace Game::Client::GameLoop::GameSessionBootstrap
 {
+namespace Detail
+{
+enum class StartRace
+{
+    Terran,
+    Zerg,
+    Protoss
+};
+
+inline StartRace RaceFromScriptRace(uint8_t Race)
+{
+    switch (Race)
+    {
+    case 0: return StartRace::Zerg;
+    case 2: return StartRace::Protoss;
+    default: return StartRace::Terran;
+    }
+}
+
+inline StartRace RaceFromScriptPlayer(const GameSession& Session, int PlayerId)
+{
+    if (PlayerId < 0 || PlayerId >= (int)Session.GetScriptData().Players.size())
+        return StartRace::Terran;
+
+    return RaceFromScriptRace(Session.GetScriptData().Players[(size_t)PlayerId].Race);
+}
+
+inline StartRace RaceFromChkUnitID(int ChkUnitID, StartRace Fallback)
+{
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
+    if (DefID < 0)
+        return Fallback;
+
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.RaceType == Game::Components::Race::Zerg)
+        return StartRace::Zerg;
+    if (Def.RaceType == Game::Components::Race::Protoss)
+        return StartRace::Protoss;
+    return StartRace::Terran;
+}
+
+inline bool IsTownHallForRace(StartRace Race, int ChkUnitID)
+{
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
+    if (DefID < 0)
+        return false;
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    if (!Def.IsBuilding)
+        return false;
+
+    if (Race == StartRace::Zerg)
+        return Def.Name == "Hatchery" || Def.Name == "Lair" || Def.Name == "Hive";
+    if (Race == StartRace::Protoss)
+        return Def.Name == "Nexus";
+    return Def.Name == "CommandCenter";
+}
+
+inline bool IsWorkerForRace(StartRace Race, int ChkUnitID)
+{
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
+    if (DefID < 0)
+        return false;
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+
+    if (Race == StartRace::Zerg)
+        return Def.Name == "Drone";
+    if (Race == StartRace::Protoss)
+        return Def.Name == "Probe";
+    return Def.Name == "SCV";
+}
+
+inline int TownHallDefForRace(StartRace Race)
+{
+    if (Race == StartRace::Zerg)
+        return Game::Races::GetUnitDefID("Hatchery");
+    if (Race == StartRace::Protoss)
+        return Game::Races::GetUnitDefID("Nexus");
+    return Game::Races::GetUnitDefID("CommandCenter");
+}
+
+inline int WorkerDefForRace(StartRace Race)
+{
+    if (Race == StartRace::Zerg)
+        return Game::Races::GetUnitDefID("Drone");
+    if (Race == StartRace::Protoss)
+        return Game::Races::GetUnitDefID("Probe");
+    return Game::Races::GetUnitDefID("SCV");
+}
+}
 
 inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSystem& Audio)
 {
@@ -35,7 +124,7 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
     CmdSys->Init(&SysMgr);
     SysMgr.RegisterSystem(std::move(CmdSys));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::MovementSystem>(SysMgr));
+    SysMgr.RegisterSystem(std::make_unique<Game::Systems::MovementSystem>(SysMgr, &Session.MutableEcsMap()));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::HarvestSystem>(SysMgr));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::BuildingSystem>(SysMgr));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::ProductionSystem>(SysMgr));
@@ -89,8 +178,6 @@ inline void EnsurePlayableStart(GameSession& Session,
 
     const int BaseX = ChosenStart->TileX * 32 + 16;
     const int BaseY = ChosenStart->TileY * 32 + 16;
-    const int CommandCenterChkId = 0x6A;
-    const int ScvChkId = 0x07;
     const int ResourceRadius = 448;
     const int ResourceRadiusSq = ResourceRadius * ResourceRadius;
 
@@ -103,6 +190,7 @@ inline void EnsurePlayableStart(GameSession& Session,
 
     bool HasTownHall = false;
     int WorkerCount = 0;
+    Detail::StartRace Race = Detail::RaceFromScriptPlayer(Session, PlayerId);
     bool HasNearbyMinerals = false;
     bool HasNearbyGas = false;
     auto Existing = Session.Entities().GetEntitiesWith<
@@ -117,16 +205,29 @@ inline void EnsurePlayableStart(GameSession& Session,
         if (!Trans || !Unit)
             continue;
         const int Owner = Player ? Player->PlayerID : 11;
+        if (Owner == PlayerId && !EM.GetComponent<Game::Components::ResourceComponent>(EntityId))
+            Race = Detail::RaceFromChkUnitID(Unit->ChkUnitID, Race);
+    }
+
+    for (int EntityId : Existing)
+    {
+        auto& EM = Session.Entities();
+        auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityId);
+        auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
+        auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityId);
+        if (!Trans || !Unit)
+            continue;
+        const int Owner = Player ? Player->PlayerID : 11;
         if (Owner == PlayerId &&
             EM.GetComponent<Game::Components::BuildingComponent>(EntityId) &&
-            Unit->ChkUnitID == CommandCenterChkId)
+            Detail::IsTownHallForRace(Race, Unit->ChkUnitID))
         {
             HasTownHall = true;
         }
         if (Owner == PlayerId &&
             !EM.GetComponent<Game::Components::BuildingComponent>(EntityId) &&
             !EM.GetComponent<Game::Components::ResourceComponent>(EntityId) &&
-            Unit->ChkUnitID == ScvChkId)
+            Detail::IsWorkerForRace(Race, Unit->ChkUnitID))
         {
             ++WorkerCount;
         }
@@ -142,19 +243,19 @@ inline void EnsurePlayableStart(GameSession& Session,
 
     if (!HasTownHall)
     {
-        const int CcDefID = Game::Races::GetTerranDefIDByChkUnitID(CommandCenterChkId);
-        if (CcDefID >= 0)
+        const int TownHallDefID = Detail::TownHallDefForRace(Race);
+        if (TownHallDefID >= 0)
             Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
-                Session.Entities(), CcDefID, {(float)BaseX, (float)BaseY}, PlayerId);
+                Session.Entities(), TownHallDefID, {(float)BaseX, (float)BaseY}, PlayerId);
         SpawnedAny = true;
     }
 
     for (int I = WorkerCount; I < 4; ++I)
     {
-        const int ScvDefID = Game::Races::GetTerranDefIDByChkUnitID(ScvChkId);
-        if (ScvDefID >= 0)
+        const int WorkerDefID = Detail::WorkerDefForRace(Race);
+        if (WorkerDefID >= 0)
             Game::Systems::ProductionSystem::DebugSpawnUnit(
-                Session.Entities(), ScvDefID,
+                Session.Entities(), WorkerDefID,
                 {(float)(BaseX - 36 + I * 24), (float)(BaseY + 64)}, PlayerId);
         SpawnedAny = true;
     }
@@ -207,10 +308,10 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session)
             continue;
         if (Player->PlayerID == 1)
             HasPlayer1 = true;
-        const int TerranDefID = Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID);
-        if (TerranDefID >= 0 && Player->PlayerID >= 0 && Player->PlayerID < 8)
+        const int UnitDefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        if (UnitDefID >= 0 && Player->PlayerID >= 0 && Player->PlayerID < 8)
         {
-            const auto Def = Game::Races::GetUnitDefByID(TerranDefID);
+            const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
             auto& Resources = Game::Systems::HarvestSystem::GetResources(Player->PlayerID);
             if (Def.IsBuilding)
                 Resources.SupplyMax += Def.SupplyCost;

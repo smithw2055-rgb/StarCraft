@@ -12,6 +12,7 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Main/GameLoop/CursorTypes.h"
 #include "Main/GameLoop/InputHandler.h"
 #include "UI/HudState.h"
 
@@ -160,7 +161,22 @@ inline void ExecuteSmartClickCommand(
 
     if (ClickTarget.EnemyEntityID >= 0)
     {
-        Game::Systems::CombatSystem::IssueAttack(EntityManager, EntityIDs, ClickTarget.EnemyEntityID);
+        auto Attackers = FilterAttackersForTarget(EntityManager, EntityIDs, ClickTarget.EnemyEntityID);
+        if (!Attackers.empty())
+            Game::Systems::CombatSystem::IssueAttack(EntityManager, Attackers, ClickTarget.EnemyEntityID);
+
+        if (Attackers.size() < EntityIDs.size())
+        {
+            std::vector<int> Movers;
+            Movers.reserve(EntityIDs.size() - Attackers.size());
+            for (int EntityID : EntityIDs)
+            {
+                if (!CanEntityAttackTarget(EntityManager, EntityID, ClickTarget.EnemyEntityID))
+                    Movers.push_back(EntityID);
+            }
+            if (!Movers.empty())
+                Game::Systems::CommandSystem::IssueMove(EntityManager, Movers, Target);
+        }
     }
     else if (ClickTarget.ResourceEntityID >= 0)
     {

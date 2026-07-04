@@ -2,6 +2,8 @@
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
 
+#include <algorithm>
+
 namespace Game::Client::GameLoop
 {
 
@@ -157,17 +159,79 @@ bool HasCombatSelection(Core::ECS::EntityManager& EM,
     return false;
 }
 
+namespace
+{
+    bool IsAirTarget(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityId)
+    {
+        if (auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(EntityId))
+        {
+            if (Path->IsAir)
+                return true;
+        }
+
+        if (auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(EntityId))
+            return Combat->MyElevation == Game::Components::Elevation::Air;
+
+        return false;
+    }
+}
+
+bool CanEntityAttackTarget(Core::ECS::EntityManager& EM,
+                           Core::ECS::EntityID AttackerId,
+                           Core::ECS::EntityID TargetId)
+{
+    auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(AttackerId);
+    if (!Combat)
+        return false;
+    if (TargetId <= 0 || !EM.IsAlive(TargetId))
+        return false;
+    if (EM.GetComponent<Game::Components::ResourceComponent>(TargetId))
+        return false;
+
+    const bool TargetAir = IsAirTarget(EM, TargetId);
+    if (TargetAir)
+        return Combat->CanTargetAir && Combat->AirDamage > 0;
+    return Combat->CanTargetGround && Combat->GroundDamage > 0;
+}
+
+bool HasAttackCapableSelection(Core::ECS::EntityManager& EM,
+                               const std::vector<Core::ECS::EntityID>& EcsIds,
+                               Core::ECS::EntityID TargetId)
+{
+    return std::any_of(EcsIds.begin(), EcsIds.end(), [&](Core::ECS::EntityID EntityId) {
+        return CanEntityAttackTarget(EM, EntityId, TargetId);
+    });
+}
+
+std::vector<Core::ECS::EntityID> FilterAttackersForTarget(
+    Core::ECS::EntityManager& EM,
+    const std::vector<Core::ECS::EntityID>& EcsIds,
+    Core::ECS::EntityID TargetId)
+{
+    std::vector<Core::ECS::EntityID> Attackers;
+    Attackers.reserve(EcsIds.size());
+    for (Core::ECS::EntityID EntityId : EcsIds)
+    {
+        if (CanEntityAttackTarget(EM, EntityId, TargetId))
+            Attackers.push_back(EntityId);
+    }
+    return Attackers;
+}
+
 std::vector<Core::ECS::EntityID> FilterHarvesters(Core::ECS::EntityManager& EM,
                                                    const std::vector<Core::ECS::EntityID>& EcsIds)
 {
     std::vector<Core::ECS::EntityID> Harvesters;
     Harvesters.reserve(EcsIds.size());
     const int ScvDefId = Game::Races::GetUnitDefID("SCV");
+    const int DroneDefId = Game::Races::GetUnitDefID("Drone");
+    const int ProbeDefId = Game::Races::GetUnitDefID("Probe");
     for (int EntityId : EcsIds)
     {
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
         if (!Unit) continue;
-        if (Game::Races::GetTerranDefIDByChkUnitID(Unit->ChkUnitID) == ScvDefId)
+        const int UnitDefId = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        if (UnitDefId == ScvDefId || UnitDefId == DroneDefId || UnitDefId == ProbeDefId)
             Harvesters.push_back(EntityId);
     }
     return Harvesters;

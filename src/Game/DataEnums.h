@@ -219,6 +219,53 @@ enum class UnitType : int
     kCount = 228
 };
 
+inline bool IsAirUnitType(int ChkUnitID)
+{
+    // Use raw CHK ids here. UnitType currently omits a few late special ids,
+    // so enum ordinals are not reliable for every Brood War unit.
+    switch (ChkUnitID)
+    {
+        case 8:   // Terran Wraith
+        case 9:   // Terran Science Vessel
+        case 11:  // Terran Dropship
+        case 12:  // Terran Battlecruiser
+        case 21:  // Hero Tom Kazansky
+        case 22:  // Hero Magellan
+        case 28:  // Hero Hyperion
+        case 29:  // Hero Norad II
+        case 58:  // Terran Valkyrie
+        case 42:  // Zerg Overlord
+        case 43:  // Zerg Mutalisk
+        case 44:  // Zerg Guardian
+        case 45:  // Zerg Queen
+        case 47:  // Zerg Scourge
+        case 49:  // Hero Matriarch
+        case 55:  // Hero Kukulza Mutalisk
+        case 56:  // Hero Kukulza Guardian
+        case 57:  // Hero Yggdrasill
+        case 60:  // Protoss Corsair
+        case 62:  // Zerg Devourer
+        case 69:  // Protoss Shuttle
+        case 70:  // Protoss Scout
+        case 71:  // Protoss Arbiter
+        case 72:  // Protoss Carrier
+        case 73:  // Protoss Interceptor
+        case 80:  // Hero Mojo
+        case 82:  // Hero Gantrithor
+        case 84:  // Protoss Observer
+        case 86:  // Hero Danimoth
+        case 88:  // Hero Artanis
+        case 91:  // Special Cargo Ship
+        case 92:  // Special Mercenary Gunship
+        case 94:  // Critter Kakaru
+        case 101: // Special Map Revealer
+        case 105: // Spell Disruption Web
+            return true;
+        default:
+            return false;
+    }
+}
+
 enum class WeaponType : int
 {
     Gauss_Rifle,

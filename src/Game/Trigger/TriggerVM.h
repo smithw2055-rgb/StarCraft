@@ -10,6 +10,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Game/Components.h"
 #include "Game/Trigger/SCRTriggerParser.h"
 
 namespace Game::Trigger
@@ -64,6 +65,7 @@ struct TriggerRuntimeConfig
 {
     std::function<void(int, int, bool)> SetAlliance;
     std::function<int(int, Core::Math::Vec2, int)> ResolveImageID;
+    std::function<Game::Components::UnitCollisionBounds(int)> ResolveCollisionBounds;
     std::function<void(Core::Math::Vec2)> CenterView;
     std::function<void(Core::Math::Vec2)> MinimapPing;
     std::function<void(bool)> SetGamePaused;

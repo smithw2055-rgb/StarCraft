@@ -1,21 +1,42 @@
 #include "Client/EntityRenderer.h"
+#include "Client/SelectionFootprint.h"
 
+#include "Game/DataEnums.h"
+#include "Resource/GameDataLoader.h"
 #include "Render/Draw2D.h"
 #include "Render/Color.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace Game::Client
 {
 
 namespace
 {
+    constexpr float kTwoPi = 6.28318530718f;
+    constexpr uint32_t kSelectionCircleBaseImageId = 561;
+
+    struct FootprintVisual
+    {
+        float CenterX = 0.0f;
+        float CenterY = 0.0f;
+        float RadiusX = 12.0f;
+        float RadiusY = 5.0f;
+    };
+
+    struct SelectionVisual
+    {
+        FootprintVisual Footprint;
+        const Resource::Graphics::GpuImage* CircleImage = nullptr;
+    };
+
     const std::vector<Resource::Graphics::GpuImage>* ResolveFramesFor(
         const Resource::Graphics::SpriteAssetCacheView& SpriteAssets, int ImageId)
     {
-        return SpriteAssets.GetSpriteFrames(ImageId);
+        return SpriteAssets.GetDatImageFrames(ImageId);
     }
 
     void ResolveFrameExtents(const Entity& E, float& HalfW, float& HalfH)
@@ -32,6 +53,420 @@ namespace
                 HalfH = (float)Img.Height * 0.5f;
             }
         }
+    }
+
+    void DrawSolidFootprintEllipse(Render::Draw2D& Draw,
+                                   float CenterX,
+                                   float CenterY,
+                                   float RadiusX,
+                                   float RadiusY)
+    {
+        const Render::Color Shadow(0, 36, 0, 170);
+        const Render::Color Glow(72, 255, 96, 255);
+        const int Segments = std::max(72, (int)std::lround(RadiusX * 2.6f));
+        for (int I = 0; I < Segments; ++I)
+        {
+            const float T = (float)I / (float)Segments;
+            const float Angle = T * kTwoPi;
+            const float PX = CenterX + std::cos(Angle) * RadiusX;
+            const float PY = CenterY + std::sin(Angle) * RadiusY;
+            Draw.DrawRect(PX - 1.5f, PY - 1.5f, 3.0f, 3.0f, Shadow);
+            Draw.DrawRect(PX - 0.75f, PY - 0.75f, 1.5f, 1.5f, Glow);
+        }
+    }
+
+    Render::Color HealthColor(float HpFrac)
+    {
+        if (HpFrac < 0.25f)
+            return Render::Color(230, 48, 38, 255);
+        if (HpFrac < 0.5f)
+            return Render::Color(230, 210, 42, 255);
+        return Render::Color(78, 220, 78, 255);
+    }
+
+    void DrawSegmentedBar(Render::Draw2D& Draw,
+                          float CenterX,
+                          float Y,
+                          float Width,
+                          float Frac,
+                          Render::Color Fill)
+    {
+        Frac = std::clamp(Frac, 0.0f, 1.0f);
+        const int SegmentCount = std::clamp((int)std::lround(Width / 4.0f), 7, 32);
+        const float Gap = 1.0f;
+        const float Height = 4.0f;
+        const float SegmentW = std::max(2.0f, (Width - Gap * (SegmentCount - 1)) / (float)SegmentCount);
+        const float TotalW = SegmentW * SegmentCount + Gap * (SegmentCount - 1);
+        const float X0 = CenterX - TotalW * 0.5f;
+        const int FilledSegments = (int)std::ceil(Frac * (float)SegmentCount);
+        const Render::Color Border(0, 0, 0, 235);
+        const Render::Color Back(20, 36, 20, 230);
+        for (int I = 0; I < SegmentCount; ++I)
+        {
+            const float X = X0 + (SegmentW + Gap) * (float)I;
+            Draw.DrawRect(X - 1.0f, Y - 1.0f, SegmentW + 2.0f, Height + 2.0f, Border);
+            Draw.DrawRect(X, Y, SegmentW, Height, Back);
+            if (I < FilledSegments)
+                Draw.DrawRect(X, Y, SegmentW, Height, Fill);
+        }
+    }
+
+    void DrawSegmentedStatusBars(Render::Draw2D& Draw,
+                                 float CenterX,
+                                 float Y,
+                                 float Width,
+                                 int HitPoints,
+                                 int MaxHitPoints,
+                                 int ShieldPoints,
+                                 int MaxShieldPoints,
+                                 int EnergyPoints,
+                                 int MaxEnergyPoints)
+    {
+        if (MaxHitPoints <= 0)
+            return;
+
+        const float HpFrac = (float)HitPoints / (float)MaxHitPoints;
+        DrawSegmentedBar(Draw, CenterX, Y, Width, HpFrac, HealthColor(HpFrac));
+
+        if (MaxShieldPoints > 0)
+        {
+            const float ShieldFrac = (float)ShieldPoints / (float)MaxShieldPoints;
+            DrawSegmentedBar(Draw, CenterX, Y + 6.0f, Width, ShieldFrac,
+                             Render::Color(64, 112, 255, 255));
+        }
+        else if (MaxEnergyPoints > 0)
+        {
+            const float EnergyFrac = (float)EnergyPoints / (float)MaxEnergyPoints;
+            DrawSegmentedBar(Draw, CenterX, Y + 6.0f, Width, EnergyFrac,
+                             Render::Color(178, 72, 230, 255));
+        }
+    }
+
+    FootprintVisual UnitFootprint(float X,
+                                  float Y,
+                                  UnitSize Size,
+                                  float FrameHalfW,
+                                  float FrameHalfH)
+    {
+        float FallbackRadius = 12.0f;
+        switch (Size)
+        {
+            case UnitSize::Small: FallbackRadius = 16.0f; break;
+            case UnitSize::Medium: FallbackRadius = 23.0f; break;
+            case UnitSize::Large: FallbackRadius = 34.0f; break;
+        }
+        const BuildingFootprintSpec F =
+            SelectionEllipseFromVisualBounds(X, Y, FrameHalfW, FrameHalfH, FallbackRadius);
+        return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+    }
+
+    float UnitFallbackRadius(UnitSize Size)
+    {
+        switch (Size)
+        {
+            case UnitSize::Small: return 16.0f;
+            case UnitSize::Medium: return 23.0f;
+            case UnitSize::Large: return 34.0f;
+        }
+        return 12.0f;
+    }
+
+    float UnitFallbackRadius(Game::Components::UnitSize Size)
+    {
+        switch (Size)
+        {
+            case Game::Components::UnitSize::Small: return 16.0f;
+            case Game::Components::UnitSize::Medium: return 23.0f;
+            case Game::Components::UnitSize::Large: return 34.0f;
+        }
+        return 12.0f;
+    }
+
+    FootprintVisual UnitFootprintFromVisualRadius(float X,
+                                                  float Y,
+                                                  Game::Components::UnitSize Size,
+                                                  float VisualRadius)
+    {
+        (void)VisualRadius;
+        const BuildingFootprintSpec F =
+            SelectionEllipseFromVisualRadius(X, Y, UnitFallbackRadius(Size), UnitFallbackRadius(Size));
+        return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+    }
+
+    FootprintVisual FootprintFromDatDimensions(float X,
+                                               float Y,
+                                               const Resource::UnitEntry& Unit)
+    {
+        const BuildingFootprintSpec F =
+            SelectionEllipseFromDatBounds(
+                X, Y,
+                Unit.DimensionLeft, Unit.DimensionUp,
+                Unit.DimensionRight, Unit.DimensionDown,
+                12.0f);
+        return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+    }
+
+    FootprintVisual BuildingFootprintFromVisualRadius(float X,
+                                                      float Y,
+                                                      int ChkUnitID,
+                                                      float VisualRadius)
+    {
+        const BuildingFootprintTiles Tiles = BuildingFootprintSize(ChkUnitID);
+        const float FallbackHalfW = Tiles.W * 16.0f;
+        const float FallbackHalfH = Tiles.H * 16.0f;
+        const float FallbackRadius =
+            std::sqrt(FallbackHalfW * FallbackHalfW + FallbackHalfH * FallbackHalfH);
+        const BuildingFootprintSpec F =
+            SelectionEllipseFromVisualRadius(X, Y, VisualRadius, FallbackRadius);
+        return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+    }
+
+    const Resource::GameDataLoader* DataLoader(
+        const Resource::Graphics::DataAssetCacheView& DataAssets)
+    {
+        return DataAssets.HasCache() ? DataAssets.GetDataLoader() : nullptr;
+    }
+
+    const Resource::UnitEntry* FindUnitData(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        int ChkUnitID)
+    {
+        const auto* Loader = DataLoader(DataAssets);
+        return Loader ? Loader->FindUnitByID((uint32_t)ChkUnitID) : nullptr;
+    }
+
+    const Resource::SpriteEntry* FindUnitSpriteData(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        int ChkUnitID)
+    {
+        const auto* Loader = DataLoader(DataAssets);
+        if (!Loader)
+            return nullptr;
+        const uint32_t SpriteID = Loader->ResolveUnitSpriteID((uint32_t)ChkUnitID);
+        return SpriteID != UINT32_MAX ? Loader->FindSpriteByID(SpriteID) : nullptr;
+    }
+
+    const Resource::Graphics::GpuImage* FindSelectionCircleImage(
+        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets,
+        const Resource::SpriteEntry* Sprite)
+    {
+        if (!SpriteAssets.HasCache() || !Sprite)
+            return nullptr;
+
+        const int PixelSize = SelectionCirclePixelSize((int)Sprite->SelectionCircle);
+        if (PixelSize <= 0)
+            return nullptr;
+
+        const uint32_t ImageId = kSelectionCircleBaseImageId + Sprite->SelectionCircle;
+        const auto* Frames = SpriteAssets.GetDatImageFrames(ImageId);
+        if (!Frames || Frames->empty())
+            return nullptr;
+
+        const auto& Img = (*Frames)[0];
+        return Img.Valid() ? &Img : nullptr;
+    }
+
+    FootprintVisual FootprintFromSpriteCircle(float X,
+                                              float Y,
+                                              const Resource::SpriteEntry* Sprite,
+                                              const Resource::Graphics::GpuImage* CircleImage)
+    {
+        (void)CircleImage;
+        if (Sprite)
+        {
+            const BuildingFootprintSpec F =
+                SelectionEllipseFromSpriteCircle(
+                    X, Y,
+                    (int)Sprite->SelectionCircle,
+                    (int)Sprite->SelectionCircleVerticalOffset,
+                    12.0f);
+            return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+        }
+
+        return {X, Y, 12.0f, 5.0f};
+    }
+
+    FootprintVisual SelectionFootprintForUnit(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets,
+        int ChkUnitID,
+        float X,
+        float Y,
+        bool IsBuilding,
+        Game::Components::UnitSize Size,
+        float VisualRadius)
+    {
+        const auto* Sprite = FindUnitSpriteData(DataAssets, ChkUnitID);
+        if (Sprite && SelectionCirclePixelSize((int)Sprite->SelectionCircle) > 0)
+            return FootprintFromSpriteCircle(
+                X, Y, Sprite, FindSelectionCircleImage(SpriteAssets, Sprite));
+
+        const auto* UnitData = FindUnitData(DataAssets, ChkUnitID);
+        if (UnitData && UnitData->DimensionWidth() > 0 && UnitData->DimensionHeight() > 0)
+            return FootprintFromDatDimensions(X, Y, *UnitData);
+
+        return IsBuilding
+            ? BuildingFootprintFromVisualRadius(X, Y, ChkUnitID, VisualRadius)
+            : UnitFootprintFromVisualRadius(X, Y, Size, VisualRadius);
+    }
+
+    SelectionVisual SelectionVisualForUnit(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets,
+        int ChkUnitID,
+        float X,
+        float Y,
+        bool IsBuilding,
+        Game::Components::UnitSize Size,
+        float VisualRadius)
+    {
+        if (const auto* Sprite = FindUnitSpriteData(DataAssets, ChkUnitID);
+            Sprite && SelectionCirclePixelSize((int)Sprite->SelectionCircle) > 0)
+        {
+            const auto* CircleImage = FindSelectionCircleImage(SpriteAssets, Sprite);
+            return {
+                FootprintFromSpriteCircle(X, Y, Sprite, CircleImage),
+                CircleImage
+            };
+        }
+
+        return {
+            SelectionFootprintForUnit(DataAssets, SpriteAssets, ChkUnitID,
+                                      X, Y, IsBuilding, Size, VisualRadius),
+            nullptr
+        };
+    }
+
+    void DrawSelectionVisual(Render::Draw2D& Draw, const SelectionVisual& Visual)
+    {
+        const FootprintVisual& F = Visual.Footprint;
+        if (Visual.CircleImage && Visual.CircleImage->Valid())
+        {
+            Draw.DrawSprite(*Visual.CircleImage,
+                            F.CenterX - F.RadiusX,
+                            F.CenterY - F.RadiusY,
+                            F.RadiusX * 2.0f,
+                            F.RadiusY * 2.0f,
+                            0.0f, 0.0f, 1.0f, 1.0f,
+                            Render::Color(84, 255, 84, 255), false);
+            return;
+        }
+
+        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+    }
+
+    float StatusBarWidthFromSpriteData(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        int ChkUnitID,
+        const FootprintVisual& F,
+        bool IsBuilding)
+    {
+        if (const auto* Sprite = FindUnitSpriteData(DataAssets, ChkUnitID);
+            Sprite && Sprite->HealthBar > 0)
+        {
+            return (float)Sprite->HealthBar;
+        }
+
+        return IsBuilding
+            ? std::max(42.0f, F.RadiusX * 1.10f)
+            : std::max(24.0f, F.RadiusX * 1.30f);
+    }
+
+    void AccumulateRectVisualRadius(float OffsetX,
+                                    float OffsetY,
+                                    float HalfW,
+                                    float HalfH,
+                                    float& Radius)
+    {
+        const float Xs[2] = {OffsetX - HalfW, OffsetX + HalfW};
+        const float Ys[2] = {OffsetY - HalfH, OffsetY + HalfH};
+        for (float X : Xs)
+        {
+            for (float Y : Ys)
+            {
+                Radius = std::max(Radius, std::sqrt(X * X + Y * Y));
+            }
+        }
+    }
+
+    FootprintVisual UnitFootprint(float X,
+                                  float Y,
+                                  Game::Components::UnitSize Size,
+                                  float FrameHalfW,
+                                  float FrameHalfH)
+    {
+        float FallbackRadius = 12.0f;
+        switch (Size)
+        {
+            case Game::Components::UnitSize::Small: FallbackRadius = 16.0f; break;
+            case Game::Components::UnitSize::Medium: FallbackRadius = 23.0f; break;
+            case Game::Components::UnitSize::Large: FallbackRadius = 34.0f; break;
+        }
+        const BuildingFootprintSpec F =
+            SelectionEllipseFromVisualBounds(X, Y, FrameHalfW, FrameHalfH, FallbackRadius);
+        return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
+    }
+
+    FootprintVisual BuildingFootprint(float X,
+                                      float Y,
+                                      int ChkUnitID,
+                                      float FrameHalfW,
+                                      float FrameHalfH)
+    {
+        const BuildingFootprintSpec F =
+            BuildingFootprintForSelection(X, Y, ChkUnitID, FrameHalfW, FrameHalfH);
+        return {
+            F.CenterX,
+            F.CenterY,
+            F.RadiusX,
+            F.RadiusY
+        };
+    }
+
+    FootprintVisual FallbackFootprint(float X, float Y, float Size)
+    {
+        return {
+            X,
+            Y + Size * 0.38f,
+            std::max(12.0f, Size * 0.30f),
+            std::max(5.0f, Size * 0.12f)
+        };
+    }
+
+    float StatusBarY(const FootprintVisual& F)
+    {
+        return F.CenterY + F.RadiusY + 1.0f;
+    }
+
+    int RenderSortBand(const Entity& E)
+    {
+        if (Game::Data::IsAirUnitType(E.ChkUnitId))
+            return 2;
+        if (E.Kind == EntityKind::Effect)
+            return 3;
+        return 1;
+    }
+
+    bool IsAirEntity(Core::ECS::EntityManager& Entities, int EntityId)
+    {
+        if (auto* Path = Entities.GetComponent<Game::Components::PathfindingComponent>(EntityId))
+            if (Path->IsAir)
+                return true;
+        if (auto* Combat = Entities.GetComponent<Game::Components::CombatComponent>(EntityId))
+            if (Combat->MyElevation == Game::Components::Elevation::Air)
+                return true;
+        if (auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId))
+            return Game::Data::IsAirUnitType(Unit->ChkUnitID);
+        return false;
+    }
+
+    int RenderSortBand(Core::ECS::EntityManager& Entities, int EntityId)
+    {
+        if (IsAirEntity(Entities, EntityId))
+            return 2;
+        if (Entities.GetComponent<Game::Components::EffectComponent>(EntityId))
+            return 3;
+        return 1;
     }
 }
 
@@ -70,8 +505,6 @@ void EntityRenderer::DrawSelectionMarker(const Entity& E)
         return;
 
     auto& Draw = Render::g_Draw2D;
-    const Render::Color Shadow(0, 40, 0, 180);
-    const Render::Color Glow(72, 255, 96, 255);
 
     float FrameHalfW = 0.0f;
     float FrameHalfH = 0.0f;
@@ -79,48 +512,20 @@ void EntityRenderer::DrawSelectionMarker(const Entity& E)
 
     if (E.Kind == EntityKind::Unit)
     {
-        float RadiusX = 12.0f;
-        switch (E.Size)
-        {
-            case UnitSize::Small: RadiusX = 11.0f; break;
-            case UnitSize::Medium: RadiusX = 15.0f; break;
-            case UnitSize::Large: RadiusX = 20.0f; break;
-        }
-        if (FrameHalfW > 0.0f)
-            RadiusX = std::max(RadiusX, FrameHalfW * 0.22f);
-
-        float RadiusY = std::max(5.0f, RadiusX * 0.42f);
-        float CenterY = E.Y + std::max(8.0f, FrameHalfH * 0.55f);
-        constexpr int Segments = 28;
-        for (int I = 0; I < Segments; ++I)
-        {
-            float T = (float)I / (float)Segments;
-            float Angle = T * 6.28318530718f;
-            float PX = E.X + std::cos(Angle) * RadiusX;
-            float PY = CenterY + std::sin(Angle) * RadiusY;
-            Draw.DrawRect(PX - 1.0f, PY - 1.0f, 3.0f, 3.0f, Shadow);
-            Draw.DrawRect(PX, PY, 2.0f, 2.0f, Glow);
-        }
+        const FootprintVisual F = UnitFootprint(E.X, E.Y, E.Size, FrameHalfW, FrameHalfH);
+        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
         return;
     }
 
-    float Width = 64.0f;
-    float Height = 36.0f;
     if (E.Kind == EntityKind::Building)
     {
-        Width = std::max(96.0f, FrameHalfW * 1.38f);
-        Height = std::max(48.0f, std::max(24.0f, FrameHalfH * 0.60f));
-    }
-    else
-    {
-        Width = std::max(36.0f, FrameHalfW * 0.9f);
-        Height = std::max(20.0f, FrameHalfH * 0.32f);
+        const FootprintVisual F = BuildingFootprint(E.X, E.Y, E.ChkUnitId, FrameHalfW, FrameHalfH);
+        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+        return;
     }
 
-    float X = E.X - Width * 0.5f;
-    float Y = E.Y + std::max(10.0f, FrameHalfH * 0.68f) - Height * 0.5f;
-    Draw.DrawRectLines(X - 1.0f, Y - 1.0f, Width + 2.0f, Height + 2.0f, Shadow, 1.0f);
-    Draw.DrawRectLines(X, Y, Width, Height, Glow, 1.0f);
+    const FootprintVisual F = FallbackFootprint(E.X, E.Y, std::max(32.0f, FrameHalfW * 2.0f));
+    DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
 }
 
 void EntityRenderer::DrawImageNode(const Entity& E, const EntityImageNode& Node, float OffsetX, float OffsetY) const
@@ -205,7 +610,13 @@ void EntityRenderer::Render(const EntityManager& Entities, const std::vector<int
         Order.push_back(I);
     }
     std::stable_sort(Order.begin(), Order.end(), [&](int A, int B) {
-        return Entities.GetAll()[A].Y < Entities.GetAll()[B].Y;
+        const Entity& EA = Entities.GetAll()[A];
+        const Entity& EB = Entities.GetAll()[B];
+        const int BandA = RenderSortBand(EA);
+        const int BandB = RenderSortBand(EB);
+        if (BandA != BandB)
+            return BandA < BandB;
+        return EA.Y < EB.Y;
     });
 
     // Render each visible entity
@@ -215,6 +626,9 @@ void EntityRenderer::Render(const EntityManager& Entities, const std::vector<int
         bool DrewSprite = false;
         const bool IsSelected = SelectedLookup.find(E.Id) != SelectedLookup.end();
         const bool ShowHealthBar = E.Kind != EntityKind::Resource && E.MaxHitPoints > 0 && IsSelected;
+
+        if (IsSelected)
+            DrawSelectionMarker(E);
 
         for (size_t NodeIndex = 0; NodeIndex < E.ImageNodes.size(); ++NodeIndex)
             if (E.ImageNodes[NodeIndex].ParentIndex < 0 && !E.ImageNodes[NodeIndex].DrawAbove)
@@ -237,16 +651,15 @@ void EntityRenderer::Render(const EntityManager& Entities, const std::vector<int
 
                 if (ShowHealthBar)
                 {
-                    float BarW = std::max(16.0f, HW * 0.8f);
-                    float BarH = 3.0f;
-                    float BarX = E.X - BarW * 0.5f;
-                    float BarY = E.Y - HH - 8.0f;
-                    float HpFrac = (float)E.HitPoints / (float)E.MaxHitPoints;
-                    Draw.DrawRect(BarX, BarY, BarW, BarH, Render::Color(40, 40, 40, 200));
-                    Render::Color HpColor(80, 230, 80, 255);
-                    if (HpFrac < 0.5f) HpColor = Render::Color(230, 230, 30, 255);
-                    if (HpFrac < 0.25f) HpColor = Render::Color(230, 30, 30, 255);
-                    Draw.DrawRect(BarX, BarY, BarW * HpFrac, BarH, HpColor);
+                    const FootprintVisual F = E.Kind == EntityKind::Building
+                        ? BuildingFootprint(E.X, E.Y, E.ChkUnitId, HW, HH)
+                        : UnitFootprint(E.X, E.Y, E.Size, HW, HH);
+                    const float BarW = E.Kind == EntityKind::Building
+                        ? std::max(42.0f, F.RadiusX * 1.10f)
+                        : std::max(24.0f, F.RadiusX * 1.30f);
+                    DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F), BarW,
+                                            E.HitPoints, E.MaxHitPoints,
+                                            0, 0, 0, 0);
                 }
             }
         }
@@ -298,15 +711,14 @@ void EntityRenderer::Render(const EntityManager& Entities, const std::vector<int
 
             if (ShowHealthBar)
             {
-                float HpFrac = (E.MaxHitPoints > 0) ? (float)E.HitPoints / (float)E.MaxHitPoints : 1.0f;
-                Draw.DrawRect(X, Y - 6.0f, Size, 4.0f, Render::Color(40, 40, 40, 220));
-                Draw.DrawRect(X, Y - 6.0f, Size * HpFrac, 4.0f, Render::Color(80, 230, 80, 255));
+                const FootprintVisual F = E.Kind == EntityKind::Building
+                    ? BuildingFootprint(E.X, E.Y, E.ChkUnitId, Size * 0.5f, Size * 0.5f)
+                    : FallbackFootprint(E.X, E.Y, Size);
+                DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F),
+                                        std::max(24.0f, F.RadiusX * 1.30f),
+                                        E.HitPoints, E.MaxHitPoints,
+                                        0, 0, 0, 0);
             }
-        }
-
-        if (IsSelected)
-        {
-            DrawSelectionMarker(E);
         }
     }
 }
@@ -326,59 +738,117 @@ void EntityRenderer::DrawSelectionMarker(Core::ECS::EntityManager& Entities, int
         return;
 
     auto& Draw = Render::g_Draw2D;
-    const Render::Color Shadow(0, 40, 0, 180);
-    const Render::Color Glow(72, 255, 96, 255);
 
-    float FrameHalfW = 0.0f;
-    float FrameHalfH = 0.0f;
-    if (mSpriteAssets.HasCache())
+    float VisualRadius = 0.0f;
+    const auto* Sprite = FindUnitSpriteData(mDataAssets, Unit->ChkUnitID);
+    if (!Sprite || SelectionCirclePixelSize((int)Sprite->SelectionCircle) <= 0)
+        VisualRadius = ResolveVisualRadius(Entities, EntityId);
+
+    DrawSelectionVisual(
+        Draw,
+        SelectionVisualForUnit(mDataAssets, mSpriteAssets, Unit->ChkUnitID,
+                               Trans->Position.X, Trans->Position.Y,
+                               IsBuilding, Unit->SizeType, VisualRadius));
+}
+
+float EntityRenderer::ResolveVisualRadius(Core::ECS::EntityManager& Entities, int EntityId) const
+{
+    if (!mSpriteAssets.HasCache())
+        return 0.0f;
+
+    auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+    if (!RenderComp)
+        return 0.0f;
+
+    float Radius = 0.0f;
+    if (const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->ImageID);
+        Frames && !Frames->empty())
     {
-        if (const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->ImageID);
+        const int FrameIndex = std::clamp(RenderComp->FrameIndex, 0, (int)Frames->size() - 1);
+        const auto& Img = (*Frames)[FrameIndex];
+        if (Img.Valid())
+            AccumulateRectVisualRadius(0.0f, 0.0f,
+                                       (float)Img.Width * 0.5f,
+                                       (float)Img.Height * 0.5f,
+                                       Radius);
+    }
+
+    if (RenderComp->SubunitImageID != UINT32_MAX)
+    {
+        if (const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->SubunitImageID);
             Frames && !Frames->empty())
         {
             const int FrameIndex = std::clamp(RenderComp->FrameIndex, 0, (int)Frames->size() - 1);
             const auto& Img = (*Frames)[FrameIndex];
             if (Img.Valid())
+                AccumulateRectVisualRadius(0.0f, 0.0f,
+                                           (float)Img.Width * 0.5f,
+                                           (float)Img.Height * 0.5f,
+                                           Radius);
+        }
+    }
+
+    if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
+    {
+        for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
+        {
+            if (Tree->Nodes[NodeIndex].ParentIndex < 0)
             {
-                FrameHalfW = (float)Img.Width * 0.5f;
-                FrameHalfH = (float)Img.Height * 0.5f;
+                AccumulateImageNodeVisualRadius(
+                    *RenderComp, Tree->Nodes, (int)NodeIndex,
+                    0.0f, 0.0f, 0, Radius);
             }
         }
     }
 
-    if (!IsBuilding)
-    {
-        float RadiusX = 12.0f;
-        switch (Unit->SizeType)
-        {
-            case Game::Components::UnitSize::Small: RadiusX = 11.0f; break;
-            case Game::Components::UnitSize::Medium: RadiusX = 15.0f; break;
-            case Game::Components::UnitSize::Large: RadiusX = 20.0f; break;
-        }
-        if (FrameHalfW > 0.0f)
-            RadiusX = std::max(RadiusX, FrameHalfW * 0.22f);
+    return Radius;
+}
 
-        const float RadiusY = std::max(5.0f, RadiusX * 0.42f);
-        const float CenterY = Trans->Position.Y + std::max(8.0f, FrameHalfH * 0.55f);
-        constexpr int Segments = 28;
-        for (int I = 0; I < Segments; ++I)
-        {
-            const float T = (float)I / (float)Segments;
-            const float Angle = T * 6.28318530718f;
-            const float PX = Trans->Position.X + std::cos(Angle) * RadiusX;
-            const float PY = CenterY + std::sin(Angle) * RadiusY;
-            Draw.DrawRect(PX - 1.0f, PY - 1.0f, 3.0f, 3.0f, Shadow);
-            Draw.DrawRect(PX, PY, 2.0f, 2.0f, Glow);
-        }
+void EntityRenderer::AccumulateImageNodeVisualRadius(
+    const Game::Components::RenderComponent& RenderComp,
+    const std::vector<Game::Components::ImageSubnode>& Nodes,
+    int NodeIndex,
+    float ParentOffsetX,
+    float ParentOffsetY,
+    int Depth,
+    float& Radius) const
+{
+    if (!mSpriteAssets.HasCache() || NodeIndex < 0 || NodeIndex >= (int)Nodes.size() || Depth > 8)
         return;
+
+    const auto& Node = Nodes[(size_t)NodeIndex];
+    if (!Node.Visible)
+        return;
+
+    const float NodeOffsetX = ParentOffsetX + Node.Offset.X;
+    const float NodeOffsetY = ParentOffsetY + Node.Offset.Y;
+    const float DrawOffsetX = RenderComp.Flipped ? -NodeOffsetX : NodeOffsetX;
+
+    const auto* Frames = Node.UseSpriteID ?
+        mSpriteAssets.GetSpriteOverlayFrames(Node.ImageID) :
+        mSpriteAssets.GetDatImageFrames(Node.ImageID);
+    if (Frames && !Frames->empty())
+    {
+        const int FrameIndex = std::clamp(Node.FrameIndex, 0, (int)Frames->size() - 1);
+        const auto& Img = (*Frames)[FrameIndex];
+        if (Img.Valid())
+        {
+            AccumulateRectVisualRadius(DrawOffsetX, NodeOffsetY,
+                                       (float)Img.Width * 0.5f,
+                                       (float)Img.Height * 0.5f,
+                                       Radius);
+        }
     }
 
-    const float Width = std::max(96.0f, FrameHalfW * 1.38f);
-    const float Height = std::max(48.0f, std::max(24.0f, FrameHalfH * 0.60f));
-    const float X = Trans->Position.X - Width * 0.5f;
-    const float Y = Trans->Position.Y + std::max(10.0f, FrameHalfH * 0.68f) - Height * 0.5f;
-    Draw.DrawRectLines(X - 1.0f, Y - 1.0f, Width + 2.0f, Height + 2.0f, Shadow, 1.0f);
-    Draw.DrawRectLines(X, Y, Width, Height, Glow, 1.0f);
+    for (size_t I = 0; I < Nodes.size(); ++I)
+    {
+        if (Nodes[I].ParentIndex == NodeIndex)
+        {
+            AccumulateImageNodeVisualRadius(
+                RenderComp, Nodes, (int)I,
+                NodeOffsetX, NodeOffsetY, Depth + 1, Radius);
+        }
+    }
 }
 
 void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
@@ -486,10 +956,47 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     std::stable_sort(Order.begin(), Order.end(), [&](int A, int B) {
         auto* TA = Entities.GetComponent<Game::Components::TransformComponent>(A);
         auto* TB = Entities.GetComponent<Game::Components::TransformComponent>(B);
+        const int BandA = RenderSortBand(Entities, A);
+        const int BandB = RenderSortBand(Entities, B);
+        if (BandA != BandB)
+            return BandA < BandB;
+
+        auto* RA = Entities.GetComponent<Game::Components::RenderComponent>(A);
+        auto* RB = Entities.GetComponent<Game::Components::RenderComponent>(B);
+        const int ZOrderA = RA ? RA->ZOrder : 0;
+        const int ZOrderB = RB ? RB->ZOrder : 0;
+        if (ZOrderA != ZOrderB)
+            return ZOrderA < ZOrderB;
+
         return TA && TB ? TA->Position.Y < TB->Position.Y : A < B;
     });
 
     auto& Draw = Render::g_Draw2D;
+    std::unordered_map<int, SelectionVisual> SelectionVisualCache;
+    SelectionVisualCache.reserve(SelectedIds.size());
+    auto GetSelectionVisual =
+        [&](int EntityId,
+            const Game::Components::TransformComponent& Trans,
+            const Game::Components::UnitComponent& Unit,
+            bool IsBuilding) -> const SelectionVisual&
+        {
+            auto It = SelectionVisualCache.find(EntityId);
+            if (It != SelectionVisualCache.end())
+                return It->second;
+
+            float VisualRadius = 0.0f;
+            const auto* Sprite = FindUnitSpriteData(mDataAssets, Unit.ChkUnitID);
+            if (!Sprite || SelectionCirclePixelSize((int)Sprite->SelectionCircle) <= 0)
+                VisualRadius = ResolveVisualRadius(Entities, EntityId);
+
+            auto Inserted = SelectionVisualCache.emplace(
+                EntityId,
+                SelectionVisualForUnit(mDataAssets, mSpriteAssets, Unit.ChkUnitID,
+                                       Trans.Position.X, Trans.Position.Y,
+                                       IsBuilding, Unit.SizeType, VisualRadius));
+            return Inserted.first->second;
+        };
+
     for (int EntityId : Order)
     {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
@@ -504,6 +1011,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
         const bool ShowHealthBar = !IsResource && Unit->MaxHitPoints > 0 && IsSelected;
+
+        if (IsSelected)
+            DrawSelectionVisual(Draw, GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding));
 
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
@@ -558,16 +1068,14 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
 
                 if (ShowHealthBar)
                 {
-                    const float BarW = std::max(16.0f, HW * 0.8f);
-                    const float BarH = 3.0f;
-                    const float BarX = Trans->Position.X - BarW * 0.5f;
-                    const float BarY = Trans->Position.Y - HH - 8.0f;
-                    const float HpFrac = (float)Unit->HitPoints / (float)Unit->MaxHitPoints;
-                    Draw.DrawRect(BarX, BarY, BarW, BarH, Render::Color(40, 40, 40, 200));
-                    Render::Color HpColor(80, 230, 80, 255);
-                    if (HpFrac < 0.5f) HpColor = Render::Color(230, 230, 30, 255);
-                    if (HpFrac < 0.25f) HpColor = Render::Color(230, 30, 30, 255);
-                    Draw.DrawRect(BarX, BarY, BarW * HpFrac, BarH, HpColor);
+                    const FootprintVisual& F =
+                        GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding).Footprint;
+                    const float BarW = StatusBarWidthFromSpriteData(
+                        mDataAssets, Unit->ChkUnitID, F, IsBuilding);
+                    DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F), BarW,
+                                            Unit->HitPoints, Unit->MaxHitPoints,
+                                            Unit->ShieldPoints, Unit->MaxShieldPoints,
+                                            Unit->EnergyPoints, Unit->MaxEnergyPoints);
                 }
             }
         }
@@ -609,14 +1117,16 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
 
             if (ShowHealthBar)
             {
-                const float HpFrac = Unit->MaxHitPoints > 0 ? (float)Unit->HitPoints / (float)Unit->MaxHitPoints : 1.0f;
-                Draw.DrawRect(X, Y - 6.0f, Size, 4.0f, Render::Color(40, 40, 40, 220));
-                Draw.DrawRect(X, Y - 6.0f, Size * HpFrac, 4.0f, Render::Color(80, 230, 80, 255));
+                const FootprintVisual& F =
+                    GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding).Footprint;
+                DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F),
+                                        StatusBarWidthFromSpriteData(
+                                            mDataAssets, Unit->ChkUnitID, F, IsBuilding),
+                                        Unit->HitPoints, Unit->MaxHitPoints,
+                                        Unit->ShieldPoints, Unit->MaxShieldPoints,
+                                        Unit->EnergyPoints, Unit->MaxEnergyPoints);
             }
         }
-
-        if (IsSelected)
-            DrawSelectionMarker(Entities, EntityId);
     }
 }
 

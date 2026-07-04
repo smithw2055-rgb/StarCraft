@@ -5,6 +5,7 @@
 #include "Game/Components.h"
 #include "Render/Draw2D.h"
 #include "UI/HudLayout.h"
+#include "UI/HudMinimapGeometry.h"
 
 namespace Game::Client::UI
 {
@@ -37,32 +38,31 @@ void Hud::DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
     D.DrawRectLines((float)Layout.MinimapRect.X - 1, (float)Layout.MinimapRect.Y - 1,
                     (float)Layout.MinimapRect.W + 2, (float)Layout.MinimapRect.H + 2,
                     Render::Color(100, 100, 120, 150), 1.0f);
+    const RectI ContentRect = ResolveMinimapContentRect(
+        Layout.MinimapRect, MapWidthTiles, MapHeightTiles);
 
     const float MapPxW = (float)(MapWidthTiles * 32);
     const float MapPxH = (float)(MapHeightTiles * 32);
     if (MapPxW <= 0.0f || MapPxH <= 0.0f)
         return;
 
-    auto MinimapEntities = Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                    Game::Components::RenderComponent,
-                                                    Game::Components::UnitComponent>();
-    for (int EntityId : MinimapEntities)
+    Entities.ForEachEntityWith<Game::Components::TransformComponent,
+                               Game::Components::RenderComponent,
+                               Game::Components::UnitComponent>([&](int EntityId)
     {
         auto* Transform = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* Render = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
         auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);
         if (!Transform || !Render || !Render->Visible)
-            continue;
+            return;
 
-        const float U = Transform->Position.X / MapPxW;
-        const float V = Transform->Position.Y / MapPxH;
-        const int PX = Layout.MinimapRect.X + (int)std::lround(U * (float)Layout.MinimapRect.W);
-        const int PY = Layout.MinimapRect.Y + (int)std::lround(V * (float)Layout.MinimapRect.H);
+        const int PX = MinimapWorldToScreenX(ContentRect, Transform->Position.X, MapPxW);
+        const int PY = MinimapWorldToScreenY(ContentRect, Transform->Position.Y, MapPxH);
         const int PlayerId = Player ? Player->PlayerID : 11;
         const Render::Color Dot = (PlayerId == 0) ? Render::Color(80, 200, 255, 255)
                                                   : Render::Color(220, 60, 60, 255);
         D.DrawRect((float)PX, (float)PY, 2.0f, 2.0f, Dot);
-    }
+    });
 }
 
 } // namespace Game::Client::UI

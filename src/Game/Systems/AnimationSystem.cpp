@@ -12,29 +12,65 @@ namespace Game::Systems
 
 using namespace Game::Components;
 
+namespace
+{
+    int DirectionToIScriptDirection(Core::Math::Vec2 Direction)
+    {
+        if (Direction.Length() <= 0.001f)
+            Direction = {1.0f, 0.0f};
+        const float Angle = std::atan2(Direction.X, -Direction.Y);
+        float Normalized = Angle;
+        if (Normalized < 0.0f)
+            Normalized += 6.28318530718f;
+        return (int)std::lround(Normalized * 256.0f / 6.28318530718f) & 0xff;
+    }
+
+    Core::Math::Vec2 ResolveMovementDirection(const TransformComponent& Trans,
+                                              const PathfindingComponent* Path)
+    {
+        if (!Path)
+            return {std::cos(0.0f), std::sin(0.0f)};
+        if (Path->CurrentVelocity.Length() > 0.1f)
+            return Path->CurrentVelocity.Normalized();
+        if (!Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())
+        {
+            const auto Delta = Path->Path[(size_t)Path->PathIndex] - Trans.Position;
+            if (Delta.Length() > 0.001f)
+                return Delta.Normalized();
+        }
+        return {std::cos(Path->FacingAngle), std::sin(Path->FacingAngle)};
+    }
+
+    Core::Math::Vec2 ResolveAttackDirection(Core::ECS::EntityManager& EM,
+                                            const TransformComponent& Trans,
+                                            const CombatComponent* Combat)
+    {
+        if (!Combat || Combat->TargetEntityID < 0)
+            return {std::cos(0.0f), std::sin(0.0f)};
+        if (auto* TargetTrans = EM.GetComponent<TransformComponent>(Combat->TargetEntityID))
+        {
+            const auto Delta = TargetTrans->Position - Trans.Position;
+            if (Delta.Length() > 0.001f)
+                return Delta.Normalized();
+        }
+        return {std::cos(0.0f), std::sin(0.0f)};
+    }
+
+    Core::Math::Vec2 ResolveAnimationDirection(Core::ECS::EntityManager& EM,
+                                               AnimState DesiredState,
+                                               const TransformComponent& Trans,
+                                               const PathfindingComponent* Path,
+                                               const CombatComponent* Combat)
+    {
+        if (DesiredState == AnimState::Attacking || (Combat && Combat->PendingAttackFrame))
+            return ResolveAttackDirection(EM, Trans, Combat);
+        return ResolveMovementDirection(Trans, Path);
+    }
+}
+
 std::unordered_map<int, AnimationSystem::UnitAnimData> AnimationSystem::sAnimDB;
 Game::IScriptDatabase AnimationSystem::sIScriptDB;
 bool AnimationSystem::sTriedLoadIScript = false;
-
-AnimState AnimationSystem::GetAnimStateFromComponents(
-    const CommandComponent* Cmd, const CombatComponent* Combat,
-    const PathfindingComponent* Path, const UnitComponent* Unit,
-    const BuildingComponent* Bldg, const MorphComponent* Morph)
-{
-    if (Morph && Morph->IsMorphing) return AnimState::Morphing;
-    if (Bldg && Bldg->UnderConstruction) return AnimState::Constructing;
-    if (Combat && Combat->CooldownRemaining > Combat->AttackCooldown * 0.5f)
-        return AnimState::Attacking;
-    if (Cmd && (Cmd->CurrentCommand == CommandType::Attack ||
-                Cmd->CurrentCommand == CommandType::AttackMove))
-        return AnimState::Attacking;
-    if (Path && !Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())
-        return AnimState::Walking;
-    if (Cmd && (Cmd->CurrentCommand == CommandType::Move ||
-                Cmd->CurrentCommand == CommandType::Harvest))
-        return AnimState::Walking;
-    return AnimState::Idle;
-}
 
 void AnimationSystem::RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips)
 {
@@ -62,6 +98,26 @@ bool AnimationSystem::HasIScriptAnimationForImage(int ImageID, int AnimID)
            AnimID >= 0 &&
            AnimID < (int)Script->AnimationPC.size() &&
            Script->AnimationPC[(size_t)AnimID] > 0;
+}
+
+int AnimationSystem::DirectionalFrameIndex(int BaseFrame,
+                                           int Direction,
+                                           int TotalFrames,
+                                           bool HasDirectionalFrames,
+                                           bool* OutFlipped)
+{
+    if (OutFlipped)
+        *OutFlipped = false;
+    if (!HasDirectionalFrames || TotalFrames <= 0)
+        return std::clamp(BaseFrame, 0, std::max(0, TotalFrames - 1));
+
+    const int Dir32 = ((Direction & 0xff) + 4) / 8;
+    const int ClampedDir32 = Dir32 >= 32 ? 0 : Dir32;
+    const bool Flip = ClampedDir32 > 16;
+    const int DirectionFrame = Flip ? 32 - ClampedDir32 : ClampedDir32;
+    if (OutFlipped)
+        *OutFlipped = Flip;
+    return std::clamp(BaseFrame + DirectionFrame, 0, std::max(0, TotalFrames - 1));
 }
 
 void AnimationSystem::UpdateScriptEffects(float DeltaTime)
@@ -274,6 +330,7 @@ void AnimationSystem::StartImageNodeScript(ImageSubnode& Node)
                        Script->AnimationPC[(size_t)Node.AnimID]);
     Node.VM.GetContext().ImageID = (int)Node.ImageID;
     Node.VM.GetContext().FrameIndex = Node.FrameIndex;
+    Node.VM.GetContext().HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
 }
 
 void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
@@ -301,7 +358,8 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                     mAudio->PlaySound(Event.A,
                                       Trans.Position.X + NodeOffset.X,
                                       Trans.Position.Y + NodeOffset.Y,
-                                      0, UnitType);
+                                      0, UnitType,
+                                      Core::Audio::SoundFlags::PerSound);
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
@@ -368,7 +426,9 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 if (mAudio && Event.A >= 0)
                 {
                     int UnitType = Player ? Player->PlayerID : -1;
-                    mAudio->PlaySound(Event.A, Trans.Position.X, Trans.Position.Y, 0, UnitType);
+                    mAudio->PlaySound(Event.A, Trans.Position.X, Trans.Position.Y,
+                                      0, UnitType,
+                                      Core::Audio::SoundFlags::PerSound);
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
@@ -408,26 +468,23 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
 
 bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
                                              float DeltaTime,
+                                             AnimState DesiredState,
                                              RenderComponent& Render,
                                              const TransformComponent& Trans,
+                                             const PathfindingComponent* Path,
                                              const PlayerComponent* Player,
                                              CombatComponent* Combat,
                                              const BuildingComponent* Bldg,
                                              const ProductionComponent* Prod)
 {
     auto& State = mScriptStates[EntityID];
-    if (Bldg && Bldg->UnderConstruction)
-    {
-        State.WasUnderConstruction = true;
-        return false;
-    }
-    if (!Bldg && !(Combat && Combat->PendingAttackFrame))
-        return false;
 
     const bool IsEffect = mSystemMgr.GetEntityManager().GetComponent<EffectComponent>(EntityID) != nullptr;
     if (IsEffect)
         return false;
 
+    const bool IsBuilding = Bldg != nullptr;
+    const bool UnderConstruction = Bldg && Bldg->UnderConstruction;
     const bool IsWorking =
         Prod && (Prod->CurrentTrainingUnitDefID >= 0 || !Prod->Queue.empty());
     const bool IsPendingAttack = Combat && Combat->PendingAttackFrame;
@@ -444,7 +501,6 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     if (!Script)
         return false;
 
-    int TargetAnim = Game::IScriptAnims::Anim_Init;
     auto HasAnim = [&](int AnimID) -> bool
     {
         return AnimID >= 0 &&
@@ -452,43 +508,34 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
                Script->AnimationPC[(size_t)AnimID] > 0;
     };
 
-    if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_GndAttkInit))
-    {
-        TargetAnim = Game::IScriptAnims::Anim_GndAttkInit;
-    }
-    else if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_AirAttkInit))
-    {
-        TargetAnim = Game::IScriptAnims::Anim_AirAttkInit;
-    }
-    else if (!Bldg)
-    {
+    if (UnderConstruction)
+        State.HasPlayedBuilt = false;
+    const bool NeedsInitialBuilt =
+        IsBuilding &&
+        !UnderConstruction &&
+        !State.HasPlayedBuilt &&
+        HasAnim(Game::IScriptAnims::Anim_Built);
+
+    int TargetAnim = SelectIScriptAnimationForState(
+        DesiredState,
+        IsBuilding,
+        UnderConstruction,
+        State.WasUnderConstruction || NeedsInitialBuilt,
+        IsWorking,
+        State.WasWorking,
+        State.WasWalking,
+        IsPendingAttack,
+        HasAnim);
+    if (TargetAnim < 0)
         return false;
-    }
-    else if (IsWorking && HasAnim(Game::IScriptAnims::Anim_IsWorking))
-    {
-        TargetAnim = Game::IScriptAnims::Anim_IsWorking;
-    }
-    else if (State.WasWorking && HasAnim(Game::IScriptAnims::Anim_WorkingToIdle))
-    {
-        TargetAnim = Game::IScriptAnims::Anim_WorkingToIdle;
-    }
-    else if (Bldg && HasAnim(Game::IScriptAnims::Anim_Init))
-    {
-        TargetAnim = Game::IScriptAnims::Anim_Init;
-    }
-    else if (Bldg)
-    {
-        return false;
-    }
-    else
-    {
-        return false;
-    }
 
     const bool IsTransientAnim =
         IsPendingAttack ||
+        UnderConstruction ||
         IsWorking ||
-        State.WasWorking;
+        State.WasWorking ||
+        (State.WasUnderConstruction && TargetAnim == Game::IScriptAnims::Anim_Built) ||
+        TargetAnim == Game::IScriptAnims::Anim_WalkingToIdle;
     if (State.ImageID == (int)Render.ImageID &&
         State.ScriptID == ImageInfo->IScriptID &&
         State.AnimID == TargetAnim &&
@@ -503,23 +550,47 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.ScriptID != ImageInfo->IScriptID ||
         State.AnimID != TargetAnim ||
         !State.VM.IsRunning();
+    const bool ImageOrScriptChanged =
+        State.ImageID != (int)Render.ImageID ||
+        State.ScriptID != ImageInfo->IScriptID;
 
     if (NeedStart)
     {
         const int EntryPC = Script->AnimationPC[(size_t)TargetAnim];
         State.VM.LoadScript(TargetAnim, &sIScriptDB.GetProgram().ProgramData, EntryPC);
-        State.VM.GetContext().ImageID = (int)Render.ImageID;
-        State.VM.GetContext().FrameIndex = std::clamp(Render.FrameIndex, 0, std::max(0, Render.TotalFrames - 1));
+        auto& Ctx = State.VM.GetContext();
+        Ctx.ImageID = (int)Render.ImageID;
+        Ctx.BaseFrameIndex = 0;
+        Ctx.FrameIndex = 0;
+        Ctx.HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
+        Ctx.IsAttacking = false;
         State.ImageID = (int)Render.ImageID;
         State.ScriptID = ImageInfo->IScriptID;
         State.AnimID = TargetAnim;
         State.StepAccumulator = 0.0f;
-        ClearImageTree(EntityID);
+        if (ImageOrScriptChanged ||
+            TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
+            TargetAnim == Game::IScriptAnims::Anim_AirAttkInit ||
+            UnderConstruction)
+        {
+            ClearImageTree(EntityID);
+        }
+    }
+
+    auto& Ctx = State.VM.GetContext();
+    Ctx.LiftOffState = Bldg && Bldg->IsLifted;
+    if (!IsBuilding)
+    {
+        const Core::Math::Vec2 AnimDirection =
+            ResolveAnimationDirection(mSystemMgr.GetEntityManager(), DesiredState, Trans, Path, Combat);
+        Ctx.CurrentDirection = DirectionToIScriptDirection(AnimDirection);
+        Ctx.FlDirect = Ctx.CurrentDirection;
+        if (Ctx.HasDirectionalFrames)
+            State.VM.RefreshDirectionalFrame();
     }
 
     if (Combat && Combat->PendingAttackFrame)
     {
-        auto& Ctx = State.VM.GetContext();
         Ctx.IsAttacking = true;
         if (Combat->PendingAttackTargetEntityID >= 0)
         {
@@ -527,12 +598,14 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
             {
                 const auto Delta = TargetTrans->Position - Trans.Position;
                 Ctx.TargetRangePixels = (int)Delta.Length();
-                float Angle = std::atan2(Delta.Y, Delta.X);
-                Ctx.CurrentDirection = (int)std::lround((Angle + 3.14159265359f) * 256.0f / 6.28318530718f) & 0xff;
+                Ctx.CurrentDirection = DirectionToIScriptDirection(Delta);
+                Ctx.FlDirect = Ctx.CurrentDirection;
                 Ctx.TargetArc = 0;
+                State.VM.RefreshDirectionalFrame();
             }
         }
     }
+    Ctx.IsWalking = DesiredState == AnimState::Walking;
 
     constexpr float kIScriptFrameSeconds = 1.0f / 24.0f;
     State.StepAccumulator += DeltaTime;
@@ -546,6 +619,9 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     }
     if (!Ran && NeedStart)
         State.VM.ExecuteFrame();
+
+    if (!IsBuilding && Ctx.HasDirectionalFrames)
+        State.VM.RefreshDirectionalFrame();
 
     ConsumeIScriptEvents(EntityID, State, Trans, Player, Combat);
 
@@ -562,13 +638,28 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
              State.AnimID == Game::IScriptAnims::Anim_Built)
     {
         State.WasUnderConstruction = false;
+        State.HasPlayedBuilt = true;
+        State.AnimID = -1;
+    }
+    else if (!State.VM.IsRunning() &&
+             State.AnimID == Game::IScriptAnims::Anim_WalkingToIdle)
+    {
+        State.WasWalking = false;
         State.AnimID = -1;
     }
     else
     {
         State.WasWorking = IsWorking;
-        if (!Bldg || !Bldg->UnderConstruction)
+        State.WasWalking = DesiredState == AnimState::Walking;
+        if (UnderConstruction ||
+            (State.AnimID == Game::IScriptAnims::Anim_Built && State.VM.IsRunning()))
+        {
+            State.WasUnderConstruction = true;
+        }
+        else if (!Bldg || !Bldg->UnderConstruction)
+        {
             State.WasUnderConstruction = false;
+        }
     }
 
     return true;
@@ -597,10 +688,10 @@ void AnimationSystem::Update(float DeltaTime)
         auto* Prod = EM.GetComponent<ProductionComponent>(Eid);
         auto* Player = EM.GetComponent<PlayerComponent>(Eid);
 
-        if (UpdateIScriptAnimation(Eid, DeltaTime, *Render, *Trans, Player, Combat, Bldg, Prod))
-            continue;
-
         AnimState State = GetAnimStateFromComponents(Cmd, Combat, Path, Unit, Bldg, Morph);
+
+        if (UpdateIScriptAnimation(Eid, DeltaTime, State, *Render, *Trans, Path, Player, Combat, Bldg, Prod))
+            continue;
 
         // Look up animation clip
         int ChkID = Unit ? Unit->ChkUnitID : 0;
@@ -648,6 +739,31 @@ void AnimationSystem::Update(float DeltaTime)
         else
         {
             Render->TotalFrames = std::max(1, Render->TotalFrames);
+            bool HasDirectionalFrames = false;
+            if (!Bldg && Render->TotalFrames >= 17)
+            {
+                EnsureIScriptLoaded();
+                if (sIScriptDB.IsLoaded())
+                    if (const auto* ImageInfo = sIScriptDB.FindImageInfo((int)Render->ImageID))
+                        HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
+            }
+
+            if (HasDirectionalFrames)
+            {
+                const Core::Math::Vec2 Direction =
+                    State == AnimState::Attacking
+                        ? ResolveAttackDirection(EM, *Trans, Combat)
+                        : ResolveMovementDirection(*Trans, Path);
+                const int IScriptDirection = DirectionToIScriptDirection(Direction);
+                bool Flipped = false;
+                Render->FrameIndex = DirectionalFrameIndex(0, IScriptDirection,
+                                                           Render->TotalFrames,
+                                                           HasDirectionalFrames,
+                                                           &Flipped);
+                Render->Flipped = Flipped;
+                continue;
+            }
+
             // No clip data yet: hold the frame selected by movement/building state.
             // Buildings need their real iscript idle/working sequences; full-GRP
             // cycling runs into construction/working/death frames and looks wrong.

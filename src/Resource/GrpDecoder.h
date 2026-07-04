@@ -14,6 +14,8 @@ struct GrpFrameInfo
 {
     int Width = 0;
     int Height = 0;
+    int XOffset = 0;
+    int YOffset = 0;
     int Offset = 0;
     bool Flip = false;
 };

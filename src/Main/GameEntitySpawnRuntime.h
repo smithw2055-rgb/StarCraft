@@ -7,6 +7,7 @@
 
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
+#include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
@@ -16,10 +17,11 @@
 namespace Game::Client::GameLoop::GameEntitySpawnRuntime
 {
 
-template <typename ResolveImageIdT, typename ResolveSubunitImageIdT>
+template <typename ResolveImageIdT, typename ResolveSubunitImageIdT, typename ResolveCollisionBoundsT>
 inline void SpawnChkEntities(GameSession& Session,
                              ResolveImageIdT&& ResolveImageID,
-                             ResolveSubunitImageIdT&& ResolveSubunitImageID)
+                             ResolveSubunitImageIdT&& ResolveSubunitImageID,
+                             ResolveCollisionBoundsT&& ResolveCollisionBounds)
 {
     auto& EM = Session.Entities();
     for (const auto& UnitPlacement : Session.GetChkUnits())
@@ -38,10 +40,10 @@ inline void SpawnChkEntities(GameSession& Session,
         Unit.Speed = IsMineralUnit(UnitPlacement.UnitID) || IsGeyserUnit(UnitPlacement.UnitID) ? 0.0f : 2.8f;
         Unit.SightRange = 8;
 
-        const int TerranDefID = Game::Races::GetTerranDefIDByChkUnitID(UnitPlacement.UnitID);
-        if (TerranDefID >= 0)
+        const int UnitDefID = Game::Races::GetUnitDefIDByChkUnitID(UnitPlacement.UnitID);
+        if (UnitDefID >= 0)
         {
-            const auto Def = Game::Races::GetUnitDefByID(TerranDefID);
+            const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
             Unit.UnitRace = Def.RaceType;
             Unit.SizeType = Def.SizeType;
             Unit.Armor = Def.Armor;
@@ -79,9 +81,9 @@ inline void SpawnChkEntities(GameSession& Session,
             Game::Components::RenderLayer::Buildings :
             Game::Components::RenderLayer::Units;
 
-        if (TerranDefID >= 0)
+        if (UnitDefID >= 0)
         {
-            const auto Def = Game::Races::GetUnitDefByID(TerranDefID);
+            const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
             if (Def.GroundDamage > 0 || Def.AirDamage > 0)
             {
                 auto& Combat = EM.AddComponent<Game::Components::CombatComponent>(EntityID);
@@ -93,6 +95,9 @@ inline void SpawnChkEntities(GameSession& Session,
                 Combat.AttackCooldown = Def.AttackCooldown;
                 Combat.CanTargetGround = Def.GroundDamage > 0;
                 Combat.CanTargetAir = Def.AirDamage > 0;
+                Combat.MyElevation = Game::Data::IsAirUnitType(Unit.ChkUnitID) ?
+                    Game::Components::Elevation::Air :
+                    Game::Components::Elevation::Ground;
                 Combat.IsRanged = Def.AttackRange > 1.5f;
             }
         }
@@ -103,6 +108,8 @@ inline void SpawnChkEntities(GameSession& Session,
             Res.Type = Game::Components::ResourceType::Minerals;
             Res.Amount = UnitPlacement.ResourceAmount > 0 ? (int)UnitPlacement.ResourceAmount : 1500;
             Res.MaxAmount = Res.Amount;
+            auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+            Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(UnitPlacement.UnitID));
         }
         else if (IsGeyserUnit(UnitPlacement.UnitID))
         {
@@ -113,6 +120,8 @@ inline void SpawnChkEntities(GameSession& Session,
             auto& Build = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);
             Build.IsBuilding = true;
             Build.UnderConstruction = false;
+            auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+            Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(UnitPlacement.UnitID));
         }
         else if (IsBuildingChkId(UnitPlacement.UnitID))
         {
@@ -123,14 +132,18 @@ inline void SpawnChkEntities(GameSession& Session,
             Build.RequiresPylon = RequiresPylonChkId(UnitPlacement.UnitID);
             Build.TotalBuildTime = 120.0f;
             Build.BuildProgress = Build.TotalBuildTime;
-            Build.BuildingDefID = TerranDefID;
-            if (TerranDefID == Game::Races::GetUnitDefID("Refinery"))
+            Build.BuildingDefID = UnitDefID;
+            if (UnitDefID >= 0)
+                Build.CanLiftOff = Game::Races::GetUnitDefByID(UnitDefID).CanLiftOff;
+            if (UnitDefID == Game::Races::GetUnitDefID("Refinery"))
             {
                 auto& Res = EM.AddComponent<Game::Components::ResourceComponent>(EntityID);
                 Res.Type = Game::Components::ResourceType::VespeneGas;
                 Res.Amount = UnitPlacement.ResourceAmount > 0 ? (int)UnitPlacement.ResourceAmount : 5000;
                 Res.MaxAmount = Res.Amount;
             }
+            auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+            Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(UnitPlacement.UnitID));
         }
         else
         {
@@ -138,17 +151,20 @@ inline void SpawnChkEntities(GameSession& Session,
             Cmd.CurrentCommand = Game::Components::CommandType::Stop;
             auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
             Path.NodeTolerance = 8.0f;
+            Path.IsAir = Game::Data::IsAirUnitType(Unit.ChkUnitID);
+            Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(UnitPlacement.UnitID));
         }
     }
 }
 
-template <typename ResolveImageIdT>
+template <typename ResolveImageIdT, typename ResolveCollisionBoundsT>
 inline int SpawnResourceEntity(GameSession& Session,
                                int ChkUnitId,
                                int WorldX,
                                int WorldY,
                                int Amount,
-                               ResolveImageIdT&& ResolveImageID)
+                               ResolveImageIdT&& ResolveImageID,
+                               ResolveCollisionBoundsT&& ResolveCollisionBounds)
 {
     auto& EM = Session.Entities();
     int EntityID = EM.CreateEntity();
@@ -172,6 +188,8 @@ inline int SpawnResourceEntity(GameSession& Session,
         Game::Components::ResourceType::Minerals;
     Res.Amount = Amount;
     Res.MaxAmount = Amount;
+    auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+    Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(ChkUnitId));
     if (IsGeyserUnit(ChkUnitId))
     {
         auto& Build = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);

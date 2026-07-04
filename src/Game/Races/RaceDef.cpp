@@ -346,6 +346,66 @@ auto& Z = ZergDefs;
     P[PArbiterTribunalID].RequiredBuildings = {PTemplarArchivesID, PStargateID};
     P[PObservatoryID].RequiredBuildings = {PRoboticsFacilityID};
 
+    Z[LarvaID].ChkUnitID = 35;
+    Z[ZDroneID].ChkUnitID = 41;
+    Z[ZOverlordID].ChkUnitID = 42;
+    Z[ZZerglingID].ChkUnitID = 37;
+    Z[ZHydraliskID].ChkUnitID = 38;
+    Z[ZMutaliskID].ChkUnitID = 43;
+    Z[ZScourgeID].ChkUnitID = 47;
+    Z[ZQueenID].ChkUnitID = 45;
+    Z[ZUltraliskID].ChkUnitID = 39;
+    Z[ZDefilerID].ChkUnitID = 46;
+    Z[ZLurkerID].ChkUnitID = 103;
+    Z[ZBroodlingID].ChkUnitID = 40;
+    Z[ZInfestedID].ChkUnitID = 50;
+    Z[ZGuardianID].ChkUnitID = 44;
+    Z[ZDevourerID].ChkUnitID = 62;
+    Z[ZHatcheryID].ChkUnitID = 131;
+    Z[ZLairID].ChkUnitID = 132;
+    Z[ZHiveID].ChkUnitID = 133;
+    Z[ZExtractorID].ChkUnitID = 149;
+    Z[ZSpawningPoolID].ChkUnitID = 142;
+    Z[ZEvolutionChamberID].ChkUnitID = 139;
+    Z[ZHydraliskDenID].ChkUnitID = 135;
+    Z[ZSpireID].ChkUnitID = 141;
+    Z[ZNydusCanalID].ChkUnitID = 134;
+    Z[ZQueensNestID].ChkUnitID = 138;
+    Z[ZGreaterSpireID].ChkUnitID = 137;
+    Z[ZUltraliskCavernID].ChkUnitID = 140;
+    Z[ZDefilerMoundID].ChkUnitID = 136;
+
+    P[PProbeID].ChkUnitID = 64;
+    P[PZealotID].ChkUnitID = 65;
+    P[PDragoonID].ChkUnitID = 66;
+    P[PHighTemplarID].ChkUnitID = 67;
+    P[PDarkTemplarID].ChkUnitID = 61;
+    P[PArchonID].ChkUnitID = 68;
+    P[PDarkArchonID].ChkUnitID = 63;
+    P[PReaverID].ChkUnitID = 83;
+    P[PShuttleID].ChkUnitID = 69;
+    P[PScoutID].ChkUnitID = 70;
+    P[PCorsairID].ChkUnitID = 60;
+    P[PCarrierID].ChkUnitID = 72;
+    P[PArbiterID].ChkUnitID = 71;
+    P[PObserverID].ChkUnitID = 84;
+    P[PNexusID].ChkUnitID = 154;
+    P[PPylonID].ChkUnitID = 156;
+    P[PAssimilatorID].ChkUnitID = 157;
+    P[PGatewayID].ChkUnitID = 160;
+    P[PForgeID].ChkUnitID = 166;
+    P[PPhotonCannonID].ChkUnitID = 162;
+    P[PCyberneticsCoreID].ChkUnitID = 164;
+    P[PShieldBatteryID].ChkUnitID = 172;
+    P[PRoboticsFacilityID].ChkUnitID = 155;
+    P[PStargateID].ChkUnitID = 167;
+    P[PCitadelOfAdunID].ChkUnitID = 163;
+    P[PTemplarArchivesID].ChkUnitID = 165;
+    P[PRoboticsSupportBayID].ChkUnitID = 171;
+    P[PFleetBeaconID].ChkUnitID = 169;
+    P[PArbiterTribunalID].ChkUnitID = 170;
+    P[PObservatoryID].ChkUnitID = 159;
+
     // ---- Hero & Special Units (data-driven alignment with openbw-ref) ----
     T.push_back({"JimRaynorMarine",    Race::Terran, UnitSize::Small, 100,  0,  0, 3,  1,  0,   0,  24, 12,  0, 5, 1, 2.6f, 7,  false});
     T.push_back({"JimRaynorVulture",   Race::Terran, UnitSize::Medium,300,  0,  0, 1,  2,  0,   0,  30, 30,  0, 5, 1, 3.2f, 8,  false});
@@ -425,6 +485,29 @@ int GetTerranDefIDByChkUnitID(int ChkUnitID)
     {
         if (TerranDefs[I].ChkUnitID == ChkUnitID)
             return I;
+    }
+    return -1;
+}
+
+int GetUnitDefIDByChkUnitID(int ChkUnitID)
+{
+    InitDefs();
+    for (int I = 0; I < (int)TerranDefs.size(); ++I)
+    {
+        if (TerranDefs[I].ChkUnitID == ChkUnitID)
+            return I;
+    }
+    const int ZergOffset = (int)TerranDefs.size();
+    for (int I = 0; I < (int)ZergDefs.size(); ++I)
+    {
+        if (ZergDefs[I].ChkUnitID == ChkUnitID)
+            return ZergOffset + I;
+    }
+    const int ProtossOffset = ZergOffset + (int)ZergDefs.size();
+    for (int I = 0; I < (int)ProtossDefs.size(); ++I)
+    {
+        if (ProtossDefs[I].ChkUnitID == ChkUnitID)
+            return ProtossOffset + I;
     }
     return -1;
 }

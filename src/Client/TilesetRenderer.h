@@ -35,6 +35,7 @@ private:
     Resource::Graphics::TilesetAssetCacheView mTilesetAssets;
     const Render::Camera2D* mCamera = nullptr;
     int mMegatileCount = 0;
+    const Resource::Graphics::TilesetAtlas* mAtlas = nullptr;
 
     // CV5 lookup: group index â†?megatile index (16 entries per group)
     const std::vector<uint16_t>* mCv5 = nullptr;

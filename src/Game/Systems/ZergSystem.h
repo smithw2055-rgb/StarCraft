@@ -1,10 +1,12 @@
 #pragma once
 
-#include <vector>
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Game/Components.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -14,12 +16,15 @@ namespace Game::Systems
 class ZergSystem : public Core::ECS::ISystem
 {
 public:
+    using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
+
     ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map);
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "ZergSystem"; }
 
     static bool HasCreep(int TileX, int TileY);
     static void SetMap(Game::Map::GameMap* Map);
+    static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
 
     static void BurrowUnit(Core::ECS::EntityManager& EM, int EntityID);
 

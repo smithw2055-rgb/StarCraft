@@ -137,6 +137,7 @@ struct IScriptProgram
 struct IScriptImageInfo
 {
     bool HasIScriptAnimations = false;
+    bool HasDirectionalFrames = false;
     int IScriptID = -1;
 };
 
@@ -197,6 +198,7 @@ public:
         int SpriteID = -1;
         int ImageID = -1;
         int FrameIndex = 0;
+        int BaseFrameIndex = 0;
         int HorPos = 0;
         int VertPos = 0;
         bool FlipState = false;
@@ -204,6 +206,7 @@ public:
         int FlDirect = 0;
         int OrderSignal = 0;
         int CurrentDirection = 0;
+        bool HasDirectionalFrames = false;
         int TargetRangePixels = 0;
         int TargetArc = 0;
         int RandomSeed = 1;
@@ -223,6 +226,7 @@ public:
     void LoadScript(int AnimationID, const std::vector<int>* ProgramData, int EntryPC);
     void Reset();
     bool ExecuteFrame();
+    void RefreshDirectionalFrame();
 
     int GetCurrentFrame() const { return mSprite.FrameIndex; }
     bool IsRunning() const { return mSprite.PC >= 0 && mProgramData; }

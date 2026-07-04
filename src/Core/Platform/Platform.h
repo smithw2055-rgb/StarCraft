@@ -28,7 +28,7 @@ namespace Core::Platform
     bool IsWindowFocused();
     bool IsMouseInClientArea();
 
-    // Mouse (logical window pixels, top-left origin; DPI scaling removed)
+    // Mouse (framebuffer pixels, top-left origin; matches rendering coordinates)
     bool IsMouseButtonDown(int Button);
     bool IsMouseButtonPressed(int Button);
     bool IsMouseButtonReleased(int Button);

@@ -13,6 +13,11 @@ static inline uint16_t ReadU16(const uint8_t* Data, size_t Offset)
     return Data[Offset] | (Data[Offset + 1] << 8);
 }
 
+static inline int16_t ReadI16(const uint8_t* Data, size_t Offset)
+{
+    return static_cast<int16_t>(ReadU16(Data, Offset));
+}
+
 // Helper: read uint32_t from little-endian buffer
 static inline uint32_t ReadU32(const uint8_t* Data, size_t Offset)
 {
@@ -29,6 +34,8 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 {
     std::vector<UnitEntry> Entries;
     constexpr size_t Count = 228;
+    constexpr size_t PlacementOffset = 0x2D94;
+    constexpr size_t DimensionOffset = 0x3124;
     if (Data.empty())
     {
         Core::Utils::Logger::Warning("DatDecoder", "units.dat is empty");
@@ -56,6 +63,18 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
             E.Subunit1ID = ReadU16(Data.data(), Subunit1Offset + I * 2);
         if (Subunit2Offset + I * 2 + 2 <= Data.size())
             E.Subunit2ID = ReadU16(Data.data(), Subunit2Offset + I * 2);
+        if (PlacementOffset + I * 4 + 4 <= Data.size())
+        {
+            E.PlacementWidth = ReadI16(Data.data(), PlacementOffset + I * 4 + 0);
+            E.PlacementHeight = ReadI16(Data.data(), PlacementOffset + I * 4 + 2);
+        }
+        if (DimensionOffset + I * 8 + 8 <= Data.size())
+        {
+            E.DimensionLeft = ReadI16(Data.data(), DimensionOffset + I * 8 + 0);
+            E.DimensionUp = ReadI16(Data.data(), DimensionOffset + I * 8 + 2);
+            E.DimensionRight = ReadI16(Data.data(), DimensionOffset + I * 8 + 4);
+            E.DimensionDown = ReadI16(Data.data(), DimensionOffset + I * 8 + 6);
+        }
 
         Entries.push_back(E);
     }
@@ -134,11 +153,19 @@ std::vector<SpriteEntry> DatDecoder::DecodeSprites(const std::vector<uint8_t>& D
 {
     std::vector<SpriteEntry> Entries;
     constexpr size_t Count = 517;
+    constexpr size_t SelectableCount = 387;
+    constexpr size_t NonSelectableCount = 130;
+    constexpr size_t ImageOffset = 0;
+    constexpr size_t HealthBarOffset = ImageOffset + Count * 2;
+    constexpr size_t UnknownOffset = HealthBarOffset + SelectableCount;
+    constexpr size_t VisibleOffset = UnknownOffset + Count;
+    constexpr size_t SelectionCircleOffset = VisibleOffset + Count;
+    constexpr size_t SelectionCircleVerticalOffset = SelectionCircleOffset + SelectableCount;
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        const size_t Off = I * 2;
+        const size_t Off = ImageOffset + I * 2;
         if (Off + 2 > Data.size())
             break;
 
@@ -146,6 +173,22 @@ std::vector<SpriteEntry> DatDecoder::DecodeSprites(const std::vector<uint8_t>& D
         E.Id = (uint32_t)I;
         // First column is image.dat id.
         E.ImageID = ReadU16(Data.data(), Off);
+        if (VisibleOffset + I < Data.size())
+            E.VisibilitySize = Data[VisibleOffset + I];
+
+        if (I >= NonSelectableCount)
+        {
+            const size_t SelectableIndex = I - NonSelectableCount;
+            if (SelectableIndex < SelectableCount)
+            {
+                if (HealthBarOffset + SelectableIndex < Data.size())
+                    E.HealthBar = Data[HealthBarOffset + SelectableIndex];
+                if (SelectionCircleOffset + SelectableIndex < Data.size())
+                    E.SelectionCircle = Data[SelectionCircleOffset + SelectableIndex];
+                if (SelectionCircleVerticalOffset + SelectableIndex < Data.size())
+                    E.SelectionCircleVerticalOffset = Data[SelectionCircleVerticalOffset + SelectableIndex];
+            }
+        }
 
         Entries.push_back(E);
     }

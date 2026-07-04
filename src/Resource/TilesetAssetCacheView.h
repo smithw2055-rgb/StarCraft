@@ -23,6 +23,7 @@ public:
 
     bool SetTilesetPalette(const std::string& TilesetName) const;
     const std::vector<GpuImage>* GetTilesetImages(const std::string& TilesetName) const;
+    const TilesetAtlas* GetTilesetAtlas(const std::string& TilesetName) const;
     const TilesetData* GetTilesetData(const std::string& TilesetName) const;
 
 private:

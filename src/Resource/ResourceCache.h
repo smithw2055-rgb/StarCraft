@@ -68,6 +68,7 @@ public:
 
     // Tileset megatile textures: returns array of GPU images (one per megatile index)
     const std::vector<GpuImage>* GetTilesetImages(const std::string& TilesetName);
+    const TilesetAtlas* GetTilesetAtlas(const std::string& TilesetName);
 
     // Direct archive read (for raw files like scenario.chk)
     std::optional<std::vector<uint8_t>> ReadFile(const std::string& Path);
@@ -150,6 +151,7 @@ private:
     bool LoadBlinkGraphics();
     bool LoadCursorGraphics(const GrpDecodeOptions& CursorOptions);
     bool BuildTilesetImages(const std::string& TilesetName);
+    bool BuildTilesetAtlas(const std::string& TilesetName);
     const std::vector<GpuImage>* LoadSpriteFramesForPath(uint32_t CacheKey,
                                                          const std::string& GrpPath,
                                                          const char* DebugLabel = nullptr);

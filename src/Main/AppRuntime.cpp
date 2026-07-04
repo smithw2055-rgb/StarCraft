@@ -58,11 +58,17 @@ void AppRuntime::UpdateFrameStats()
     if (FpsTimer >= 1.0f)
     {
         FpsValue = FpsFrames;
-        std::cout << "fps=" << FpsValue
-                  << " win=" << Core::Platform::GetWindowWidth() << "x" << Core::Platform::GetWindowHeight()
-                  << " frame=" << FrameCount
-                  << " mouse=" << Core::Platform::GetMouseX() << "," << Core::Platform::GetMouseY()
-                  << std::endl;
+        if (const char* LogFps = std::getenv("STARCRAFT_LOG_FPS"))
+        {
+            if (LogFps[0] == '1')
+            {
+                std::cout << "fps=" << FpsValue
+                          << " win=" << Core::Platform::GetWindowWidth() << "x" << Core::Platform::GetWindowHeight()
+                          << " frame=" << FrameCount
+                          << " mouse=" << Core::Platform::GetMouseX() << "," << Core::Platform::GetMouseY()
+                          << std::endl;
+            }
+        }
         FpsTimer = 0.0f;
         FpsFrames = 0;
     }

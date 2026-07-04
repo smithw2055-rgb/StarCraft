@@ -42,7 +42,8 @@ private:
     int FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange);
     bool AreEnemies(int A, int B, Core::ECS::EntityManager& EM);
     int PickWeaponDamage(const Components::CombatComponent& Combat,
-                         const Components::UnitComponent* TargetUnit) const;
+                         const Components::UnitComponent* TargetUnit,
+                         bool TargetIsAir) const;
     bool RollMissChance(const Components::CombatComponent& Combat,
                         const Components::TransformComponent& AttackerTrans,
                         const Components::TransformComponent& TargetTrans,

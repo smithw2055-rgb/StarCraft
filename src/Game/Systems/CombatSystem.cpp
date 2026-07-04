@@ -59,12 +59,51 @@ static void IssueMovePreservingCommand(Core::ECS::EntityManager& EM,
     Cmd->TargetEntityID = TargetEntityID;
 }
 
+static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID)
+{
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+    {
+        if (Path->IsAir)
+            return true;
+    }
+
+    if (auto* Combat = EM.GetComponent<CombatComponent>(EntityID))
+        return Combat->MyElevation == Elevation::Air;
+
+    return false;
+}
+
+static bool CanAttackTarget(const CombatComponent& Combat,
+                            Core::ECS::EntityManager& EM,
+                            int TargetID)
+{
+    if (EM.GetComponent<ResourceComponent>(TargetID))
+        return false;
+    const bool TargetAir = IsAirTarget(EM, TargetID);
+    return TargetAir ? (Combat.CanTargetAir && Combat.AirDamage > 0)
+                     : (Combat.CanTargetGround && Combat.GroundDamage > 0);
+}
+
 void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
                                 const std::vector<int>& Attackers,
                                 int TargetEntityID)
 {
     auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetEntityID);
     if (!TargetTrans) return;
+    if (EM.GetComponent<ResourceComponent>(TargetEntityID))
+    {
+        for (int ID : Attackers)
+        {
+            if (auto* Combat = EM.GetComponent<CombatComponent>(ID))
+                Combat->TargetEntityID = -1;
+            if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
+            {
+                Cmd->CurrentCommand = CommandType::Stop;
+                Cmd->TargetEntityID = -1;
+            }
+        }
+        return;
+    }
 
     for (int ID : Attackers)
     {
@@ -120,6 +159,9 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
         auto* TargetUnit = EM.GetComponent<UnitComponent>(ID);
         if (!TargetTrans || !TargetUnit) continue;
         if (TargetUnit->HitPoints <= 0) continue;
+        if (EM.GetComponent<ResourceComponent>(ID)) continue;
+        auto* MyCombat = EM.GetComponent<CombatComponent>(EntityID);
+        if (MyCombat && !CanAttackTarget(*MyCombat, EM, ID)) continue;
 
         // Skip cloaked units we can't detect
         auto* Cloak = EM.GetComponent<CloakComponent>(ID);
@@ -141,9 +183,15 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
 }
 
 int CombatSystem::PickWeaponDamage(const CombatComponent& Combat,
-                                    const UnitComponent* TargetUnit) const
+                                    const UnitComponent* TargetUnit,
+                                    bool TargetIsAir) const
 {
     if (!TargetUnit) return 0;
+
+    if (TargetIsAir)
+        return Combat.CanTargetAir ? Combat.AirDamage : 0;
+    if (!Combat.CanTargetGround)
+        return 0;
 
     // Pick ground or air weapon based on what the target accepts and what we have
     // For now, prefer ground unless the unit explicitly targets air only
@@ -187,9 +235,12 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
 {
     auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
     if (!TargetUnit || TargetUnit->HitPoints <= 0) return;
+    if (EM.GetComponent<ResourceComponent>(TargetID))
+        return;
 
-    // Size-based damage modifier
-    float SizeMod = GetSizeDamageModifier(Attacker.GroundDmgType, TargetUnit->SizeType);
+    const bool TargetIsAir = IsAirTarget(EM, TargetID);
+    const DamageType DamageKind = TargetIsAir ? Attacker.AirDmgType : Attacker.GroundDmgType;
+    float SizeMod = GetSizeDamageModifier(DamageKind, TargetUnit->SizeType);
     int UpgradedArmor = TargetUnit->Armor + UpgradeSystem::GetArmorBonus(EM, TargetID);
     int ModifiedDamage = std::max(1, (int)((float)BaseDamage * SizeMod));
     int EffectiveDamage = std::max(1, ModifiedDamage - UpgradedArmor);
@@ -238,6 +289,12 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
         auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
         if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans)
+        {
+            Combat->PendingAttackFrame = false;
+            Combat->PendingAttackTargetEntityID = -1;
+            return false;
+        }
+        if (EM.GetComponent<ResourceComponent>(TargetID))
         {
             Combat->PendingAttackFrame = false;
             Combat->PendingAttackTargetEntityID = -1;
@@ -366,11 +423,22 @@ void CombatSystem::Update(float DeltaTime)
     for (int ID : ShieldUnits)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
-        if (Unit && Unit->ShieldPoints > 0 && Unit->ShieldPoints < Unit->MaxShieldPoints)
+        if (Unit && Unit->MaxShieldPoints > 0 && Unit->ShieldPoints < Unit->MaxShieldPoints)
         {
-            float Regen = 1.0f * DeltaTime;
-            Unit->ShieldPoints = std::min(Unit->MaxShieldPoints,
-                Unit->ShieldPoints + (int)(Regen));
+            Unit->ShieldRegenAccumulator += DeltaTime;
+            const int Regen = (int)(Unit->ShieldRegenAccumulator + 0.0001f);
+            if (Regen > 0)
+            {
+                Unit->ShieldRegenAccumulator -= (float)Regen;
+                if (Unit->ShieldRegenAccumulator < 0.0f)
+                    Unit->ShieldRegenAccumulator = 0.0f;
+                Unit->ShieldPoints = std::min(Unit->MaxShieldPoints,
+                    Unit->ShieldPoints + Regen);
+            }
+        }
+        else if (Unit && Unit->ShieldPoints >= Unit->MaxShieldPoints)
+        {
+            Unit->ShieldRegenAccumulator = 0.0f;
         }
     }
 
@@ -425,10 +493,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
                 {
                     Combat->CooldownRemaining = Combat->AttackCooldown;
 
-                    int Damage = PickWeaponDamage(*Combat, EM.GetComponent<UnitComponent>(Nearby));
-                    if (Damage <= 0 && Combat->AirDamage > 0)
-                        Damage = Combat->AirDamage;
-                    if (Damage <= 0) Damage = Combat->GroundDamage;
+                    const bool TargetIsAir = IsAirTarget(EM, Nearby);
+                    int Damage = PickWeaponDamage(*Combat, EM.GetComponent<UnitComponent>(Nearby), TargetIsAir);
                     if (Damage <= 0) return;
 
                     int UpgradeBonus = UpgradeSystem::GetWeaponBonus(EM, EntityID);
@@ -460,7 +526,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
         auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
-        if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans)
+        if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans ||
+            !CanAttackTarget(*Combat, EM, TargetID))
         {
             TargetID = -1;
             Combat->TargetEntityID = -1;
@@ -533,10 +600,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
 
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
 
-        int Damage = PickWeaponDamage(*Combat, TargetUnit);
-        if (Damage <= 0 && Combat->AirDamage > 0)
-            Damage = Combat->AirDamage;
-        if (Damage <= 0) Damage = Combat->GroundDamage;
+        const bool TargetIsAir = IsAirTarget(EM, TargetID);
+        int Damage = PickWeaponDamage(*Combat, TargetUnit, TargetIsAir);
         if (Damage <= 0) return;
 
         int UpgradeBonus = UpgradeSystem::GetWeaponBonus(EM, EntityID);

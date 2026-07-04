@@ -1,4 +1,5 @@
 #include "Core/Platform/Platform.h"
+#include "Core/Platform/MouseCoordinate.h"
 
 #include "third_party/sokol/sokol_app.h"
 
@@ -29,6 +30,8 @@ namespace
     float g_mouseScroll = 0.0f;
     bool g_cursorVisible = true;
     bool g_cursorLocked = false;
+    float g_mouseScaleX = 1.0f;
+    float g_mouseScaleY = 1.0f;
 
     static constexpr int kKeyCount = 512;
     uint8_t g_keys[kKeyCount] = {};
@@ -40,6 +43,20 @@ namespace
     double g_lastFrameTime = 0.0;
     double g_currentTime = 0.0;
     float g_deltaTime = 0.016f;
+
+    void UpdateMouseScale(int WindowWidth, int WindowHeight, int FramebufferWidth, int FramebufferHeight)
+    {
+        const Core::Platform::MouseScale Scale =
+            Core::Platform::ComputeMouseScale(
+                WindowWidth, WindowHeight,
+                FramebufferWidth, FramebufferHeight,
+                sapp_dpi_scale());
+        g_mouseScaleX = Scale.X;
+        g_mouseScaleY = Scale.Y;
+    }
+
+    float MouseXToFramebuffer(float X) { return Core::Platform::MouseCoordToFramebuffer(X, g_mouseScaleX); }
+    float MouseYToFramebuffer(float Y) { return Core::Platform::MouseCoordToFramebuffer(Y, g_mouseScaleY); }
 }
 
 namespace Core::Platform
@@ -48,11 +65,6 @@ namespace Core::Platform
     {
         const sapp_event* Event = static_cast<const sapp_event*>(EventPtr);
         if (!Event) return;
-        const float DpiScale = std::max(1.0f, sapp_dpi_scale());
-        const auto ToLogicalCoord = [&](float Value) -> float
-        {
-            return Value / DpiScale;
-        };
         switch (Event->type)
         {
             case SAPP_EVENTTYPE_QUIT_REQUESTED:
@@ -61,14 +73,16 @@ namespace Core::Platform
             case SAPP_EVENTTYPE_RESIZED:
                 if (Event->window_width > 0 && Event->window_height > 0)
                 {
-                    g_windowWidth = Event->window_width;
-                    g_windowHeight = Event->window_height;
+                    g_windowWidth = Event->framebuffer_width > 0 ? Event->framebuffer_width : Event->window_width;
+                    g_windowHeight = Event->framebuffer_height > 0 ? Event->framebuffer_height : Event->window_height;
+                    UpdateMouseScale(Event->window_width, Event->window_height,
+                                     Event->framebuffer_width, Event->framebuffer_height);
                 }
                 else
                 {
-                    const float FallbackDpiScale = std::max(1.0f, sapp_dpi_scale());
-                    g_windowWidth = std::max(1, (int)std::lround((float)Event->framebuffer_width / FallbackDpiScale));
-                    g_windowHeight = std::max(1, (int)std::lround((float)Event->framebuffer_height / FallbackDpiScale));
+                    g_windowWidth = std::max(1, Event->framebuffer_width);
+                    g_windowHeight = std::max(1, Event->framebuffer_height);
+                    UpdateMouseScale(g_windowWidth, g_windowHeight, g_windowWidth, g_windowHeight);
                 }
                 break;
             case SAPP_EVENTTYPE_FOCUSED:
@@ -76,12 +90,18 @@ namespace Core::Platform
                 break;
             case SAPP_EVENTTYPE_UNFOCUSED:
                 g_windowFocused = false;
+                std::memset(g_mouseDown, 0, sizeof(g_mouseDown));
+                std::memset(g_mousePressedPending, 0, sizeof(g_mousePressedPending));
+                std::memset(g_mouseReleasedPending, 0, sizeof(g_mouseReleasedPending));
                 break;
             case SAPP_EVENTTYPE_MOUSE_ENTER:
                 g_mouseInClientArea = true;
                 break;
             case SAPP_EVENTTYPE_MOUSE_LEAVE:
                 g_mouseInClientArea = false;
+                std::memset(g_mouseDown, 0, sizeof(g_mouseDown));
+                std::memset(g_mousePressedPending, 0, sizeof(g_mousePressedPending));
+                std::memset(g_mouseReleasedPending, 0, sizeof(g_mouseReleasedPending));
                 break;
             case SAPP_EVENTTYPE_MOUSE_DOWN:
                 if (Event->mouse_button >= 0 && Event->mouse_button < 3)
@@ -89,8 +109,8 @@ namespace Core::Platform
                     g_mouseDown[Event->mouse_button] = true;
                     g_mousePressedPending[Event->mouse_button] = true;
                 }
-                g_mouseX = ToLogicalCoord(Event->mouse_x);
-                g_mouseY = ToLogicalCoord(Event->mouse_y);
+                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
+                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
                 break;
             case SAPP_EVENTTYPE_MOUSE_UP:
                 if (Event->mouse_button >= 0 && Event->mouse_button < 3)
@@ -98,14 +118,14 @@ namespace Core::Platform
                     g_mouseDown[Event->mouse_button] = false;
                     g_mouseReleasedPending[Event->mouse_button] = true;
                 }
-                g_mouseX = ToLogicalCoord(Event->mouse_x);
-                g_mouseY = ToLogicalCoord(Event->mouse_y);
+                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
+                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
                 break;
             case SAPP_EVENTTYPE_MOUSE_MOVE:
-                g_mouseX = ToLogicalCoord(Event->mouse_x);
-                g_mouseY = ToLogicalCoord(Event->mouse_y);
-                g_mouseDX += ToLogicalCoord(Event->mouse_dx);
-                g_mouseDY += ToLogicalCoord(Event->mouse_dy);
+                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
+                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
+                g_mouseDX += Event->mouse_dx * g_mouseScaleX;
+                g_mouseDY += Event->mouse_dy * g_mouseScaleY;
                 break;
             case SAPP_EVENTTYPE_MOUSE_SCROLL:
                 g_mouseScroll += Event->scroll_y;
@@ -149,11 +169,10 @@ namespace Core::Platform
         g_mouseScroll = 0.0f;
         g_windowFocused = true;
         g_mouseInClientArea = true;
-        {
-            const float DpiScale = std::max(1.0f, sapp_dpi_scale());
-            g_windowWidth = std::max(1, (int)std::lround((float)sapp_width() / DpiScale));
-            g_windowHeight = std::max(1, (int)std::lround((float)sapp_height() / DpiScale));
-        }
+        g_windowWidth = std::max(1, sapp_width());
+        g_windowHeight = std::max(1, sapp_height());
+        g_mouseScaleX = sapp_dpi_scale();
+        g_mouseScaleY = sapp_dpi_scale();
         g_lastFrameTime = 0.0;
         g_initialized = true;
         return true;
@@ -209,6 +228,7 @@ namespace Core::Platform
     bool IsMouseButtonDown(int Button)
     {
         if (Button < 0 || Button > 2) return false;
+        if (!g_windowFocused || !g_mouseInClientArea) return false;
         return g_mouseDown[Button];
     }
 

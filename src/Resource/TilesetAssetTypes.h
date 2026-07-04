@@ -19,10 +19,22 @@ struct TilesetData
     bool Loaded = false;
 };
 
+struct TilesetAtlas
+{
+    GpuImage Image;
+    int FrameWidth = 0;
+    int FrameHeight = 0;
+    int CellWidth = 0;
+    int CellHeight = 0;
+    int Columns = 0;
+    int FrameCount = 0;
+};
+
 struct TilesetAssetCacheState
 {
     std::unordered_map<std::string, TilesetData> DataByName;
     std::unordered_map<std::string, std::vector<GpuImage>> ImagesByName;
+    std::unordered_map<std::string, TilesetAtlas> AtlasesByName;
 };
 
 } // namespace Resource::Graphics

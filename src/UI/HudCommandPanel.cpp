@@ -160,7 +160,7 @@ int Hud::ResolveSelectedTerranDefId(int SelectedEntityId,
                 return Building->BuildingDefID;
         }
     }
-    return Game::Races::GetTerranDefIDByChkUnitID(SelectedChkUnitId);
+    return Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
 }
 
 void Hud::BuildTerranPage(int SelectedEntityId,

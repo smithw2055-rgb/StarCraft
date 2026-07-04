@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -23,6 +24,20 @@ namespace
         std::transform(Lower.begin(), Lower.end(), Lower.begin(),
             [](unsigned char C) { return (char)std::tolower(C); });
         return Lower;
+    }
+
+    bool PreferClassicEffectSprite(const std::string& GrpPath)
+    {
+        std::string Lower = ToLowerCopy(GrpPath);
+        std::replace(Lower.begin(), Lower.end(), '\\', '/');
+        return Lower.rfind("thingy/", 0) == 0 ||
+               Lower.rfind("bullet/", 0) == 0;
+    }
+
+    bool ShouldLogSpriteLoads()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_SPRITE_LOADS");
+        return Value && Value[0] == '1';
     }
 }
 
@@ -69,7 +84,9 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
                                                                     const std::string& GrpPath,
                                                                     const char* DebugLabel)
 {
-    if (GrpPath.size() > 4 && ToLowerCopy(GrpPath.substr(GrpPath.size() - 4)) == ".grp")
+    if (!PreferClassicEffectSprite(GrpPath) &&
+        GrpPath.size() > 4 &&
+        ToLowerCopy(GrpPath.substr(GrpPath.size() - 4)) == ".grp")
     {
         const std::string HdPath = GrpPath.substr(0, GrpPath.size() - 4) + ".dds.grp";
         auto HdData = ReadFile(HdPath);
@@ -83,10 +100,13 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
                 for (const auto& Frame : *HdFrames)
                     Out.push_back(UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data()));
 
-                Core::Utils::Logger::Info("ResourceCache",
-                    std::string("Loaded HD unit sprite: ") +
-                    (DebugLabel ? DebugLabel : "ImageID") + "=" + std::to_string(CacheKey) +
-                    " -> " + HdPath + " (" + std::to_string(Out.size()) + " frames)");
+                if (ShouldLogSpriteLoads())
+                {
+                    Core::Utils::Logger::Info("ResourceCache",
+                        std::string("Loaded HD unit sprite: ") +
+                        (DebugLabel ? DebugLabel : "ImageID") + "=" + std::to_string(CacheKey) +
+                        " -> " + HdPath + " (" + std::to_string(Out.size()) + " frames)");
+                }
                 return &Out;
             }
 
@@ -133,7 +153,7 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         Out.push_back(UploadRgbaFull(F.Width, F.Height, F.Rgba.data()));
     }
 
-    if (DebugLabel || (CacheKey >= 100 && CacheKey <= 103))
+    if (ShouldLogSpriteLoads() && (DebugLabel || (CacheKey >= 100 && CacheKey <= 103)))
     {
         Core::Utils::Logger::Info("ResourceCache",
             "Resource GRP: " + std::string(DebugLabel ? DebugLabel : "ImageID") +

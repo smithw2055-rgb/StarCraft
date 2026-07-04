@@ -68,6 +68,16 @@ bool IsRenderableChkUnit(int Id);
 
 bool HasCombatSelection(Core::ECS::EntityManager& EM,
                         const std::vector<Core::ECS::EntityID>& EcsIds);
+bool CanEntityAttackTarget(Core::ECS::EntityManager& EM,
+                           Core::ECS::EntityID AttackerId,
+                           Core::ECS::EntityID TargetId);
+bool HasAttackCapableSelection(Core::ECS::EntityManager& EM,
+                               const std::vector<Core::ECS::EntityID>& EcsIds,
+                               Core::ECS::EntityID TargetId);
+std::vector<Core::ECS::EntityID> FilterAttackersForTarget(
+    Core::ECS::EntityManager& EM,
+    const std::vector<Core::ECS::EntityID>& EcsIds,
+    Core::ECS::EntityID TargetId);
 std::vector<Core::ECS::EntityID> FilterHarvesters(
     Core::ECS::EntityManager& EM,
     const std::vector<Core::ECS::EntityID>& EcsIds);

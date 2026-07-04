@@ -452,7 +452,7 @@ std::string GameDataLoader::ResolveImageGrpPath(uint32_t ImageID) const
     return {};
 }
 
-uint32_t GameDataLoader::ResolveUnitImageID(uint32_t ChkUnitID) const
+uint32_t GameDataLoader::ResolveUnitSpriteID(uint32_t ChkUnitID) const
 {
     if (ChkUnitID >= mUnits.size())
         return UINT32_MAX;
@@ -463,6 +463,15 @@ uint32_t GameDataLoader::ResolveUnitImageID(uint32_t ChkUnitID) const
 
     const uint32_t SpriteID = mFlingy[(size_t)FlingyID].SpriteID;
     if (SpriteID >= mSprites.size())
+        return UINT32_MAX;
+
+    return SpriteID;
+}
+
+uint32_t GameDataLoader::ResolveUnitImageID(uint32_t ChkUnitID) const
+{
+    const uint32_t SpriteID = ResolveUnitSpriteID(ChkUnitID);
+    if (SpriteID == UINT32_MAX)
         return UINT32_MAX;
 
     const uint32_t ImageID = mSprites[(size_t)SpriteID].ImageID;

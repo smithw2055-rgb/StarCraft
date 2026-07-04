@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 namespace Game::Systems
 {
@@ -16,6 +17,17 @@ using namespace Game::Components;
 using Core::Utils::Logger;
 
 Game::Map::GameMap* ZergSystem::sMap = nullptr;
+
+namespace
+{
+    ZergSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+
+    UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
+    {
+        return gCollisionBoundsResolver ? gCollisionBoundsResolver(ChkUnitID) : UnitCollisionBounds{};
+    }
+}
+
 
 ZergSystem::ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map)
     : mSystemMgr(SysMgr)
@@ -31,6 +43,11 @@ ZergSystem::ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map
 void ZergSystem::SetMap(Game::Map::GameMap* Map)
 {
     sMap = Map;
+}
+
+void ZergSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
+{
+    gCollisionBoundsResolver = std::move(Resolver);
 }
 
 bool ZergSystem::HasCreep(int TileX, int TileY)
@@ -313,6 +330,7 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     auto& BUnit = EM.AddComponent<UnitComponent>(BldgID);
     auto& BPlayer = EM.AddComponent<PlayerComponent>(BldgID);
     auto& BBuild = EM.AddComponent<BuildingComponent>(BldgID);
+    auto& BPath = EM.AddComponent<PathfindingComponent>(BldgID);
 
     BTrans.Position = Position;
     BPlayer.PlayerID = PlayerID;
@@ -340,6 +358,7 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     BBuild.IsOrganic = true; // Zerg buildings are organic
     BBuild.BuildingDefID = BuildingDefID;
     BBuild.BuildTimeRemaining = (float)BldgDef.BuildTime;
+    ApplyCollisionBounds(BPath, ResolveCollisionBounds(BldgDef.ChkUnitID));
 
     // Add morph component so ProcessMorphs handles completion
     auto& DroneMorph = EM.AddComponent<MorphComponent>(BldgID);
@@ -469,6 +488,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     auto& EPlayer = EM.AddComponent<PlayerComponent>(EggID);
     auto& EBuild = EM.AddComponent<BuildingComponent>(EggID);
     auto& EMorph = EM.AddComponent<MorphComponent>(EggID);
+    auto& EPath = EM.AddComponent<PathfindingComponent>(EggID);
 
     ETrans.Position = LarvaTrans ? LarvaTrans->Position : Core::Math::Vec2();
     EPlayer.PlayerID = PlayerID;
@@ -494,6 +514,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     EBuild.IsOrganic = true;
     EBuild.BuildingDefID = -1;
     EBuild.BuildTimeRemaining = (float)UnitDef.BuildTime;
+    ApplyCollisionBounds(EPath, ResolveCollisionBounds(EUnit.ChkUnitID));
 
     EMorph.MorphTargetDefID = UnitDefID;
     EMorph.MorphDuration = (float)UnitDef.BuildTime;
@@ -665,6 +686,11 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             Bldg->BuildTimeRemaining = 0.0f;
             Bldg->IsResearching = false;
         }
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(MorphEntityID))
+        {
+            Path->IsAir = false;
+            ApplyCollisionBounds(*Path, ResolveCollisionBounds(TargetDef.ChkUnitID));
+        }
 
         Logger::Info("ZergSystem",
             "Building morph complete: " + TargetDef.Name +
@@ -688,6 +714,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         auto& NUnit = EM.AddComponent<UnitComponent>(NewUnitID);
         auto& NPlayer = EM.AddComponent<PlayerComponent>(NewUnitID);
         auto& NCmd = EM.AddComponent<CommandComponent>(NewUnitID);
+        auto& NPath = EM.AddComponent<PathfindingComponent>(NewUnitID);
 
         NTrans.Position = SpawnPos;
         NPlayer.PlayerID = PlayerID;
@@ -707,6 +734,9 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         NUnit.SizeType = TargetDef.SizeType;
 
         NCmd.CurrentCommand = CommandType::Stop;
+        NPath.NodeTolerance = 8.0f;
+        NPath.IsAir = Game::Data::IsAirUnitType(TargetDef.ChkUnitID);
+        ApplyCollisionBounds(NPath, ResolveCollisionBounds(TargetDef.ChkUnitID));
 
         // Add combat component if unit has weapons
         if (TargetDef.GroundDamage > 0 || TargetDef.AirDamage > 0)
@@ -718,15 +748,12 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             NCombat.AttackCooldown = TargetDef.AttackCooldown;
             NCombat.GroundDmgType = TargetDef.GroundDmgType;
             NCombat.AirDmgType = TargetDef.AirDmgType;
-            NCombat.MyElevation = Elevation::Ground;
+            NCombat.MyElevation = Game::Data::IsAirUnitType(TargetDef.ChkUnitID)
+                ? Elevation::Air
+                : Elevation::Ground;
+            NCombat.CanTargetGround = TargetDef.GroundDamage > 0;
             NCombat.CanTargetAir = TargetDef.AirDamage > 0;
             NCombat.IsRanged = TargetDef.AttackRange > 1.5f;
-            if (TargetDef.Name == "Mutalisk" || TargetDef.Name == "Guardian" ||
-                TargetDef.Name == "Devourer" || TargetDef.Name == "Scourge" ||
-                TargetDef.Name == "Queen" || TargetDef.Name == "Overlord")
-            {
-                NCombat.MyElevation = Elevation::Air;
-            }
         }
 
         // Add burrow component for units that can burrow

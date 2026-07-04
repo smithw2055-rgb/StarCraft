@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -248,6 +249,7 @@ struct UnitComponent
     int MaxHitPoints = 100;
     int ShieldPoints = 0;
     int MaxShieldPoints = 0;
+    float ShieldRegenAccumulator = 0.0f;
     int EnergyPoints = 0;
     int MaxEnergyPoints = 0;
     int Armor = 0;
@@ -461,7 +463,36 @@ struct PathfindingComponent
     // Air / ground flag
     bool IsAir = false;
     int CollisionRadius = 16;       // tile pixels for collision
+    bool HasCollisionBounds = false;
+    int CollisionLeft = 16;
+    int CollisionUp = 16;
+    int CollisionRight = 16;
+    int CollisionDown = 16;
 };
+
+struct UnitCollisionBounds
+{
+    bool IsValid = false;
+    int Left = 16;
+    int Up = 16;
+    int Right = 16;
+    int Down = 16;
+};
+
+inline void ApplyCollisionBounds(PathfindingComponent& Path, const UnitCollisionBounds& Bounds)
+{
+    if (!Bounds.IsValid)
+        return;
+
+    Path.HasCollisionBounds = true;
+    Path.CollisionLeft = std::max(0, Bounds.Left);
+    Path.CollisionUp = std::max(0, Bounds.Up);
+    Path.CollisionRight = std::max(0, Bounds.Right);
+    Path.CollisionDown = std::max(0, Bounds.Down);
+    const int Width = Path.CollisionLeft + Path.CollisionRight + 1;
+    const int Height = Path.CollisionUp + Path.CollisionDown + 1;
+    Path.CollisionRadius = std::max(4, std::max(Width, Height) / 2);
+}
 
 struct ProductionComponent
 {

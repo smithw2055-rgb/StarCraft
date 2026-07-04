@@ -1,4 +1,6 @@
 #include "Client/Selection.h"
+#include "Client/SelectionFootprint.h"
+#include "Resource/GameDataLoader.h"
 
 #include <algorithm>
 #include <cmath>
@@ -39,17 +41,106 @@ namespace
     {
         return Entities.GetComponent<Game::Components::EffectComponent>(EntityId) != nullptr;
     }
+
+    struct PickBounds
+    {
+        float Left = -12.0f;
+        float Top = -12.0f;
+        float Right = 12.0f;
+        float Bottom = 12.0f;
+        float ScoreCenterX = 0.0f;
+        float ScoreCenterY = 0.0f;
+
+        float Width() const { return Right - Left; }
+        float Height() const { return Bottom - Top; }
+    };
+
+    PickBounds PickBoundsForEntity(Core::ECS::EntityManager& Entities,
+                                   int EntityId,
+                                   const Game::Components::TransformComponent& Trans,
+                                   const Game::Components::UnitComponent& Unit,
+                                   const Resource::Graphics::DataAssetCacheView& DataAssets,
+                                   float UnitHalfW,
+                                   float UnitHalfH,
+                                   float Padding)
+    {
+        if (DataAssets.HasCache())
+        {
+            if (const auto* Loader = DataAssets.GetDataLoader())
+            {
+                if (const auto* UnitData = Loader->FindUnitByID((uint32_t)Unit.ChkUnitID))
+                {
+                    const int DimW = UnitData->DimensionWidth();
+                    const int DimH = UnitData->DimensionHeight();
+                    if (DimW > 0 && DimH > 0)
+                    {
+                        const float Left = Trans.Position.X - (float)UnitData->DimensionLeft - Padding;
+                        const float Top = Trans.Position.Y - (float)UnitData->DimensionUp - Padding;
+                        const float Right = Trans.Position.X + (float)UnitData->DimensionRight + 1.0f + Padding;
+                        const float Bottom = Trans.Position.Y + (float)UnitData->DimensionDown + 1.0f + Padding;
+                        return {
+                            Left,
+                            Top,
+                            Right,
+                            Bottom,
+                            (Left + Right) * 0.5f,
+                            (Top + Bottom) * 0.5f
+                        };
+                    }
+                }
+            }
+        }
+
+        if (IsBuilding(Entities, EntityId))
+        {
+            const BuildingFootprintSpec F =
+                BuildingFootprintForSelection(Trans.Position.X, Trans.Position.Y, Unit.ChkUnitID);
+            return {
+                F.CenterX - F.RadiusX - 8.0f,
+                F.CenterY - F.RadiusY - 8.0f,
+                F.CenterX + F.RadiusX + 8.0f,
+                F.CenterY + F.RadiusY + 8.0f,
+                F.CenterX,
+                F.CenterY
+            };
+        }
+
+        if (IsResource(Entities, EntityId))
+        {
+            const float HalfW = std::max(UnitHalfW, 36.0f) + 18.0f;
+            const float HalfH = std::max(UnitHalfH, 30.0f) + 18.0f;
+            return {
+                Trans.Position.X - HalfW,
+                Trans.Position.Y - HalfH,
+                Trans.Position.X + HalfW,
+                Trans.Position.Y + HalfH,
+                Trans.Position.X,
+                Trans.Position.Y
+            };
+        }
+
+        UnitHalfW += 12.0f;
+        UnitHalfH += 12.0f;
+        return {
+            Trans.Position.X - UnitHalfW,
+            Trans.Position.Y - UnitHalfH,
+            Trans.Position.X + UnitHalfW,
+            Trans.Position.Y + UnitHalfH,
+            Trans.Position.X,
+            Trans.Position.Y
+        };
+    }
 }
 
 float Selection::PickRadiusForSize(Game::Components::UnitSize Size) const
 {
     switch (Size)
     {
-        case Game::Components::UnitSize::Small: return 14.0f;
-        case Game::Components::UnitSize::Medium: return 18.0f;
-        case Game::Components::UnitSize::Large: return 32.0f;
+        case Game::Components::UnitSize::Small: return 18.0f;
+        case Game::Components::UnitSize::Medium: return 25.0f;
+        case Game::Components::UnitSize::Large: return 40.0f;
     }
-    return 16.0f;
+    return 20.0f;
 }
 
 bool Selection::EntityHitTest(Core::ECS::EntityManager& Entities, int EntityId,
@@ -65,43 +156,15 @@ bool Selection::EntityHitTest(Core::ECS::EntityManager& Entities, int EntityId,
 
     float HalfW = PickRadiusForSize(Unit->SizeType);
     float HalfH = HalfW;
-    if (IsBuilding(Entities, EntityId))
-    {
-        HalfW = std::max(HalfW, 64.0f);
-        HalfH = std::max(HalfH, 48.0f);
-    }
-    else if (IsResource(Entities, EntityId))
-    {
-        HalfW = std::max(HalfW, 36.0f);
-        HalfH = std::max(HalfH, 30.0f);
-    }
+    const PickBounds Bounds =
+        PickBoundsForEntity(Entities, EntityId, *Trans, *Unit, mDataAssets, HalfW, HalfH, 2.0f);
 
-    if (IsBuilding(Entities, EntityId))
-    {
-        HalfW += 28.0f;
-        HalfH += 22.0f;
-    }
-    else if (IsResource(Entities, EntityId))
-    {
-        HalfW += 18.0f;
-        HalfH += 18.0f;
-    }
-    else
-    {
-        HalfW += 12.0f;
-        HalfH += 12.0f;
-    }
-
-    const float Left = Trans->Position.X - HalfW;
-    const float Right = Trans->Position.X + HalfW;
-    const float Top = Trans->Position.Y - HalfH;
-    const float Bottom = Trans->Position.Y + HalfH;
-    if (WX < Left || WX > Right || WY < Top || WY > Bottom)
+    if (WX < Bounds.Left || WX > Bounds.Right || WY < Bounds.Top || WY > Bounds.Bottom)
         return false;
 
-    const float DX = WX - Trans->Position.X;
-    const float DY = WY - Trans->Position.Y;
-    const float AreaPenalty = HalfW * HalfH * 0.0025f;
+    const float DX = WX - Bounds.ScoreCenterX;
+    const float DY = WY - Bounds.ScoreCenterY;
+    const float AreaPenalty = Bounds.Width() * Bounds.Height() * 0.000625f;
     const float KindBias = IsBuilding(Entities, EntityId) ? 12.0f : 0.0f;
     OutScore = DX * DX + DY * DY + AreaPenalty + KindBias;
     return true;
@@ -120,22 +183,11 @@ bool Selection::EntityInRect(Core::ECS::EntityManager& Entities, int EntityId,
 
     float HalfW = PickRadiusForSize(Unit->SizeType);
     float HalfH = HalfW;
-    if (IsBuilding(Entities, EntityId))
-    {
-        HalfW = std::max(HalfW, 64.0f);
-        HalfH = std::max(HalfH, 48.0f);
-    }
-    else if (IsResource(Entities, EntityId))
-    {
-        HalfW = std::max(HalfW, 36.0f);
-        HalfH = std::max(HalfH, 30.0f);
-    }
+    const PickBounds Bounds =
+        PickBoundsForEntity(Entities, EntityId, *Trans, *Unit, mDataAssets, HalfW, HalfH, 0.0f);
 
-    const float Left = Trans->Position.X - HalfW;
-    const float Top = Trans->Position.Y - HalfH;
-    const float Right = Trans->Position.X + HalfW;
-    const float Bottom = Trans->Position.Y + HalfH;
-    return !(Right < RX || Left > RX + RW || Bottom < RY || Top > RY + RH);
+    return !(Bounds.Right < RX || Bounds.Left > RX + RW ||
+             Bounds.Bottom < RY || Bounds.Top > RY + RH);
 }
 
 bool Selection::IsMultiSelectable(Core::ECS::EntityManager& Entities, int EntityId) const
@@ -252,6 +304,14 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
 
     const int MX = (int)Core::Platform::GetMouseX();
     const int MY = (int)Core::Platform::GetMouseY();
+    const bool PointerActive =
+        Core::Platform::IsWindowFocused() &&
+        Core::Platform::IsMouseInClientArea();
+    if (!PointerActive)
+    {
+        CancelPointerGesture();
+        return;
+    }
 
     static double sLastClickTime = 0.0;
     static int sLastClickId = -1;
@@ -268,13 +328,21 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
         mEndY = MY;
     }
 
-    if (Core::Platform::IsMouseButtonDown(0) && mPhase == Phase::Dragging)
+    const bool MouseDown = Core::Platform::IsMouseButtonDown(0);
+    bool MouseReleased = Core::Platform::IsMouseButtonReleased(0);
+
+    if (MouseDown && mPhase == Phase::Dragging)
     {
         mEndX = MX;
         mEndY = MY;
     }
 
-    if (!Core::Platform::IsMouseButtonReleased(0) || mPhase != Phase::Dragging)
+    // Window focus changes can eat the one-frame release edge. If the button
+    // is no longer down, finish the drag so the overlay cannot stick onscreen.
+    if (mPhase == Phase::Dragging && !MouseDown)
+        MouseReleased = true;
+
+    if (!MouseReleased || mPhase != Phase::Dragging)
         return;
 
     mEndX = MX;

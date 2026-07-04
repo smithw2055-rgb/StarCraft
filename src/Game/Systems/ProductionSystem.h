@@ -13,12 +13,14 @@ class ProductionSystem : public Core::ECS::ISystem
 {
 public:
     using ImageIDResolver = std::function<uint32_t(int)>;
+    using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
 
     ProductionSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "ProductionSystem"; }
 
     static void SetImageResolver(ImageIDResolver Resolver);
+    static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
 
     static bool CanTrain(const Core::ECS::EntityManager& EM,
                          int BuildingID, int UnitDefID,

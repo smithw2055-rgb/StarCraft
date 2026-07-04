@@ -7,6 +7,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Game/Components.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -58,6 +59,7 @@ class BuildingSystem : public Core::ECS::ISystem
 {
 public:
     using ImageIDResolver = std::function<uint32_t(int)>;
+    using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
 
     BuildingSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
@@ -65,6 +67,7 @@ public:
 
     static void SetMap(const Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
+    static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
 
     static bool CanBuild(const Core::ECS::EntityManager& EM,
                          int BuilderID,

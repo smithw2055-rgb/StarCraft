@@ -18,6 +18,7 @@ namespace
     float gCameraX = 0.0f;
     float gCameraY = 0.0f;
     bool gEnableGuiHud = false;
+    bool gHighDpi = true;
 }
 
 static void InitCb()
@@ -61,6 +62,10 @@ sapp_desc sokol_main(int argc, char* argv[])
         {
             gEnableGuiHud = true;
         }
+        else if (std::strcmp(argv[I], "--low-dpi") == 0)
+        {
+            gHighDpi = false;
+        }
         else if (gMapPathOverride.empty())
             gMapPathOverride = argv[I];
     }
@@ -78,8 +83,8 @@ sapp_desc sokol_main(int argc, char* argv[])
     Desc.cleanup_cb = CleanupCb;
     Desc.width = 1280;
     Desc.height = 720;
-    Desc.high_dpi = true;
-    Desc.sample_count = 4;
+    Desc.high_dpi = gHighDpi;
+    Desc.sample_count = 1;
     Desc.window_title = "StarCraft";
     Desc.icon.sokol_default = true;
     Desc.logger.func = slog_func;

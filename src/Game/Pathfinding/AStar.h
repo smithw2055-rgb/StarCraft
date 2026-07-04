@@ -33,12 +33,14 @@ class AStar
 public:
     static PathResult FindPath(const Map::GameMap& Map,
                                Core::Math::Vec2 Start, Core::Math::Vec2 End,
-                               int MaxNodes = 1000);
+                               int MaxNodes = 1000,
+                               int ClearanceRadiusPixels = 0);
 
     static PathResult FindPathTile(const Map::GameMap& Map,
                                    int StartX, int StartY,
                                    int EndX, int EndY,
-                                   int MaxNodes = 1000);
+                                   int MaxNodes = 1000,
+                                   int ClearanceRadiusPixels = 0);
 
     struct SearchConfig
     {
@@ -51,7 +53,7 @@ public:
 
 private:
     static int Heuristic(int DX, int DY);
-    static bool IsWalkable(const Map::GameMap& Map, int X, int Y);
+    static bool IsWalkable(const Map::GameMap& Map, int X, int Y, int ClearanceRadiusPixels = 0);
     static std::vector<Core::Math::Vec2> ReconstructPath(const std::vector<PathNode>& Nodes, int GoalIndex);
 
     static SearchConfig sConfig;

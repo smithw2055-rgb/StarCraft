@@ -18,21 +18,10 @@ void IssuePatrolCommand(Core::ECS::EntityManager& EM,
                         const std::vector<Core::ECS::EntityID>& EcsIds,
                         const Core::Math::Vec2& Target)
 {
-    for (int EntityId : EcsIds)
-    {
-        auto* Command = EM.GetComponent<Game::Components::CommandComponent>(EntityId);
-        if (!Command)
-            Command = &EM.AddComponent<Game::Components::CommandComponent>(EntityId);
-        Command->TargetPosition = Target;
-        auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(EntityId);
-        if (Path) { Path->Path.clear(); Path->PathIndex = 0; }
-    }
-    Game::Systems::CommandSystem::IssueMove(EM, EcsIds, Target);
-    for (int EntityId : EcsIds)
-    {
-        auto* Command = EM.GetComponent<Game::Components::CommandComponent>(EntityId);
-        if (Command) Command->CurrentCommand = Game::Components::CommandType::Patrol;
-    }
+    Game::Components::Order PatrolOrder;
+    PatrolOrder.Type = Game::Components::OrderType::Patrol;
+    PatrolOrder.TargetPosition = Target;
+    Game::Systems::CommandSystem::IssueOrder(EM, EcsIds, PatrolOrder, false);
 }
 
 void IssueFollowCommand(Core::ECS::EntityManager& EM,
@@ -41,15 +30,19 @@ void IssueFollowCommand(Core::ECS::EntityManager& EM,
 {
     if (TargetEntityId < 0) return;
     auto* FollowTarget = EM.GetComponent<Game::Components::TransformComponent>(TargetEntityId);
-    if (FollowTarget)
-        Game::Systems::CommandSystem::IssueMove(EM, EcsIds, FollowTarget->Position);
+    if (!FollowTarget)
+        return;
+
+    Game::Components::Order FollowOrder;
+    FollowOrder.Type = Game::Components::OrderType::Follow;
+    FollowOrder.TargetPosition = FollowTarget->Position;
+    FollowOrder.TargetEntityID = TargetEntityId;
+    Game::Systems::CommandSystem::IssueOrder(EM, EcsIds, FollowOrder, false);
     for (int EntityId : EcsIds)
     {
         auto* Command = EM.GetComponent<Game::Components::CommandComponent>(EntityId);
-        if (!Command)
-            Command = &EM.AddComponent<Game::Components::CommandComponent>(EntityId);
-        Command->CurrentCommand = Game::Components::CommandType::Follow;
-        Command->TargetEntityID = TargetEntityId;
+        if (Command && Command->CurrentCommand == Game::Components::CommandType::Follow)
+            Command->TargetEntityID = TargetEntityId;
     }
 }
 

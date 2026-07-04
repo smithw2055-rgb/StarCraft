@@ -1,5 +1,16 @@
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#pragma warning(disable: 4701)
+#endif
+#define STB_VORBIS_HEADER_ONLY
+#include "third_party/stb_vorbis.c"
 #define MINIAUDIO_IMPLEMENTATION
 #include "third_party/miniaudio/miniaudio.h"
+#undef STB_VORBIS_HEADER_ONLY
+#include "third_party/stb_vorbis.c"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
@@ -275,9 +286,9 @@ void AudioSystem::Play(SoundEffect Effect)
         return;
     mImpl->ChannelBufferInit[ch] = true;
 
-    ma_result R = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer,
+    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer,
         MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &Snd);
-    if (R != MA_SUCCESS)
+    if (Result != MA_SUCCESS)
     {
         ma_audio_buffer_uninit(&Buffer);
         mImpl->ChannelBufferInit[ch] = false;
@@ -382,8 +393,8 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
     mImpl->ChannelBufferInit[ch] = true;
 
     // Init sound from buffer with full spatialization
-    ma_result R = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer, 0, nullptr, &Snd);
-    if (R != MA_SUCCESS)
+    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer, 0, nullptr, &Snd);
+    if (Result != MA_SUCCESS)
     {
         ma_audio_buffer_uninit(&Buffer);
         mImpl->ChannelBufferInit[ch] = false;
@@ -436,9 +447,9 @@ int AudioSystem::PlayFile(const std::string& FilePath, float SourceX, float Sour
         mImpl->ChannelBufferInit[ch] = false;
     }
 
-    ma_result R = ma_sound_init_from_file(&mImpl->Engine, FilePath.c_str(),
+    ma_result Result = ma_sound_init_from_file(&mImpl->Engine, FilePath.c_str(),
         MA_SOUND_FLAG_STREAM, nullptr, nullptr, &Snd);
-    if (R != MA_SUCCESS)
+    if (Result != MA_SUCCESS)
     {
         Core::Utils::Logger::Warning("AudioSystem", "Failed to play audio file: " + FilePath);
         return -1;

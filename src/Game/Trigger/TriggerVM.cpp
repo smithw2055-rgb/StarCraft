@@ -2,8 +2,10 @@
 
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
+#include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/DeathEvents.h"
+#include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 
 #include <algorithm>
@@ -47,7 +49,7 @@ namespace
 
     Race RaceFromChkUnit(int ChkUnitID)
     {
-        int DefID = Game::Races::GetTerranDefIDByChkUnitID(ChkUnitID);
+        int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
         if (DefID >= 0)
             return Game::Races::GetUnitDefByID(DefID).RaceType;
         if ((ChkUnitID >= 37 && ChkUnitID <= 62) || (ChkUnitID >= 131 && ChkUnitID <= 151))
@@ -218,8 +220,10 @@ void TriggerVM::Update(Core::ECS::EntityManager& EM, float DeltaTime)
             if (!AllMet)
                 continue;
 
+            const bool ContinuingActions = (Running.Flags & 0x01) != 0;
             Running.Flags |= 0x01;
-            Running.CurrentActionIndex = 0;
+            if (!ContinuingActions)
+                Running.CurrentActionIndex = 0;
             for (; Running.CurrentActionIndex < Trigger.Actions.size(); ++Running.CurrentActionIndex)
             {
                 const auto& Action = Trigger.Actions[Running.CurrentActionIndex];
@@ -809,19 +813,12 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             auto Units = FindMatchingUnits(EM, Owner, Action.PlayerID, Action.UnitID, Action.LocationID);
             for (int ID : Units)
             {
-                auto* Cmd = EM.GetComponent<CommandComponent>(ID);
-                if (!Cmd)
-                    Cmd = &EM.AddComponent<CommandComponent>(ID);
-                Cmd->TargetPosition = Dest->Center();
-                Cmd->TargetEntityID = -1;
-                Cmd->CurrentCommand = Modifier == 1 ? CommandType::Patrol :
-                    (Modifier == 2 ? CommandType::AttackMove : CommandType::Move);
-                auto* Path = EM.GetComponent<PathfindingComponent>(ID);
-                if (!Path)
-                    Path = &EM.AddComponent<PathfindingComponent>(ID);
-                Path->Path.clear();
-                Path->PathIndex = 0;
-                Path->Path.push_back(Dest->Center());
+                Order MoveOrder;
+                MoveOrder.TargetPosition = Dest->Center();
+                MoveOrder.TargetEntityID = -1;
+                MoveOrder.Type = Modifier == 1 ? OrderType::Patrol :
+                    (Modifier == 2 ? OrderType::AttackMove : OrderType::Move);
+                Game::Systems::CommandSystem::IssueOrder(EM, ID, MoveOrder, false);
             }
             return true;
         }
@@ -860,7 +857,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
         }
         case 52:
         {
-            auto Units = FindMatchingUnits(EM, Owner, Action.PlayerID, 229, Action.LocationID);
+            auto Units = FindMatchingUnits(EM, Owner, Action.PlayerID, Action.UnitID, Action.LocationID);
             int Limit = Action.Amount == 0 ? 0 : Action.Amount;
             int Done = 0;
             for (int ID : Units)
@@ -921,10 +918,10 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
     Player.PlayerID = Owner;
     Render.ImageID = mConfig.ResolveImageID ? (uint32_t)mConfig.ResolveImageID(ChkUnitID, Pos, Owner) : (uint32_t)ChkUnitID;
 
-    int TerranDefID = Game::Races::GetTerranDefIDByChkUnitID(ChkUnitID);
-    if (TerranDefID >= 0)
+    int UnitDefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
+    if (UnitDefID >= 0)
     {
-        auto Def = Game::Races::GetUnitDefByID(TerranDefID);
+        auto Def = Game::Races::GetUnitDefByID(UnitDefID);
         Unit.UnitRace = Def.RaceType;
         Unit.SizeType = Def.SizeType;
         Unit.MaxHitPoints = Def.HitPoints;
@@ -942,7 +939,7 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
             auto& Building = EM.AddComponent<BuildingComponent>(Eid);
             Building.IsBuilding = true;
             Building.UnderConstruction = false;
-            Building.BuildingDefID = TerranDefID;
+            Building.BuildingDefID = UnitDefID;
             Building.CanLiftOff = Def.CanLiftOff;
             Building.RequiresCreep = Def.RequiresCreep;
             Building.RequiresPylon = Def.RequiresPylon;
@@ -950,7 +947,10 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         else
         {
             EM.AddComponent<CommandComponent>(Eid);
-            EM.AddComponent<PathfindingComponent>(Eid);
+            auto& Path = EM.AddComponent<PathfindingComponent>(Eid);
+            Path.IsAir = Game::Data::IsAirUnitType(ChkUnitID);
+            if (mConfig.ResolveCollisionBounds)
+                ApplyCollisionBounds(Path, mConfig.ResolveCollisionBounds(ChkUnitID));
         }
         if (Def.GroundDamage > 0 || Def.AirDamage > 0)
         {
@@ -961,6 +961,9 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
             Combat.AttackCooldown = Def.AttackCooldown;
             Combat.CanTargetGround = Def.GroundDamage > 0;
             Combat.CanTargetAir = Def.AirDamage > 0;
+            Combat.MyElevation = Game::Data::IsAirUnitType(ChkUnitID) ?
+                Elevation::Air :
+                Elevation::Ground;
         }
     }
     else if (IsBuildingUnitID(ChkUnitID))
@@ -972,7 +975,19 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
     else
     {
         EM.AddComponent<CommandComponent>(Eid);
-        EM.AddComponent<PathfindingComponent>(Eid);
+        auto& Path = EM.AddComponent<PathfindingComponent>(Eid);
+        Path.IsAir = Game::Data::IsAirUnitType(ChkUnitID);
+        if (mConfig.ResolveCollisionBounds)
+            ApplyCollisionBounds(Path, mConfig.ResolveCollisionBounds(ChkUnitID));
+    }
+
+    if ((IsBuildingUnitID(ChkUnitID) || ChkUnitID == 188 ||
+         (ChkUnitID >= 176 && ChkUnitID <= 178)) &&
+        !EM.GetComponent<PathfindingComponent>(Eid))
+    {
+        auto& Path = EM.AddComponent<PathfindingComponent>(Eid);
+        if (mConfig.ResolveCollisionBounds)
+            ApplyCollisionBounds(Path, mConfig.ResolveCollisionBounds(ChkUnitID));
     }
 
     if (ChkUnitID >= 176 && ChkUnitID <= 178)
@@ -1186,31 +1201,31 @@ int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript
         if (!EM.GetComponent<CombatComponent>(ID))
             continue;
 
-        auto* Cmd = EM.GetComponent<CommandComponent>(ID);
-        if (!Cmd)
-            Cmd = &EM.AddComponent<CommandComponent>(ID);
-
         auto* Path = EM.GetComponent<PathfindingComponent>(ID);
-        if (!Path)
-            Path = &EM.AddComponent<PathfindingComponent>(ID);
+        auto* Cmd = EM.GetComponent<CommandComponent>(ID);
         const bool SameAttackMove =
+            Cmd &&
             Cmd->CurrentCommand == CommandType::AttackMove &&
             Cmd->TargetEntityID < 0 &&
             Cmd->TargetPosition.DistanceTo(Target) <= kAIScriptRetargetPixels;
-        const bool HasActivePath = Path->PathIndex < (int)Path->Path.size();
-        const bool IsAtTarget = Trans->Position.DistanceTo(Target) <= std::max(Path->NodeTolerance, kAIScriptRetargetPixels);
+        const bool HasActivePath = Path && Path->PathIndex < (int)Path->Path.size();
+        const float NodeTolerance = Path ? Path->NodeTolerance : 0.0f;
+        const bool IsAtTarget = Trans->Position.DistanceTo(Target) <= std::max(NodeTolerance, kAIScriptRetargetPixels);
         if (SameAttackMove && (HasActivePath || IsAtTarget))
             continue;
 
-        Cmd->CurrentCommand = CommandType::AttackMove;
-        Cmd->TargetPosition = Target;
-        Cmd->TargetEntityID = -1;
-
-        Path->Path.clear();
-        Path->PathIndex = 0;
-        Path->NodeTolerance = std::max(Path->NodeTolerance, kAIScriptRetargetPixels);
-        Path->Path.push_back(Target);
-        ++Issued;
+        Order AttackOrder;
+        AttackOrder.Type = OrderType::AttackMove;
+        AttackOrder.TargetPosition = Target;
+        AttackOrder.TargetEntityID = -1;
+        Game::Systems::CommandSystem::IssueOrder(EM, ID, AttackOrder, false);
+        if (auto* IssuedCmd = EM.GetComponent<CommandComponent>(ID);
+            IssuedCmd && IssuedCmd->CurrentCommand == CommandType::AttackMove)
+        {
+            if (auto* IssuedPath = EM.GetComponent<PathfindingComponent>(ID))
+                IssuedPath->NodeTolerance = std::max(IssuedPath->NodeTolerance, kAIScriptRetargetPixels);
+            ++Issued;
+        }
     }
     return Issued;
 }
