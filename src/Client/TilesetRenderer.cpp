@@ -23,7 +23,6 @@ namespace
         const Resource::Graphics::GpuImage* Image = nullptr;
         float X = 0.0f;
         float Y = 0.0f;
-        uint32_t TextureId = 0;
         uint16_t RawTile = 0;
     };
 }
@@ -217,7 +216,6 @@ void TilesetRenderer::Render(const GameMap& Map)
                         &Img,
                         PX,
                         PY,
-                        Img.Image.id,
                         RawTile
                     });
                 }
@@ -227,19 +225,11 @@ void TilesetRenderer::Render(const GameMap& Map)
                         nullptr,
                         PX,
                         PY,
-                        0,
                         RawTile
                     });
                 }
             }
         }
-
-        std::stable_sort(VisibleTiles.begin(), VisibleTiles.end(),
-                         [](const VisibleTileDraw& A, const VisibleTileDraw& B) {
-                             if (A.TextureId != B.TextureId)
-                                 return A.TextureId < B.TextureId;
-                             return A.RawTile < B.RawTile;
-                         });
 
         for (const VisibleTileDraw& Tile : VisibleTiles)
         {

@@ -13,24 +13,24 @@
 namespace Game::Client::GameLoop
 {
 
-template <typename TryLoadMapT, typename ConfigureSyntheticMapT>
-void ResolveAndLoadStartupMap(AppRuntime& App,
-                              TryLoadMapT&& TryLoadMap,
-                              ConfigureSyntheticMapT&& ConfigureSyntheticMap)
+template <typename TryLoadMapT>
+bool ResolveAndLoadStartupMap(AppRuntime& App,
+                              TryLoadMapT&& TryLoadMap)
 {
     App.ResolveMapPath();
     if (App.MapPath.empty())
     {
-        Core::Utils::Logger::Warning("GameMain", "No default map found; using synthetic skirmish map");
-        ConfigureSyntheticMap();
-        return;
+        Core::Utils::Logger::Error("GameMain", "No default map found; startup map load aborted");
+        return false;
     }
 
     if (!TryLoadMap())
     {
-        Core::Utils::Logger::Warning("GameMain", "Falling back to synthetic skirmish map");
-        ConfigureSyntheticMap();
+        Core::Utils::Logger::Error("GameMain", "Startup map load aborted");
+        return false;
     }
+
+    return true;
 }
 
 inline void InitializeClientWorldViewFromSession(ClientRuntime& Client, GameSession& Session)

@@ -1,9 +1,5 @@
 #include "Resource/ResourceCache.h"
 
-#ifdef _WIN32
-#include <mfapi.h>
-#endif
-
 namespace Resource::Graphics
 {
 
@@ -53,8 +49,11 @@ void ResourceCache::DestroyUICache()
         for (auto& Frame : Frames) DestroyImage(Frame);
     mUI.CursorFrames.clear();
     for (auto& [Name, Clip] : mUI.PortraitClips)
+    {
         for (auto& Frame : Clip.Frames)
             DestroyImage(Frame.Image);
+        DestroyImage(Clip.CurrentFrame.Image);
+    }
     mUI.PortraitClips.clear();
     DestroyImage(mUI.HudAggIcons);
     DestroyImage(mUI.HudTwireStrip);
@@ -77,13 +76,6 @@ void ResourceCache::Shutdown()
     DestroySpriteCache();
     DestroyTilesetCache();
     DestroyUICache();
-#ifdef _WIN32
-    if (mMediaFoundationInitialized)
-    {
-        MFShutdown();
-        mMediaFoundationInitialized = false;
-    }
-#endif
     mSources.Archive.reset();
     mSources.Archive2.reset();
     mSources.Archive3.reset();

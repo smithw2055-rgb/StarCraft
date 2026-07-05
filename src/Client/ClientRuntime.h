@@ -23,6 +23,7 @@ namespace Game::Client::GameLoop { class CursorManager; }
 namespace Game::Client
 {
 
+struct CampaignPing;
 class WorldEffects;
 class TilesetRenderer;
 class EntityRenderer;
@@ -76,6 +77,7 @@ struct ClientRuntime
                             Core::Audio::AudioSystem& Audio,
                             float DeltaSeconds);
     void AddCampaignPing(Core::Math::Vec2 Position);
+    const std::vector<CampaignPing>& GetCampaignPings() const;
     const std::vector<int>& GetSelectedIds() const;
     bool IsSelectionDragging() const;
     void GetSelectionDragRectScreen(float& X, float& Y, float& W, float& H) const;

@@ -60,11 +60,24 @@ static bool IsSiegedTankUnit(int ChkUnitID)
            ChkUnitID == 25;    // Hero Edmund Duke Siege Mode
 }
 
+static bool IsFrozenByStatus(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
+{
+    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+    return Status && (Status->HasEffect(StatusEffect::Stasis) ||
+                      Status->HasEffect(StatusEffect::Lockdown) ||
+                      Status->HasEffect(StatusEffect::Maelstrom));
+}
+
 static bool CanReceiveMovementOrder(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
 {
     auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     if (!Trans || !Unit)
+        return false;
+    if (Unit->HitPoints <= 0)
+        return false;
+
+    if (IsFrozenByStatus(EM, EntityID))
         return false;
 
     if (EM.GetComponent<ResourceComponent>(EntityID))
@@ -134,6 +147,48 @@ static bool ShouldMoveAsAir(Core::ECS::EntityManager& EM, Core::ECS::EntityID En
 
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     return Unit && Game::Data::IsAirUnitType(Unit->ChkUnitID);
+}
+
+static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
+                                          Core::ECS::EntityID EntityID,
+                                          const Order& InOrder)
+{
+    if (!IsMovementOrder(InOrder.Type))
+        return;
+
+    auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+    if (!Path)
+        Path = &EM.AddComponent<PathfindingComponent>(EntityID);
+    Path->Path.clear();
+    Path->PathIndex = 0;
+    Path->NodeTolerance = 8.0f;
+    RefreshCollisionRadius(EM, EntityID, *Path);
+    Path->IsAir = ShouldMoveAsAir(EM, EntityID);
+
+    if (Path->IsAir)
+    {
+        Path->Path.push_back(InOrder.TargetPosition);
+    }
+    else if (gCmdMap)
+    {
+        auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+        if (Trans)
+        {
+            auto Result = Game::Pathfinding::AStar::FindPath(*gCmdMap,
+                Trans->Position, InOrder.TargetPosition,
+                1000, TerrainClearanceForPath(*Path));
+            if (Result.Found && !Result.Waypoints.empty())
+                Path->Path = std::move(Result.Waypoints);
+        }
+        else
+        {
+            Path->Path.clear();
+        }
+    }
+    else
+    {
+        Path->Path.push_back(InOrder.TargetPosition);
+    }
 }
 
 void CommandSystem::Update(float DeltaTime)
@@ -263,7 +318,8 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
 {
     if (IsMovementOrder(InOrder.Type) && !CanReceiveMovementOrder(EM, EntityID))
     {
-        ClearMovementPath(EM, EntityID);
+        if (!IsFrozenByStatus(EM, EntityID))
+            ClearMovementPath(EM, EntityID);
         return;
     }
 
@@ -281,44 +337,7 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     Cmd->CurrentOrderIndex = -1;
     Cmd->QueueOrder(InOrder);
 
-    // Pathfinding for movement-type orders
-    if (IsMovementOrder(InOrder.Type))
-    {
-        auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
-        if (!Path)
-            Path = &EM.AddComponent<PathfindingComponent>(EntityID);
-        Path->Path.clear();
-        Path->PathIndex = 0;
-        Path->NodeTolerance = 8.0f;
-        RefreshCollisionRadius(EM, EntityID, *Path);
-        Path->IsAir = ShouldMoveAsAir(EM, EntityID);
-
-        if (Path->IsAir)
-        {
-            Path->Path.push_back(InOrder.TargetPosition);
-        }
-        else if (gCmdMap)
-        {
-            auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
-            if (Trans)
-            {
-                // Use region pathfinder for long-distance paths
-                auto Result = Game::Pathfinding::AStar::FindPath(*gCmdMap,
-                    Trans->Position, InOrder.TargetPosition,
-                    1000, TerrainClearanceForPath(*Path));
-                if (Result.Found && !Result.Waypoints.empty())
-                    Path->Path = std::move(Result.Waypoints);
-            }
-            else
-            {
-                Path->Path.clear();
-            }
-        }
-        else
-        {
-            Path->Path.push_back(InOrder.TargetPosition);
-        }
-    }
+    ConfigureMovementPathForOrder(EM, EntityID, InOrder);
 }
 
 void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
@@ -409,6 +428,8 @@ void CommandSystem::AdvanceQueue(Core::ECS::EntityManager& EM,
     auto* Cmd = EM.GetComponent<CommandComponent>(EntityID);
     if (!Cmd) return;
     Cmd->AdvanceQueue();
+    if (const Order* CurrentOrder = Cmd->GetCurrentOrder())
+        ConfigureMovementPathForOrder(EM, EntityID, *CurrentOrder);
 }
 
 } // namespace Game::Systems

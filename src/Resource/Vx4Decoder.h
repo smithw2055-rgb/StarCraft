@@ -25,16 +25,6 @@ public:
     static Vx4Data Decode(const std::vector<uint8_t>& Data);
 
     static constexpr int MiniTilesPerMegaTile = 16;
-
-    static uint16_t GetVr4Index(uint16_t MiniTileID)
-    {
-        return MiniTileID / 2;
-    }
-
-    static bool IsFlipped(uint16_t MiniTileID)
-    {
-        return (MiniTileID & 1) != 0;
-    }
 };
 
 } // namespace Resource

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Game/Locale/TextEncoding.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -309,9 +311,9 @@ private:
             size_t End = StringPos;
             while (End < Offset + Size && Data[End] != 0)
                 ++End;
-            OutStrings[I] = std::string(
+            OutStrings[I] = Game::Locale::LegacyGameTextToUtf8(std::string(
                 reinterpret_cast<const char*>(Data.data() + StringPos),
-                End - StringPos);
+                End - StringPos));
         }
     }
 

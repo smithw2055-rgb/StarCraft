@@ -9,8 +9,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <utility>
+
+#ifdef _WIN32
+#include <objbase.h>
+#include <windows.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+#endif
 
 namespace Resource::Graphics
 {
@@ -35,6 +43,135 @@ namespace
             [](unsigned char C) { return (char)std::tolower(C); });
         return Lower;
     }
+
+    std::string MakeGuiExportStem(const std::string& Path, bool Hd, bool AsMask)
+    {
+        std::string Stem = ToLowerCopy(NormalizeLogicalPath(Path));
+        for (char& C : Stem)
+        {
+            if (!std::isalnum((unsigned char)C))
+                C = '_';
+        }
+        return Stem + (Hd ? "_hd" : "_classic") + (AsMask ? "_mask" : "");
+    }
+
+#ifdef _WIN32
+    std::filesystem::path GetGuiExportDirectory()
+    {
+        return std::filesystem::temp_directory_path() / "StarCraftGuiAssetCache";
+    }
+
+    bool WritePngRgba(const std::filesystem::path& Path, const DecodedRgbaImage& Image)
+    {
+        using Microsoft::WRL::ComPtr;
+
+        if (Image.Width <= 0 || Image.Height <= 0 || Image.Rgba.empty())
+            return false;
+
+        const HRESULT InitHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const bool NeedUninitialize = SUCCEEDED(InitHr);
+        if (FAILED(InitHr) && InitHr != RPC_E_CHANGED_MODE)
+            return false;
+
+        auto CleanupCom = [&]()
+        {
+            if (NeedUninitialize)
+                CoUninitialize();
+        };
+
+        ComPtr<IWICImagingFactory> Factory;
+        HRESULT Hr = CoCreateInstance(CLSID_WICImagingFactory,
+                                      nullptr,
+                                      CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(Factory.GetAddressOf()));
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        std::filesystem::create_directories(Path.parent_path());
+
+        ComPtr<IWICStream> Stream;
+        Hr = Factory->CreateStream(Stream.GetAddressOf());
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        Hr = Stream->InitializeFromFilename(Path.wstring().c_str(), GENERIC_WRITE);
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        ComPtr<IWICBitmapEncoder> Encoder;
+        Hr = Factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, Encoder.GetAddressOf());
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        Hr = Encoder->Initialize(Stream.Get(), WICBitmapEncoderNoCache);
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        ComPtr<IWICBitmapFrameEncode> Frame;
+        ComPtr<IPropertyBag2> Properties;
+        Hr = Encoder->CreateNewFrame(Frame.GetAddressOf(), Properties.GetAddressOf());
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        Hr = Frame->Initialize(Properties.Get());
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        Hr = Frame->SetSize((UINT)Image.Width, (UINT)Image.Height);
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        WICPixelFormatGUID PixelFormat = GUID_WICPixelFormat32bppBGRA;
+        Hr = Frame->SetPixelFormat(&PixelFormat);
+        if (FAILED(Hr) || PixelFormat != GUID_WICPixelFormat32bppBGRA)
+        {
+            CleanupCom();
+            return false;
+        }
+
+        std::vector<uint8_t> Bgra = Image.Rgba;
+        for (size_t I = 0; I + 3 < Bgra.size(); I += 4)
+            std::swap(Bgra[I + 0], Bgra[I + 2]);
+
+        const UINT Stride = (UINT)Image.Width * 4u;
+        Hr = Frame->WritePixels((UINT)Image.Height, Stride, (UINT)Bgra.size(), Bgra.data());
+        if (FAILED(Hr))
+        {
+            CleanupCom();
+            return false;
+        }
+
+        Hr = Frame->Commit();
+        if (SUCCEEDED(Hr))
+            Hr = Encoder->Commit();
+        CleanupCom();
+        return SUCCEEDED(Hr);
+    }
+#endif
 
 } // namespace
 
@@ -239,6 +376,105 @@ bool ResourceCache::LoadPreferredUIFrames(const std::string& ClassicPath,
         }
     }
     return LoadUIGrpFrames(ClassicPath, Out, Options, OutBounds, AsMask);
+}
+
+bool ResourceCache::ExportPreferredUIFramesForGui(const std::string& ClassicPath,
+                                                  std::vector<std::string>& OutUris,
+                                                  const GrpDecodeOptions& Options,
+                                                  bool AsMask,
+                                                  const char* DebugLabel)
+{
+#ifdef _WIN32
+    std::vector<DecodedRgbaImage> Frames;
+    bool LoadedHd = false;
+    if (mSources.UseExtractedAssets)
+    {
+        const std::string DdsPath = GetDdsGrpLogicalPath(ClassicPath);
+        auto DdsGrpData = ReadUIFileWithUpperFallback(DdsPath);
+        if (DdsGrpData)
+        {
+            auto Parsed = ParseDdsGrp(*DdsGrpData);
+            if (Parsed)
+            {
+                Frames.reserve(Parsed->Frames.size());
+                for (const auto& Frame : Parsed->Frames)
+                {
+                    auto ImageOpt = LoadWicRgbaImageFromMemory(
+                        DdsGrpData->data() + Frame.DataOffset,
+                        Frame.ByteSize);
+                    if (!ImageOpt)
+                    {
+                        Frames.clear();
+                        break;
+                    }
+                    Frames.push_back(std::move(*ImageOpt));
+                }
+                LoadedHd = !Frames.empty();
+            }
+        }
+    }
+
+    if (Frames.empty())
+    {
+        auto GrpData = ReadUIFileWithUpperFallback(ClassicPath);
+        if (!GrpData)
+            return false;
+
+        auto SpriteOpt = DecodeGrpToRgba(*GrpData, mData.ActivePalette, Options);
+        if (!SpriteOpt)
+            return false;
+
+        Frames.reserve(SpriteOpt->Frames.size());
+        for (const auto& Frame : SpriteOpt->Frames)
+        {
+            DecodedRgbaImage Image = {};
+            Image.Width = Frame.Width;
+            Image.Height = Frame.Height;
+            Image.Rgba = Frame.Rgba;
+            Frames.push_back(std::move(Image));
+        }
+    }
+
+    if (Frames.empty())
+        return false;
+
+    const std::filesystem::path ExportDir = GetGuiExportDirectory();
+    const std::string Stem = MakeGuiExportStem(ClassicPath, LoadedHd, AsMask);
+    std::vector<std::string> Uris;
+    Uris.reserve(Frames.size());
+    for (size_t I = 0; I < Frames.size(); ++I)
+    {
+        DecodedRgbaImage Image = std::move(Frames[I]);
+        if (AsMask)
+            ConvertOpaquePixelsToWhiteMask(Image.Rgba);
+
+        char Name[128];
+        std::snprintf(Name, sizeof(Name), "%s_%03zu.png", Stem.c_str(), I);
+        const std::filesystem::path OutPath = ExportDir / Name;
+        if (!WritePngRgba(OutPath, Image))
+            return false;
+
+        std::string Uri = OutPath.string();
+        std::replace(Uri.begin(), Uri.end(), '\\', '/');
+        Uris.push_back(std::move(Uri));
+    }
+
+    OutUris = std::move(Uris);
+    if (DebugLabel)
+    {
+        Core::Utils::Logger::Info("ResourceCache",
+            std::string("Exported GUI ") + DebugLabel + " PNGs: " +
+            std::to_string(OutUris.size()) + " frames");
+    }
+    return true;
+#else
+    (void)ClassicPath;
+    (void)OutUris;
+    (void)Options;
+    (void)AsMask;
+    (void)DebugLabel;
+    return false;
+#endif
 }
 
 bool ResourceCache::LoadDdsGrpUIFirstFrame(const std::string& Path, GpuImage& Out)

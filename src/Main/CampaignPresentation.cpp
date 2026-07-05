@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace Game::Client::GameLoop
 {
@@ -61,11 +62,33 @@ void RenderCampaignOverlay(
             }
         }
 
+        const auto& Leaderboard = C.GetLeaderboard();
+        if (Leaderboard.Active)
+        {
+            const float BoardW = std::min(300.0f, (float)ViewportWidth - 24.0f);
+            const float BoardH = 54.0f;
+            const float BoardX = std::max(12.0f, (float)ViewportWidth - BoardW - 12.0f);
+            const float BoardY = (float)Hud.GetResourceBarHeight() + 12.0f;
+            Render::g_Draw2D.DrawRect(BoardX, BoardY, BoardW, BoardH, Render::Color(3, 8, 14, 170));
+            Render::g_Draw2D.DrawRectLines(BoardX, BoardY, BoardW, BoardH,
+                Render::Color(72, 112, 140, 210), 1.0f);
+            std::string Label = SanitizeCampaignText(Leaderboard.Label);
+            if (Label.empty())
+                Label = "Leaderboard";
+            if (Label.size() > 28)
+                Label = Label.substr(0, 25) + "...";
+            Render::g_Draw2D.DrawText(Label, BoardX + 12.0f, BoardY + 9.0f, 1.0f,
+                Render::Color(235, 224, 170, 255));
+            Render::g_Draw2D.DrawText(std::to_string(Leaderboard.CurrentValue),
+                BoardX + BoardW - 54.0f, BoardY + 27.0f, 1.8f,
+                Render::Color(130, 230, 140, 255));
+        }
+
         const auto& Messages = C.GetMessages();
         for (auto It = Messages.rbegin(); It != Messages.rend(); ++It)
         {
             const auto& M = *It;
-            if (M.Text.empty())
+            if (M.Text.empty() && M.ActionID != 29)
                 continue;
 
             const float PanelW = std::min(760.0f, (float)ViewportWidth - 32.0f);
@@ -80,16 +103,15 @@ void RenderCampaignOverlay(
             Render::g_Draw2D.DrawRect(PortraitX, PortraitY, 72.0f, 72.0f, Render::Color(10, 16, 24, 255));
 
             std::string PortraitKey;
-            if (M.PortraitUnitID != 0)
+            if (M.PortraitUnitID != Game::Campaign::kNoPortraitUnitID)
                 PortraitKey = CampaignPortraitKeyFromUnitID(DataAssets, ArchiveSource, M.PortraitUnitID);
             if (PortraitKey.empty())
                 PortraitKey = CampaignPortraitKeyFromText(M.Text);
             if (PortraitKey.empty())
                 PortraitKey = CampaignAdvisorPortraitKey(M.PlayerID);
 
-            const auto* Clip = UIAssets.GetPortraitClip(PortraitKey);
             const Resource::Graphics::PortraitFrame* Frame =
-                Clip ? CampaignPortraitFrameAt(*Clip, Core::Platform::GetAbsoluteTime()) : nullptr;
+                UIAssets.GetPortraitFrame(PortraitKey, Core::Platform::GetAbsoluteTime());
             if (Frame && Frame->Image.Valid())
             {
                 const float Pad = 3.0f;
@@ -125,7 +147,9 @@ void RenderCampaignOverlay(
 
             Render::g_Draw2D.DrawText(CampaignMessageKind(M.ActionID), PanelX + 100.0f, PanelY + 13.0f, 1.0f,
                 M.ActionID == 8 ? Render::Color(150, 200, 255, 255) : Render::Color(235, 224, 170, 255));
-            const auto Lines = WrapCampaignText(M.Text, 74, 3);
+            const auto Lines = M.Text.empty()
+                ? std::vector<std::string>{}
+                : WrapCampaignText(M.Text, 74, 3);
             float TextY = PanelY + 34.0f;
             for (const auto& Line : Lines)
             {

@@ -80,6 +80,16 @@ const Resource::Graphics::GpuImage* Hud::GetLegacyIcon(int IconIndex) const
     return &(*Icons)[IconIndex];
 }
 
+std::string Hud::GetLegacyIconUri(int IconIndex) const
+{
+    if (!mUIAssets.HasCache())
+        return {};
+    const auto* IconUris = mUIAssets.GetUIIconUris();
+    if (!IconUris || IconIndex < 0 || IconIndex >= (int)IconUris->size())
+        return {};
+    return (*IconUris)[(size_t)IconIndex];
+}
+
 const Resource::Graphics::GpuImage* Hud::GetCommandIcon(int IconIndex) const
 {
     if (!mUIAssets.HasCache())
@@ -133,7 +143,7 @@ const Resource::Graphics::GpuImage* Hud::GetSelectionPreviewImage() const
     {
         const auto Def = Game::Races::GetUnitDefByID(mState.InfoPanel.PreviewDefID);
         if (const auto* Icon = GetCommandIcon(IconForDef(mState.InfoPanel.PreviewDefID));
-            Icon && Icon->Valid() && Def.RaceType == Game::Components::Race::Terran)
+            Icon && Icon->Valid() && Def.Name != "Unknown")
         {
             return Icon;
         }
@@ -174,7 +184,7 @@ const Resource::Graphics::GpuImage* Hud::GetButtonImage(const CmdButtonDef& Butt
     if (Button.TargetUnitDefID >= 0)
     {
         const auto Def = Game::Races::GetUnitDefByID(Button.TargetUnitDefID);
-        if (Def.RaceType == Game::Components::Race::Terran)
+        if (Def.Name != "Unknown")
         {
             if (const auto* Icon = GetCommandIcon(IconForDef(Button.TargetUnitDefID));
                 Icon && Icon->Valid())
@@ -223,7 +233,7 @@ const Resource::Graphics::GpuImage* Hud::GetButtonMaskImage(const CmdButtonDef& 
     if (Button.TargetUnitDefID >= 0)
     {
         const auto Def = Game::Races::GetUnitDefByID(Button.TargetUnitDefID);
-        if (Def.RaceType == Game::Components::Race::Terran)
+        if (Def.Name != "Unknown")
         {
             if (const auto* Icon = GetCommandIconMask(IconForDef(Button.TargetUnitDefID));
                 Icon && Icon->Valid())
@@ -234,6 +244,66 @@ const Resource::Graphics::GpuImage* Hud::GetButtonMaskImage(const CmdButtonDef& 
     }
 
     return nullptr;
+}
+
+std::string Hud::GetButtonIconUri(const CmdButtonDef& Button) const
+{
+    const auto* IconUris = mUIAssets.GetCommandIconUris();
+    auto ResolveUri = [&](int IconIndex) -> std::string
+    {
+        if (!IconUris || IconIndex < 0 || IconIndex >= (int)IconUris->size())
+            return {};
+        return (*IconUris)[(size_t)IconIndex];
+    };
+
+    if (const int VisualCommandIcon = CommandIconForVisual(Button.VisualId);
+        VisualCommandIcon >= 0)
+    {
+        if (auto Uri = ResolveUri(VisualCommandIcon); !Uri.empty())
+            return Uri;
+    }
+
+    if (Button.CommandId != HudCommandId::None)
+    {
+        if (auto Uri = ResolveUri(CommandIconForCommand(Button.CommandId)); !Uri.empty())
+            return Uri;
+    }
+
+    if (Button.ResearchId != TerranResearchId::None)
+    {
+        if (auto Uri = ResolveUri(CommandIconForResearch(Button.ResearchId)); !Uri.empty())
+            return Uri;
+    }
+
+    if (Button.TargetUnitDefID >= 0)
+    {
+        const auto Def = Game::Races::GetUnitDefByID(Button.TargetUnitDefID);
+        if (Def.Name != "Unknown")
+        {
+            if (auto Uri = ResolveUri(IconForDef(Button.TargetUnitDefID)); !Uri.empty())
+                return Uri;
+        }
+    }
+
+    return ResolveUri(Button.IconIndex);
+}
+
+std::string Hud::GetUnitIconUriForChkUnitId(int ChkUnitId) const
+{
+    const int DefId = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitId);
+    if (DefId < 0)
+        return {};
+
+    const auto Def = Game::Races::GetUnitDefByID(DefId);
+    if (Def.Name == "Unknown")
+        return {};
+
+    const auto* IconUris = mUIAssets.GetCommandIconUris();
+    const int IconIndex = IconForDef(DefId);
+    if (!IconUris || IconIndex < 0 || IconIndex >= (int)IconUris->size())
+        return {};
+
+    return (*IconUris)[(size_t)IconIndex];
 }
 
 void Hud::DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage& AggIcons)

@@ -2,8 +2,6 @@
 
 #include "Core/Utils/Logger.h"
 
-#include "Resource/GameDetector.h"
-
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -13,7 +11,6 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <mfapi.h>
 #include <windows.h>
 #endif
 
@@ -77,22 +74,6 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
     mSources.UseExtractedAssets = false;
     mSources.AssetsRoot.clear();
 
-#ifdef _WIN32
-    if (!mMediaFoundationInitialized)
-    {
-        const HRESULT Hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
-        if (SUCCEEDED(Hr))
-        {
-            mMediaFoundationInitialized = true;
-        }
-        else
-        {
-            Core::Utils::Logger::Warning("ResourceCache",
-                "Media Foundation startup failed; portrait webm decode will fall back");
-        }
-    }
-#endif
-
     bool UsingExtractedAssets = false;
     std::vector<std::string> AssetCandidates;
     std::unordered_set<std::string> SeenAssets;
@@ -126,24 +107,9 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
 
     if (!UsingExtractedAssets)
     {
-        GameInstallInfo Info = GameDetector::CheckPath(GameInstallPath);
-
-        if (Info.Type == ArchiveType::Casc)
-        {
-            if (!OpenCascStorage(Info.CascDataPath))
-            {
-                Core::Utils::Logger::Warning("ResourceCache",
-                    "Failed to open CASC storage at: " + Info.CascDataPath);
-                return false;
-            }
-            mSources.IsCasc = true;
-        }
-        else
-        {
-            if (!OpenMpqArchives(GameInstallPath))
-                return false;
-            mSources.IsCasc = false;
-        }
+        Core::Utils::Logger::Warning("ResourceCache",
+            "Local assets directory not found; archive resource fallback is disabled");
+        return false;
     }
 
     if (mSources.UseExtractedAssets)
@@ -158,7 +124,8 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
         LogProbe("images.tbl");
         LogProbe("images.rel");
         LogProbe("game/consoles/terran/console_left.dds");
-        LogProbe("Tileset/badlands.wpe");
+        LogProbe("Tileset/badlands.vx4ex");
+        LogProbe("Tileset/badlands.dds.vr4");
     }
 
     auto LoadTable = [&](const std::string& Name, auto LoadFn)

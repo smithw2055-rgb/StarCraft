@@ -37,7 +37,7 @@ public:
     ResourceCache();
     ~ResourceCache();
 
-    // Open game data at InstallPath. Returns true on success.
+    // Open local extracted assets under GameInstallPath/assets. Returns true on success.
     bool Initialize(const std::string& GameInstallPath);
     void Shutdown();
 
@@ -58,10 +58,10 @@ public:
     const std::vector<GpuImage>* GetDatImageFrames(uint32_t ImageID);
     const std::vector<GpuImage>* GetSpriteOverlayFrames(uint32_t SpriteID);
 
-    // Current active palette (set by SetTilesetPalette or unit palette)
+    // Current active palette for non-HD indexed assets.
     const ColorPalette& GetPalette() const { return mData.ActivePalette; }
 
-    // Set the active tileset (loads .wpe into palette, invalidates tileset cache)
+    // Prepare the active HD tileset. HD terrain uses RGBA DDS megatiles and does not load WPE.
     bool SetTilesetPalette(const std::string& TilesetName);
     const TilesetData* GetTilesetData(const std::string& TilesetName);
     TilesetData* LoadTilesetData(const std::string& TilesetName);
@@ -76,13 +76,16 @@ public:
 
     // UI graphics
     const std::vector<GpuImage>* GetUIIcons();
+    const std::vector<std::string>* GetUIIconUris();
     const std::vector<GpuImage>* GetCommandIcons();
     const std::vector<GpuImage>* GetCommandIconMasks();
+    const std::vector<std::string>* GetCommandIconUris();
     const std::vector<GpuImage>* GetCommandButtonSkins(CommandButtonSkinSet SkinSet);
     const std::vector<GpuImage>* GetWireframeFrames();
     const ImageOpaqueBounds* GetWireframeOpaqueBounds(int FrameIndex) const;
     const std::vector<GpuImage>* GetCursorFrames(const std::string& CursorName);
     const PortraitClip* GetPortraitClip(const std::string& PortraitKey);
+    const PortraitFrame* GetPortraitFrame(const std::string& PortraitKey, double TimeSeconds);
     GpuImage GetHudAggIcons();
     GpuImage GetHudTwireStrip();
     GpuImage GetHudTunitStrip();
@@ -142,6 +145,11 @@ private:
                                std::vector<ImageOpaqueBounds>* OutBounds = nullptr,
                                bool AsMask = false,
                                const char* DebugLabel = nullptr);
+    bool ExportPreferredUIFramesForGui(const std::string& ClassicPath,
+                                       std::vector<std::string>& OutUris,
+                                       const GrpDecodeOptions& Options = {},
+                                       bool AsMask = false,
+                                       const char* DebugLabel = nullptr);
     bool LoadCommandButtonGraphics(const GrpDecodeOptions& CommandButtonOptions);
     bool LoadDdsGrpUIFirstFrame(const std::string& Path, GpuImage& Out);
     bool LoadPcxUIImage(const std::string& Path, GpuImage& Out, bool TransparentBlack = false);
@@ -171,7 +179,7 @@ private:
     // Sprite cache: ImageID -> frames
     SpriteAssetCacheState mSprites;
 
-    // Tileset cache: name â†?data + images
+    // Tileset cache: name -> data + images
     TilesetAssetCacheState mTilesets;
 
     // UI cache
@@ -179,7 +187,6 @@ private:
 
     // CASC path resolution
     std::string ResolveCascPath(const std::string& Path);
-    bool mMediaFoundationInitialized = false;
 };
 
 } // namespace Resource::Graphics

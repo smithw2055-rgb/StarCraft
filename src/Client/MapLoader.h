@@ -30,7 +30,8 @@ public:
     // Load the first scenario.chk found inside the archive at ScmPath
     static Result Load(const std::string& ScmPath);
 
-    // Try to auto-detect a map under InstallPath/maps/BroodWar/*.scm
+    // Try to auto-detect a default single-player map under assets/maps.
+    // Returns empty when no single-player map is available.
     static std::string FindDefaultMap(const std::string& InstallPath);
 
     // Access raw CHK data for trigger/replay parsing

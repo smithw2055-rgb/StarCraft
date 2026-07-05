@@ -40,10 +40,22 @@ public:
                     float U1 = 1.0f, float V1 = 1.0f,
                     Color Tint = Color(255, 255, 255, 255),
                     bool FlipX = false);
+    void DrawSpriteEffect(const GpuTextureHandle& Texture,
+                          float X, float Y, float W, float H,
+                          float U0, float V0, float U1, float V1,
+                          Color Tint,
+                          bool FlipX,
+                          float Hallucination,
+                          float Cloaked,
+                          float Brighten = 0.0f,
+                          float Shadow = 0.0f,
+                          Color TeamColor = Color(255, 255, 255, 255),
+                          const GpuTextureHandle* TeamColorMask = nullptr);
 
     // Solid color rectangle (no texture; uses the 1x1 white image)
     void DrawRect(float X, float Y, float W, float H, Color C);
     void DrawRectLines(float X, float Y, float W, float H, Color C, float Thickness = 1.0f);
+    void DrawHealthBar(float X, float Y, float W, float H, float Fraction, Color Fill);
 
     // Text (simple bitmap font). Draws left-to-right.
     void DrawText(const std::string& Text, float X, float Y, float Size, Color C);
@@ -63,12 +75,26 @@ private:
         uint32_t C; // RGBA8 packed
     };
 
+    enum class BatchMaterial
+    {
+        Textured,
+        HealthBar,
+        SpriteEffect
+    };
+
     void Flush();
     void EnsureCapacity(int Vertices, int Indices);
     void AddQuad(float X, float Y, float W, float H,
                  float U0, float V0, float U1, float V1,
                  Color C, bool FlipX);
-    void SetPipeline(bool AlphaBlend);
+    void SetPipeline(bool AlphaBlend, BatchMaterial Material = BatchMaterial::Textured);
+    void SetHealthBarParams(float Fraction, Color Fill);
+    void SetSpriteEffectParams(float Hallucination,
+                               float Cloaked,
+                               float Brighten,
+                               float Shadow,
+                               Color TeamColor,
+                               bool UseTeamColor);
 
     Shader2D mShader;
     GpuBufferHandle mVbuf;
@@ -85,6 +111,10 @@ private:
     // Batched draw state
     GpuTextureHandle mCurrentTexture;
     bool mCurrentAlphaBlend = true;
+    BatchMaterial mCurrentMaterial = BatchMaterial::Textured;
+    HealthBarShaderParams mHealthBarParams = {};
+    SpriteEffectShaderParams mSpriteEffectParams = {};
+    GpuTextureHandle mCurrentTeamColorMask;
     int mVerticesInBatch = 0;
     int mIndicesInBatch = 0;
 

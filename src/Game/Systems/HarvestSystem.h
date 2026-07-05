@@ -8,6 +8,8 @@
 namespace Game::Systems
 {
 
+inline constexpr int kPlayerResourceSlots = 12;
+
 struct PlayerResources
 {
     int Minerals = 400;
@@ -25,7 +27,11 @@ public:
 
     static PlayerResources& GetResources(int PlayerID = 0)
     {
-        static PlayerResources Resources[8];
+        static PlayerResources Resources[kPlayerResourceSlots];
+        if (PlayerID < 0)
+            PlayerID = 0;
+        else if (PlayerID >= kPlayerResourceSlots)
+            PlayerID = kPlayerResourceSlots - 1;
         return Resources[PlayerID];
     }
 

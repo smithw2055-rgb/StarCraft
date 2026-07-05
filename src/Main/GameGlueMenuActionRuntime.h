@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <string>
 #include <utility>
 
@@ -34,6 +35,8 @@ inline void HandleGlueMenuAction(
     else if (Action == "start_original" || Action == "start_expansion" ||
              Action == "start_custom_game")
     {
+        std::cout << "StarCraft: menu action '" << Action
+                  << "' has no campaign map path; using default map resolver" << std::endl;
         Campaign.ClearProgressTarget();
         StartGame();
     }

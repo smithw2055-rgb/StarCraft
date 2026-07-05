@@ -3,12 +3,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Resource/GpuImage.h"
 #include "Resource/PcxRegion.h"
+#include "Resource/PortraitVideoDecoder.h"
 
 namespace Resource::Graphics
 {
@@ -41,15 +43,23 @@ struct PortraitClip
 {
     int Width = 0;
     int Height = 0;
+    bool StreamingWebm = false;
+    std::vector<std::filesystem::path> WebmPaths;
+    WebmVideoDecoder WebmDecoder;
+    size_t ActiveWebmPath = 0;
+    PortraitFrame CurrentFrame;
+    double NextFrameTimeSeconds = 0.0;
     std::vector<PortraitFrame> Frames;
-    bool Valid() const { return !Frames.empty(); }
+    bool Valid() const { return StreamingWebm ? CurrentFrame.Image.Valid() : !Frames.empty(); }
 };
 
 struct UIAssetCacheState
 {
     std::vector<GpuImage> Icons;
+    std::vector<std::string> IconUris;
     std::vector<GpuImage> CommandIcons;
     std::vector<GpuImage> CommandIconMasks;
+    std::vector<std::string> CommandIconUris;
     std::array<std::vector<GpuImage>, static_cast<size_t>(CommandButtonSkinSet::Count)> CommandButtonSkins;
     std::vector<GpuImage> WireframeFrames;
     std::vector<ImageOpaqueBounds> WireframeOpaqueBounds;

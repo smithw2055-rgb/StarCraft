@@ -1,7 +1,9 @@
 #include "Game/Systems/SpellSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
+#include "Game/Systems/DeathEvents.h"
 #include "Game/Components.h"
+#include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
@@ -11,6 +13,75 @@ namespace Game::Systems
 
 using namespace Game::Components;
 using Core::Utils::Logger;
+
+namespace
+{
+    bool IsMechanicalLockdownTarget(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        if (!Unit || Unit->HitPoints <= 0)
+            return false;
+        if (EM.GetComponent<ResourceComponent>(EntityID))
+            return false;
+        if (EM.GetComponent<BuildingComponent>(EntityID))
+            return false;
+
+        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        if (DefID >= 0)
+        {
+            const auto Def = Game::Races::GetUnitDefByID(DefID);
+            if (Def.IsBuilding)
+                return false;
+
+            switch (Def.RaceType)
+            {
+                case Race::Terran:
+                    return Def.Name != "SCV" &&
+                           Def.Name != "Marine" &&
+                           Def.Name != "Firebat" &&
+                           Def.Name != "Medic" &&
+                           Def.Name != "Ghost";
+                case Race::Protoss:
+                    return Def.Name == "Dragoon" ||
+                           Def.Name == "Reaver" ||
+                           Def.Name == "Shuttle" ||
+                           Def.Name == "Scout" ||
+                           Def.Name == "Corsair" ||
+                           Def.Name == "Carrier" ||
+                           Def.Name == "Arbiter" ||
+                           Def.Name == "Observer";
+                case Race::Zerg:
+                    return Def.Name == "Infested Terran";
+            }
+        }
+
+        if (Unit->UnitRace == Race::Terran)
+            return Unit->SizeType != UnitSize::Small;
+        if (Unit->UnitRace == Race::Protoss)
+            return Unit->SizeType != UnitSize::Small;
+        return false;
+    }
+
+    void ClearMotionAfterTeleport(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->TargetSpeed = 0.0f;
+            Path->CurrentVelocity = {0.0f, 0.0f};
+        }
+
+        if (auto* Cmd = EM.GetComponent<CommandComponent>(EntityID))
+        {
+            Cmd->CancelAll();
+            Cmd->CommandQueue.clear();
+            Cmd->TargetEntityID = -1;
+            Cmd->TargetPosition = {};
+        }
+    }
+}
 
 int SpellSystem::GetSpellEnergyCost(SpellType Spell)
 {
@@ -55,9 +126,11 @@ bool SpellSystem::CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, Spell
                                 int TargetEntityID, const Core::Math::Vec2& TargetPos,
                                 std::string* OutReason)
 {
+    (void)TargetPos;
     auto* CasterUnit = EM.GetComponent<UnitComponent>(CasterID);
     auto* CasterTrans = EM.GetComponent<TransformComponent>(CasterID);
-    if (!CasterUnit || !CasterTrans)
+    auto* CasterPlayer = EM.GetComponent<PlayerComponent>(CasterID);
+    if (!CasterUnit || !CasterTrans || !CasterPlayer)
     {
         if (OutReason) *OutReason = "invalid caster";
         return false;
@@ -84,6 +157,36 @@ bool SpellSystem::CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, Spell
         if (!TargetUnit || TargetUnit->HitPoints <= 0)
         {
             if (OutReason) *OutReason = "invalid target";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Consume)
+    {
+        if (TargetEntityID < 0 || TargetEntityID == CasterID)
+        {
+            if (OutReason) *OutReason = "invalid consume target";
+            return false;
+        }
+        auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+        auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetPlayer || !TargetUnit || TargetPlayer->PlayerID != CasterPlayer->PlayerID)
+        {
+            if (OutReason) *OutReason = "consume requires a friendly target";
+            return false;
+        }
+        if (TargetUnit->UnitRace != Race::Zerg || EM.GetComponent<BuildingComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "consume requires a friendly zerg unit";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Lockdown)
+    {
+        if (TargetEntityID < 0 || !IsMechanicalLockdownTarget(EM, TargetEntityID))
+        {
+            if (OutReason) *OutReason = "lockdown requires a mechanical target";
             return false;
         }
     }
@@ -154,7 +257,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                         { Dmg -= UUnit->ShieldPoints; UUnit->ShieldPoints = 0; }
                     }
                     UUnit->HitPoints = std::max(0, UUnit->HitPoints - Dmg);
-                    if (UUnit->HitPoints <= 0) EM.DestroyEntity(Uid);
+                    if (UUnit->HitPoints <= 0)
+                    {
+                        RecordUnitDeath(EM, Uid, CasterID, true);
+                        EM.DestroyEntity(Uid);
+                    }
                 }
             }
             Logger::Info("SpellSystem", "Psionic Storm cast at (" +
@@ -211,6 +318,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 {
                     UUnit->ShieldPoints = 0;
                     UUnit->EnergyPoints = 0;
+                    if (auto* Cloak = EM.GetComponent<CloakComponent>(Uid);
+                        Cloak && Cloak->IsCloaked && !Cloak->IsPassiveCloak && !Cloak->IsBurrowed)
+                    {
+                        Cloak->IsCloaked = false;
+                    }
                     auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
                     if (!Status)
                         Status = &EM.AddComponent<StatusEffectComponent>(Uid);
@@ -223,18 +335,14 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
         case SpellType::ScannerSweep:
         {
-            // Reveal area - mark cloaked units as detected in area
-            float Radius = 160.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, CloakComponent>();
-            for (int Uid : Units)
-            {
-                auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
-                if (UTrans && UTrans->Position.DistanceTo(Pos) <= Radius)
-                {
-                    auto* Cloak = EM.GetComponent<CloakComponent>(Uid);
-                    if (Cloak) Cloak->IsCloaked = false;
-                }
-            }
+            constexpr float Radius = 160.0f;
+            int RevealID = EM.CreateEntity();
+            EM.AddComponent<TransformComponent>(RevealID).Position = Pos;
+            auto& Reveal = EM.AddComponent<RevealAreaComponent>(RevealID);
+            Reveal.PlayerID = CasterPlayer->PlayerID;
+            Reveal.SightRange = std::max(1, (int)(Radius / 32.0f));
+            Reveal.DurationRemaining = 8.0f;
+            Reveal.ProvidesDetection = true;
             Logger::Info("SpellSystem", "Scanner Sweep at (" +
                 std::to_string((int)Pos.X) + "," + std::to_string((int)Pos.Y) + ")");
             break;
@@ -258,6 +366,52 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 }
             }
             Logger::Info("SpellSystem", "Stasis Field cast");
+            break;
+        }
+
+        case SpellType::Recall:
+        {
+            static const Core::Math::Vec2 kRecallOffsets[] =
+            {
+                {-32.0f, 0.0f},
+                {32.0f, 0.0f},
+                {0.0f, -32.0f},
+                {0.0f, 32.0f},
+                {-32.0f, -32.0f},
+                {32.0f, -32.0f},
+                {-32.0f, 32.0f},
+                {32.0f, 32.0f},
+            };
+
+            constexpr float Radius = 96.0f;
+            int RecalledCount = 0;
+            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+            for (int Uid : Units)
+            {
+                if (Uid == CasterID) continue;
+                auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
+                auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
+                auto* UPlayer = EM.GetComponent<PlayerComponent>(Uid);
+                if (!UUnit || !UTrans || !UPlayer) continue;
+                if (UUnit->HitPoints <= 0) continue;
+                if (UPlayer->PlayerID != CasterPlayer->PlayerID) continue;
+                if (EM.GetComponent<BuildingComponent>(Uid) ||
+                    EM.GetComponent<ResourceComponent>(Uid))
+                {
+                    continue;
+                }
+                if (UTrans->Position.DistanceTo(Pos) > Radius) continue;
+
+                const auto& Offset =
+                    kRecallOffsets[RecalledCount %
+                                   (int)(sizeof(kRecallOffsets) / sizeof(kRecallOffsets[0]))];
+                UTrans->Position = CasterTrans->Position + Offset;
+                ClearMotionAfterTeleport(EM, Uid);
+                ++RecalledCount;
+            }
+
+            Logger::Info("SpellSystem", "Recall cast, teleported " +
+                std::to_string(RecalledCount) + " units");
             break;
         }
 
@@ -305,16 +459,28 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
         case SpellType::Ensnare:
         {
-            if (TargetEntityID >= 0)
+            constexpr float Radius = 96.0f;
+            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            for (int Uid : Units)
             {
-                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
-                if (TargetUnit)
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(Uid);
+                auto* TargetTrans = EM.GetComponent<TransformComponent>(Uid);
+                auto* TargetPlayer = EM.GetComponent<PlayerComponent>(Uid);
+                if (!TargetUnit || !TargetTrans || !TargetPlayer) continue;
+                if (TargetUnit->HitPoints <= 0) continue;
+                if (TargetPlayer->PlayerID == CasterPlayer->PlayerID) continue;
+                if (EM.GetComponent<ResourceComponent>(Uid)) continue;
+                if (TargetTrans->Position.DistanceTo(Pos) > Radius) continue;
+
+                auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
+                if (!Status)
+                    Status = &EM.AddComponent<StatusEffectComponent>(Uid);
+                Status->AddEffect(StatusEffect::Ensnare, 8.0f, CasterID);
+
+                if (auto* Cloak = EM.GetComponent<CloakComponent>(Uid))
                 {
-                    TargetUnit->Speed *= 0.5f;
-                    auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
-                    if (!Status)
-                        Status = &EM.AddComponent<StatusEffectComponent>(TargetEntityID);
-                    Status->AddEffect(StatusEffect::Ensnare, 8.0f, CasterID);
+                    Cloak->IsCloaked = false;
+                    Cloak->IsBurrowed = false;
                 }
             }
             Logger::Info("SpellSystem", "Ensnare cast");
@@ -340,12 +506,14 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             auto* CasterRace = EM.GetComponent<UnitComponent>(CasterID);
             if (CasterRace)
             {
+                auto* CasterRender = EM.GetComponent<RenderComponent>(CasterID);
                 for (int I = 0; I < 2; I++)
                 {
                     int IllusionID = EM.CreateEntity();
                     auto& ITrans = EM.AddComponent<TransformComponent>(IllusionID);
                     auto& IUnit = EM.AddComponent<UnitComponent>(IllusionID);
                     auto& IPlayer = EM.AddComponent<PlayerComponent>(IllusionID);
+                    auto& IStatus = EM.AddComponent<StatusEffectComponent>(IllusionID);
 
                     ITrans.Position = CasterTrans->Position;
                     ITrans.Position.X += (float)((I == 0 ? -32.0f : 32.0f));
@@ -353,7 +521,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     IUnit.ChkUnitID = CasterRace->ChkUnitID;
                     IUnit.HitPoints = 1;
                     IUnit.MaxHitPoints = 1;
-                    IPlayer.PlayerID = CasterPlayer->PlayerID;
+                    if (CasterPlayer)
+                        IPlayer = *CasterPlayer;
+                    if (CasterRender)
+                        EM.AddComponent<RenderComponent>(IllusionID) = *CasterRender;
+                    IStatus.AddEffect(StatusEffect::Hallucination, 180.0f, CasterID);
                 }
             }
             Logger::Info("SpellSystem", "Hallucination cast");
@@ -369,35 +541,80 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 {
                     // Kill target, spawn 2 broodlings
                     TargetUnit->HitPoints = 0;
+                    RecordUnitDeath(EM, TargetEntityID, CasterID, true);
                     EM.DestroyEntity(TargetEntityID);
 
-                    for (int I = 0; I < 2; I++)
+                    const int BroodlingDefID = Game::Races::GetUnitDefID("Broodling");
+                    const auto BroodlingDef = Game::Races::GetUnitDefByID(BroodlingDefID);
+                    for (int I = 0; I < 2 && BroodlingDef.Name != "Unknown"; I++)
                     {
                         int BroodID = EM.CreateEntity();
                         auto& BTrans = EM.AddComponent<TransformComponent>(BroodID);
                         auto& BUnit = EM.AddComponent<UnitComponent>(BroodID);
                         auto& BPlayer = EM.AddComponent<PlayerComponent>(BroodID);
                         auto& BCombat = EM.AddComponent<CombatComponent>(BroodID);
+                        auto& BCommand = EM.AddComponent<CommandComponent>(BroodID);
+                        auto& BPath = EM.AddComponent<PathfindingComponent>(BroodID);
+                        auto& BRender = EM.AddComponent<RenderComponent>(BroodID);
 
                         BTrans.Position = Pos;
                         BTrans.Position.X += (float)(I * 24.0f);
-                        BUnit.UnitRace = Race::Zerg;
-                        BUnit.ChkUnitID = 0x28; // Broodling
-                        BUnit.HitPoints = 30;
-                        BUnit.MaxHitPoints = 30;
-                        BUnit.Speed = 2.5f;
-                        BUnit.SightRange = 5;
-                        BUnit.SizeType = UnitSize::Small;
-                        BPlayer.PlayerID = CasterPlayer->PlayerID;
+                        BUnit.UnitRace = BroodlingDef.RaceType;
+                        BUnit.ChkUnitID = BroodlingDef.ChkUnitID;
+                        BUnit.HitPoints = BroodlingDef.HitPoints;
+                        BUnit.MaxHitPoints = BroodlingDef.HitPoints;
+                        BUnit.ShieldPoints = BroodlingDef.ShieldPoints;
+                        BUnit.MaxShieldPoints = BroodlingDef.ShieldPoints;
+                        BUnit.EnergyPoints = BroodlingDef.EnergyPoints;
+                        BUnit.MaxEnergyPoints = BroodlingDef.EnergyPoints;
+                        BUnit.Armor = BroodlingDef.Armor;
+                        BUnit.Speed = BroodlingDef.Speed;
+                        BUnit.SightRange = BroodlingDef.SightRange;
+                        BUnit.SupplyCost = BroodlingDef.SupplyCost;
+                        BUnit.SizeType = BroodlingDef.SizeType;
+                        BPlayer = *CasterPlayer;
 
-                        BCombat.GroundDamage = 5;
-                        BCombat.AttackRange = 1.0f;
-                        BCombat.AttackCooldown = 0.5f;
+                        BCombat.GroundDamage = BroodlingDef.GroundDamage;
+                        BCombat.AirDamage = BroodlingDef.AirDamage;
+                        BCombat.GroundDmgType = BroodlingDef.GroundDmgType;
+                        BCombat.AirDmgType = BroodlingDef.AirDmgType;
+                        BCombat.AttackRange = BroodlingDef.AttackRange;
+                        BCombat.AttackCooldown = BroodlingDef.AttackCooldown;
                         BCombat.WeaponBeh = WeaponBehavior::Melee;
+                        BCombat.CanTargetGround = BroodlingDef.GroundDamage > 0;
+                        BCombat.CanTargetAir = BroodlingDef.AirDamage > 0;
+
+                        BCommand.CurrentCommand = CommandType::Stop;
+                        BPath.NodeTolerance = 8.0f;
+                        BPath.IsAir = false;
+
+                        BRender.ImageID = (uint32_t)BroodlingDef.ChkUnitID;
+                        BRender.FrameIndex = 0;
+                        BRender.TotalFrames = 1;
+                        BRender.Tint = Core::Colors::White();
+                        BRender.Layer = RenderLayer::Units;
                     }
                 }
             }
             Logger::Info("SpellSystem", "Spawn Broodling cast");
+            break;
+        }
+
+        case SpellType::Consume:
+        {
+            if (TargetEntityID >= 0)
+            {
+                if (auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                    TargetUnit && TargetUnit->HitPoints > 0)
+                {
+                    TargetUnit->HitPoints = 0;
+                    RecordUnitDeath(EM, TargetEntityID, CasterID, true);
+                    EM.DestroyEntity(TargetEntityID);
+                    CasterUnit->EnergyPoints =
+                        std::min(CasterUnit->MaxEnergyPoints, CasterUnit->EnergyPoints + 50);
+                }
+            }
+            Logger::Info("SpellSystem", "Consume cast");
             break;
         }
 

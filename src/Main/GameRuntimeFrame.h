@@ -5,6 +5,7 @@
 #include "Main/GameSaveRuntime.h"
 #include "Main/GameGuiPresentation.h"
 #include "Main/GameInputRuntime.h"
+#include "Main/GameInteractionSmokeRuntime.h"
 #include "Main/GameRuntimeState.h"
 #include "Main/GameSimulationRuntime.h"
 #include "Main/GameUiPresentation.h"
@@ -56,6 +57,14 @@ inline void UpdateGameRuntimeFrame(
     {
         return;
     }
+
+    RunInteractionSmokeIfRequested(
+        Runtime.InteractionSmoke,
+        Runtime.Session.Game,
+        Runtime.Session.Campaign,
+        Runtime.Client.Runtime,
+        Runtime.App.Gui,
+        Runtime.Client.Hud);
 
     UpdateCampaignAndSimulationRuntime(
         Runtime.Session.Campaign,

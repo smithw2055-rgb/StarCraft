@@ -4,6 +4,8 @@
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Main/GameLoop/InputHandler.h"
+#include "Game/Systems/MovementSystem.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -130,6 +132,43 @@ int main()
     Require(ScvPath && !ScvPath->Path.empty(),
         "mobile units receive movement paths");
 
+    int DeadScv = CreateUnit(
+        EM,
+        7,
+        2.8f,
+        {32.0f, 64.0f});
+    auto* DeadScvUnit = EM.GetComponent<Game::Components::UnitComponent>(DeadScv);
+    Require(DeadScvUnit != nullptr, "dead movement command coverage has unit data");
+    DeadScvUnit->HitPoints = 0;
+    auto& DeadScvPath = EM.AddComponent<Game::Components::PathfindingComponent>(DeadScv);
+    DeadScvPath.Path.push_back({96.0f, 64.0f});
+
+    Game::Systems::CommandSystem::IssueMove(EM, {DeadScv}, {160.0f, 64.0f});
+
+    Require(DeadScvPath.Path.empty(),
+        "dead units reject move orders and clear stale paths");
+    Require(!EM.GetComponent<Game::Components::CommandComponent>(DeadScv),
+        "dead units do not receive a move command component");
+
+    int StasisScv = CreateUnit(
+        EM,
+        7,
+        2.8f,
+        {32.0f, 96.0f});
+    auto& StasisPath = EM.AddComponent<Game::Components::PathfindingComponent>(StasisScv);
+    StasisPath.Path.push_back({96.0f, 96.0f});
+    auto& StasisStatus = EM.AddComponent<Game::Components::StatusEffectComponent>(StasisScv);
+    StasisStatus.AddEffect(Game::Components::StatusEffect::Stasis, 5.0f, -1);
+
+    Game::Systems::CommandSystem::IssueMove(EM, {StasisScv}, {160.0f, 96.0f});
+
+    Require(StasisPath.Path.size() == 1 &&
+            StasisPath.Path.front().X == 96.0f &&
+            StasisPath.Path.front().Y == 96.0f,
+        "stasis units reject new move orders without clearing the frozen path");
+    Require(!EM.GetComponent<Game::Components::CommandComponent>(StasisScv),
+        "stasis units do not receive a move command component");
+
     Game::Map::GameMap Map;
     Map.Generate(16, 16);
     Game::Map::Tile Blocked = Map.GetTile(8, 8);
@@ -183,6 +222,143 @@ int main()
         "SCV movement does not receive a direct waypoint into blocked terrain");
 
     Game::Systems::CommandSystem::SetMap(nullptr);
+
+    int StopTarget = CreateUnit(
+        EM,
+        0,
+        0.0f,
+        {256.0f, 128.0f});
+    auto& StopTargetPlayer = EM.AddComponent<Game::Components::PlayerComponent>(StopTarget);
+    StopTargetPlayer.PlayerID = 1;
+
+    int ActiveMarine = CreateUnit(
+        EM,
+        0,
+        4.0f,
+        {128.0f, 128.0f});
+    auto& ActiveCmd = EM.AddComponent<Game::Components::CommandComponent>(ActiveMarine);
+    ActiveCmd.CurrentCommand = Game::Components::CommandType::Attack;
+    ActiveCmd.TargetEntityID = StopTarget;
+    Game::Components::Order QueuedOrder;
+    QueuedOrder.Type = Game::Components::OrderType::Move;
+    QueuedOrder.TargetPosition = {300.0f, 128.0f};
+    ActiveCmd.QueueOrder(QueuedOrder);
+    ActiveCmd.QueueOrder(QueuedOrder);
+
+    auto& ActivePath = EM.AddComponent<Game::Components::PathfindingComponent>(ActiveMarine);
+    ActivePath.Path.push_back({200.0f, 128.0f});
+    ActivePath.PathIndex = 0;
+    ActivePath.CurrentSpeed = 40.0f;
+    ActivePath.CurrentVelocity = {40.0f, 0.0f};
+
+    auto& ActiveCombat = EM.AddComponent<Game::Components::CombatComponent>(ActiveMarine);
+    ActiveCombat.TargetEntityID = StopTarget;
+    ActiveCombat.PendingAttackFrame = true;
+    ActiveCombat.PendingAttackTargetEntityID = StopTarget;
+    ActiveCombat.PendingAttackTargetPos = {256.0f, 128.0f};
+    ActiveCombat.PendingAttackElapsed = 0.25f;
+
+    Game::Client::GameLoop::SetAllCommand(
+        EM, {ActiveMarine}, Game::Components::CommandType::Stop);
+    Require(ActiveCmd.CurrentCommand == Game::Components::CommandType::Stop,
+        "HUD stop command sets stop command immediately");
+    Require(!ActiveCmd.HasPendingOrders(),
+        "HUD stop command clears queued orders");
+    Require(ActiveCmd.TargetEntityID == -1,
+        "HUD stop command clears command target");
+    Require(ActivePath.Path.empty() &&
+            ActivePath.PathIndex == 0 &&
+            ActivePath.CurrentSpeed == 0.0f &&
+            ActivePath.CurrentVelocity.Length() == 0.0f,
+        "HUD stop command clears active motion immediately");
+    Require(ActiveCombat.TargetEntityID == -1 &&
+            !ActiveCombat.PendingAttackFrame &&
+            ActiveCombat.PendingAttackTargetEntityID == -1,
+        "HUD stop command cancels combat target and pending attack frame");
+
+    int QueuedScv = CreateUnit(
+        EM,
+        7,
+        2.8f,
+        {32.0f, 192.0f});
+    Game::Components::Order FirstMove;
+    FirstMove.Type = Game::Components::OrderType::Move;
+    FirstMove.TargetPosition = {48.0f, 192.0f};
+    Game::Components::Order SecondMove;
+    SecondMove.Type = Game::Components::OrderType::Move;
+    SecondMove.TargetPosition = {96.0f, 192.0f};
+    Game::Systems::CommandSystem::IssueOrder(EM, QueuedScv, FirstMove, false);
+    Game::Systems::CommandSystem::IssueOrder(EM, QueuedScv, SecondMove, true);
+
+    auto* QueuedCmd = EM.GetComponent<Game::Components::CommandComponent>(QueuedScv);
+    auto* QueuedPath = EM.GetComponent<Game::Components::PathfindingComponent>(QueuedScv);
+    Require(QueuedCmd && QueuedCmd->Orders.size() == 2 && QueuedCmd->CurrentOrderIndex == 0,
+        "queued move test starts with two orders and the first active");
+    Require(QueuedPath && !QueuedPath->Path.empty() &&
+            QueuedPath->Path.back().X == FirstMove.TargetPosition.X,
+        "first queued move has an active path");
+
+    Game::Systems::MovementSystem Movement(SysMgr);
+    for (int I = 0; I < 20 && QueuedCmd->CurrentOrderIndex == 0; ++I)
+        Movement.Update(0.05f);
+
+    Require(QueuedCmd->CurrentOrderIndex == 1 &&
+            QueuedCmd->CurrentCommand == Game::Components::CommandType::Move &&
+            QueuedCmd->TargetPosition.X == SecondMove.TargetPosition.X,
+        "movement completion advances to the next queued move order");
+    Require(QueuedPath && !QueuedPath->Path.empty() &&
+            QueuedPath->Path.back().X == SecondMove.TargetPosition.X,
+        "advancing the queued move order generates the next movement path");
+
+    for (int I = 0; I < 40 && QueuedCmd->HasPendingOrders(); ++I)
+        Movement.Update(0.05f);
+
+    auto* QueuedTrans = EM.GetComponent<Game::Components::TransformComponent>(QueuedScv);
+    Require(QueuedCmd->CurrentOrderIndex == (int)QueuedCmd->Orders.size(),
+        "queued move chain completes after the second destination");
+    Require(QueuedPath && QueuedPath->Path.empty(),
+        "queued move chain clears movement path after completion");
+    Require(QueuedTrans &&
+            QueuedTrans->Position.DistanceTo(SecondMove.TargetPosition) < 16.0f,
+        "queued move chain leaves the unit near the second destination");
+
+    int FollowTarget = CreateUnit(
+        EM,
+        0,
+        0.0f,
+        {240.0f, 240.0f});
+    int Follower = CreateUnit(
+        EM,
+        7,
+        2.8f,
+        {128.0f, 240.0f});
+    Game::Components::Order FollowActive;
+    FollowActive.Type = Game::Components::OrderType::Follow;
+    FollowActive.TargetPosition = {240.0f, 240.0f};
+    FollowActive.TargetEntityID = FollowTarget;
+    Game::Systems::CommandSystem::IssueOrder(EM, Follower, FollowActive, false);
+    auto* FollowCmd = EM.GetComponent<Game::Components::CommandComponent>(Follower);
+    auto* FollowPath = EM.GetComponent<Game::Components::PathfindingComponent>(Follower);
+    Require(FollowCmd && FollowCmd->CurrentCommand == Game::Components::CommandType::Follow,
+        "follow order starts in follow command mode");
+    Require(FollowPath, "follow order creates a path component");
+
+    FollowPath->Path.clear();
+    FollowPath->PathIndex = 0;
+    auto* FollowTargetTrans = EM.GetComponent<Game::Components::TransformComponent>(FollowTarget);
+    Require(FollowTargetTrans, "follow target has a transform");
+    FollowTargetTrans->Position = {300.0f, 240.0f};
+    Movement.Update(0.05f);
+
+    Require(FollowCmd->CurrentCommand == Game::Components::CommandType::Follow,
+        "movement follow refresh preserves follow command instead of downgrading to move");
+    Require(FollowCmd->TargetEntityID == FollowTarget,
+        "movement follow refresh preserves the followed target entity");
+    Require(FollowCmd->TargetPosition.X == FollowTargetTrans->Position.X &&
+            FollowCmd->TargetPosition.Y == FollowTargetTrans->Position.Y,
+        "movement follow refresh tracks the target's latest position");
+    Require(FollowPath && !FollowPath->Path.empty(),
+        "movement follow refresh generates a new path to the moving target");
 
     std::printf("CommandSystemOrderTest passed\n");
     return 0;

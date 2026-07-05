@@ -11,6 +11,7 @@ namespace Core::ECS { class EntityManager; }
 
 namespace Game::Client::UI
 {
+class Hud;
 
 class MainGui
 {
@@ -23,11 +24,12 @@ public:
     void Shutdown();
     void Update(Core::ECS::EntityManager& Entities,
                 const std::vector<int>& SelectedIds,
+                const Hud& HudState,
                 double Time);
     void RenderOffscreen();
     void Render();
     void Resize(int Width, int Height);
-    void HandleEvent(const void* Event);
+    bool HandleEvent(const void* Event);
 
     bool IsActive() const { return Host_.IsActive(); }
 
@@ -35,6 +37,11 @@ public:
     int HitMinimapButton(float X, float Y) const;
     int HitMultiSelection(float X, float Y) const;
     bool HitMinimap(float X, float Y) const;
+    bool CheckMinimapClick(float X, float Y,
+                           int MapWidthTiles,
+                           int MapHeightTiles,
+                           float& OutWorldX,
+                           float& OutWorldY) const;
     bool IsPointInHud(float X, float Y) const;
 
     void SetResources(int Minerals, int Gas, int SupplyUsed, int SupplyMax,
@@ -51,6 +58,7 @@ public:
     int GetHoveredCommand() const { return HoveredCommandIndex_; }
     int GetClickedCommand() const { return ClickedCommandIndex_; }
     void ClearClickedCommand() { ClickedCommandIndex_ = -1; }
+    int ConsumeClickedCommand();
 
 private:
     enum class TargetMode : uint8_t
@@ -64,9 +72,11 @@ private:
 
     void UpdateCommandCard(Core::ECS::EntityManager& Entities,
                            int SelectedEntityId,
-                           int SelectedChkUnitId);
+                           int SelectedChkUnitId,
+                           const Hud& HudState);
     void UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
-                             const std::vector<int>& SelectedIds);
+                             const std::vector<int>& SelectedIds,
+                             const Hud& HudState);
     std::string GetPortraitUri(int ChkUnitId) const;
 
     GuiHudHost Host_;
@@ -79,7 +89,10 @@ private:
     std::string TimeText_ = "00:00";
 
     int HoveredCommandIndex_ = -1;
+    int PressedCommandIndex_ = -1;
     int ClickedCommandIndex_ = -1;
+    float LastMouseX_ = 0.0f;
+    float LastMouseY_ = 0.0f;
     TargetMode PendingTargetMode_ = TargetMode::None;
     int PendingBuildDefID_ = -1;
     int PendingCommandId_ = -1;

@@ -1,5 +1,6 @@
 #include "GuiHudHost.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
@@ -18,7 +19,6 @@
 #include <NsGui/SolidColorBrush.h>
 #include <NsGui/InputEnums.h>
 #include <NsDrawing/Color.h>
-#include <NsApp/MediaElement.h>
 #if defined(SOKOL_D3D11)
 #include <NsRender/D3D11Factory.h>
 #include "third_party/sokol/sokol_gfx.h"
@@ -28,6 +28,9 @@ struct ID3D11DeviceContext;
 #endif
 
 #include "third_party/sokol/sokol_app.h"
+#include "UI/GlueAnimatedImage.h"
+#include "UI/GlueComponentRegistration.h"
+#include "UI/HudMinimapGeometry.h"
 
 namespace Game::Client::UI
 {
@@ -86,6 +89,22 @@ int ComputeHudHeight(int LogicalHeight)
     return static_cast<int>(std::lround(std::clamp(Target, 128.0f, 220.0f)));
 }
 
+bool HasWebmExtension(const std::string& Uri)
+{
+    const size_t Query = Uri.find_first_of("?#");
+    const std::string Path = Uri.substr(0, Query);
+    if (Path.size() < 5)
+        return false;
+
+    const std::string Ext = Path.substr(Path.size() - 5);
+    return std::equal(Ext.begin(), Ext.end(), ".webm",
+        [](char A, char B)
+        {
+            return std::tolower(static_cast<unsigned char>(A)) ==
+                   std::tolower(static_cast<unsigned char>(B));
+        });
+}
+
 } // namespace
 
 GuiHudHost::~GuiHudHost()
@@ -122,6 +141,9 @@ bool GuiHudHost::Initialize(const std::string& AssetRoot, int Width, int Height,
                       << Prefix[std::min(Level, static_cast<uint32_t>(4))]
                       << "] " << Message << std::endl;
         });
+
+    Glue::RegisterGlueComponents(false);
+    Glue::GlueAnimatedImage::SetAssetRoot(AssetRoot_);
 
     Root_ = Aero::GUI::LoadXaml<Aero::UserControl>(ResolvedXamlPath.c_str());
     if (!Root_)
@@ -235,6 +257,7 @@ void GuiHudHost::Update(double Time)
     HasLastUpdateTime_ = true;
 
     ApplyState();
+    Glue::GlueAnimatedImage::UpdateAll(Time);
     View_->Update(Time);
     CacheRects();
     (void)Dt;
@@ -310,6 +333,15 @@ void GuiHudHost::SetResources(int Minerals, int Gas, int SupplyUsed, int SupplyM
     SupplyUsed_ = SupplyUsed;
     SupplyMax_ = SupplyMax;
     TimeValue_ = TimeText;
+}
+
+void GuiHudHost::SetResourceIconUris(const std::string& MineralUri,
+                                     const std::string& GasUri,
+                                     const std::string& SupplyUri)
+{
+    MineralIconUri_ = MineralUri;
+    GasIconUri_ = GasUri;
+    SupplyIconUri_ = SupplyUri;
 }
 
 void GuiHudHost::SetSelection(const std::string& Name, int Count,
@@ -393,6 +425,20 @@ void GuiHudHost::SetMultiSelection(const std::vector<ScSelectionInfo>& Units,
     }
 }
 
+void GuiHudHost::SetMinimapDots(const std::vector<HudMinimapDot>& Dots)
+{
+    MinimapDotsState_ = Dots;
+}
+
+void GuiHudHost::SetCampaignPings(const std::vector<HudMinimapPing>& Pings,
+                                  int MapWidthTiles,
+                                  int MapHeightTiles)
+{
+    CampaignPings_ = Pings;
+    CampaignMapWidth_ = MapWidthTiles;
+    CampaignMapHeight_ = MapHeightTiles;
+}
+
 int GuiHudHost::HitCommandButton(float X, float Y) const
 {
     for (int i = 0; i < 9; ++i)
@@ -443,13 +489,16 @@ void GuiHudHost::CacheElements()
     MineralText_ = FindAs<Aero::TextBlock>(RootElement, "MineralText");
     GasText_ = FindAs<Aero::TextBlock>(RootElement, "GasText");
     SupplyText_ = FindAs<Aero::TextBlock>(RootElement, "SupplyText");
+    MineralIcon_ = FindAs<Aero::Image>(RootElement, "MineralIcon");
+    GasIcon_ = FindAs<Aero::Image>(RootElement, "GasIcon");
+    SupplyIcon_ = FindAs<Aero::Image>(RootElement, "SupplyIcon");
     TimeText_ = FindAs<Aero::TextBlock>(RootElement, "TimeText");
     BottomHudScale_ = FindAs<Aero::FrameworkElement>(RootElement, "BottomHudScale");
 
     InfoPanel_ = FindAs<Aero::FrameworkElement>(RootElement, "InfoPanel");
     PortraitViewport_ = FindAs<Aero::Border>(RootElement, "PortraitViewport");
     PortraitImage_ = FindAs<Aero::Image>(RootElement, "PortraitImage");
-    PortraitMedia_ = FindAs<AeroApp::MediaElement>(RootElement, "PortraitMedia");
+    PortraitVideo_ = FindAs<Glue::GlueAnimatedImage>(RootElement, "PortraitVideo");
     UnitNameText_ = FindAs<Aero::TextBlock>(RootElement, "UnitNameText");
 
     HpFill_ = FindAs<Aero::Border>(RootElement, "HpFill");
@@ -496,7 +545,19 @@ void GuiHudHost::CacheElements()
     }
 
     Miniviewport_ = FindAs<Aero::Border>(RootElement, "MinimapViewport");
-    MinimapContentViewport_ = FindAs<Aero::Border>(RootElement, "MinimapContentViewport");
+    MinimapContentViewport_ = FindAs<Aero::FrameworkElement>(RootElement, "MinimapContentViewport");
+    for (int i = 0; i < kMaxMinimapDotVisuals; ++i)
+    {
+        char Name[64];
+        std::snprintf(Name, sizeof(Name), "MinimapDot%d", i);
+        MinimapDots_[i] = FindAs<Aero::Border>(RootElement, Name);
+    }
+    for (int i = 0; i < kMaxCampaignPingVisuals; ++i)
+    {
+        char Name[64];
+        std::snprintf(Name, sizeof(Name), "MinimapPing%d", i);
+        MinimapPings_[i] = FindAs<Aero::Border>(RootElement, Name);
+    }
     MiniMapTerrainButton_ = FindAs<Aero::FrameworkElement>(RootElement, "MiniMapTerrainButton");
     MiniMapAllyButton_ = FindAs<Aero::FrameworkElement>(RootElement, "MiniMapAllyButton");
     MiniMapFogButton_ = FindAs<Aero::FrameworkElement>(RootElement, "MiniMapFogButton");
@@ -505,9 +566,14 @@ void GuiHudHost::CacheElements()
     TooltipText_ = FindAs<Aero::TextBlock>(RootElement, "TooltipText");
     TooltipCostRow_ = FindAs<Aero::FrameworkElement>(RootElement, "TooltipCostRow");
     TooltipMineralCost_ = FindAs<Aero::FrameworkElement>(RootElement, "TooltipMineralCost");
+    TooltipMineralIcon_ = FindAs<Aero::Image>(RootElement, "TooltipMineralIcon");
     TooltipMineralCostText_ = FindAs<Aero::TextBlock>(RootElement, "TooltipMineralCostText");
     TooltipGasCost_ = FindAs<Aero::FrameworkElement>(RootElement, "TooltipGasCost");
+    TooltipGasIcon_ = FindAs<Aero::Image>(RootElement, "TooltipGasIcon");
     TooltipGasCostText_ = FindAs<Aero::TextBlock>(RootElement, "TooltipGasCostText");
+    TooltipSupplyCost_ = FindAs<Aero::FrameworkElement>(RootElement, "TooltipSupplyCost");
+    TooltipSupplyIcon_ = FindAs<Aero::Image>(RootElement, "TooltipSupplyIcon");
+    TooltipSupplyCostText_ = FindAs<Aero::TextBlock>(RootElement, "TooltipSupplyCostText");
 
     SelectionPanel_ = FindAs<Aero::FrameworkElement>(RootElement, "SelectionPanel");
 
@@ -516,6 +582,8 @@ void GuiHudHost::CacheElements()
         char Name[64];
         std::snprintf(Name, sizeof(Name), "SelectSlot%d", i);
         SelectSlots_[i] = FindAs<Aero::Border>(RootElement, Name);
+        std::snprintf(Name, sizeof(Name), "SelectImage%d", i);
+        SelectImages_[i] = FindAs<Aero::Image>(RootElement, Name);
         std::snprintf(Name, sizeof(Name), "SelectColor%d", i);
         SelectColors_[i] = FindAs<Aero::Border>(RootElement, Name);
         std::snprintf(Name, sizeof(Name), "SelectHp%d", i);
@@ -534,11 +602,15 @@ void GuiHudHost::LogMissingElements() const
     LogMissing("MineralText", MineralText_);
     LogMissing("GasText", GasText_);
     LogMissing("SupplyText", SupplyText_);
+    LogMissing("MineralIcon", MineralIcon_);
+    LogMissing("GasIcon", GasIcon_);
+    LogMissing("SupplyIcon", SupplyIcon_);
     LogMissing("TimeText", TimeText_);
     LogMissing("BottomHudScale", BottomHudScale_);
     LogMissing("InfoPanel", InfoPanel_);
     LogMissing("PortraitViewport", PortraitViewport_);
-    LogMissing("PortraitMedia", PortraitMedia_);
+    LogMissing("PortraitImage", PortraitImage_);
+    LogMissing("PortraitVideo", PortraitVideo_);
     LogMissing("UnitNameText", UnitNameText_);
     LogMissing("HpFill", HpFill_);
     LogMissing("HpText", HpText_);
@@ -597,6 +669,27 @@ void GuiHudHost::ApplyState()
     }
     if (TimeText_)
         TimeText_->SetText(TimeValue_.c_str());
+
+    auto ApplyResourceIcon = [](Aero::Image* Image,
+                                const std::string& Uri,
+                                std::string& AppliedUri)
+    {
+        if (!Image || Uri == AppliedUri)
+            return;
+        AppliedUri = Uri;
+        if (Uri.empty())
+        {
+            Image->SetSource(nullptr);
+            Image->SetVisibility(Aero::Visibility_Collapsed);
+            return;
+        }
+
+        Image->SetSource(Aero::MakePtr<Aero::BitmapImage>(Aero::Uri(Uri.c_str())));
+        Image->SetVisibility(Aero::Visibility_Visible);
+    };
+    ApplyResourceIcon(MineralIcon_, MineralIconUri_, AppliedMineralIconUri_);
+    ApplyResourceIcon(GasIcon_, GasIconUri_, AppliedGasIconUri_);
+    ApplyResourceIcon(SupplyIcon_, SupplyIconUri_, AppliedSupplyIconUri_);
 
     // --- Info Panel ---
     if (UnitNameText_)
@@ -661,30 +754,73 @@ void GuiHudHost::ApplyState()
         QueueProgressFill_->SetWidth(268.0f * QueueProgressRatio_);
 
     // --- Portrait ---
-    if (PortraitImage_)
-        PortraitImage_->SetVisibility(Aero::Visibility_Collapsed);
-    if (PortraitMedia_)
+    const bool HasPortrait = !PortraitIconUri_.empty();
+    const bool WantsVideoPortrait = HasPortrait && HasWebmExtension(PortraitIconUri_);
+    if (!HasPortrait)
     {
-        if (PortraitIconUri_.empty())
+        if (PortraitImage_)
+            PortraitImage_->SetVisibility(Aero::Visibility_Collapsed);
+        if (PortraitVideo_)
+            PortraitVideo_->SetVisibility(Aero::Visibility_Collapsed);
+
+        if (!AppliedPortraitImageUri_.empty())
         {
-            PortraitMedia_->SetVisibility(Aero::Visibility_Collapsed);
-            if (!AppliedPortraitMediaUri_.empty())
+            if (PortraitImage_)
+                PortraitImage_->SetSource(nullptr);
+            AppliedPortraitImageUri_.clear();
+        }
+        if (!AppliedPortraitVideoUri_.empty())
+        {
+            if (PortraitVideo_)
+                PortraitVideo_->ClearVideoSource();
+            AppliedPortraitVideoUri_.clear();
+            AppliedPortraitVideoReady_ = false;
+        }
+    }
+    else if (WantsVideoPortrait)
+    {
+        if (PortraitImage_)
+        {
+            PortraitImage_->SetVisibility(Aero::Visibility_Collapsed);
+            if (!AppliedPortraitImageUri_.empty())
             {
-                PortraitMedia_->Close();
-                AppliedPortraitMediaUri_.clear();
+                PortraitImage_->SetSource(nullptr);
+                AppliedPortraitImageUri_.clear();
             }
         }
-        else
+
+        if (PortraitVideo_)
         {
-            PortraitMedia_->SetVisibility(Aero::Visibility_Visible);
-            if (PortraitIconUri_ != AppliedPortraitMediaUri_)
+            if (PortraitIconUri_ != AppliedPortraitVideoUri_)
             {
-                AppliedPortraitMediaUri_ = PortraitIconUri_;
-                std::cout << "[Gui] PortraitMedia source: " << AppliedPortraitMediaUri_ << std::endl;
-                PortraitMedia_->SetSource(Aero::Uri(PortraitIconUri_.c_str()));
-                PortraitMedia_->SetPosition(Aero::TimeSpan::Zero());
-                PortraitMedia_->SetIsMuted(true);
-                PortraitMedia_->Play();
+                AppliedPortraitVideoUri_ = PortraitIconUri_;
+                AppliedPortraitVideoReady_ = PortraitVideo_->SetWebmSource(PortraitIconUri_, 12.0);
+            }
+            PortraitVideo_->SetVisibility(
+                AppliedPortraitVideoReady_ ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
+        }
+    }
+    else
+    {
+        if (PortraitVideo_)
+        {
+            PortraitVideo_->SetVisibility(Aero::Visibility_Collapsed);
+            if (!AppliedPortraitVideoUri_.empty())
+            {
+                PortraitVideo_->ClearVideoSource();
+                AppliedPortraitVideoUri_.clear();
+                AppliedPortraitVideoReady_ = false;
+            }
+        }
+
+        if (PortraitImage_)
+        {
+            PortraitImage_->SetVisibility(Aero::Visibility_Visible);
+            if (PortraitIconUri_ != AppliedPortraitImageUri_)
+            {
+                AppliedPortraitImageUri_ = PortraitIconUri_;
+                PortraitImage_->SetSource(Aero::MakePtr<Aero::BitmapImage>(
+                    Aero::Uri(PortraitIconUri_.c_str())));
             }
         }
     }
@@ -746,6 +882,27 @@ void GuiHudHost::ApplyState()
     for (int i = 0; i < 6; ++i)
     {
         SetElementVisibility(SelectSlots_[i], MultiSelectVisible_[i]);
+        if (SelectImages_[i])
+        {
+            const std::string Uri = MultiSelectVisible_[i]
+                ? MultiSelectStates_[i].PortraitUri
+                : std::string();
+            if (Uri != MultiSelectAppliedImageUris_[i])
+            {
+                MultiSelectAppliedImageUris_[i] = Uri;
+                if (Uri.empty())
+                {
+                    SelectImages_[i]->SetSource(nullptr);
+                    SelectImages_[i]->SetVisibility(Aero::Visibility_Collapsed);
+                }
+                else
+                {
+                    SelectImages_[i]->SetSource(Aero::MakePtr<Aero::BitmapImage>(
+                        Aero::Uri(Uri.c_str())));
+                    SelectImages_[i]->SetVisibility(Aero::Visibility_Visible);
+                }
+            }
+        }
         if (MultiSelectVisible_[i] && SelectColors_[i])
         {
             uint32_t Color = MultiSelectStates_[i].PlayerColor;
@@ -767,6 +924,9 @@ void GuiHudHost::ApplyState()
         }
     }
 
+    ApplyMinimapDots();
+    ApplyCampaignPings();
+
     // --- Tooltip ---
     if (TooltipPanel_)
     {
@@ -776,7 +936,13 @@ void GuiHudHost::ApplyState()
     if (TooltipText_)
         TooltipText_->SetText(TooltipValue_.c_str());
 
-    bool HasCosts = TooltipCosts_.Minerals > 0 || TooltipCosts_.Gas > 0;
+    ApplyResourceIcon(TooltipMineralIcon_, MineralIconUri_, AppliedTooltipMineralIconUri_);
+    ApplyResourceIcon(TooltipGasIcon_, GasIconUri_, AppliedTooltipGasIconUri_);
+    ApplyResourceIcon(TooltipSupplyIcon_, SupplyIconUri_, AppliedTooltipSupplyIconUri_);
+
+    bool HasCosts = TooltipCosts_.Minerals > 0 ||
+        TooltipCosts_.Gas > 0 ||
+        TooltipCosts_.Supply > 0;
     SetElementVisibility(TooltipCostRow_, HasCosts);
 
     bool HasMinerals = TooltipCosts_.Minerals > 0;
@@ -791,12 +957,119 @@ void GuiHudHost::ApplyState()
         TooltipGasCostText_->SetText(
             HasGas ? std::to_string(TooltipCosts_.Gas).c_str() : "");
 
+    bool HasSupply = TooltipCosts_.Supply > 0;
+    SetElementVisibility(TooltipSupplyCost_, HasSupply);
+    if (TooltipSupplyCostText_)
+        TooltipSupplyCostText_->SetText(
+            HasSupply ? std::to_string(TooltipCosts_.Supply).c_str() : "");
+
     if (TooltipVisible_ && TooltipPanel_)
     {
         float Tx = std::clamp(TooltipX_ + 12.0f, 12.0f, static_cast<float>(Width_) - 280.0f);
         float Ty = std::clamp(TooltipY_ - 20.0f, 12.0f, static_cast<float>(Height_) - 150.0f);
         Aero::Canvas::SetLeft(TooltipPanel_, Tx);
         Aero::Canvas::SetTop(TooltipPanel_, Ty);
+    }
+}
+
+void GuiHudHost::ApplyMinimapDots()
+{
+    for (auto* DotVisual : MinimapDots_)
+        SetElementVisibility(DotVisual, false);
+
+    if (!MinimapContentViewport_ || CampaignMapWidth_ <= 0 || CampaignMapHeight_ <= 0)
+        return;
+
+    const float ActualW = MinimapContentViewport_->GetActualWidth();
+    const float ActualH = MinimapContentViewport_->GetActualHeight();
+    const RectI FrameRect{
+        0,
+        0,
+        std::max(1, static_cast<int>(std::lround(ActualW))),
+        std::max(1, static_cast<int>(std::lround(ActualH)))
+    };
+
+    const int Count = std::min<int>(
+        static_cast<int>(MinimapDotsState_.size()),
+        kMaxMinimapDotVisuals);
+    for (int i = 0; i < Count; ++i)
+    {
+        auto* DotVisual = MinimapDots_[i];
+        if (!DotVisual)
+            continue;
+
+        int PX = 0;
+        int PY = 0;
+        const auto& Dot = MinimapDotsState_[i];
+        if (!MinimapWorldToScreenPoint(FrameRect,
+                                       CampaignMapWidth_,
+                                       CampaignMapHeight_,
+                                       Dot.Position.X,
+                                       Dot.Position.Y,
+                                       PX,
+                                       PY))
+            continue;
+
+        DotVisual->SetWidth(3.0f);
+        DotVisual->SetHeight(3.0f);
+        DotVisual->SetBackground(MakeColorBrush(
+            static_cast<uint8_t>((Dot.Color >> 16) & 0xFF),
+            static_cast<uint8_t>((Dot.Color >> 8) & 0xFF),
+            static_cast<uint8_t>(Dot.Color & 0xFF),
+            static_cast<uint8_t>((Dot.Color >> 24) & 0xFF)).GetPtr());
+        Aero::Canvas::SetLeft(DotVisual, static_cast<float>(PX) - 1.0f);
+        Aero::Canvas::SetTop(DotVisual, static_cast<float>(PY) - 1.0f);
+        SetElementVisibility(DotVisual, true);
+    }
+}
+
+void GuiHudHost::ApplyCampaignPings()
+{
+    for (auto* PingVisual : MinimapPings_)
+        SetElementVisibility(PingVisual, false);
+
+    if (!MinimapContentViewport_ || CampaignMapWidth_ <= 0 || CampaignMapHeight_ <= 0)
+        return;
+
+    const float ActualW = MinimapContentViewport_->GetActualWidth();
+    const float ActualH = MinimapContentViewport_->GetActualHeight();
+    const RectI FrameRect{
+        0,
+        0,
+        std::max(1, static_cast<int>(std::lround(ActualW))),
+        std::max(1, static_cast<int>(std::lround(ActualH)))
+    };
+
+    const int Count = std::min<int>(
+        static_cast<int>(CampaignPings_.size()),
+        kMaxCampaignPingVisuals);
+    for (int i = 0; i < Count; ++i)
+    {
+        auto* PingVisual = MinimapPings_[i];
+        if (!PingVisual)
+            continue;
+
+        int PX = 0;
+        int PY = 0;
+        const auto& Ping = CampaignPings_[i];
+        if (!MinimapWorldToScreenPoint(FrameRect,
+                                       CampaignMapWidth_,
+                                       CampaignMapHeight_,
+                                       Ping.Position.X,
+                                       Ping.Position.Y,
+                                       PX,
+                                       PY))
+            continue;
+
+        const float T = std::clamp(Ping.TimeRemaining / 4.0f, 0.0f, 1.0f);
+        const float Radius = 4.0f + (1.0f - T) * 9.0f;
+        const float Size = Radius * 2.0f;
+        PingVisual->SetWidth(Size);
+        PingVisual->SetHeight(Size);
+        PingVisual->SetOpacity(0.4f + 0.6f * T);
+        Aero::Canvas::SetLeft(PingVisual, static_cast<float>(PX) - Radius);
+        Aero::Canvas::SetTop(PingVisual, static_cast<float>(PY) - Radius);
+        SetElementVisibility(PingVisual, true);
     }
 }
 

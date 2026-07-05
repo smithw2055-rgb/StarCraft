@@ -53,9 +53,30 @@ void SetAllCommand(Core::ECS::EntityManager& EM,
     for (int Eid : EcsIds)
     {
         auto* C = EM.GetComponent<Game::Components::CommandComponent>(Eid);
-        if (C) { C->CurrentCommand = Cmd; C->TargetEntityID = -1; }
+        if (C)
+        {
+            C->CancelAll();
+            C->CurrentCommand = Cmd;
+            C->TargetEntityID = -1;
+            C->TargetPosition = {};
+        }
         auto* P = EM.GetComponent<Game::Components::PathfindingComponent>(Eid);
-        if (P) { P->Path.clear(); P->PathIndex = 0; }
+        if (P)
+        {
+            P->Path.clear();
+            P->PathIndex = 0;
+            P->CurrentSpeed = 0.0f;
+            P->CurrentVelocity = {0.0f, 0.0f};
+        }
+        auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(Eid);
+        if (Combat)
+        {
+            Combat->TargetEntityID = -1;
+            Combat->PendingAttackFrame = false;
+            Combat->PendingAttackTargetEntityID = -1;
+            Combat->PendingAttackTargetPos = {};
+            Combat->PendingAttackElapsed = 0.0f;
+        }
     }
 }
 

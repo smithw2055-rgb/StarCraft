@@ -108,6 +108,138 @@ inline void UpdateClientSelectionFromUiState(
     Client.UpdateSelection(Session.Entities(), BlockSelection);
 }
 
+inline bool ConsumeGuiHudCommandClick(
+    GuiRuntime& Gui,
+    ClientRuntime& Client,
+    GameSession& Session,
+    UI::Hud& Hud)
+{
+#if ENABLE_GUI_UI
+    if (!Gui.UseGui || !Gui.MainGui.IsActive())
+        return false;
+
+    const int CmdIdx = Gui.MainGui.ConsumeClickedCommand();
+    if (CmdIdx < 0)
+        return false;
+
+    if (Session.IsEcsInitialized())
+    {
+        auto& EM = Session.Entities();
+        auto EcsIds = Client.CollectSelectedAliveIds(EM);
+        ExecuteHudCommandIndex(EM, EcsIds, Hud, CmdIdx);
+    }
+    Client.CancelPointerGesture();
+    return true;
+#else
+    (void)Gui;
+    (void)Client;
+    (void)Session;
+    (void)Hud;
+    return false;
+#endif
+}
+
+inline bool ConsumeGuiHudMinimapClick(
+    GuiRuntime& Gui,
+    ClientRuntime& Client,
+    GameSession& Session,
+    int MouseX,
+    int MouseY)
+{
+#if ENABLE_GUI_UI
+    if (!Gui.UseGui || !Gui.MainGui.IsActive() || !Core::Platform::IsMouseButtonPressed(0))
+        return false;
+
+    float WX = 0.0f;
+    float WY = 0.0f;
+    if (!Gui.MainGui.CheckMinimapClick(
+            static_cast<float>(MouseX),
+            static_cast<float>(MouseY),
+            Session.GetMapData().Width,
+            Session.GetMapData().Height,
+            WX,
+            WY))
+    {
+        return false;
+    }
+
+    Client.CenterCamera(WX, WY);
+    Client.CancelPointerGesture();
+    return true;
+#else
+    (void)Gui;
+    (void)Client;
+    (void)Session;
+    (void)MouseX;
+    (void)MouseY;
+    return false;
+#endif
+}
+
+template <typename RecordGameActionT>
+inline bool ExecuteSmartClickAtWorldPosition(
+    ClientRuntime& Client,
+    GameSession& Session,
+    const Core::Math::Vec2& Target,
+    RecordGameActionT&& RecordGameAction)
+{
+    if (!Session.IsEcsInitialized())
+        return false;
+
+    auto& EM = Session.Entities();
+    auto EcsIds = Client.CollectSelectedAliveIds(EM);
+    if (EcsIds.empty())
+        return false;
+
+    auto ClickTarget = Client.ResolveClickTargetContext(EM, EcsIds, Target);
+    ExecuteSmartClickCommand(EM, EcsIds, ClickTarget, Target);
+    RecordGameAction(0, 1, (uint16_t)(Target.X), (uint16_t)(Target.Y));
+    Client.CancelPointerGesture();
+    return true;
+}
+
+template <typename RecordGameActionT>
+inline bool ConsumeGuiHudMinimapSmartClick(
+    GuiRuntime& Gui,
+    ClientRuntime& Client,
+    GameSession& Session,
+    int MouseX,
+    int MouseY,
+    RecordGameActionT&& RecordGameAction)
+{
+#if ENABLE_GUI_UI
+    if (!Gui.UseGui || !Gui.MainGui.IsActive() || !Core::Platform::IsMouseButtonReleased(1))
+        return false;
+
+    float WX = 0.0f;
+    float WY = 0.0f;
+    if (!Gui.MainGui.CheckMinimapClick(
+            static_cast<float>(MouseX),
+            static_cast<float>(MouseY),
+            Session.GetMapData().Width,
+            Session.GetMapData().Height,
+            WX,
+            WY))
+    {
+        return false;
+    }
+
+    return ExecuteSmartClickAtWorldPosition(
+        Client,
+        Session,
+        {WX, WY},
+        RecordGameAction);
+#else
+    (void)Gui;
+    (void)Client;
+    (void)Session;
+    (void)MouseX;
+    (void)MouseY;
+    (void)RecordGameAction;
+    return false;
+#endif
+}
+
 template <typename RecordGameActionT>
 inline void HandleClientWorldClickCommands(
     ClientRuntime& Client,
@@ -143,19 +275,9 @@ inline void HandleClientWorldClickCommands(
         const int CmdIdx = Hud.CheckCommandPanelClick(MouseX, MouseY, ViewportWidth, ViewportHeight);
         if (CmdIdx >= 0 && Session.IsEcsInitialized())
         {
-            auto& Defs = Hud.GetButtonDefs();
-            if (CmdIdx < 9 && !Defs[CmdIdx].Label.empty())
-            {
-                auto& EM = Session.Entities();
-                auto EcsIds = Client.CollectSelectedAliveIds(EM);
-
-                if (!EcsIds.empty())
-                {
-                    const auto& CmdDef = Defs[CmdIdx];
-                    ExecuteHudCommandSlot(EM, EcsIds, CmdDef);
-                }
-            }
-            Hud.OnButtonInvoked(CmdIdx);
+            auto& EM = Session.Entities();
+            auto EcsIds = Client.CollectSelectedAliveIds(EM);
+            ExecuteHudCommandIndex(EM, EcsIds, Hud, CmdIdx);
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
         }
@@ -170,10 +292,11 @@ inline void HandleClientWorldClickCommands(
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
+            bool TargetCommandAccepted = false;
             if (!EcsIds.empty())
             {
                 auto ClickTarget = Client.ResolveClickTargetContext(EM, EcsIds, Target);
-                ExecutePendingTargetCommand(
+                TargetCommandAccepted = ExecutePendingTargetCommand(
                     EM,
                     EcsIds,
                     Hud.GetPendingTargetMode(),
@@ -181,7 +304,8 @@ inline void HandleClientWorldClickCommands(
                     ClickTarget,
                     Target);
             }
-            Hud.CancelPendingTarget();
+            if (TargetCommandAccepted)
+                Hud.CancelPendingTarget();
             Client.CancelPointerGesture();
         }
         else if (!ConsumedLeftClick && Session.IsEcsInitialized() && Core::Platform::IsKeyDown(65))
@@ -196,10 +320,28 @@ inline void HandleClientWorldClickCommands(
     if (Session.IsEcsInitialized() && Core::Platform::IsMouseButtonReleased(1) && !InGui)
     {
         const bool InHudBand = Hud.IsPointInHudBand(MouseX, MouseY, ViewportWidth, ViewportHeight);
+        float MinimapWX = 0.0f;
+        float MinimapWY = 0.0f;
         if (Hud.HasPendingTarget())
         {
             Hud.CancelPendingTarget();
             Client.CancelPointerGesture();
+        }
+        else if (Hud.CheckMinimapClick(
+                     MouseX,
+                     MouseY,
+                     ViewportWidth,
+                     ViewportHeight,
+                     Session.GetMapData().Width,
+                     Session.GetMapData().Height,
+                     MinimapWX,
+                     MinimapWY))
+        {
+            ExecuteSmartClickAtWorldPosition(
+                Client,
+                Session,
+                {MinimapWX, MinimapWY},
+                RecordGameAction);
         }
         else if (InHudBand)
         {
@@ -208,14 +350,11 @@ inline void HandleClientWorldClickCommands(
         else
         {
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
-            auto& EM = Session.Entities();
-            auto EcsIds = Client.CollectSelectedAliveIds(EM);
-            if (!EcsIds.empty())
-            {
-                auto ClickTarget = Client.ResolveClickTargetContext(EM, EcsIds, Target);
-                ExecuteSmartClickCommand(EM, EcsIds, ClickTarget, Target);
-                RecordGameAction(0, 1, (uint16_t)(Target.X), (uint16_t)(Target.Y));
-            }
+            ExecuteSmartClickAtWorldPosition(
+                Client,
+                Session,
+                Target,
+                RecordGameAction);
         }
     }
 }
@@ -305,6 +444,15 @@ inline bool UpdateActiveGameplayInputRuntime(
         MouseX,
         MouseY,
         InGui);
+    ConsumeGuiHudMinimapClick(Gui, Client, Session, MouseX, MouseY);
+    ConsumeGuiHudCommandClick(Gui, Client, Session, Hud);
+    ConsumeGuiHudMinimapSmartClick(
+        Gui,
+        Client,
+        Session,
+        MouseX,
+        MouseY,
+        RecordGameAction);
     HandleClientWorldClickCommands(
         Client,
         Session,

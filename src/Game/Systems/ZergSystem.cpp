@@ -26,6 +26,83 @@ namespace
     {
         return gCollisionBoundsResolver ? gCollisionBoundsResolver(ChkUnitID) : UnitCollisionBounds{};
     }
+
+    int NormalizeDefIDForRace(int DefID, Race RaceType)
+    {
+        if (DefID < 0)
+            return DefID;
+
+        const auto Candidate = Game::Races::GetUnitDefByID(DefID);
+        if (Candidate.Name != "Unknown" && Candidate.RaceType == RaceType)
+            return DefID;
+
+        if (RaceType == Race::Zerg)
+            return (int)Game::Races::GetTerranDefs().size() + DefID;
+        if (RaceType == Race::Protoss)
+            return (int)Game::Races::GetTerranDefs().size() +
+                   (int)Game::Races::GetZergDefs().size() + DefID;
+        return DefID;
+    }
+
+    int ResolveBuildingDefID(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
+        {
+            if (Building->BuildingDefID >= 0)
+                return Building->BuildingDefID;
+        }
+        if (auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        return -1;
+    }
+
+    bool HasCompletedBuildingDef(Core::ECS::EntityManager& EM, int PlayerID, int RequiredDefID)
+    {
+        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+        for (int Bid : Buildings)
+        {
+            auto* B = EM.GetComponent<BuildingComponent>(Bid);
+            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
+            if (!B || !BP || BP->PlayerID != PlayerID || B->UnderConstruction)
+                continue;
+
+            if (ResolveBuildingDefID(EM, Bid) == RequiredDefID)
+                return true;
+        }
+        return false;
+    }
+
+    bool HasRequiredBuildings(Core::ECS::EntityManager& EM,
+                              int PlayerID,
+                              const std::vector<int>& RequiredBuildings,
+                              Race RaceType,
+                              std::string* OutReason)
+    {
+        for (int ReqID : RequiredBuildings)
+        {
+            const int NormalizedReqID = NormalizeDefIDForRace(ReqID, RaceType);
+            if (HasCompletedBuildingDef(EM, PlayerID, NormalizedReqID))
+                continue;
+
+            if (OutReason)
+                *OutReason = "missing required building: " +
+                    Game::Races::GetUnitDefByID(NormalizedReqID).Name;
+            return false;
+        }
+        return true;
+    }
+
+    bool IsValidZergBuildingMorph(int SourceDefID, int TargetDefID)
+    {
+        const auto SourceDef = Game::Races::GetUnitDefByID(SourceDefID);
+        const auto TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
+        if (SourceDef.RaceType != Race::Zerg || TargetDef.RaceType != Race::Zerg)
+            return false;
+
+        return (SourceDef.Name == "Hatchery" && TargetDef.Name == "Lair") ||
+               (SourceDef.Name == "Lair" && TargetDef.Name == "Hive") ||
+               (SourceDef.Name == "Spire" && TargetDef.Name == "Greater Spire");
+    }
 }
 
 
@@ -280,25 +357,9 @@ bool ZergSystem::CanMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     }
 
     // Check required buildings (predecessor tech)
-    for (int ReqID : BldgDef.RequiredBuildings)
-    {
-        bool Found = false;
-        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
-        for (int Bid : Buildings)
-        {
-            auto* B = EM.GetComponent<BuildingComponent>(Bid);
-            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
-            if (B && BP && BP->PlayerID == Player->PlayerID &&
-                B->BuildingDefID == ReqID && !B->UnderConstruction)
-            { Found = true; break; }
-        }
-        if (!Found)
-        {
-            if (OutReason) *OutReason = "missing required building: " +
-                Game::Races::GetUnitDefByID(ReqID).Name;
-            return false;
-        }
-    }
+    if (!HasRequiredBuildings(EM, Player->PlayerID, BldgDef.RequiredBuildings,
+                              BldgDef.RaceType, OutReason))
+        return false;
 
     return true;
 }
@@ -323,6 +384,8 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     auto& Res = HarvestSystem::GetResources(PlayerID);
     Res.Minerals -= BldgDef.MineralCost;
     Res.VespeneGas -= BldgDef.GasCost;
+    if (auto* DroneUnit = EM.GetComponent<UnitComponent>(DroneID))
+        Res.SupplyUsed = std::max(0, Res.SupplyUsed - DroneUnit->SupplyCost);
 
     // Create building entity
     int BldgID = EM.CreateEntity();
@@ -413,9 +476,8 @@ bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    // Don't allow larva, egg, drone (morphed differently), or devolved forms
-    if (UnitDef.Name == "Larva" || UnitDef.Name == "Egg" ||
-        UnitDef.Name == "Drone" || UnitDef.Name == "Overlord")
+    // Larva and egg are source/intermediate forms, not larva morph targets.
+    if (UnitDef.Name == "Larva" || UnitDef.Name == "Egg")
     {
         if (OutReason) *OutReason = "this unit cannot morph from larva";
         return false;
@@ -436,25 +498,9 @@ bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     }
 
     // Check required buildings
-    for (int ReqID : UnitDef.RequiredBuildings)
-    {
-        bool Found = false;
-        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
-        for (int Bid : Buildings)
-        {
-            auto* B = EM.GetComponent<BuildingComponent>(Bid);
-            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
-            if (B && BP && BP->PlayerID == Player->PlayerID &&
-                B->BuildingDefID == ReqID && !B->UnderConstruction)
-            { Found = true; break; }
-        }
-        if (!Found)
-        {
-            if (OutReason) *OutReason = "missing required building: " +
-                Game::Races::GetUnitDefByID(ReqID).Name;
-            return false;
-        }
-    }
+    if (!HasRequiredBuildings(EM, Player->PlayerID, UnitDef.RequiredBuildings,
+                              UnitDef.RaceType, OutReason))
+        return false;
 
     return true;
 }
@@ -533,7 +579,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
 }
 
 // ============================================================
-// Building morph (Hatchery→Lair→Hive, Spire→Greater Spire, etc.)
+// Building morph (Hatchery -> Lair -> Hive, Spire -> Greater Spire, etc.)
 // ============================================================
 
 bool ZergSystem::CanMorphBuilding(Core::ECS::EntityManager& EM,
@@ -552,11 +598,22 @@ bool ZergSystem::CanMorphBuilding(Core::ECS::EntityManager& EM,
     }
 
     const auto& TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
-    if (TargetDef.Name.empty() || !TargetDef.IsBuilding)
+    if (TargetDef.Name.empty() || !TargetDef.IsBuilding || TargetDef.RaceType != Race::Zerg)
     {
         if (OutReason) *OutReason = "not a valid building morph target";
         return false;
     }
+
+    const int SourceDefID = ResolveBuildingDefID(EM, BuildingID);
+    if (!IsValidZergBuildingMorph(SourceDefID, TargetDefID))
+    {
+        if (OutReason) *OutReason = "invalid building morph source";
+        return false;
+    }
+
+    if (!HasRequiredBuildings(EM, Player->PlayerID, TargetDef.RequiredBuildings,
+                              TargetDef.RaceType, OutReason))
+        return false;
 
     // Check if morph is already in progress
     auto* Morph = EM.GetComponent<MorphComponent>(BuildingID);
@@ -664,7 +721,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
 
     if (TargetDef.IsBuilding)
     {
-        // Building morph (e.g. Hatchery→Lair, Spire→Greater Spire)
+        // Building morph (e.g. Hatchery -> Lair, Spire -> Greater Spire)
         // Update the existing building entity to the new type
         if (Unit)
         {
@@ -686,6 +743,11 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             Bldg->BuildTimeRemaining = 0.0f;
             Bldg->IsResearching = false;
         }
+        if (Player && Morph->SourceUnitID != MorphEntityID)
+        {
+            HarvestSystem::GetResources(Player->PlayerID).SupplyMax +=
+                Game::Races::GetSupplyProvidedByDefID(TargetDefID);
+        }
         if (auto* Path = EM.GetComponent<PathfindingComponent>(MorphEntityID))
         {
             Path->IsAir = false;
@@ -698,7 +760,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
     }
     else
     {
-        // Unit morph (egg �?unit)
+        // Unit morph (egg -> unit)
         // Destroy the egg, spawn the unit
         if (!Player) return;
 
@@ -732,6 +794,9 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         NUnit.Speed = TargetDef.Speed;
         NUnit.SightRange = TargetDef.SightRange;
         NUnit.SizeType = TargetDef.SizeType;
+
+        HarvestSystem::GetResources(PlayerID).SupplyMax +=
+            Game::Races::GetSupplyProvidedByDefID(TargetDefID);
 
         NCmd.CurrentCommand = CommandType::Stop;
         NPath.NodeTolerance = 8.0f;

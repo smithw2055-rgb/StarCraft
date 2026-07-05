@@ -44,6 +44,7 @@ public:
     PendingTargetMode GetPendingTargetMode() const { return mState.CommandPanel.PendingTargetModeValue; }
     int GetPendingBuildDefID() const { return mState.CommandPanel.PendingBuildDefID; }
     HudCommandId GetPendingCommandId() const { return mState.CommandPanel.PendingCommandId; }
+    int GetActiveCommandIndex() const { return mState.ActiveCommand; }
 
     const std::array<CmdButtonDef, 9>& GetButtonDefs() const { return mState.CommandPanel.ButtonDefs; }
     int GetHudHeight() const { return kHudHeight; }
@@ -56,11 +57,27 @@ public:
                          int MapW, int MapH,
                          const int* TileData,
                          const bool* FogVisible, const bool* FogExplored);
+    void SetCampaignPings(const std::vector<HudMinimapPing>& Pings)
+    {
+        mState.Minimap.CampaignPings = Pings;
+    }
+    void SetMinimapDots(const std::vector<HudMinimapDot>& Dots)
+    {
+        mState.Minimap.UnitDots = Dots;
+    }
+    void SetMinimapMapSize(int MapW, int MapH)
+    {
+        mState.Minimap.MapWidth = MapW;
+        mState.Minimap.MapHeight = MapH;
+    }
     void DrawMinimap(float PosX, float PosY, float SizeW, float SizeH) const;
 
     const HudState& GetState() const { return mState; }
     const HudResourceState& GetResourceState() const { return mState.Resources; }
     void SetResourceState(const HudResourceState& Resources) { mState.Resources = Resources; }
+    std::string GetLegacyIconUri(int IconIndex) const;
+    std::string GetButtonIconUri(const CmdButtonDef& Button) const;
+    std::string GetUnitIconUriForChkUnitId(int ChkUnitId) const;
 
 private:
     const Resource::Graphics::GpuImage* GetLegacyIcon(int IconIndex) const;
@@ -101,7 +118,10 @@ private:
                    int IconIndex,
                    bool Enabled,
                    int NextMenuPage = 0,
-                   HudVisualId VisualId = HudVisualId::None);
+                   HudVisualId VisualId = HudVisualId::None,
+                   int MineralCost = 0,
+                   int GasCost = 0,
+                   int SupplyCost = 0);
     void ResetButtons();
     void DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
                             const HudLayout& Layout,

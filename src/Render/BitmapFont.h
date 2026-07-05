@@ -35,7 +35,7 @@ public:
     static constexpr int CellW = 6;
     static constexpr int CellH = 8;
     static constexpr int Cols = 16;
-    static constexpr int Rows = 8;        // covers chars 0..127 â†?only 0..95 used
+    static constexpr int Rows = 8;        // covers chars 0..127 -> only 0..95 used
     static constexpr int AtlasW = CellW * Cols;  // 96
     static constexpr int AtlasH = CellH * Rows;  // 64
     static constexpr int FirstChar = 32;  // space

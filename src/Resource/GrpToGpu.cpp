@@ -8,6 +8,19 @@
 namespace Resource::Graphics
 {
 
+namespace
+{
+    bool IsTeamColorIndex(uint8_t Index, const GrpDecodeOptions& Options)
+    {
+        if (!Options.GenerateTeamColorMask || Options.TeamColorIndexCount == 0)
+            return false;
+
+        const int Start = Options.TeamColorIndexStart;
+        const int End = Start + Options.TeamColorIndexCount;
+        return Index >= Start && Index < End;
+    }
+}
+
 std::optional<DecodedSprite> DecodeGrpToRgba(
     const std::vector<uint8_t>& GrpData,
     const ColorPalette& Pal,
@@ -31,11 +44,14 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
         F.OriginY = 0;
         F.Flip = Info.Flip;
         F.Rgba.resize(static_cast<size_t>(F.Width) * static_cast<size_t>(F.Height) * 4, 0);
+        F.TeamColorMaskRgba.resize(static_cast<size_t>(F.Width) * static_cast<size_t>(F.Height) * 4, 0);
+        bool HasTeamColorMask = false;
 
         int Px = Info.Width * Info.Height;
         for (int P = 0; P < Px; ++P)
         {
             uint8_t Idx = Sprite.RawFrameData[Info.Offset + P];
+            const bool TeamColorPixel = IsTeamColorIndex(Idx, Options);
             if (Options.UseIndexRemap && Options.IndexRemap[Idx] >= 0)
                 Idx = static_cast<uint8_t>(Options.IndexRemap[Idx]);
 
@@ -57,7 +73,18 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
             F.Rgba[OutOffset + 1] = C.G;
             F.Rgba[OutOffset + 2] = C.B;
             F.Rgba[OutOffset + 3] = (TransparentByIndex || TransparentByBlack) ? 0 : C.A;
+
+            if (TeamColorPixel && F.Rgba[OutOffset + 3] != 0)
+            {
+                F.TeamColorMaskRgba[OutOffset + 0] = 255;
+                F.TeamColorMaskRgba[OutOffset + 1] = 255;
+                F.TeamColorMaskRgba[OutOffset + 2] = 255;
+                F.TeamColorMaskRgba[OutOffset + 3] = 255;
+                HasTeamColorMask = true;
+            }
         }
+        if (!HasTeamColorMask)
+            F.TeamColorMaskRgba.clear();
         Out.Frames.push_back(std::move(F));
     }
     return Out;
@@ -106,6 +133,16 @@ GpuImage UploadRgbaFull(int Width, int Height, const uint8_t* Rgba)
 
 void DestroyImage(GpuImage& Img)
 {
+    if (Img.TeamColorMask.View.id != 0)
+    {
+        sg_destroy_view(Render::ToSokol(Img.TeamColorMask.View));
+        Img.TeamColorMask.View = {};
+    }
+    if (Img.TeamColorMask.Image.id != 0)
+    {
+        sg_destroy_image(Render::ToSokol(Img.TeamColorMask.Image));
+        Img.TeamColorMask.Image = {};
+    }
     if (Img.View.id != 0) { sg_destroy_view(Render::ToSokol(Img.View)); Img.View = {}; }
     if (Img.Image.id != 0) { sg_destroy_image(Render::ToSokol(Img.Image)); Img.Image = {}; }
     Img.Width = 0;

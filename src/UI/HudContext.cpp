@@ -10,9 +10,9 @@ namespace Game::Client::UI
 namespace
 {
     constexpr int ZergDrone = 41;
-    constexpr int ZergHatchery = 86;
-    constexpr int ZergLair = 87;
-    constexpr int ZergHive = 88;
+    constexpr int ZergHatchery = 131;
+    constexpr int ZergLair = 132;
+    constexpr int ZergHive = 133;
 
     int FindFirstSelectedEntityId(const std::vector<int>& SelectedIds)
     {

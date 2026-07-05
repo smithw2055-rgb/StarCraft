@@ -160,6 +160,7 @@ private:
 
     int CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Math::Vec2 Pos, int Owner, const SCRUnitProperties* Props);
     void SyncDeathsFromEntityManager(Core::ECS::EntityManager& EM);
+    void UpdateRescuePassiveUnits(Core::ECS::EntityManager& EM);
     void RecordUnitDeath(int VictimPlayerID, int UnitID, int KillerPlayerID, bool AwardKill);
     void StartAIScript(Core::ECS::EntityManager& EM, int Owner, uint32_t ScriptID, uint32_t LocationID, bool HasLocation);
     void UpdateAIScripts(Core::ECS::EntityManager& EM, float DeltaTime);

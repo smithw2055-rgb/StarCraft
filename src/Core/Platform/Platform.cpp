@@ -171,8 +171,7 @@ namespace Core::Platform
         g_mouseInClientArea = true;
         g_windowWidth = std::max(1, sapp_width());
         g_windowHeight = std::max(1, sapp_height());
-        g_mouseScaleX = sapp_dpi_scale();
-        g_mouseScaleY = sapp_dpi_scale();
+        UpdateMouseScale(g_windowWidth, g_windowHeight, g_windowWidth, g_windowHeight);
         g_lastFrameTime = 0.0;
         g_initialized = true;
         return true;

@@ -1,4 +1,5 @@
 #include "UI/HudMinimapGeometry.h"
+#include "UI/HudMinimapState.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,7 @@ namespace
 int main()
 {
     using Game::Client::UI::MinimapScreenToWorld;
+    using Game::Client::UI::MinimapWorldToScreenPoint;
     using Game::Client::UI::MinimapWorldToScreenX;
     using Game::Client::UI::MinimapWorldToScreenY;
     using Game::Client::UI::RectI;
@@ -73,6 +75,34 @@ int main()
         "world-to-minimap clamps right edge inside content rect");
     Require(PY == WideContent.Y + WideContent.H - 1,
         "world-to-minimap clamps bottom edge inside content rect");
+
+    Game::Client::UI::HudMinimapPing Ping;
+    Ping.Position = {192.0f * 32.0f * 0.25f, 128.0f * 32.0f * 0.75f};
+    Ping.TimeRemaining = 3.0f;
+    const int PingX = MinimapWorldToScreenX(WideContent, Ping.Position.X, 192.0f * 32.0f);
+    const int PingY = MinimapWorldToScreenY(WideContent, Ping.Position.Y, 128.0f * 32.0f);
+    Require(std::abs(PingX - (WideContent.X + WideContent.W / 4)) <= 1,
+        "campaign minimap ping maps its world X into minimap content");
+    Require(std::abs(PingY - (WideContent.Y + (WideContent.H * 3) / 4)) <= 1,
+        "campaign minimap ping maps its world Y into minimap content");
+
+    int SharedPingX = 0;
+    int SharedPingY = 0;
+    Require(MinimapWorldToScreenPoint(
+            Frame,
+            192,
+            128,
+            Ping.Position.X,
+            Ping.Position.Y,
+            SharedPingX,
+            SharedPingY),
+        "shared ping geometry maps campaign ping to minimap point");
+    Require(std::abs(SharedPingX - PingX) <= 1,
+        "shared ping geometry uses the same X mapping as explicit content mapping");
+    Require(std::abs(SharedPingY - PingY) <= 1,
+        "shared ping geometry uses the same Y mapping as explicit content mapping");
+    Require(!MinimapWorldToScreenPoint(Frame, 0, 128, Ping.Position.X, Ping.Position.Y, SharedPingX, SharedPingY),
+        "shared ping geometry rejects invalid map dimensions");
 
     std::printf("HudMinimapGeometryTest passed\n");
     return 0;

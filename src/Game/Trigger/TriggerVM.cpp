@@ -24,6 +24,9 @@ namespace
     constexpr int kTriggerStepMs = 1000;
     constexpr uint32_t kAnywhereLocationId = 64;
     constexpr float kAIScriptRetargetPixels = 8.0f;
+    constexpr float kRescuePassiveRangePixels = 96.0f;
+    constexpr uint8_t kChkOwnerRescuePassive = 3;
+    constexpr uint8_t kChkOwnerHuman = 6;
 
     bool IsBuildingUnitID(int ChkUnitID)
     {
@@ -59,9 +62,55 @@ namespace
         return Race::Terran;
     }
 
+    int NormalizeTriggerPlayerID(uint32_t PlayerID)
+    {
+        if (PlayerID >= 1 && PlayerID <= 8)
+            return (int)PlayerID - 1;
+        return (int)PlayerID;
+    }
+
+    size_t RuntimePlayerDataIndex(const SCRTriggerData& Data, int PlayerID)
+    {
+        const bool OneBasedPlayerSlots =
+            Data.Players[0].Owner == 0 &&
+            std::any_of(Data.Players.begin() + 1, Data.Players.begin() + 9,
+                [](const SCRPlayerInfo& Info) { return Info.Owner != 0; });
+        if (OneBasedPlayerSlots && PlayerID >= 0 && PlayerID < 8)
+            return (size_t)PlayerID + 1u;
+        if (PlayerID >= 0 && PlayerID < (int)Data.Players.size())
+            return (size_t)PlayerID;
+        return 0u;
+    }
+
+    bool RuntimePlayerHasOwner(const SCRTriggerData& Data, int PlayerID, uint8_t Owner)
+    {
+        if (PlayerID < 0 || PlayerID >= 8)
+            return false;
+        return Data.Players[RuntimePlayerDataIndex(Data, PlayerID)].Owner == Owner;
+    }
+
     int ClampPlayer(int PlayerID)
     {
         return PlayerID >= 0 && PlayerID < 12 ? PlayerID : 0;
+    }
+
+    void ClearUnitMotionAfterTeleport(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->CurrentVelocity = {0.0f, 0.0f};
+        }
+
+        if (auto* Cmd = EM.GetComponent<CommandComponent>(EntityID))
+        {
+            Cmd->CancelAll();
+            Cmd->CommandQueue.clear();
+            Cmd->TargetEntityID = -1;
+            Cmd->TargetPosition = {};
+        }
     }
 }
 
@@ -114,8 +163,11 @@ bool TriggerVM::LoadScript(const SCRTriggerData& Data)
         const auto& Trigger = mTriggers[Index];
         for (int Owner = 0; Owner < 8; ++Owner)
         {
-            const uint32_t ForceGroup = 18u + (uint32_t)mData.Players[Owner].Force;
-            if (!Trigger.Owners[Owner] && !Trigger.Owners[17] &&
+            const uint32_t ForceGroup =
+                18u + (uint32_t)mData.Players[RuntimePlayerDataIndex(mData, Owner)].Force;
+            const size_t TriggerOwnerIndex = (size_t)Owner + 1u;
+            if ((TriggerOwnerIndex >= Trigger.Owners.size() || !Trigger.Owners[TriggerOwnerIndex]) &&
+                !Trigger.Owners[17] &&
                 (ForceGroup >= Trigger.Owners.size() || !Trigger.Owners[ForceGroup]))
                 continue;
 
@@ -167,6 +219,7 @@ void TriggerVM::Update(Core::ECS::EntityManager& EM, float DeltaTime)
 
     SyncDeathsFromEntityManager(EM);
     UpdateAIScripts(EM, DeltaTime);
+    UpdateRescuePassiveUnits(EM);
     if (!mTimerPaused && mCountdownTimer > 0.0f)
         mCountdownTimer = std::max(0.0f, mCountdownTimer - DeltaTime);
 
@@ -357,7 +410,8 @@ bool TriggerVM::IsPlayerActive(int PlayerID) const
         return false;
     if (PlayerID >= 8)
         return mData.Players[(size_t)PlayerID].Owner != 0;
-    return mData.Players[(size_t)PlayerID].Owner != 0 || mData.RawData.empty();
+    return mData.Players[RuntimePlayerDataIndex(mData, PlayerID)].Owner != 0 ||
+        mData.RawData.empty();
 }
 
 bool TriggerVM::AreAllied(int PlayerA, int PlayerB) const
@@ -394,7 +448,7 @@ bool TriggerVM::MatchPlayerGroup(int Owner, uint32_t PlayerGroup, int CandidateP
     if (!IsPlayerActive(CandidatePlayer))
         return false;
     if (PlayerGroup < 12)
-        return CandidatePlayer == (int)PlayerGroup;
+        return CandidatePlayer == NormalizeTriggerPlayerID(PlayerGroup);
     switch (PlayerGroup)
     {
         case 12: return false;
@@ -405,7 +459,8 @@ bool TriggerVM::MatchPlayerGroup(int Owner, uint32_t PlayerGroup, int CandidateP
         case 17: return CandidatePlayer < 8;
         case 18: case 19: case 20: case 21:
             return CandidatePlayer < 8 &&
-                mData.Players[(size_t)CandidatePlayer].Force == (uint8_t)(PlayerGroup - 18);
+                mData.Players[RuntimePlayerDataIndex(mData, CandidatePlayer)].Force ==
+                    (uint8_t)(PlayerGroup - 18);
         case 26:
             return CandidatePlayer != Owner && !AreAllied(Owner, CandidatePlayer);
         default:
@@ -471,7 +526,7 @@ bool TriggerVM::TestCondition(Core::ECS::EntityManager& EM, const SCRCondition& 
             int Total = 0;
             for (int Player : ResolvePlayers(Owner, Cond.PlayerID))
             {
-                auto& Res = Game::Systems::HarvestSystem::GetResources(std::min(Player, 7));
+                auto& Res = Game::Systems::HarvestSystem::GetResources(Player);
                 if (Cond.Extra == 0 || Cond.Extra == 2) Total += Res.Minerals;
                 if (Cond.Extra == 1 || Cond.Extra == 2) Total += Res.VespeneGas;
             }
@@ -542,7 +597,7 @@ bool TriggerVM::TestCondition(Core::ECS::EntityManager& EM, const SCRCondition& 
         {
             bool WantsMost = Cond.ConditionType == 10;
             auto ResValue = [](int P) {
-                auto& Res = Game::Systems::HarvestSystem::GetResources(std::min(P, 7));
+                auto& Res = Game::Systems::HarvestSystem::GetResources(P);
                 return Res.Minerals + Res.VespeneGas;
             };
             int OwnerRes = ResValue(Owner);
@@ -706,7 +761,10 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
         case 16:
             StartAIScript(EM, Owner, Action.Secondary, Action.LocationID, Type == 16);
             return true;
-        case 17: case 18: case 19: case 20: case 21:
+        case 17: case 18:
+            Emit(Type, Owner, mData.GetString(Action.StringID), {}, Action.UnitID);
+            return true;
+        case 19: case 20: case 21:
         case 32: case 33: case 34: case 35: case 36: case 37: case 40:
             Emit(Type, Owner, mData.GetString(Action.StringID), {}, Action.Secondary);
             return true;
@@ -736,7 +794,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
         case 26:
             for (int Player : ResolvePlayers(Owner, Action.PlayerID))
             {
-                auto& Res = Game::Systems::HarvestSystem::GetResources(std::min(Player, 7));
+                auto& Res = Game::Systems::HarvestSystem::GetResources(Player);
                 if (Action.UnitID == 0 || Action.UnitID == 2) ApplyNumberModifier(Res.Minerals, Modifier, (int)Action.Secondary);
                 if (Action.UnitID == 1 || Action.UnitID == 2) ApplyNumberModifier(Res.VespeneGas, Modifier, (int)Action.Secondary);
             }
@@ -745,7 +803,10 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             for (int Player : ResolvePlayers(Owner, Action.PlayerID))
                 ApplyNumberModifier(mScores[(size_t)std::min(Player, 11)], Modifier, (int)Action.Secondary);
             return true;
-        case 29: case 30: case 31:
+        case 29:
+            Emit(Type, Owner, "", {}, Action.UnitID, {}, Action.Time);
+            return true;
+        case 30: case 31:
             Emit(Type, Owner, "", {}, Action.UnitID);
             return true;
         case 38:
@@ -782,7 +843,10 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             {
                 if (Limit > 0 && Done >= Limit) break;
                 if (auto* T = EM.GetComponent<TransformComponent>(ID))
+                {
                     T->Position = Dest->Center();
+                    ClearUnitMotionAfterTeleport(EM, ID);
+                }
                 ++Done;
             }
             return true;
@@ -798,7 +862,14 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             auto Units = FindMatchingUnits(EM, Owner, Action.PlayerID, Action.UnitID, Action.LocationID);
             for (int ID : Units)
                 if (auto* Unit = EM.GetComponent<UnitComponent>(ID))
-                    Unit->Armor = Modifier == 4 ? 999 : (Modifier == 5 ? 0 : Unit->Armor);
+                {
+                    if (Modifier == 4)
+                        Unit->IsInvincible = true;
+                    else if (Modifier == 5)
+                        Unit->IsInvincible = false;
+                    else if (Modifier == 6)
+                        Unit->IsInvincible = !Unit->IsInvincible;
+                }
             return true;
         }
         case 45:
@@ -831,7 +902,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             {
                 if (Limit > 0 && Done >= Limit) break;
                 if (auto* Player = EM.GetComponent<PlayerComponent>(ID))
-                    Player->PlayerID = (int)Action.Secondary;
+                    Player->PlayerID = NormalizeTriggerPlayerID(Action.Secondary);
                 ++Done;
             }
             return true;
@@ -850,6 +921,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                     if (Type == 49) Unit->HitPoints = std::max(1, Unit->MaxHitPoints * Percent / 100);
                     else if (Type == 50) Unit->EnergyPoints = Unit->MaxEnergyPoints * Percent / 100;
                     else if (Type == 51) Unit->ShieldPoints = Unit->MaxShieldPoints * Percent / 100;
+                    else if (Type == 53) Unit->HangarCount = std::max(0, (int)Action.Secondary);
                 }
                 ++Done;
             }
@@ -957,6 +1029,8 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
             auto& Combat = EM.AddComponent<CombatComponent>(Eid);
             Combat.GroundDamage = Def.GroundDamage;
             Combat.AirDamage = Def.AirDamage;
+            Combat.GroundDmgType = Def.GroundDmgType;
+            Combat.AirDmgType = Def.AirDmgType;
             Combat.AttackRange = Def.AttackRange;
             Combat.AttackCooldown = Def.AttackCooldown;
             Combat.CanTargetGround = Def.GroundDamage > 0;
@@ -964,6 +1038,7 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
             Combat.MyElevation = Game::Data::IsAirUnitType(ChkUnitID) ?
                 Elevation::Air :
                 Elevation::Ground;
+            Combat.IsRanged = Def.AttackRange > 1.5f;
         }
     }
     else if (IsBuildingUnitID(ChkUnitID))
@@ -1010,6 +1085,8 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         if (Props->ValidFieldFlags & 0x02) Unit.HitPoints = std::max(1, Unit.MaxHitPoints * Props->HitPointPercent / 100);
         if (Props->ValidFieldFlags & 0x04) Unit.ShieldPoints = Unit.MaxShieldPoints * Props->ShieldPercent / 100;
         if (Props->ValidFieldFlags & 0x08) Unit.EnergyPoints = Unit.MaxEnergyPoints * Props->EnergyPercent / 100;
+        if (Props->ValidFieldFlags & 0x20) Unit.HangarCount = std::max(0, (int)Props->HangarCount);
+        if (Props->ValidSpecialFlags & 0x10) Unit.IsInvincible = (Props->StateFlags & 0x10) != 0;
         if ((Props->ValidFieldFlags & 0x10) && EM.GetComponent<ResourceComponent>(Eid))
             EM.GetComponent<ResourceComponent>(Eid)->Amount = (int)Props->ResourceAmount;
         if (Props->ValidSpecialFlags & 0x13)
@@ -1065,6 +1142,61 @@ void TriggerVM::SyncDeathsFromEntityManager(Core::ECS::EntityManager& EM)
 
         RecordUnitDeath(Info.PlayerID, Info.UnitID, KillerPlayerID, AwardKill);
         It = mTrackedUnits.erase(It);
+    }
+}
+
+void TriggerVM::UpdateRescuePassiveUnits(Core::ECS::EntityManager& EM)
+{
+    if (mData.RawData.empty())
+        return;
+
+    const float RescueRangeSq = kRescuePassiveRangePixels * kRescuePassiveRangePixels;
+    auto EntityIds = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+    for (int RescueID : EntityIds)
+    {
+        auto* RescueTransform = EM.GetComponent<TransformComponent>(RescueID);
+        auto* RescueUnit = EM.GetComponent<UnitComponent>(RescueID);
+        auto* RescuePlayer = EM.GetComponent<PlayerComponent>(RescueID);
+        if (!RescueTransform || !RescueUnit || !RescuePlayer || RescueUnit->HitPoints <= 0)
+            continue;
+        if (!RuntimePlayerHasOwner(mData, RescuePlayer->PlayerID, kChkOwnerRescuePassive))
+            continue;
+        if (EM.GetComponent<ResourceComponent>(RescueID))
+            continue;
+
+        for (int RescuerID : EntityIds)
+        {
+            if (RescuerID == RescueID)
+                continue;
+
+            auto* RescuerTransform = EM.GetComponent<TransformComponent>(RescuerID);
+            auto* RescuerUnit = EM.GetComponent<UnitComponent>(RescuerID);
+            auto* RescuerPlayer = EM.GetComponent<PlayerComponent>(RescuerID);
+            if (!RescuerTransform || !RescuerUnit || !RescuerPlayer || RescuerUnit->HitPoints <= 0)
+                continue;
+            if (!RuntimePlayerHasOwner(mData, RescuerPlayer->PlayerID, kChkOwnerHuman))
+                continue;
+            if (EM.GetComponent<ResourceComponent>(RescuerID) ||
+                EM.GetComponent<BuildingComponent>(RescuerID))
+            {
+                continue;
+            }
+
+            const Core::Math::Vec2 Delta =
+                RescueTransform->Position - RescuerTransform->Position;
+            if (Delta.X * Delta.X + Delta.Y * Delta.Y > RescueRangeSq)
+                continue;
+
+            const int OldPlayerID = RescuePlayer->PlayerID;
+            RescuePlayer->PlayerID = RescuerPlayer->PlayerID;
+            Logger::Info(
+                "TriggerVM",
+                "Rescued passive unit entity=" + std::to_string(RescueID) +
+                    " unit=" + std::to_string(RescueUnit->ChkUnitID) +
+                    " from player=" + std::to_string(OldPlayerID) +
+                    " to player=" + std::to_string(RescuePlayer->PlayerID));
+            break;
+        }
     }
 }
 

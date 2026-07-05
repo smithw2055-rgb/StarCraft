@@ -27,6 +27,9 @@ namespace Game::Systems
 
 namespace
 {
+    constexpr int kDirectionalImage = 234;
+    constexpr int kGoliathChkUnit = 3;
+
     void Require(bool Value, const char* Message)
     {
         if (!Value)
@@ -36,19 +39,48 @@ namespace
         }
     }
 
-    int SpawnIdleDirectionalUnit(Core::ECS::EntityManager& EM, float FacingAngle)
+    int FindDirectionalAttackImage()
     {
-        constexpr int kGoliathImage = 234;
-        constexpr int kGoliathChkUnit = 3;
+        Game::IScriptDatabase Database;
+        Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+                "load iscript database for attack direction test");
 
+        for (int ImageID = 0; ImageID < 999; ++ImageID)
+        {
+            const auto* ImageInfo = Database.FindImageInfo(ImageID);
+            if (!ImageInfo || !ImageInfo->HasDirectionalFrames || ImageInfo->IScriptID < 0)
+                continue;
+
+            const auto* Script = Database.FindScript(ImageInfo->IScriptID);
+            if (!Script ||
+                Game::IScriptAnims::Anim_GndAttkInit >= (int)Script->AnimationPC.size() ||
+                Game::IScriptAnims::Anim_Init >= (int)Script->AnimationPC.size() ||
+                Script->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init] <= 0 ||
+                Script->AnimationPC[(size_t)Game::IScriptAnims::Anim_GndAttkInit] <= 0)
+            {
+                continue;
+            }
+
+            return ImageID;
+        }
+
+        Require(false, "find directional image with ground attack iscript");
+        return -1;
+    }
+
+    int SpawnIdleDirectionalUnit(Core::ECS::EntityManager& EM,
+                                 float FacingAngle,
+                                 int TotalFrames = 256,
+                                 int ImageID = kDirectionalImage)
+    {
         const int EntityID = EM.CreateEntity();
         auto& Trans = EM.AddComponent<Game::Components::TransformComponent>(EntityID);
         Trans.Position = {128.0f, 128.0f};
 
         auto& Render = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
-        Render.ImageID = kGoliathImage;
+        Render.ImageID = (uint32_t)ImageID;
         Render.FrameIndex = 0;
-        Render.TotalFrames = 256;
+        Render.TotalFrames = TotalFrames;
 
         auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
         Unit.ChkUnitID = kGoliathChkUnit;
@@ -74,13 +106,38 @@ namespace
         Path->CurrentVelocity = {TargetX >= Trans->Position.X ? 64.0f : -64.0f, 0.0f};
         return EntityID;
     }
+
+    int SpawnPendingAttackUnit(Core::ECS::EntityManager& EM,
+                               int AttackImageID,
+                               Core::Math::Vec2 TargetPos)
+    {
+        const int EntityID = EM.CreateEntity();
+        auto& Trans = EM.AddComponent<Game::Components::TransformComponent>(EntityID);
+        Trans.Position = {128.0f, 128.0f};
+
+        auto& Render = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
+        Render.ImageID = (uint32_t)AttackImageID;
+        Render.FrameIndex = 0;
+        Render.TotalFrames = 256;
+
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.ChkUnitID = kGoliathChkUnit;
+
+        auto& Combat = EM.AddComponent<Game::Components::CombatComponent>(EntityID);
+        Combat.PendingAttackFrame = true;
+        Combat.PendingAttackTargetEntityID = -1;
+        Combat.PendingAttackTargetPos = TargetPos;
+        Combat.AttackCooldown = 1.0f;
+        return EntityID;
+    }
 }
 
 int main()
 {
     Require(Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
-                234, Game::IScriptAnims::Anim_Init),
+                kDirectionalImage, Game::IScriptAnims::Anim_Init),
             "goliath image has idle/init iscript");
+    const int DirectionalAttackImage = FindDirectionalAttackImage();
 
     Core::ECS::SystemManager SysMgr;
     auto& EM = SysMgr.GetEntityManager();
@@ -96,6 +153,14 @@ int main()
     Require(EastRender->FrameIndex != WestRender->FrameIndex ||
                 EastRender->Flipped != WestRender->Flipped,
             "idle units use facing direction for their standing frame");
+
+    const int UnknownFrameCount = SpawnIdleDirectionalUnit(EM, 3.14159265359f, 1);
+    Anim.Update(1.0f / 24.0f);
+    auto* UnknownFrameRender = EM.GetComponent<Game::Components::RenderComponent>(UnknownFrameCount);
+    Require(UnknownFrameRender && UnknownFrameRender->TotalFrames > 1,
+            "iscript animation expands unknown render frame count before renderer backfills sprites");
+    Require(UnknownFrameRender->FrameIndex > 0 || UnknownFrameRender->Flipped,
+            "unknown frame count entity keeps the directional iscript frame instead of clamping to zero");
 
     auto* EastPath = EM.GetComponent<Game::Components::PathfindingComponent>(EastIdle);
     EastPath->FacingAngle = 3.14159265359f;
@@ -135,6 +200,36 @@ int main()
     Require(WalkEastRender->FrameIndex == StoppedFrame &&
                 WalkEastRender->Flipped == StoppedFlipped,
             "stopped unit settles to a stable idle frame instead of continuing walking");
+
+    const int AttackEast = SpawnPendingAttackUnit(EM, DirectionalAttackImage, {192.0f, 128.0f});
+    const int AttackWest = SpawnPendingAttackUnit(EM, DirectionalAttackImage, {64.0f, 128.0f});
+    Anim.Update(1.0f / 24.0f);
+
+    auto* AttackEastRender = EM.GetComponent<Game::Components::RenderComponent>(AttackEast);
+    auto* AttackWestRender = EM.GetComponent<Game::Components::RenderComponent>(AttackWest);
+    Require(AttackEastRender && AttackWestRender,
+            "pending attack units have render components");
+    Require(AttackEastRender->FrameIndex != AttackWestRender->FrameIndex ||
+                AttackEastRender->Flipped != AttackWestRender->Flipped,
+            "pending attack animation uses target position direction when target entity is absent");
+
+    const int FrozenIdleReference =
+        SpawnIdleDirectionalUnit(EM, 0.0f, 256, DirectionalAttackImage);
+    const int FrozenPendingAttack =
+        SpawnPendingAttackUnit(EM, DirectionalAttackImage, {64.0f, 128.0f});
+    EM.AddComponent<Game::Components::StatusEffectComponent>(FrozenPendingAttack)
+        .AddEffect(Game::Components::StatusEffect::Stasis, 5.0f, -1);
+    Anim.Update(1.0f / 24.0f);
+
+    auto* FrozenIdleRender =
+        EM.GetComponent<Game::Components::RenderComponent>(FrozenIdleReference);
+    auto* FrozenAttackRender =
+        EM.GetComponent<Game::Components::RenderComponent>(FrozenPendingAttack);
+    Require(FrozenIdleRender && FrozenAttackRender,
+            "frozen pending attack comparison units have render components");
+    Require(FrozenAttackRender->FrameIndex == FrozenIdleRender->FrameIndex &&
+                FrozenAttackRender->Flipped == FrozenIdleRender->Flipped,
+            "frozen pending attack uses idle direction instead of attack target direction");
 
     std::printf("AnimationRuntimeDirectionTest passed\n");
     return 0;

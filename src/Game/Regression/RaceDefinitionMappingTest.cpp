@@ -45,6 +45,7 @@ int main()
     RequireUnit(7, "SCV", Race::Terran, false);
     RequireUnit(106, "CommandCenter", Race::Terran, true);
     RequireUnit(41, "Drone", Race::Zerg, false);
+    RequireUnit(42, "Overlord", Race::Zerg, false);
     RequireUnit(43, "Mutalisk", Race::Zerg, false);
     RequireUnit(131, "Hatchery", Race::Zerg, true);
     RequireUnit(64, "Probe", Race::Protoss, false);
@@ -60,6 +61,12 @@ int main()
     Require(!Game::Data::IsAirUnitType(41), "Drone raw CHK id is treated as ground");
     Require(!Game::Data::IsAirUnitType(64), "Probe raw CHK id is treated as ground");
     Require(!Game::Data::IsAirUnitType(78), "Hero Fenix Dragoon raw CHK id is treated as ground");
+
+    const int OverlordDefID = Game::Races::GetUnitDefID("Overlord");
+    const auto OverlordDef = Game::Races::GetUnitDefByID(OverlordDefID);
+    Require(OverlordDef.SupplyCost == 0, "Overlord does not consume supply");
+    Require(Game::Races::GetSupplyProvidedByDefID(OverlordDefID) == 8,
+        "Overlord provides Zerg supply");
 
     Require(Bootstrap::Detail::TownHallDefForRace(Bootstrap::Detail::StartRace::Terran) ==
             Game::Races::GetUnitDefID("CommandCenter"),

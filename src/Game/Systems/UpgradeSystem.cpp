@@ -213,6 +213,9 @@ void UpgradeSystem::Update(float DeltaTime)
     {
         auto* Bldg = EM.GetComponent<BuildingComponent>(ID);
         if (!Bldg || !Bldg->IsResearching) continue;
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        if (Bldg->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+            continue;
 
         Bldg->BuildTimeRemaining -= DeltaTime;
         if (Bldg->BuildTimeRemaining <= 0.0f)
@@ -264,6 +267,22 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
     if (Building->UnderConstruction)
     {
         SetReason(OutReason, "building is still under construction");
+        return false;
+    }
+    if (Building->IsResearching)
+    {
+        SetReason(OutReason, "building is already researching");
+        return false;
+    }
+    auto* ProducerUnit = MutableEM.GetComponent<UnitComponent>(BuildingID);
+    if (!ProducerUnit || ProducerUnit->HitPoints <= 0)
+    {
+        SetReason(OutReason, "research producer is not operational");
+        return false;
+    }
+    if (!MutableEM.GetComponent<Game::Components::TransformComponent>(BuildingID))
+    {
+        SetReason(OutReason, "research producer missing transform");
         return false;
     }
 
@@ -363,6 +382,25 @@ std::string_view UpgradeSystem::GetResearchDisplayName(ResearchId ResearchId)
     if (const ResearchDef* Research = FindResearchDef(ResearchId))
         return Research->Name;
     return "Unknown Research";
+}
+
+bool UpgradeSystem::GetResearchCost(ResearchId ResearchId,
+                                    int PlayerID,
+                                    int& OutMinerals,
+                                    int& OutGas)
+{
+    const ResearchDef* Research = FindResearchDef(ResearchId);
+    if (!Research)
+    {
+        OutMinerals = 0;
+        OutGas = 0;
+        return false;
+    }
+
+    const int CurrentLevel = GetResearchLevel(PlayerID, ResearchId);
+    OutMinerals = Research->MineralCost + CurrentLevel * Research->MineralStep;
+    OutGas = Research->GasCost + CurrentLevel * Research->GasStep;
+    return true;
 }
 
 int UpgradeSystem::GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID)

@@ -39,7 +39,11 @@ inline std::string Ellipsize(const std::string& Text, size_t MaxChars)
 inline int IconForDef(int DefID)
 {
     const auto Def = Game::Races::GetUnitDefByID(DefID);
-    return Def.DefaultIconIndex >= 0 ? Def.DefaultIconIndex : DefID;
+    if (Def.DefaultIconIndex >= 0)
+        return Def.DefaultIconIndex;
+    if (Def.ChkUnitID > 0)
+        return Def.ChkUnitID;
+    return DefID;
 }
 
 inline int CommandIconForCommand(HudCommandId CommandId)

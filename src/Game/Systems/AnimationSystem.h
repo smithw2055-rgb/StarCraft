@@ -59,12 +59,18 @@ public:
                                               bool WasWalking,
                                               bool IsPendingAttack,
                                               const std::function<bool(int)>& HasAnim);
+    static bool ShouldClearImageTreeForAnimRestart(bool IsBuilding,
+                                                   bool ImageOrScriptChanged,
+                                                   int PreviousAnim,
+                                                   int TargetAnim,
+                                                   bool UnderConstruction);
     static AnimState GetAnimStateFromComponents(const Components::CommandComponent* Cmd,
                                                   const Components::CombatComponent* Combat,
                                                   const Components::PathfindingComponent* Path,
                                                   const Components::UnitComponent* Unit,
                                                   const Components::BuildingComponent* Bldg,
-                                                  const Components::MorphComponent* Morph);
+                                                  const Components::MorphComponent* Morph,
+                                                  const Components::StatusEffectComponent* Status);
 private:
     struct EntityScriptState
     {
@@ -146,6 +152,7 @@ private:
                                 const Components::PlayerComponent* Player,
                                 Components::CombatComponent* Combat,
                                 const Components::BuildingComponent* Bldg,
+                                const Components::StatusEffectComponent* Status,
                                 const Components::ProductionComponent* Prod);
 };
 
@@ -160,6 +167,9 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
     bool IsPendingAttack,
     const std::function<bool(int)>& HasAnim)
 {
+    if (DesiredState == AnimState::Dying && HasAnim(Game::IScriptAnims::Anim_Death))
+        return Game::IScriptAnims::Anim_Death;
+
     if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_GndAttkInit))
         return Game::IScriptAnims::Anim_GndAttkInit;
     if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_AirAttkInit))
@@ -196,17 +206,41 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
     return -1;
 }
 
+inline bool AnimationSystem::ShouldClearImageTreeForAnimRestart(
+    bool IsBuilding,
+    bool ImageOrScriptChanged,
+    int PreviousAnim,
+    int TargetAnim,
+    bool UnderConstruction)
+{
+    if (ImageOrScriptChanged || UnderConstruction)
+        return true;
+
+    if (TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
+        TargetAnim == Game::IScriptAnims::Anim_AirAttkInit)
+        return true;
+
+    return !IsBuilding && PreviousAnim != TargetAnim;
+}
+
 inline AnimState AnimationSystem::GetAnimStateFromComponents(
     const Components::CommandComponent* Cmd,
     const Components::CombatComponent* Combat,
     const Components::PathfindingComponent* Path,
     const Components::UnitComponent* Unit,
     const Components::BuildingComponent* Bldg,
-    const Components::MorphComponent* Morph)
+    const Components::MorphComponent* Morph,
+    const Components::StatusEffectComponent* Status)
 {
-    (void)Unit;
+    if (Unit && Unit->HitPoints <= 0) return AnimState::Dying;
     if (Morph && Morph->IsMorphing) return AnimState::Morphing;
     if (Bldg && Bldg->UnderConstruction) return AnimState::Constructing;
+    if (Status && (Status->HasEffect(Components::StatusEffect::Stasis) ||
+                   Status->HasEffect(Components::StatusEffect::Lockdown) ||
+                   Status->HasEffect(Components::StatusEffect::Maelstrom)))
+    {
+        return AnimState::Idle;
+    }
     if (Path)
     {
         if (!Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())

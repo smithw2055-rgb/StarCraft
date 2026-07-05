@@ -22,7 +22,7 @@ MpqArchive::~MpqArchive()
 
 #ifdef HAS_STORMLIB
 
-// Normalize MPQ internal paths: forward slash â†?backslash
+// Normalize MPQ internal paths: forward slash -> backslash
 static std::string NormalizeMpqPath(const std::string& Path)
 {
     std::string Result = Path;

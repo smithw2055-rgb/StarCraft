@@ -98,6 +98,7 @@ std::optional<TilesetAtlas> BuildAtlasFromFrames(const std::vector<DecodedRgbaIm
     Atlas.FrameCount = Count;
     return Atlas;
 }
+
 }
 
 bool ResourceCache::BuildTilesetImages(const std::string& TilesetName)
@@ -105,10 +106,8 @@ bool ResourceCache::BuildTilesetImages(const std::string& TilesetName)
     auto* Ts = LoadTilesetData(TilesetName);
     if (!Ts || !Ts->Loaded) return false;
 
-    size_t MegatileCount = Ts->Vx4.size() / 16;
     auto& Images = mTilesets.ImagesByName[TilesetName];
     Images.clear();
-    Images.reserve(MegatileCount);
 
     auto TryRead = [&](const std::string& Base) -> std::optional<std::vector<uint8_t>>
     {
@@ -125,84 +124,38 @@ bool ResourceCache::BuildTilesetImages(const std::string& TilesetName)
         return ReadFile(Lower);
     };
 
-    constexpr int MegaW = 32, MegaH = 32;
-    constexpr int MiniW = 8, MiniH = 8;
-
-    if (mSources.UseExtractedAssets)
+    auto HdMegatileData = TryRead("Tileset/" + TilesetName + ".dds.vr4");
+    if (!HdMegatileData)
     {
-        auto HdMegatileData = TryRead("Tileset/" + TilesetName + ".dds.vr4");
-        if (HdMegatileData)
-        {
+        Core::Utils::Logger::Warning("ResourceCache",
+            "HD tileset megatile file not found for Tileset/" + TilesetName + ".dds.vr4");
+        return false;
+    }
+
 #ifdef _WIN32
-            auto HdFrames = LoadDdsGrpRgbaFrames(*HdMegatileData);
-            if (HdFrames && !HdFrames->empty())
-            {
-                Images.reserve(HdFrames->size());
-                for (const auto& Frame : *HdFrames)
-                {
-                    Images.push_back(UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data()));
-                }
-
-                Core::Utils::Logger::Info("ResourceCache",
-                    "Loaded HD tileset megatiles from Tileset/" + TilesetName + ".dds.vr4: " +
-                    std::to_string(Images.size()) + " frames");
-                return !Images.empty();
-            }
-            Core::Utils::Logger::Warning("ResourceCache",
-                "Failed to decode HD tileset megatiles from Tileset/" + TilesetName + ".dds.vr4");
-#else
-            Core::Utils::Logger::Info("ResourceCache",
-                "HD tileset megatile decode is unavailable on this platform for Tileset/" +
-                TilesetName + ".dds.vr4");
-#endif
-        }
-        else
-        {
-            Core::Utils::Logger::Info("ResourceCache",
-                "HD tileset megatile file not found for Tileset/" + TilesetName + ".dds.vr4");
-        }
-    }
-
-    std::vector<uint8_t> Pixels(MegaW * MegaH * 4, 0);
-
-    for (size_t M = 0; M < MegatileCount; M++)
+    auto HdFrames = LoadDdsGrpRgbaFrames(*HdMegatileData);
+    if (HdFrames && !HdFrames->empty())
     {
-        std::memset(Pixels.data(), 0, Pixels.size());
-        for (int Iy = 0; Iy < 4; Iy++)
+        Images.reserve(HdFrames->size());
+        for (const auto& Frame : *HdFrames)
         {
-            for (int Ix = 0; Ix < 4; Ix++)
-            {
-                size_t Vx4Off = M * 16 + Iy * 4 + Ix;
-                if (Vx4Off >= Ts->Vx4.size()) continue;
-                uint16_t ImgIdx = Ts->Vx4[Vx4Off];
-                size_t Vr4Entry = ImgIdx / 2;
-                bool Inverted = (ImgIdx & 1) != 0;
-                size_t Vr4Off = Vr4Entry * 64;
-                if (Vr4Off + 64 > Ts->Vr4.size()) continue;
-
-                for (int Py = 0; Py < MiniH; Py++)
-                {
-                    for (int Px = 0; Px < MiniW; Px++)
-                    {
-                        int SrcPx = Inverted ? (MiniW - 1 - Px) : Px;
-                        uint8_t PalIdx = (uint8_t)Ts->Vr4[Vr4Off + Py * MiniW + SrcPx];
-                        int DstX = Ix * MiniW + Px;
-                        int DstY = Iy * MiniH + Py;
-                        int DstOff = (DstY * MegaW + DstX) * 4;
-                        const SokoColor& C = mData.ActivePalette.Colors[PalIdx];
-                        Pixels[DstOff + 0] = C.R;
-                        Pixels[DstOff + 1] = C.G;
-                        Pixels[DstOff + 2] = C.B;
-                        Pixels[DstOff + 3] = C.A;
-                    }
-                }
-            }
+            Images.push_back(UploadRgbaFull(
+                Frame.Width, Frame.Height, Frame.Rgba.data()));
         }
-        Images.push_back(UploadRgbaFull(MegaW, MegaH, Pixels.data()));
+
+        Core::Utils::Logger::Info("ResourceCache",
+            "Loaded HD tileset megatiles from Tileset/" + TilesetName + ".dds.vr4: " +
+            std::to_string(Images.size()) + " frames");
+        return !Images.empty();
     }
+    Core::Utils::Logger::Warning("ResourceCache",
+        "Failed to decode HD tileset megatiles from Tileset/" + TilesetName + ".dds.vr4");
+#else
     Core::Utils::Logger::Info("ResourceCache",
-        "Built tileset " + TilesetName + ": " + std::to_string(Images.size()) + " megatiles");
-    return true;
+        "HD tileset megatile decode is unavailable on this platform for Tileset/" +
+        TilesetName + ".dds.vr4");
+#endif
+    return false;
 }
 
 bool ResourceCache::BuildTilesetAtlas(const std::string& TilesetName)
@@ -225,94 +178,39 @@ bool ResourceCache::BuildTilesetAtlas(const std::string& TilesetName)
         return ReadFile(Lower);
     };
 
-    if (mSources.UseExtractedAssets)
+    auto HdMegatileData = TryRead("Tileset/" + TilesetName + ".dds.vr4");
+    if (!HdMegatileData)
     {
-        auto HdMegatileData = TryRead("Tileset/" + TilesetName + ".dds.vr4");
-        if (HdMegatileData)
-        {
-#ifdef _WIN32
-            auto HdFrames = LoadDdsGrpRgbaFrames(*HdMegatileData);
-            if (HdFrames && !HdFrames->empty())
-            {
-                auto AtlasOpt = BuildAtlasFromFrames(*HdFrames);
-                if (AtlasOpt)
-                {
-                    mTilesets.AtlasesByName[TilesetName] = std::move(*AtlasOpt);
-                    const auto& Atlas = mTilesets.AtlasesByName[TilesetName];
-                    Core::Utils::Logger::Info("ResourceCache",
-                        "Loaded HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4: " +
-                        std::to_string(Atlas.FrameCount) + " frames " +
-                        std::to_string(Atlas.Image.Width) + "x" +
-                        std::to_string(Atlas.Image.Height));
-                    return true;
-                }
-            }
-            Core::Utils::Logger::Warning("ResourceCache",
-                "Failed to build HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4");
-#else
-            Core::Utils::Logger::Info("ResourceCache",
-                "HD tileset atlas decode is unavailable on this platform for Tileset/" +
-                TilesetName + ".dds.vr4");
-#endif
-        }
-    }
-
-    constexpr int MegaW = 32, MegaH = 32;
-    constexpr int MiniW = 8, MiniH = 8;
-    const size_t MegatileCount = Ts->Vx4.size() / 16;
-    std::vector<DecodedRgbaImage> Frames;
-    Frames.reserve(MegatileCount);
-
-    for (size_t M = 0; M < MegatileCount; M++)
-    {
-        DecodedRgbaImage Frame;
-        Frame.Width = MegaW;
-        Frame.Height = MegaH;
-        Frame.Rgba.resize((size_t)MegaW * (size_t)MegaH * 4u, 0);
-        for (int Iy = 0; Iy < 4; Iy++)
-        {
-            for (int Ix = 0; Ix < 4; Ix++)
-            {
-                size_t Vx4Off = M * 16 + Iy * 4 + Ix;
-                if (Vx4Off >= Ts->Vx4.size()) continue;
-                uint16_t ImgIdx = Ts->Vx4[Vx4Off];
-                size_t Vr4Entry = ImgIdx / 2;
-                bool Inverted = (ImgIdx & 1) != 0;
-                size_t Vr4Off = Vr4Entry * 64;
-                if (Vr4Off + 64 > Ts->Vr4.size()) continue;
-
-                for (int Py = 0; Py < MiniH; Py++)
-                {
-                    for (int Px = 0; Px < MiniW; Px++)
-                    {
-                        int SrcPx = Inverted ? (MiniW - 1 - Px) : Px;
-                        uint8_t PalIdx = (uint8_t)Ts->Vr4[Vr4Off + Py * MiniW + SrcPx];
-                        int DstX = Ix * MiniW + Px;
-                        int DstY = Iy * MiniH + Py;
-                        int DstOff = (DstY * MegaW + DstX) * 4;
-                        const SokoColor& C = mData.ActivePalette.Colors[PalIdx];
-                        Frame.Rgba[(size_t)DstOff + 0] = C.R;
-                        Frame.Rgba[(size_t)DstOff + 1] = C.G;
-                        Frame.Rgba[(size_t)DstOff + 2] = C.B;
-                        Frame.Rgba[(size_t)DstOff + 3] = C.A;
-                    }
-                }
-            }
-        }
-        Frames.push_back(std::move(Frame));
-    }
-
-    auto AtlasOpt = BuildAtlasFromFrames(Frames);
-    if (!AtlasOpt)
+        Core::Utils::Logger::Warning("ResourceCache",
+            "HD tileset atlas file not found for Tileset/" + TilesetName + ".dds.vr4");
         return false;
-    mTilesets.AtlasesByName[TilesetName] = std::move(*AtlasOpt);
-    const auto& Atlas = mTilesets.AtlasesByName[TilesetName];
+    }
+
+#ifdef _WIN32
+    auto HdFrames = LoadDdsGrpRgbaFrames(*HdMegatileData);
+    if (HdFrames && !HdFrames->empty())
+    {
+        auto AtlasOpt = BuildAtlasFromFrames(*HdFrames);
+        if (AtlasOpt)
+        {
+            mTilesets.AtlasesByName[TilesetName] = std::move(*AtlasOpt);
+            const auto& Atlas = mTilesets.AtlasesByName[TilesetName];
+            Core::Utils::Logger::Info("ResourceCache",
+                "Loaded HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4: " +
+                std::to_string(Atlas.FrameCount) + " frames " +
+                std::to_string(Atlas.Image.Width) + "x" +
+                std::to_string(Atlas.Image.Height));
+            return true;
+        }
+    }
+    Core::Utils::Logger::Warning("ResourceCache",
+        "Failed to build HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4");
+#else
     Core::Utils::Logger::Info("ResourceCache",
-        "Built tileset atlas " + TilesetName + ": " +
-        std::to_string(Atlas.FrameCount) + " megatiles " +
-        std::to_string(Atlas.Image.Width) + "x" +
-        std::to_string(Atlas.Image.Height));
-    return true;
+        "HD tileset atlas decode is unavailable on this platform for Tileset/" +
+        TilesetName + ".dds.vr4");
+#endif
+    return false;
 }
 
 const std::vector<GpuImage>* ResourceCache::GetTilesetImages(const std::string& TilesetName)

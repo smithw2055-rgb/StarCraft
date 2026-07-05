@@ -159,6 +159,53 @@ int main()
     Require(Trans.Position.X == 0.0f && Trans.Position.Y == 0.0f,
         "Stop command prevents movement along stale path");
 
+    Core::ECS::SystemManager EnsnareSysMgr;
+    auto& EnsnareEM = EnsnareSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem EnsnareMovement(EnsnareSysMgr);
+    int EnsnaredUnit = CreateMovableUnit(
+        EnsnareEM, {0.0f, 32.0f}, {256.0f, 32.0f},
+        0, Game::Components::UnitSize::Small, 16);
+    auto& EnsnareStatus =
+        EnsnareEM.AddComponent<Game::Components::StatusEffectComponent>(EnsnaredUnit);
+    EnsnareStatus.AddEffect(Game::Components::StatusEffect::Ensnare, 8.0f, -1);
+    auto* EnsnarePath =
+        EnsnareEM.GetComponent<Game::Components::PathfindingComponent>(EnsnaredUnit);
+    Require(EnsnarePath, "ensnared movement test unit has path component");
+    EnsnareMovement.Update(0.1f);
+    Require(EnsnarePath->CurrentSpeed == 32.0f,
+        "Ensnare halves movement target speed while the status is active");
+    EnsnareStatus.RemoveEffect(Game::Components::StatusEffect::Ensnare);
+    EnsnareMovement.Update(0.1f);
+    Require(EnsnarePath->CurrentSpeed == 64.0f,
+        "movement speed returns to normal after Ensnare is removed");
+
+    Core::ECS::SystemManager StasisSysMgr;
+    auto& StasisEM = StasisSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem StasisMovement(StasisSysMgr);
+    int StasisUnit = CreateMovableUnit(
+        StasisEM, {0.0f, 64.0f}, {256.0f, 64.0f},
+        7, Game::Components::UnitSize::Small, 16);
+    auto& StasisStatus =
+        StasisEM.AddComponent<Game::Components::StatusEffectComponent>(StasisUnit);
+    StasisStatus.AddEffect(Game::Components::StatusEffect::Stasis, 8.0f, -1);
+    auto* StasisPath =
+        StasisEM.GetComponent<Game::Components::PathfindingComponent>(StasisUnit);
+    auto* StasisTrans =
+        StasisEM.GetComponent<Game::Components::TransformComponent>(StasisUnit);
+    Require(StasisPath && StasisTrans, "stasis movement test unit has path and transform data");
+    StasisMovement.Update(0.2f);
+    Require(StasisTrans->Position.X == 0.0f && StasisTrans->Position.Y == 64.0f,
+        "Stasis pauses movement without advancing along the active path");
+    Require(!StasisPath->Path.empty() && StasisPath->PathIndex == 0,
+        "Stasis preserves the active movement path for resume");
+    Require(StasisPath->CurrentSpeed == 0.0f &&
+            StasisPath->CurrentVelocity.Length() == 0.0f,
+        "Stasis zeroes movement speed while frozen");
+    StasisStatus.RemoveEffect(Game::Components::StatusEffect::Stasis);
+    StasisMovement.Update(0.1f);
+    Require(StasisTrans->Position.X > 0.0f,
+        "movement resumes along the preserved path after Stasis ends");
+
     Core::ECS::SystemManager CrowdSysMgr;
     auto& CrowdEM = CrowdSysMgr.GetEntityManager();
     Game::Systems::MovementSystem CrowdMovement(CrowdSysMgr);
@@ -220,6 +267,23 @@ int main()
         "sieged tank does not move until unsieged");
     Require(TankPath && TankPath->Path.empty(),
         "sieged tank movement path is cleared");
+
+    int DeadScv = CreateMovableUnit(
+        ImmobileEM, {64.0f, 192.0f}, {256.0f, 192.0f},
+        7,
+        Game::Components::UnitSize::Small, 12);
+    auto* DeadScvUnit = ImmobileEM.GetComponent<Game::Components::UnitComponent>(DeadScv);
+    auto* DeadScvTrans = ImmobileEM.GetComponent<Game::Components::TransformComponent>(DeadScv);
+    auto* DeadScvPath = ImmobileEM.GetComponent<Game::Components::PathfindingComponent>(DeadScv);
+    Require(DeadScvUnit && DeadScvTrans && DeadScvPath,
+        "dead movement coverage has unit, transform, and path data");
+    DeadScvUnit->HitPoints = 0;
+    ImmobileMovement.Update(0.2f);
+    Require(DeadScvTrans->Position.X == 64.0f &&
+            DeadScvTrans->Position.Y == 192.0f,
+        "dead units do not move along stale paths before destruction cleanup");
+    Require(DeadScvPath->Path.empty(),
+        "dead units clear stale movement paths before destruction cleanup");
 
     Core::ECS::SystemManager BlockerSysMgr;
     auto& BlockerEM = BlockerSysMgr.GetEntityManager();

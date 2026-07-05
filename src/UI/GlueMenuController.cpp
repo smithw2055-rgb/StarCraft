@@ -1,4 +1,5 @@
 #include "GlueMenuController.h"
+#include "GlueAnimatedImage.h"
 #include "UI/GlueCampaignData.h"
 #include "Game/Campaign/CampaignMissionCatalog.h"
 #include "Game/Campaign/CampaignProgressStore.h"
@@ -8,12 +9,13 @@
 #include <NsGui/FrameworkElement.h>
 #include <NsGui/TextBlock.h>
 #include <NsGui/TimeSpan.h>
+#include <NsGui/UIElementEvents.h>
 #include <NsGui/Uri.h>
 #include <NsGui/IntegrationAPI.h>
-#include <NsApp/MediaElement.h>
 #include <cstdio>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 
 namespace Game::Client::UI::Glue
 {
@@ -46,6 +48,7 @@ void GlueMenuController::CacheElements()
     auto* Root = this;
 
     mMainMenuPage = Aero::DynamicCast<Aero::Border*>(Root->FindName("MainMenuPage"));
+    mCinematicsPage = Aero::DynamicCast<Aero::Border*>(Root->FindName("CinematicsPage"));
     mSinglePlayerPage = Aero::DynamicCast<Aero::Border*>(Root->FindName("SinglePlayerPage"));
     mCampaignPage = Aero::DynamicCast<Aero::Border*>(Root->FindName("CampaignPage"));
     mCustomGamePage = Aero::DynamicCast<Aero::Border*>(Root->FindName("CustomGamePage"));
@@ -57,8 +60,10 @@ void GlueMenuController::CacheElements()
     mCustomGameBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("CustomGameButton"));
     mMultiplayerBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("MultiplayerButton"));
     mEditorBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("EditorButton"));
+    mIntroBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("IntroButton"));
     mExitBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("ExitButton"));
     mLanguageBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("LanguageButton"));
+    mCinematicsBackBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("CinematicsBackButton"));
 
     mMainSingleLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainSingleLabelEn"));
     mMainSingleLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainSingleLabelZh"));
@@ -66,6 +71,8 @@ void GlueMenuController::CacheElements()
     mMainMultiplayerLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainMultiplayerLabelZh"));
     mMainOptionsLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainOptionsLabelEn"));
     mMainOptionsLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainOptionsLabelZh"));
+    mMainFavoritesLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainFavoritesLabelEn"));
+    mMainFavoritesLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainFavoritesLabelZh"));
     mMainHotkeysLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainHotkeysLabelEn"));
     mMainHotkeysLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainHotkeysLabelZh"));
     mMainCreditsLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("MainCreditsLabelEn"));
@@ -77,11 +84,29 @@ void GlueMenuController::CacheElements()
     mLanguageLabelEn = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("LanguageLabelEn"));
     mLanguageLabelZh = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("LanguageLabelZh"));
 
-    if (mSinglePlayerBtn) mSinglePlayerBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnSinglePlayer);
+    if (mSinglePlayerBtn)
+    {
+        mSinglePlayerBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnSinglePlayer);
+        mSinglePlayerBtn->MouseEnter() += Aero::MakeDelegate(this, &GlueMenuController::OnMainSingleMouseEnter);
+        mSinglePlayerBtn->MouseLeave() += Aero::MakeDelegate(this, &GlueMenuController::OnMainMouseLeave);
+    }
+    if (mMultiplayerBtn)
+    {
+        mMultiplayerBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnCustomGame);
+        mMultiplayerBtn->MouseEnter() += Aero::MakeDelegate(this, &GlueMenuController::OnMainMultiMouseEnter);
+        mMultiplayerBtn->MouseLeave() += Aero::MakeDelegate(this, &GlueMenuController::OnMainMouseLeave);
+    }
     if (mCampaignBtn) mCampaignBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnCampaign);
     if (mCustomGameBtn) mCustomGameBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnCustomGame);
-    if (mExitBtn) mExitBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnExit);
+    if (mIntroBtn) mIntroBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnIntro);
+    if (mExitBtn)
+    {
+        mExitBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnExit);
+        mExitBtn->MouseEnter() += Aero::MakeDelegate(this, &GlueMenuController::OnMainExitMouseEnter);
+        mExitBtn->MouseLeave() += Aero::MakeDelegate(this, &GlueMenuController::OnMainMouseLeave);
+    }
     if (mLanguageBtn) mLanguageBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnLanguageToggle);
+    if (mCinematicsBackBtn) mCinematicsBackBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnBackToMain);
 
     mOriginalBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("OriginalButton"));
     mExpansionBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("ExpansionButton"));
@@ -109,24 +134,6 @@ void GlueMenuController::CacheElements()
     mCampaignBackBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("CampaignBackBtn"));
     mCampaignLoadBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("CampaignLoadButton"));
     mCampaignPlayCustomBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("CampaignPlayCustomButton"));
-    const char* CampaignMediaNames[] = {
-        "CampaignZergVideo",
-        "CampaignDiskZergVideo",
-        "CampaignTerranVideo",
-        "CampaignDiskTerranVideo",
-        "CampaignProtossVideo",
-        "CampaignDiskProtossVideo"
-    };
-    for (int i = 0; i < 6; ++i)
-    {
-        mCampaignMedia[i] = Aero::DynamicCast<AeroApp::MediaElement*>(Root->FindName(CampaignMediaNames[i]));
-        if (mCampaignMedia[i])
-        {
-            mCampaignMedia[i]->MediaEnded() += Aero::MakeDelegate(this, &GlueMenuController::OnCampaignMediaEnded);
-            mCampaignMedia[i]->MediaOpened() += Aero::MakeDelegate(this, &GlueMenuController::OnCampaignMediaOpened);
-            mCampaignMedia[i]->MediaFailed() += Aero::MakeDelegate(this, &GlueMenuController::OnCampaignMediaFailed);
-        }
-    }
 
     if (mTerranTabBtn) mTerranTabBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnTerranTab);
     if (mZergTabBtn) mZergTabBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnZergTab);
@@ -191,6 +198,70 @@ void GlueMenuController::CacheElements()
         }
     }
 
+    CacheAnimatedElements();
+}
+
+void GlueMenuController::CacheAnimatedElements()
+{
+    auto* Root = this;
+    mMainMenuVideos[0] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName("MainSingleHoverVideo"));
+    mMainMenuVideos[1] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName("MainMultiHoverVideo"));
+    mMainMenuVideos[2] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName("MainExitHoverVideo"));
+
+    const char* VideoNames[2][3][2] = {
+        {
+            {"CampaignOriginalTerranVideo", "CampaignOriginalTerranDiskVideo"},
+            {"CampaignOriginalZergVideo", "CampaignOriginalZergDiskVideo"},
+            {"CampaignOriginalProtossVideo", "CampaignOriginalProtossDiskVideo"}
+        },
+        {
+            {"CampaignExpansionTerranVideo", "CampaignExpansionTerranDiskVideo"},
+            {"CampaignExpansionZergVideo", "CampaignExpansionZergDiskVideo"},
+            {"CampaignExpansionProtossVideo", "CampaignExpansionProtossDiskVideo"}
+        }
+    };
+    const char* SelectedNames[2][3] = {
+        {"CampaignOriginalTerranSelected", "CampaignOriginalZergSelected", "CampaignOriginalProtossSelected"},
+        {"CampaignExpansionTerranSelected", "CampaignExpansionZergSelected", "CampaignExpansionProtossSelected"}
+    };
+    const char* MaskNames[2][3] = {
+        {"CampaignOriginalTerranMask", "CampaignOriginalZergMask", "CampaignOriginalProtossMask"},
+        {"CampaignExpansionTerranMask", "CampaignExpansionZergMask", "CampaignExpansionProtossMask"}
+    };
+
+    for (int Set = 0; Set < 2; ++Set)
+    {
+        for (int Race = 0; Race < 3; ++Race)
+        {
+            for (int Part = 0; Part < 2; ++Part)
+                mCampaignRaceVideos[Set][Race][Part] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName(VideoNames[Set][Race][Part]));
+            mCampaignRaceSelectedVideos[Set][Race] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName(SelectedNames[Set][Race]));
+            mCampaignRaceMasks[Set][Race] = Aero::DynamicCast<Aero::FrameworkElement*>(Root->FindName(MaskNames[Set][Race]));
+        }
+    }
+
+    StopMainMenuAnimations();
+    SetCampaignAnimationsEnabled(false, false);
+}
+
+void GlueMenuController::Update(double)
+{
+    for (int Set = 0; Set < 2; ++Set)
+    {
+        for (int Race = 0; Race < 3; ++Race)
+        {
+            auto* Mask = mCampaignRaceMasks[Set][Race];
+            if (!Mask)
+                continue;
+            float& Current = mCampaignRaceMaskOpacity[Set][Race];
+            const float Target = mCampaignRaceMaskTarget[Set][Race];
+            if (std::abs(Current - Target) <= 0.005f)
+                Current = Target;
+            else
+                Current += (Target - Current) * 0.18f;
+            Mask->SetOpacity(Current);
+        }
+    }
 }
 
 void GlueMenuController::ApplyState()
@@ -198,29 +269,150 @@ void GlueMenuController::ApplyState()
     ApplyLanguage();
 }
 
+void GlueMenuController::EmitMenuClick()
+{
+    Aero::GUI::PlayAudio(Aero::Uri("sound/glue/mousedown2.wav"), 0.6f);
+}
+
+void GlueMenuController::EmitMenuHover()
+{
+    Aero::GUI::PlayAudio(Aero::Uri("sound/glue/mouseover.wav"), 0.35f);
+}
+
+void GlueMenuController::SetMainMenuHover(int Index)
+{
+    if (mMainMenuHover == Index)
+        return;
+
+    mMainMenuHover = Index;
+    for (int i = 0; i < 3; ++i)
+    {
+        auto* Video = mMainMenuVideos[i];
+        if (!Video)
+            continue;
+        const bool Active = i == Index;
+        Video->SetOpacity(Active ? 0.96f : 0.0f);
+        Video->SetPlaybackActive(Active, Active);
+    }
+}
+
+void GlueMenuController::StopMainMenuAnimations()
+{
+    mMainMenuHover = -1;
+    for (auto* Video : mMainMenuVideos)
+    {
+        if (!Video)
+            continue;
+        Video->SetOpacity(0.0f);
+        Video->SetPlaybackActive(false);
+    }
+}
+
+void GlueMenuController::OnMainSingleMouseEnter(Aero::BaseComponent*, const Aero::MouseEventArgs&)
+{
+    EmitMenuHover();
+    SetMainMenuHover(0);
+}
+
+void GlueMenuController::OnMainMultiMouseEnter(Aero::BaseComponent*, const Aero::MouseEventArgs&)
+{
+    EmitMenuHover();
+    SetMainMenuHover(1);
+}
+
+void GlueMenuController::OnMainExitMouseEnter(Aero::BaseComponent*, const Aero::MouseEventArgs&)
+{
+    EmitMenuHover();
+    SetMainMenuHover(2);
+}
+
+void GlueMenuController::OnMainMouseLeave(Aero::BaseComponent*, const Aero::MouseEventArgs&)
+{
+    StopMainMenuAnimations();
+}
+
+void GlueMenuController::SetCampaignAnimationsEnabled(bool Enabled, bool RestartActive)
+{
+    mCampaignAnimationsEnabled = Enabled;
+    ApplyCampaignAnimationState(RestartActive);
+}
+
+void GlueMenuController::SetCampaignMaskTarget(int Set, int Race, float Opacity)
+{
+    if (Set < 0 || Set >= 2 || Race < 0 || Race >= 3)
+        return;
+    const float Clamped = std::max(0.0f, std::min(Opacity, 1.0f));
+    mCampaignRaceMaskTarget[Set][Race] = Clamped;
+    mCampaignRaceMaskOpacity[Set][Race] = Clamped;
+    if (auto* Mask = mCampaignRaceMasks[Set][Race])
+        Mask->SetOpacity(Clamped);
+}
+
+void GlueMenuController::ApplyCampaignAnimationState(bool RestartActive)
+{
+    const int ActiveSet = mCampaignExpansion ? 1 : 0;
+    for (int Set = 0; Set < 2; ++Set)
+    {
+        for (int Race = 0; Race < 3; ++Race)
+        {
+            const bool Active = mCampaignAnimationsEnabled && Set == ActiveSet && Race == mCampaignRace;
+            for (auto* Video : mCampaignRaceVideos[Set][Race])
+            {
+                if (Video)
+                    Video->SetPlaybackActive(Active, Active && RestartActive);
+            }
+            if (auto* Selected = mCampaignRaceSelectedVideos[Set][Race])
+                Selected->SetPlaybackActive(Active, Active && RestartActive);
+
+            SetCampaignMaskTarget(Set, Race, Active || !mCampaignAnimationsEnabled ? 0.0f : 0.58f);
+        }
+    }
+}
+
 void GlueMenuController::OnSinglePlayer(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::SinglePlayer); }
+{
+    SwitchToPage(Page::SinglePlayer);
+}
 
 void GlueMenuController::OnCampaign(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::Campaign); }
+{
+    SwitchToPage(Page::Campaign);
+}
 
 void GlueMenuController::OnCustomGame(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::CustomGame); }
+{
+    SwitchToPage(Page::CustomGame);
+}
 
 void GlueMenuController::OnOptions(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::Options); }
+{
+    SwitchToPage(Page::Options);
+}
 
 void GlueMenuController::OnLoadGame(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::LoadGame); }
+{
+    SwitchToPage(Page::LoadGame);
+}
 
 void GlueMenuController::OnBackToMain(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SwitchToPage(Page::MainMenu); }
+{
+    SwitchToPage(Page::MainMenu);
+}
 
 void GlueMenuController::OnExit(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ if (mActionCallback) mActionCallback("exit"); }
+{
+    if (mActionCallback) mActionCallback("exit");
+}
+
+void GlueMenuController::OnIntro(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
+{
+    SwitchToPage(Page::Cinematics);
+}
 
 void GlueMenuController::OnLanguageToggle(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ ToggleLanguage(); }
+{
+    ToggleLanguage();
+}
 
 void GlueMenuController::OnStartOriginal(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
 {
@@ -243,45 +435,25 @@ void GlueMenuController::OnCampaignContinue(Aero::BaseComponent*, const Aero::Ro
         mActionCallback(Game::Campaign::BuildCampaignMissionAction(mCampaignExpansion, mCampaignRace, Mission));
 }
 
-void GlueMenuController::OnCampaignMediaEnded(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs&)
-{
-    auto* Media = Aero::DynamicCast<AeroApp::MediaElement*>(Sender);
-    if (!Media)
-        return;
-
-    Media->SetPosition(Aero::TimeSpan::Zero());
-    Media->Play();
-}
-
-void GlueMenuController::OnCampaignMediaOpened(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs&)
-{
-    auto* Media = Aero::DynamicCast<AeroApp::MediaElement*>(Sender);
-    if (!Media)
-        return;
-
-    std::cout << "[GlueGui] MediaOpened: "
-              << Media->GetSource().Str()
-              << " video=" << Media->GetNaturalVideoWidth() << "x" << Media->GetNaturalVideoHeight()
-              << " hasVideo=" << (Media->HasVideo() ? "true" : "false")
-              << std::endl;
-}
-
-void GlueMenuController::OnCampaignMediaFailed(Aero::BaseComponent*, const AeroApp::ExceptionRoutedEventArgs& Args)
-{
-    std::cout << "[GlueGui] MediaFailed: " << (Args.errorException ? Args.errorException : "") << std::endl;
-}
-
 void GlueMenuController::OnStartCustomGame(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ if (mActionCallback) mActionCallback("start_custom_game"); }
+{
+    if (mActionCallback) mActionCallback("start_custom_game");
+}
 
 void GlueMenuController::OnTerranTab(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SetCampaignRace(0); }
+{
+    SetCampaignRace(0);
+}
 
 void GlueMenuController::OnZergTab(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SetCampaignRace(1); }
+{
+    SetCampaignRace(1);
+}
 
 void GlueMenuController::OnProtossTab(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
-{ SetCampaignRace(2); }
+{
+    SetCampaignRace(2);
+}
 
 void GlueMenuController::OnCampaignMission(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs&)
 {
@@ -447,13 +619,6 @@ void GlueMenuController::RefreshCampaignPage()
             Label += "  [ready]";
         Button->SetContent(Label.c_str());
     }
-
-    if (mCampaignMedia[0]) mCampaignMedia[0]->SetVisibility(mCampaignRace == 1 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
-    if (mCampaignMedia[1]) mCampaignMedia[1]->SetVisibility(mCampaignRace == 1 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
-    if (mCampaignMedia[2]) mCampaignMedia[2]->SetVisibility(mCampaignRace == 0 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
-    if (mCampaignMedia[3]) mCampaignMedia[3]->SetVisibility(mCampaignRace == 0 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
-    if (mCampaignMedia[4]) mCampaignMedia[4]->SetVisibility(mCampaignRace == 2 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
-    if (mCampaignMedia[5]) mCampaignMedia[5]->SetVisibility(mCampaignRace == 2 ? Aero::Visibility_Visible : Aero::Visibility_Collapsed);
 }
 
 void GlueMenuController::ToggleLanguage()
@@ -476,6 +641,7 @@ void GlueMenuController::ApplyLanguage()
     SetTextPairVisibility(mMainSingleLabelEn, mMainSingleLabelZh);
     SetTextPairVisibility(mMainMultiplayerLabelEn, mMainMultiplayerLabelZh);
     SetTextPairVisibility(mMainOptionsLabelEn, mMainOptionsLabelZh);
+    SetTextPairVisibility(mMainFavoritesLabelEn, mMainFavoritesLabelZh);
     SetTextPairVisibility(mMainHotkeysLabelEn, mMainHotkeysLabelZh);
     SetTextPairVisibility(mMainCreditsLabelEn, mMainCreditsLabelZh);
     SetTextPairVisibility(mMainIntroLabelEn, mMainIntroLabelZh);
@@ -509,26 +675,62 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
     case Page::MainMenu:
         if (InRect(X, Y, 1557.0f, 0.0f, 351.0f, 41.0f))
         {
+            EmitMenuClick();
             ToggleLanguage();
             return true;
         }
         if (InRect(X, Y, 0.0f, 68.0f, 960.0f, 337.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::SinglePlayer);
+            return true;
+        }
+        if (InRect(X, Y, 234.0f, 428.0f, 720.0f, 360.0f))
+        {
+            EmitMenuClick();
+            SwitchToPage(Page::CustomGame);
+            return true;
+        }
+        if (InRect(X, Y, 0.0f, 776.0f, 480.0f, 45.0f))
+        {
+            EmitMenuClick();
+            SwitchToPage(Page::Options);
             return true;
         }
         if (InRect(X, Y, 0.0f, 833.0f, 480.0f, 45.0f))
         {
-            SwitchToPage(Page::Options);
+            EmitMenuClick();
             return true;
         }
         if (InRect(X, Y, 0.0f, 889.0f, 480.0f, 45.0f))
         {
+            EmitMenuClick();
+            return true;
+        }
+        if (InRect(X, Y, 0.0f, 945.0f, 480.0f, 45.0f))
+        {
+            EmitMenuClick();
+            return true;
+        }
+        if (InRect(X, Y, 0.0f, 1000.0f, 480.0f, 60.0f))
+        {
+            EmitMenuClick();
+            SwitchToPage(Page::Cinematics);
             return true;
         }
         if (InRect(X, Y, 1185.0f, 720.0f, 693.0f, 306.0f))
         {
+            EmitMenuClick();
             if (mActionCallback) mActionCallback("exit");
+            return true;
+        }
+        break;
+
+    case Page::Cinematics:
+        if (InRect(X, Y, 1530.0f, 986.0f, 390.0f, 94.0f))
+        {
+            EmitMenuClick();
+            SwitchToPage(Page::MainMenu);
             return true;
         }
         break;
@@ -536,6 +738,7 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
     case Page::SinglePlayer:
         if (InRect(X, Y, 530.0f, 372.0f, 520.0f, 238.0f))
         {
+            EmitMenuClick();
             mCampaignExpansion = false;
             SetCampaignRace(mCampaignRace);
             SwitchToPage(Page::Campaign);
@@ -543,6 +746,7 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         }
         if (InRect(X, Y, 830.0f, 530.0f, 600.0f, 240.0f))
         {
+            EmitMenuClick();
             mCampaignExpansion = true;
             SetCampaignRace(mCampaignRace);
             SwitchToPage(Page::Campaign);
@@ -550,6 +754,7 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         }
         if (InRect(X, Y, 610.0f, 630.0f, 240.0f, 130.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::MainMenu);
             return true;
         }
@@ -558,42 +763,49 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
     case Page::Campaign:
         if (mCampaignExpansion)
         {
-            if (InRect(X, Y, 15.0f, 92.0f, 720.0f, 743.0f))
+            if (InRect(X, Y, 105.0f, 158.0f, 660.0f, 720.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(0);
                 return true;
             }
-            if (InRect(X, Y, 1173.0f, 16.0f, 714.0f, 819.0f))
+            if (InRect(X, Y, 1206.0f, 148.0f, 690.0f, 729.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(1);
                 return true;
             }
-            if (InRect(X, Y, 660.0f, 9.0f, 1068.0f, 668.0f))
+            if (InRect(X, Y, 528.0f, 54.0f, 858.0f, 644.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(2);
                 return true;
             }
         }
         else
         {
-            if (InRect(X, Y, 486.0f, 9.0f, 1068.0f, 626.0f))
+            if (InRect(X, Y, 528.0f, 54.0f, 858.0f, 644.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(0);
                 return true;
             }
-            if (InRect(X, Y, 15.0f, 92.0f, 660.0f, 743.0f))
+            if (InRect(X, Y, 105.0f, 158.0f, 660.0f, 720.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(1);
                 return true;
             }
-            if (InRect(X, Y, 1173.0f, 16.0f, 714.0f, 819.0f))
+            if (InRect(X, Y, 1206.0f, 148.0f, 690.0f, 729.0f))
             {
+                EmitMenuClick();
                 SetCampaignRace(2);
                 return true;
             }
         }
         if (InRect(X, Y, 729.0f, 828.0f, 567.0f, 45.0f))
         {
+            EmitMenuClick();
             const int Mission = std::max(0, GetUnlockedMissionCount() - 1);
             if (mActionCallback)
                 mActionCallback(Game::Campaign::BuildCampaignMissionAction(mCampaignExpansion, mCampaignRace, Mission));
@@ -601,11 +813,13 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         }
         if (InRect(X, Y, 678.0f, 908.0f, 618.0f, 45.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::LoadGame);
             return true;
         }
         if (InRect(X, Y, 1410.0f, 909.0f, 474.0f, 45.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::MainMenu);
             return true;
         }
@@ -614,16 +828,19 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
     case Page::CustomGame:
         if (InRect(X, Y, 180.0f, 292.0f, 864.0f, 266.0f))
         {
+            EmitMenuClick();
             if (mActionCallback) mActionCallback("select_map_0");
             return true;
         }
         if (InRect(X, Y, 1431.0f, 943.0f, 396.0f, 50.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::MainMenu);
             return true;
         }
         if (InRect(X, Y, 1323.0f, 861.0f, 456.0f, 50.0f))
         {
+            EmitMenuClick();
             if (mActionCallback) mActionCallback("start_custom_game");
             return true;
         }
@@ -632,11 +849,13 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
     case Page::Options:
         if (InRect(X, Y, 1320.0f, 870.0f, 480.0f, 72.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::MainMenu);
             return true;
         }
         if (InRect(X, Y, 480.0f, 870.0f, 360.0f, 72.0f))
         {
+            EmitMenuClick();
             return true;
         }
         break;
@@ -645,6 +864,7 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         if (InRect(X, Y, 1210.0f, 860.0f, 380.0f, 72.0f) ||
             InRect(X, Y, 840.0f, 860.0f, 360.0f, 72.0f))
         {
+            EmitMenuClick();
             SwitchToPage(Page::Campaign);
             return true;
         }
@@ -679,20 +899,20 @@ void GlueMenuController::SwitchToPage(Page NewPage)
     }
 
     SetPageVisibility(mCurrentPage, true);
-    if (mCurrentPage == Page::Campaign)
-        PlayCampaignMedia();
-}
-
-void GlueMenuController::PlayCampaignMedia()
-{
-    for (auto* Media : mCampaignMedia)
+    if (mCurrentPage == Page::MainMenu)
     {
-        if (!Media)
-            continue;
-
-        Media->SetPosition(Aero::TimeSpan::Zero());
-        std::cout << "[GlueGui] MediaPlay: " << Media->GetSource().Str() << std::endl;
-        Media->Play();
+        StopMainMenuAnimations();
+        SetCampaignAnimationsEnabled(false, false);
+    }
+    else if (mCurrentPage == Page::Campaign)
+    {
+        StopMainMenuAnimations();
+        SetCampaignAnimationsEnabled(false, false);
+    }
+    else
+    {
+        StopMainMenuAnimations();
+        SetCampaignAnimationsEnabled(false, false);
     }
 }
 
@@ -708,6 +928,7 @@ Aero::Border* GlueMenuController::GetPageBorder(Page Page)
     switch (Page)
     {
         case Page::MainMenu:     return mMainMenuPage;
+        case Page::Cinematics:   return mCinematicsPage;
         case Page::SinglePlayer: return mSinglePlayerPage;
         case Page::Campaign:     return mCampaignPage;
         case Page::CustomGame:   return mCustomGamePage;
@@ -719,7 +940,7 @@ Aero::Border* GlueMenuController::GetPageBorder(Page Page)
 
 NS_IMPLEMENT_REFLECTION(GlueMenuController, "UI.Glue.GlueMenuController")
 {
-    (void)helper;
+    NsProp("CampaignRace", &GlueMenuController::GetCampaignRace, &GlueMenuController::SetCampaignRace);
 }
 
 } // namespace Game::Client::UI::Glue

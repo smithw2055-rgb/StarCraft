@@ -6,6 +6,7 @@
 #include "Main/CampaignRuntime.h"
 #include "Main/GameMenuRuntime.h"
 #include "Main/GameSession.h"
+#include "Render/Renderer.h"
 
 namespace Game::Client::GameLoop
 {
@@ -32,6 +33,7 @@ inline void StartGameFromMainMenu(AppRuntime& App,
     }
 
     App.State = GameState::InGame;
+    Render::ResetStateCache();
     std::cout << "StarCraft: Game started" << std::endl;
 }
 

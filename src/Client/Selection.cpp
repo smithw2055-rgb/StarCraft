@@ -24,7 +24,8 @@ namespace
             return false;
         auto* Render = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
-        return Render && Render->Visible && Trans;
+        auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        return Render && Render->Visible && Trans && Unit && Unit->HitPoints > 0;
     }
 
     bool IsResource(Core::ECS::EntityManager& Entities, int EntityId)
@@ -280,6 +281,73 @@ int Selection::Get(int Index) const
     return mSelected[Index];
 }
 
+int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float WorldX, float WorldY) const
+{
+    int Best = -1;
+    float BestScore = 1e9f;
+    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
+                                                 Game::Components::RenderComponent,
+                                                 Game::Components::UnitComponent>())
+    {
+        float Score = 0.0f;
+        if (!EntityHitTest(Entities, EntityId, WorldX, WorldY, Score))
+            continue;
+        if (Score < BestScore)
+        {
+            BestScore = Score;
+            Best = EntityId;
+        }
+    }
+    return Best;
+}
+
+std::vector<int> Selection::CollectRectSelection(Core::ECS::EntityManager& Entities,
+                                                 float WorldX,
+                                                 float WorldY,
+                                                 float WorldW,
+                                                 float WorldH) const
+{
+    std::vector<int> PickedUnits;
+    std::vector<int> PickedSingles;
+    std::vector<int> FallbackUnits;
+    std::vector<int> FallbackSingles;
+    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
+                                                 Game::Components::RenderComponent,
+                                                 Game::Components::UnitComponent>())
+    {
+        if (!EntityInRect(Entities, EntityId, WorldX, WorldY, WorldW, WorldH))
+            continue;
+
+        const bool LocalOwned = IsOwnedByLocalPlayer(Entities, EntityId);
+        if (IsMultiSelectable(Entities, EntityId))
+        {
+            if (LocalOwned)
+                AppendSelectionEntity(Entities, PickedUnits, EntityId);
+            else
+                AppendSelectionEntity(Entities, FallbackUnits, EntityId);
+        }
+        else
+        {
+            if (LocalOwned)
+                PickedSingles.push_back(EntityId);
+            else
+                FallbackSingles.push_back(EntityId);
+        }
+    }
+
+    if (PickedUnits.empty() && PickedSingles.empty())
+    {
+        PickedUnits = std::move(FallbackUnits);
+        PickedSingles = std::move(FallbackSingles);
+    }
+
+    if (!PickedUnits.empty())
+        return PickedUnits;
+    if (!PickedSingles.empty())
+        return {PickedSingles.front()};
+    return {};
+}
+
 void Selection::PruneAgainst(Core::ECS::EntityManager& Entities)
 {
     std::vector<int> Pruned;
@@ -359,24 +427,10 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
         const double ClickDelta = Now - sLastClickTime;
         sLastClickTime = Now;
 
-        int Best = -1;
-        float BestScore = 1e9f;
         float WX = 0.0f;
         float WY = 0.0f;
         Camera.ScreenToWorld((float)MX, (float)MY, WX, WY);
-        for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                     Game::Components::RenderComponent,
-                                                     Game::Components::UnitComponent>())
-        {
-            float Score = 0.0f;
-            if (!EntityHitTest(Entities, EntityId, WX, WY, Score))
-                continue;
-            if (Score < BestScore)
-            {
-                BestScore = Score;
-                Best = EntityId;
-            }
-        }
+        int Best = PickEntityAtWorld(Entities, WX, WY);
 
         if (Best != -1)
         {
@@ -449,57 +503,21 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
     const float RW = std::abs(WX1 - WX0);
     const float RH = std::abs(WY1 - WY0);
 
-    std::vector<int> PickedUnits;
-    std::vector<int> PickedSingles;
-    std::vector<int> FallbackUnits;
-    std::vector<int> FallbackSingles;
-    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                 Game::Components::RenderComponent,
-                                                 Game::Components::UnitComponent>())
-    {
-        if (!EntityInRect(Entities, EntityId, RX, RY, RW, RH))
-            continue;
+    std::vector<int> Picked = CollectRectSelection(Entities, RX, RY, RW, RH);
 
-        const bool LocalOwned = IsOwnedByLocalPlayer(Entities, EntityId);
-        if (IsMultiSelectable(Entities, EntityId))
-        {
-            if (LocalOwned)
-                AppendSelectionEntity(Entities, PickedUnits, EntityId);
-            else
-                AppendSelectionEntity(Entities, FallbackUnits, EntityId);
-        }
-        else
-        {
-            if (LocalOwned)
-                PickedSingles.push_back(EntityId);
-            else
-                FallbackSingles.push_back(EntityId);
-        }
-    }
-
-    if (PickedUnits.empty() && PickedSingles.empty())
+    if (!Picked.empty())
     {
-        PickedUnits = std::move(FallbackUnits);
-        PickedSingles = std::move(FallbackSingles);
-    }
-
-    if (!PickedUnits.empty())
-    {
-        if (IsShiftHeld())
+        if (IsShiftHeld() && IsMultiSelectable(Entities, Picked.front()))
         {
             auto Sel = mSelected;
-            for (int Id : PickedUnits)
+            for (int Id : Picked)
                 AppendSelectionEntity(Entities, Sel, Id);
             mSelected = std::move(Sel);
         }
         else
         {
-            mSelected = std::move(PickedUnits);
+            mSelected = std::move(Picked);
         }
-    }
-    else if (!PickedSingles.empty())
-    {
-        mSelected = {PickedSingles.front()};
     }
     else if (!IsShiftHeld())
     {

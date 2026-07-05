@@ -89,34 +89,10 @@ std::vector<std::string> GameDetector::GetCommonPaths()
     Paths.push_back("C:\\Program Files (x86)\\StarCraft Remastered");
 #endif
 
-    // Also check current directory and common relative paths
-    // VS2022 working dir may be project root or build output dir,
-    // so try multiple relative depths.
+    // Also check current directory for explicit classic installs.
     Paths.push_back(".");
-    Paths.push_back("./Resources");
-    Paths.push_back("../Resources");
-    Paths.push_back("../../Resources");
-    Paths.push_back("../../../Resources");
     Paths.push_back("./StarCraft");
     Paths.push_back("./StarCraft Remastered");
-
-#ifdef _WIN32
-    // Try location relative to the executable itself
-    // Typical layout: C:\Projects\StarCraft\out\build\x64-Debug\StarcraftRemake.exe
-    // Resources is at C:\Projects\StarCraft\Resources
-    char ExePath[MAX_PATH];
-    GetModuleFileNameA(nullptr, ExePath, MAX_PATH);
-    std::string ExeDir = ExePath;
-    auto Pos = ExeDir.find_last_of("\\/");
-    if (Pos != std::string::npos)
-    {
-        ExeDir = ExeDir.substr(0, Pos);
-        Paths.push_back(ExeDir + "/Resources");
-        Paths.push_back(ExeDir + "/../Resources");
-        Paths.push_back(ExeDir + "/../../Resources");
-        Paths.push_back(ExeDir + "/../../../Resources");
-    }
-#endif
 
     return Paths;
 }

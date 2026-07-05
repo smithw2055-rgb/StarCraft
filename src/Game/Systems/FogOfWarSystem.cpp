@@ -162,7 +162,6 @@ void FogOfWarSystem::UpdateLastSeen(Core::ECS::EntityManager& EM)
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
-        auto* Vis = EM.GetComponent<Components::VisionComponent>(ID);
         if (!Unit || !Trans || !Player) continue;
         if (Unit->HitPoints <= 0) continue;
 
@@ -224,6 +223,59 @@ void FogOfWarSystem::Update(float DeltaTime)
         uint8_t* FogSlice = mFogGrid.data() + SliceBase;
         uint8_t* DetSlice = Unit->IsDetector ? (mDetectorGrid.data() + SliceBase) : nullptr;
         RevealAround(TileX, TileY, EffectiveRange, FogSlice, DetSlice);
+
+        if (Status)
+        {
+            for (int I = 0; I < Components::StatusEffectComponent::kMaxEffects; ++I)
+            {
+                if (Status->ActiveEffects[I] != Components::StatusEffect::Parasite ||
+                    Status->EffectTimers[I] <= 0.0f)
+                {
+                    continue;
+                }
+
+                const int SourceEntityID = Status->EffectSources[I];
+                auto* SourcePlayer = EM.GetComponent<PlayerComponent>(SourceEntityID);
+                if (!SourcePlayer) continue;
+                const int ParasitePlayerID = SourcePlayer->PlayerID;
+                if (ParasitePlayerID < 0 || ParasitePlayerID >= mMaxPlayers) continue;
+
+                size_t ParasiteSliceBase =
+                    (size_t)ParasitePlayerID * mMapWidth * mMapHeight;
+                uint8_t* ParasiteFogSlice = mFogGrid.data() + ParasiteSliceBase;
+                RevealAround(TileX, TileY, EffectiveRange, ParasiteFogSlice, nullptr);
+            }
+        }
+    }
+
+    auto RevealAreas = EM.GetEntitiesWith<TransformComponent, RevealAreaComponent>();
+    for (auto ID : RevealAreas)
+    {
+        auto* Trans = EM.GetComponent<TransformComponent>(ID);
+        auto* Reveal = EM.GetComponent<RevealAreaComponent>(ID);
+        if (!Trans || !Reveal) continue;
+
+        if (Reveal->DurationRemaining <= 0.0f)
+        {
+            EM.DestroyEntity(ID);
+            continue;
+        }
+
+        const int PlayerID = Reveal->PlayerID;
+        if (PlayerID >= 0 && PlayerID < mMaxPlayers)
+        {
+            int TileX = (int)(Trans->Position.X / 32.0f);
+            int TileY = (int)(Trans->Position.Y / 32.0f);
+            size_t SliceBase = (size_t)PlayerID * mMapWidth * mMapHeight;
+            uint8_t* FogSlice = mFogGrid.data() + SliceBase;
+            uint8_t* DetSlice = Reveal->ProvidesDetection ?
+                (mDetectorGrid.data() + SliceBase) : nullptr;
+            RevealAround(TileX, TileY, Reveal->SightRange, FogSlice, DetSlice);
+        }
+
+        Reveal->DurationRemaining -= DeltaTime;
+        if (Reveal->DurationRemaining <= 0.0f)
+            EM.DestroyEntity(ID);
     }
 
     UpdateLastSeen(EM);

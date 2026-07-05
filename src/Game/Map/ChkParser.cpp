@@ -1,5 +1,7 @@
 #include "Game/Map/ChkParser.h"
 
+#include "Game/Locale/TextEncoding.h"
+
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -163,7 +165,7 @@ void ChkParser::ParseSTR(const ChkSectionInfo& S)
         if (StrOff < S.Size)
         {
             const char* Str = reinterpret_cast<const char*>(mRawData + S.Offset + StrOff);
-            mStringTable.Strings.push_back(Str);
+            mStringTable.Strings.push_back(Game::Locale::LegacyGameTextToUtf8(Str));
         }
         else
         {

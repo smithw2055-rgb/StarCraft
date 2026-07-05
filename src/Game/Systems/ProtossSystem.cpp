@@ -1,6 +1,7 @@
 #include "Game/Systems/ProtossSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
 
 namespace Game::Systems
@@ -175,10 +176,17 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     auto* UA = EM.GetComponent<UnitComponent>(TemplarAID);
     auto* UB = EM.GetComponent<UnitComponent>(TemplarBID);
     auto* PA = EM.GetComponent<PlayerComponent>(TemplarAID);
+    auto* PB = EM.GetComponent<PlayerComponent>(TemplarBID);
     auto* TA = EM.GetComponent<TransformComponent>(TemplarAID);
     auto* TB = EM.GetComponent<TransformComponent>(TemplarBID);
-    if (!UA || !UB || !PA || !TA || !TB) return false;
+    if (!UA || !UB || !PA || !PB || !TA || !TB) return false;
     if (UA->HitPoints <= 0 || UB->HitPoints <= 0) return false;
+    if (PA->PlayerID != PB->PlayerID) return false;
+
+    const int ArchonDefID = Game::Races::GetUnitDefID(IsDarkArchon ? "Dark Archon" : "Archon");
+    const auto ArchonDef = Game::Races::GetUnitDefByID(ArchonDefID);
+    if (ArchonDef.Name == "Unknown")
+        return false;
 
     Core::Math::Vec2 CenterPos = {(TA->Position.X + TB->Position.X) * 0.5f,
                                    (TA->Position.Y + TB->Position.Y) * 0.5f};
@@ -194,46 +202,46 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     auto& APlayer = EM.AddComponent<PlayerComponent>(ArchonID);
     auto& ACombat = EM.AddComponent<CombatComponent>(ArchonID);
     auto& ACmd = EM.AddComponent<CommandComponent>(ArchonID);
+    auto& APath = EM.AddComponent<PathfindingComponent>(ArchonID);
+    auto& ARender = EM.AddComponent<RenderComponent>(ArchonID);
 
     ATrans.Position = CenterPos;
-    APlayer.PlayerID = PA->PlayerID;
+    APlayer = *PA;
 
-    if (IsDarkArchon)
-    {
-        AUnit.UnitRace = Race::Protoss;
-        AUnit.ChkUnitID = 0x3C; // Dark Archon
-        AUnit.HitPoints = 250;
-        AUnit.MaxHitPoints = 250;
-        AUnit.ShieldPoints = 250;
-        AUnit.MaxShieldPoints = 250;
-        AUnit.EnergyPoints = 200;
-        AUnit.MaxEnergyPoints = 200;
-        AUnit.Armor = 0;
-        AUnit.SupplyCost = 4;
-        AUnit.Speed = 2.0f;
-        AUnit.SightRange = 8;
-        AUnit.SizeType = UnitSize::Medium;
-        ACombat.GroundDamage = 0;
-    }
-    else
-    {
-        AUnit.UnitRace = Race::Protoss;
-        AUnit.ChkUnitID = 0x3B; // Archon
-        AUnit.HitPoints = 300;
-        AUnit.MaxHitPoints = 300;
-        AUnit.ShieldPoints = 300;
-        AUnit.MaxShieldPoints = 300;
-        AUnit.Armor = 0;
-        AUnit.SupplyCost = 4;
-        AUnit.Speed = 2.0f;
-        AUnit.SightRange = 8;
-        AUnit.SizeType = UnitSize::Medium;
-        ACombat.GroundDamage = 30;
-        ACombat.AirDamage = 30;
-        ACombat.AttackRange = 5.0f;
-        ACombat.AttackCooldown = 1.0f;
-        ACombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
-    }
+    AUnit.UnitRace = ArchonDef.RaceType;
+    AUnit.ChkUnitID = ArchonDef.ChkUnitID;
+    AUnit.HitPoints = ArchonDef.HitPoints;
+    AUnit.MaxHitPoints = ArchonDef.HitPoints;
+    AUnit.ShieldPoints = ArchonDef.ShieldPoints;
+    AUnit.MaxShieldPoints = ArchonDef.ShieldPoints;
+    AUnit.EnergyPoints = ArchonDef.EnergyPoints;
+    AUnit.MaxEnergyPoints = ArchonDef.EnergyPoints;
+    AUnit.Armor = ArchonDef.Armor;
+    AUnit.SupplyCost = ArchonDef.SupplyCost;
+    AUnit.Speed = ArchonDef.Speed;
+    AUnit.SightRange = ArchonDef.SightRange;
+    AUnit.SizeType = ArchonDef.SizeType;
+
+    ACombat.GroundDamage = ArchonDef.GroundDamage;
+    ACombat.AirDamage = ArchonDef.AirDamage;
+    ACombat.GroundDmgType = ArchonDef.GroundDmgType;
+    ACombat.AirDmgType = ArchonDef.AirDmgType;
+    ACombat.AttackRange = ArchonDef.AttackRange;
+    ACombat.AttackCooldown = ArchonDef.AttackCooldown;
+    ACombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
+    ACombat.CanTargetGround = ArchonDef.GroundDamage > 0;
+    ACombat.CanTargetAir = ArchonDef.AirDamage > 0;
+    ACombat.IsRanged = ArchonDef.AttackRange > 1.5f;
+
+    ACmd.CurrentCommand = CommandType::Stop;
+    APath.NodeTolerance = 8.0f;
+    APath.IsAir = false;
+
+    ARender.ImageID = (uint32_t)ArchonDef.ChkUnitID;
+    ARender.FrameIndex = 0;
+    ARender.TotalFrames = 1;
+    ARender.Tint = Core::Colors::White();
+    ARender.Layer = RenderLayer::Units;
 
     Core::Utils::Logger::Info("ProtossSystem",
         std::string(IsDarkArchon ? "Dark " : "") + "Archon spawned at (" +

@@ -253,7 +253,7 @@ auto& Z = ZergDefs;
     int PDarkTemplarID = (int)P.size();
     P.push_back({"Dark Templar",Race::Protoss, UnitSize::Small, 80, 40, 0, 1,  2, 125, 125,30,  40,  0,  1, 1,  2.5f, 7,  false});
     int PArchonID = (int)P.size();
-    P.push_back({"Archon",     Race::Protoss, UnitSize::Medium,300,300, 0, 0,  4,  0,   0,  1,  30,  0,  2, 1,  2.0f, 8,  false});
+    P.push_back({"Archon",     Race::Protoss, UnitSize::Medium,300,300, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
     int PDarkArchonID = (int)P.size();
     P.push_back({"Dark Archon",Race::Protoss, UnitSize::Medium,250,250, 0, 0,  4,  0,   0,  1,  0,   0,  0, 0,  2.0f, 8,  false});
     int PReaverID = (int)P.size();
@@ -273,9 +273,9 @@ auto& Z = ZergDefs;
 
     // Protoss buildings
     int PNexusID = (int)P.size();
-    P.push_back({"Nexus",            Race::Protoss, UnitSize::Large, 1000,1000,0, 1,  0, 400, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Nexus",            Race::Protoss, UnitSize::Large, 1000,1000,0, 1,  0, 400, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false, false});
     int PPylonID = (int)P.size();
-    P.push_back({"Pylon",            Race::Protoss, UnitSize::Large, 300, 300, 0, 1,  0, 100, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Pylon",            Race::Protoss, UnitSize::Large, 300, 300, 0, 1,  0, 100, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, false});
     int PAssimilatorID = (int)P.size();
     P.push_back({"Assimilator",      Race::Protoss, UnitSize::Large, 450, 450, 0, 1,  0, 100, 0,  40,  0,  0,  0, 0,  0,   11, true});
     int PGatewayID = (int)P.size();
@@ -511,6 +511,17 @@ int GetUnitDefIDByChkUnitID(int ChkUnitID)
     }
     return -1;
 }
+
+int GetSupplyProvidedByDefID(int ID)
+{
+    const UnitDef Def = GetUnitDefByID(ID);
+    if (Def.Name == "Unknown")
+        return 0;
+    if (Def.Name == "Overlord")
+        return 8;
+    return Def.IsBuilding ? Def.SupplyCost : 0;
+}
+
 int GetUnitDefID(const std::string& Name)
 {
     InitDefs();

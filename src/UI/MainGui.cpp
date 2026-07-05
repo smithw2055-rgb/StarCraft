@@ -2,13 +2,19 @@
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
 #include "Core/ECS/EntityManager.h"
+#include "UI/Hud.h"
+#include "UI/HudMinimapGeometry.h"
+#include "UI/MainGuiSelectionPresentation.h"
 #include "UI/HudPortrait.h"
+#include "UI/HudText.h"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <cmath>
+
+#include "third_party/sokol/sokol_app.h"
 
 namespace Game::Client::UI
 {
@@ -26,12 +32,21 @@ void MainGui::Shutdown()
 }
 
 void MainGui::Update(Core::ECS::EntityManager& Entities,
-                           const std::vector<int>& SelectedIds,
-                           double Time)
+                            const std::vector<int>& SelectedIds,
+                            const Hud& HudState,
+                            double Time)
 {
+    Host_.SetResourceIconUris(HudState.GetLegacyIconUri(0),
+                              HudState.GetLegacyIconUri(2),
+                              HudState.GetLegacyIconUri(3));
     Host_.SetResources(Minerals_, Gas_, SupplyUsed_, SupplyMax_, TimeText_);
+    const auto& MinimapState = HudState.GetState().Minimap;
+    Host_.SetMinimapDots(MinimapState.UnitDots);
+    Host_.SetCampaignPings(MinimapState.CampaignPings,
+                           MinimapState.MapWidth,
+                           MinimapState.MapHeight);
 
-    UpdateSelectionInfo(Entities, SelectedIds);
+    UpdateSelectionInfo(Entities, SelectedIds, HudState);
 
     Host_.Update(Time);
 }
@@ -51,9 +66,55 @@ void MainGui::Resize(int Width, int Height)
     Host_.Resize(Width, Height);
 }
 
-void MainGui::HandleEvent(const void* Event)
+bool MainGui::HandleEvent(const void* Event)
 {
-    Host_.HandleEvent(Event);
+    if (!Event)
+        return false;
+
+    const sapp_event* E = static_cast<const sapp_event*>(Event);
+    const float X = E->mouse_x;
+    const float Y = E->mouse_y;
+    LastMouseX_ = X;
+    LastMouseY_ = Y;
+    bool Handled = Host_.HandleEvent(Event);
+
+    switch (E->type)
+    {
+    case SAPP_EVENTTYPE_MOUSE_MOVE:
+    {
+        HoveredCommandIndex_ = Host_.HitCommandButton(X, Y);
+        Host_.SetHoveredCommand(HoveredCommandIndex_);
+        break;
+    }
+    case SAPP_EVENTTYPE_MOUSE_DOWN:
+    {
+        if (E->mouse_button == SAPP_MOUSEBUTTON_LEFT)
+        {
+            const int Hit = Host_.HitCommandButton(X, Y);
+            PressedCommandIndex_ = Hit;
+            Host_.SetPressedCommand(Hit);
+            Handled = Handled || Hit >= 0;
+        }
+        break;
+    }
+    case SAPP_EVENTTYPE_MOUSE_UP:
+    {
+        if (E->mouse_button == SAPP_MOUSEBUTTON_LEFT)
+        {
+            const int Hit = Host_.HitCommandButton(X, Y);
+            if (Hit >= 0 && Hit == PressedCommandIndex_)
+                ClickedCommandIndex_ = Hit;
+            PressedCommandIndex_ = -1;
+            Host_.SetPressedCommand(-1);
+            Handled = Handled || Hit >= 0;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    return Handled;
 }
 
 int MainGui::HitCommandButton(float X, float Y) const
@@ -74,6 +135,31 @@ int MainGui::HitMultiSelection(float X, float Y) const
 bool MainGui::HitMinimap(float X, float Y) const
 {
     return Host_.HitMinimap(X, Y);
+}
+
+bool MainGui::CheckMinimapClick(float X, float Y,
+                                int MapWidthTiles,
+                                int MapHeightTiles,
+                                float& OutWorldX,
+                                float& OutWorldY) const
+{
+    const ScreenRect Rect = Host_.GetMinimapRect();
+    if (!Rect.IsValid())
+        return false;
+
+    const RectI MinimapFrame{
+        static_cast<int>(std::lround(Rect.X)),
+        static_cast<int>(std::lround(Rect.Y)),
+        std::max(1, static_cast<int>(std::lround(Rect.W))),
+        std::max(1, static_cast<int>(std::lround(Rect.H)))
+    };
+    return MinimapScreenToWorld(MinimapFrame,
+                                MapWidthTiles,
+                                MapHeightTiles,
+                                static_cast<int>(std::lround(X)),
+                                static_cast<int>(std::lround(Y)),
+                                OutWorldX,
+                                OutWorldY);
 }
 
 bool MainGui::IsPointInHud(float X, float Y) const
@@ -106,8 +192,16 @@ void MainGui::CancelPendingTarget()
     PendingCommandId_ = -1;
 }
 
+int MainGui::ConsumeClickedCommand()
+{
+    const int Clicked = ClickedCommandIndex_;
+    ClickedCommandIndex_ = -1;
+    return Clicked;
+}
+
 void MainGui::UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
-                                        const std::vector<int>& SelectedIds)
+                                        const std::vector<int>& SelectedIds,
+                                        const Hud& HudState)
 {
     if (SelectedIds.empty())
     {
@@ -119,6 +213,7 @@ void MainGui::UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
         ScCommandSlot EmptySlot;
         for (int i = 0; i < 9; ++i)
             Host_.SetCommandSlot(i, EmptySlot);
+        Host_.SetTooltip("", LastMouseX_, LastMouseY_, false);
         return;
     }
 
@@ -128,24 +223,39 @@ void MainGui::UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
     {
         Host_.SetSelection("No unit selected", 0, 0, 0, 0, 0, 0, 0, -1.0f,
                            "", "", {});
+        Host_.SetTooltip("", LastMouseX_, LastMouseY_, false);
         return;
     }
 
-    // Build selection info
-    std::string UnitName = "Unit";
-    float Hp = static_cast<float>(Unit->HitPoints);
-    float MaxHp = static_cast<float>(Unit->MaxHitPoints);
-    float Shields = static_cast<float>(Unit->ShieldPoints);
-    float MaxShields = static_cast<float>(Unit->MaxShieldPoints);
-    float Energy = static_cast<float>(Unit->EnergyPoints);
-    float MaxEnergy = static_cast<float>(Unit->MaxEnergyPoints);
-    int Count = static_cast<int>(SelectedIds.size());
+    auto Presentation =
+        BuildMainGuiSelectionPresentation(HudState.GetState().InfoPanel);
+    if (Presentation.Count <= 0)
+        Presentation.Count = static_cast<int>(SelectedIds.size());
+    if (Presentation.MaxHp <= 0.0f)
+    {
+        Presentation.Hp = static_cast<float>(Unit->HitPoints);
+        Presentation.MaxHp = static_cast<float>(Unit->MaxHitPoints);
+        Presentation.Shields = static_cast<float>(Unit->ShieldPoints);
+        Presentation.MaxShields = static_cast<float>(Unit->MaxShieldPoints);
+        Presentation.Energy = static_cast<float>(Unit->EnergyPoints);
+        Presentation.MaxEnergy = static_cast<float>(Unit->MaxEnergyPoints);
+    }
 
-    Host_.SetSelection(UnitName, Count, Hp, MaxHp, Shields, MaxShields,
-                       Energy, MaxEnergy, -1.0f, "", "", {});
+    Host_.SetSelection(Presentation.Name,
+                       Presentation.Count,
+                       Presentation.Hp,
+                       Presentation.MaxHp,
+                       Presentation.Shields,
+                       Presentation.MaxShields,
+                       Presentation.Energy,
+                       Presentation.MaxEnergy,
+                       Presentation.Progress,
+                       Presentation.StatsText,
+                       Presentation.QueueLabel,
+                       Presentation.QueueEntries);
 
     // Set basic command card
-    UpdateCommandCard(Entities, PrimaryId, Unit->ChkUnitID);
+    UpdateCommandCard(Entities, PrimaryId, Unit->ChkUnitID, HudState);
 
     // Set portrait
     std::string PortraitUri = GetPortraitUri(Unit->ChkUnitID);
@@ -160,7 +270,11 @@ void MainGui::UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
             continue;
         ScSelectionInfo Info;
         Info.HandleId = Idx;
-        Info.Name = "Unit";
+        const int DefId = Game::Races::GetUnitDefIDByChkUnitID(SelUnit->ChkUnitID);
+        Info.Name = DefId >= 0
+            ? DisplayLabelForDef(DefId)
+            : DisplayLabelForChkUnitId(SelUnit->ChkUnitID);
+        Info.PortraitUri = HudState.GetUnitIconUriForChkUnitId(SelUnit->ChkUnitID);
         Info.HpRatio = SelUnit->MaxHitPoints > 0
             ? static_cast<float>(SelUnit->HitPoints) / static_cast<float>(SelUnit->MaxHitPoints)
             : 0.0f;
@@ -171,62 +285,52 @@ void MainGui::UpdateSelectionInfo(Core::ECS::EntityManager& Entities,
 }
 
 void MainGui::UpdateCommandCard(Core::ECS::EntityManager& Entities,
-                                      int SelectedEntityId,
-                                      int SelectedChkUnitId)
+                                       int SelectedEntityId,
+                                       int SelectedChkUnitId,
+                                       const Hud& HudState)
 {
     (void)Entities;
+    (void)SelectedEntityId;
+    (void)SelectedChkUnitId;
 
-    // Default command buttons for any selection: basic unit commands
-    // StarCraft layout: Move, Stop, Attack, Patrol, Hold Position, etc.
-    ScCommandSlot MoveCmd;
-    MoveCmd.Label = "Move";
-    MoveCmd.IconUri = "";
-    MoveCmd.Enabled = true;
-    MoveCmd.Visible = true;
-    MoveCmd.NumberOverlay = 0;
-    Host_.SetCommandSlot(0, MoveCmd);
+    const auto& Buttons = HudState.GetButtonDefs();
+    for (int i = 0; i < 9; ++i)
+    {
+        ScCommandSlot Slot;
+        const auto& Def = Buttons[(size_t)i];
+        Slot.Label = Def.Label;
+        Slot.Tooltip = Def.Label;
+        Slot.IconUri = HudState.GetButtonIconUri(Def);
+        Slot.Enabled = Def.Enabled;
+        Slot.Visible = !Def.Label.empty();
+        Slot.NumberOverlay = Slot.Visible ? i : -1;
+        Slot.ResourceCosts.Minerals = Def.MineralCost;
+        Slot.ResourceCosts.Gas = Def.GasCost;
+        Slot.ResourceCosts.Supply = Def.SupplyCost;
+        Slot.Active = HudState.GetActiveCommandIndex() == i;
+        Host_.SetCommandSlot(i, Slot);
+    }
 
-    ScCommandSlot StopCmd;
-    StopCmd.Label = "Stop";
-    StopCmd.IconUri = "";
-    StopCmd.Enabled = true;
-    StopCmd.Visible = true;
-    StopCmd.NumberOverlay = 1;
-    Host_.SetCommandSlot(1, StopCmd);
+    if (HoveredCommandIndex_ >= 0 && HoveredCommandIndex_ < 9)
+    {
+        const auto& Def = Buttons[(size_t)HoveredCommandIndex_];
+        if (!Def.Label.empty())
+        {
+            ScResourceCosts Costs;
+            Costs.Minerals = Def.MineralCost;
+            Costs.Gas = Def.GasCost;
+            Costs.Supply = Def.SupplyCost;
+            Host_.SetTooltip(Def.Label, LastMouseX_, LastMouseY_, true, Costs);
+            return;
+        }
+    }
 
-    ScCommandSlot AttackCmd;
-    AttackCmd.Label = "Attack";
-    AttackCmd.IconUri = "";
-    AttackCmd.Enabled = true;
-    AttackCmd.Visible = true;
-    AttackCmd.NumberOverlay = 2;
-    Host_.SetCommandSlot(2, AttackCmd);
-
-    ScCommandSlot PatrolCmd;
-    PatrolCmd.Label = "Patrol";
-    PatrolCmd.IconUri = "";
-    PatrolCmd.Enabled = true;
-    PatrolCmd.Visible = true;
-    PatrolCmd.NumberOverlay = 3;
-    Host_.SetCommandSlot(3, PatrolCmd);
-
-    ScCommandSlot HoldCmd;
-    HoldCmd.Label = "Hold";
-    HoldCmd.IconUri = "";
-    HoldCmd.Enabled = true;
-    HoldCmd.Visible = true;
-    Host_.SetCommandSlot(4, HoldCmd);
-
-    // Fill remaining slots (5-8) with empty
-    ScCommandSlot EmptySlot;
-    for (int i = 5; i < 9; ++i)
-        Host_.SetCommandSlot(i, EmptySlot);
+    Host_.SetTooltip("", LastMouseX_, LastMouseY_, false);
 }
 
 std::string MainGui::GetPortraitUri(int ChkUnitId) const
 {
-    const int UnitDefId = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitId);
-    const std::string PortraitKey = ResolvePortraitKeyForSelection(UnitDefId);
+    const std::string PortraitKey = ResolvePortraitKeyForChkUnitId(ChkUnitId);
     if (PortraitKey.empty() || AssetRoot_.empty())
         return {};
 

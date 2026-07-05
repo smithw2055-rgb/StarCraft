@@ -75,4 +75,26 @@ inline int MinimapWorldToScreenY(const RectI& ContentRect, float WorldY, float M
     return ContentRect.Y + (int)std::lround(V * (float)std::max(0, ContentRect.H - 1));
 }
 
+inline bool MinimapWorldToScreenPoint(const RectI& FrameRect,
+                                      int MapWidthTiles,
+                                      int MapHeightTiles,
+                                      float WorldX,
+                                      float WorldY,
+                                      int& OutScreenX,
+                                      int& OutScreenY)
+{
+    if (FrameRect.W <= 0 || FrameRect.H <= 0 || MapWidthTiles <= 0 || MapHeightTiles <= 0)
+        return false;
+
+    const RectI Content = ResolveMinimapContentRect(FrameRect, MapWidthTiles, MapHeightTiles);
+    const float MapPxW = (float)(MapWidthTiles * 32);
+    const float MapPxH = (float)(MapHeightTiles * 32);
+    if (MapPxW <= 0.0f || MapPxH <= 0.0f)
+        return false;
+
+    OutScreenX = MinimapWorldToScreenX(Content, WorldX, MapPxW);
+    OutScreenY = MinimapWorldToScreenY(Content, WorldY, MapPxH);
+    return true;
+}
+
 } // namespace Game::Client::UI

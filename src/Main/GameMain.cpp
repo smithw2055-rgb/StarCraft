@@ -19,6 +19,8 @@ namespace
     float gCameraY = 0.0f;
     bool gEnableGuiHud = false;
     bool gHighDpi = true;
+    int gExitAfterFrame = -1;
+    int gFrameCount = 0;
 }
 
 static void InitCb()
@@ -34,6 +36,13 @@ static void FrameCb()
 
     gController.Update(Dt, W, H);
     gController.Render(W, H);
+
+    if (gExitAfterFrame > 0)
+    {
+        ++gFrameCount;
+        if (gFrameCount >= gExitAfterFrame)
+            Core::Platform::RequestQuit();
+    }
 }
 
 static void EventCb(const sapp_event* Event)
@@ -66,9 +75,19 @@ sapp_desc sokol_main(int argc, char* argv[])
         {
             gHighDpi = false;
         }
+        else if (std::strcmp(argv[I], "--exit-after-frame") == 0 && I + 1 < argc)
+        {
+            gExitAfterFrame = std::atoi(argv[++I]);
+        }
         else if (gMapPathOverride.empty())
             gMapPathOverride = argv[I];
     }
+    if (gExitAfterFrame <= 0)
+    {
+        if (const char* EnvExitFrame = std::getenv("STARCRAFT_EXIT_AFTER_FRAME"))
+            gExitAfterFrame = std::atoi(EnvExitFrame);
+    }
+
     if (!gMapPathOverride.empty())
         gController.SetMapPathOverride(gMapPathOverride);
     if (gHasCameraOverride)

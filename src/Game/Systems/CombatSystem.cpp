@@ -61,6 +61,9 @@ static void IssueMovePreservingCommand(Core::ECS::EntityManager& EM,
 
 static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID)
 {
+    if (!EM.IsAlive(EntityID))
+        return false;
+
     if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
     {
         if (Path->IsAir)
@@ -73,10 +76,58 @@ static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID)
     return false;
 }
 
+static bool IsRangedAttack(const CombatComponent& Combat)
+{
+    return Combat.IsRanged || Combat.WeaponBeh != WeaponBehavior::Melee;
+}
+
+static bool IsProtectedByDarkSwarm(Core::ECS::EntityManager& EM, int TargetID)
+{
+    if (IsAirTarget(EM, TargetID))
+        return false;
+
+    auto* Status = EM.GetComponent<StatusEffectComponent>(TargetID);
+    return Status && Status->HasEffect(StatusEffect::DarkSwarm);
+}
+
+static bool IsInvulnerableByStatus(Core::ECS::EntityManager& EM, int TargetID)
+{
+    if (auto* Unit = EM.GetComponent<UnitComponent>(TargetID))
+    {
+        if (Unit->IsInvincible)
+            return true;
+    }
+
+    auto* Status = EM.GetComponent<StatusEffectComponent>(TargetID);
+    return Status && Status->HasEffect(StatusEffect::Stasis);
+}
+
+static bool IsFrozenByStatus(Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+    return Status && (Status->HasEffect(StatusEffect::Stasis) ||
+                      Status->HasEffect(StatusEffect::Lockdown) ||
+                      Status->HasEffect(StatusEffect::Maelstrom));
+}
+
+static float ActiveStatusSeconds(const StatusEffectComponent& Status,
+                                 StatusEffect Effect,
+                                 float DeltaTime)
+{
+    for (int I = 0; I < StatusEffectComponent::kMaxEffects; ++I)
+    {
+        if (Status.ActiveEffects[I] == Effect && Status.EffectTimers[I] > 0.0f)
+            return std::min(DeltaTime, Status.EffectTimers[I]);
+    }
+    return 0.0f;
+}
+
 static bool CanAttackTarget(const CombatComponent& Combat,
                             Core::ECS::EntityManager& EM,
                             int TargetID)
 {
+    if (!EM.IsAlive(TargetID))
+        return false;
     if (EM.GetComponent<ResourceComponent>(TargetID))
         return false;
     const bool TargetAir = IsAirTarget(EM, TargetID);
@@ -84,24 +135,122 @@ static bool CanAttackTarget(const CombatComponent& Combat,
                      : (Combat.CanTargetGround && Combat.GroundDamage > 0);
 }
 
+static void ClearCombatTargetForInvalidTarget(Core::ECS::EntityManager& EM,
+                                              int AttackerID,
+                                              int TargetID)
+{
+    auto ClearMotion = [&EM](int EntityID)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->CurrentVelocity = {0.0f, 0.0f};
+        }
+    };
+
+    if (auto* Combat = EM.GetComponent<CombatComponent>(AttackerID))
+    {
+        if (Combat->TargetEntityID == TargetID)
+            Combat->TargetEntityID = -1;
+        if (Combat->PendingAttackTargetEntityID == TargetID)
+            Combat->PendingAttackTargetEntityID = -1;
+        Combat->PendingAttackFrame = false;
+        Combat->PendingAttackDamage = 0;
+        Combat->PendingAttackUpgradeBonus = 0;
+        Combat->PendingAttackElapsed = 0.0f;
+    }
+
+    if (auto* Cmd = EM.GetComponent<CommandComponent>(AttackerID))
+    {
+        if (Cmd->TargetEntityID == TargetID)
+            Cmd->TargetEntityID = -1;
+        if (Cmd->CurrentCommand == CommandType::Attack)
+        {
+            Cmd->CurrentCommand = CommandType::Stop;
+            ClearMotion(AttackerID);
+        }
+    }
+}
+
+static void ClearCombatStateForInactiveAttacker(Core::ECS::EntityManager& EM, int AttackerID)
+{
+    if (auto* Combat = EM.GetComponent<CombatComponent>(AttackerID))
+    {
+        Combat->TargetEntityID = -1;
+        Combat->PendingAttackFrame = false;
+        Combat->PendingAttackTargetEntityID = -1;
+        Combat->PendingAttackDamage = 0;
+        Combat->PendingAttackUpgradeBonus = 0;
+        Combat->PendingAttackElapsed = 0.0f;
+    }
+
+    if (auto* Cmd = EM.GetComponent<CommandComponent>(AttackerID))
+    {
+        Cmd->TargetEntityID = -1;
+        if (Cmd->CurrentCommand == CommandType::Attack ||
+            Cmd->CurrentCommand == CommandType::AttackMove)
+        {
+            Cmd->CurrentCommand = CommandType::Stop;
+        }
+    }
+
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(AttackerID))
+    {
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->CurrentVelocity = {0.0f, 0.0f};
+    }
+}
+
+static void ClearDirectAttackOrderForInvalidTarget(Core::ECS::EntityManager& EM,
+                                                   const std::vector<int>& Attackers,
+                                                   int TargetEntityID)
+{
+    (void)TargetEntityID;
+    for (int ID : Attackers)
+    {
+        if (auto* Combat = EM.GetComponent<CombatComponent>(ID))
+        {
+            Combat->TargetEntityID = -1;
+            Combat->PendingAttackFrame = false;
+            Combat->PendingAttackTargetEntityID = -1;
+            Combat->PendingAttackDamage = 0;
+            Combat->PendingAttackUpgradeBonus = 0;
+            Combat->PendingAttackElapsed = 0.0f;
+        }
+
+        if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
+        {
+            Cmd->CurrentCommand = CommandType::Stop;
+            Cmd->TargetEntityID = -1;
+        }
+
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->CurrentVelocity = {0.0f, 0.0f};
+        }
+    }
+}
+
 void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
                                 const std::vector<int>& Attackers,
                                 int TargetEntityID)
 {
     auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetEntityID);
-    if (!TargetTrans) return;
-    if (EM.GetComponent<ResourceComponent>(TargetEntityID))
+    auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+    if (!EM.IsAlive(TargetEntityID) ||
+        !TargetTrans ||
+        !TargetUnit ||
+        TargetUnit->HitPoints <= 0 ||
+        EM.GetComponent<ResourceComponent>(TargetEntityID))
     {
-        for (int ID : Attackers)
-        {
-            if (auto* Combat = EM.GetComponent<CombatComponent>(ID))
-                Combat->TargetEntityID = -1;
-            if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
-            {
-                Cmd->CurrentCommand = CommandType::Stop;
-                Cmd->TargetEntityID = -1;
-            }
-        }
+        ClearDirectAttackOrderForInvalidTarget(EM, Attackers, TargetEntityID);
         return;
     }
 
@@ -109,6 +258,17 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
     {
         auto* Combat = EM.GetComponent<CombatComponent>(ID);
         if (!Combat) continue;
+        auto* AttackerUnit = EM.GetComponent<UnitComponent>(ID);
+        if (!AttackerUnit || AttackerUnit->HitPoints <= 0 || IsFrozenByStatus(EM, ID))
+        {
+            ClearCombatStateForInactiveAttacker(EM, ID);
+            continue;
+        }
+        if (!CanAttackTarget(*Combat, EM, TargetEntityID))
+        {
+            ClearCombatTargetForInvalidTarget(EM, ID, TargetEntityID);
+            continue;
+        }
 
         Combat->TargetEntityID = TargetEntityID;
 
@@ -210,6 +370,7 @@ bool CombatSystem::RollMissChance(const CombatComponent& Combat,
                                    const TransformComponent& TargetTrans,
                                    Core::ECS::EntityManager& EM) const
 {
+    (void)EM;
     // Cliff elevation miss: if attacker is on lower cliff than target, chance to miss
     // Higher ground advantage: 30% miss chance for lower attacker
     // Melee weapons always hit unless target is on significantly higher cliff
@@ -234,8 +395,12 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
                                 int BaseDamage)
 {
     auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
-    if (!TargetUnit || TargetUnit->HitPoints <= 0) return;
+    if (!EM.IsAlive(TargetID) || !TargetUnit || TargetUnit->HitPoints <= 0) return;
     if (EM.GetComponent<ResourceComponent>(TargetID))
+        return;
+    if (IsInvulnerableByStatus(EM, TargetID))
+        return;
+    if (IsRangedAttack(Attacker) && IsProtectedByDarkSwarm(EM, TargetID))
         return;
 
     const bool TargetIsAir = IsAirTarget(EM, TargetID);
@@ -266,6 +431,7 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
         TargetUnit->HitPoints = 0;
         RecordUnitDeath(EM, TargetID, AttackerID, true);
         EM.DestroyEntity(TargetID);
+        ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
         Core::Utils::Logger::Info("CombatSystem",
             "Entity " + std::to_string(TargetID) + " destroyed by " +
             std::to_string(AttackerID));
@@ -279,8 +445,14 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
     auto* Combat = EM.GetComponent<CombatComponent>(AttackerID);
     auto* Trans = EM.GetComponent<TransformComponent>(AttackerID);
     auto* PlayerComp = EM.GetComponent<PlayerComponent>(AttackerID);
+    auto* AttackerUnit = EM.GetComponent<UnitComponent>(AttackerID);
     if (!Combat || !Trans || !Combat->PendingAttackFrame)
         return false;
+    if (!AttackerUnit || AttackerUnit->HitPoints <= 0)
+    {
+        ClearCombatStateForInactiveAttacker(EM, AttackerID);
+        return false;
+    }
 
     const int TargetID = Combat->PendingAttackTargetEntityID;
     Core::Math::Vec2 TargetPos = Combat->PendingAttackTargetPos;
@@ -288,16 +460,14 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
         auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
-        if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans)
+        if (!EM.IsAlive(TargetID) || !TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans)
         {
-            Combat->PendingAttackFrame = false;
-            Combat->PendingAttackTargetEntityID = -1;
+            ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
             return false;
         }
         if (EM.GetComponent<ResourceComponent>(TargetID))
         {
-            Combat->PendingAttackFrame = false;
-            Combat->PendingAttackTargetEntityID = -1;
+            ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
             return false;
         }
         TargetPos = TargetTrans->Position;
@@ -378,27 +548,48 @@ void CombatSystem::UpdateStatusEffects(Core::ECS::EntityManager& EM, float Delta
         auto* Status = EM.GetComponent<StatusEffectComponent>(ID);
         if (!Status) continue;
 
-        Status->Tick(DeltaTime);
-
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
-        if (!Unit || Unit->HitPoints <= 0) continue;
+        if (!Unit || Unit->HitPoints <= 0)
+        {
+            Status->Tick(DeltaTime);
+            continue;
+        }
 
         // Plague: drain HP to minimum 1
-        if (Status->HasEffect(StatusEffect::Plague))
+        float PlagueSeconds = ActiveStatusSeconds(*Status, StatusEffect::Plague, DeltaTime);
+        if (PlagueSeconds > 0.0f)
         {
-            int Drain = std::max(1, Unit->MaxHitPoints / 40);
-            if (Unit->HitPoints > 1)
+            const float DamagePerSecond = (float)std::max(1, Unit->MaxHitPoints / 40);
+            Unit->PlagueDamageAccumulator += DamagePerSecond * PlagueSeconds;
+            int Drain = (int)Unit->PlagueDamageAccumulator;
+            if (Drain > 0)
+            {
+                Unit->PlagueDamageAccumulator -= (float)Drain;
                 Unit->HitPoints = std::max(1, Unit->HitPoints - Drain);
+            }
+        }
+        else
+        {
+            Unit->PlagueDamageAccumulator = 0.0f;
         }
 
         // Irradiate: AoE damage (handled per tick in BulletSystem Persist style)
         // For now, direct self-damage each second
-        if (Status->HasEffect(StatusEffect::Irradiate))
+        float IrradiateSeconds = ActiveStatusSeconds(*Status, StatusEffect::Irradiate, DeltaTime);
+        if (IrradiateSeconds > 0.0f)
         {
-            // Irradiate deals ~10 damage per tick to the unit itself
-            int IrradDmg = std::max(1, Unit->MaxHitPoints / 25);
-            if (Unit->HitPoints > 1)
+            const float DamagePerSecond = (float)std::max(1, Unit->MaxHitPoints / 25);
+            Unit->IrradiateDamageAccumulator += DamagePerSecond * IrradiateSeconds;
+            int IrradDmg = (int)Unit->IrradiateDamageAccumulator;
+            if (IrradDmg > 0)
+            {
+                Unit->IrradiateDamageAccumulator -= (float)IrradDmg;
                 Unit->HitPoints = std::max(1, Unit->HitPoints - IrradDmg);
+            }
+        }
+        else
+        {
+            Unit->IrradiateDamageAccumulator = 0.0f;
         }
 
         // EMP: zero shields (handled on application), energy drain
@@ -406,9 +597,15 @@ void CombatSystem::UpdateStatusEffects(Core::ECS::EntityManager& EM, float Delta
         {
             Unit->ShieldPoints = 0;
             Unit->EnergyPoints = 0;
+            if (auto* Cloak = EM.GetComponent<CloakComponent>(ID);
+                Cloak && Cloak->IsCloaked && !Cloak->IsPassiveCloak && !Cloak->IsBurrowed)
+            {
+                Cloak->IsCloaked = false;
+            }
         }
 
         // Stasis: freeze unit (handled by disabling combat/movement in respective systems)
+        Status->Tick(DeltaTime);
     }
 }
 
@@ -456,14 +653,17 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
     auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
     auto* Cmd = EM.GetComponent<CommandComponent>(EntityID);
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
 
     if (!Combat || !Trans) return;
+    if (!Unit || Unit->HitPoints <= 0)
+    {
+        ClearCombatStateForInactiveAttacker(EM, EntityID);
+        return;
+    }
 
     // Check if unit is frozen by stasis/lockdown/maelstrom
-    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
-    if (Status && (Status->HasEffect(StatusEffect::Stasis) ||
-                   Status->HasEffect(StatusEffect::Lockdown) ||
-                   Status->HasEffect(StatusEffect::Maelstrom)))
+    if (IsFrozenByStatus(EM, EntityID))
         return;
 
     // Reduce cooldown
@@ -529,17 +729,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans ||
             !CanAttackTarget(*Combat, EM, TargetID))
         {
+            ClearCombatTargetForInvalidTarget(EM, EntityID, TargetID);
             TargetID = -1;
-            Combat->TargetEntityID = -1;
-            if (Cmd && Cmd->CurrentCommand == CommandType::Attack)
-            {
-                Cmd->CurrentCommand = CommandType::Stop;
-                Cmd->TargetEntityID = -1;
-            }
-            else if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
-            {
-                Cmd->TargetEntityID = -1;
-            }
         }
     }
 

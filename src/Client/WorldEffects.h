@@ -13,6 +13,12 @@ namespace Render { class Draw2D; }
 namespace Game::Client
 {
 
+struct CampaignPing
+{
+    Core::Math::Vec2 Position;
+    float TimeRemaining = 0.0f;
+};
+
 class WorldEffects
 {
 public:
@@ -22,14 +28,9 @@ public:
                           float DeltaSeconds);
     void Render(Render::Draw2D& Draw2D);
     void AddCampaignPing(Core::Math::Vec2 Position);
+    const std::vector<CampaignPing>& GetCampaignPings() const { return CampaignPings_; }
 
 private:
-    struct CampaignPing
-    {
-        Core::Math::Vec2 Position;
-        float TimeRemaining = 0.0f;
-    };
-
     std::vector<Projectile> Projectiles_;
     Render::ParticleSystem Particles_;
     std::vector<CampaignPing> CampaignPings_;

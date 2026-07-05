@@ -16,7 +16,7 @@ struct DecodedPcx
 {
     int Width = 0;
     int Height = 0;
-    std::vector<uint8_t> Rgba;        // RGBA8888 with red-mask â†?transparent
+    std::vector<uint8_t> Rgba;        // RGBA8888 with red-mask -> transparent
     PcxRegions Regions;
 };
 

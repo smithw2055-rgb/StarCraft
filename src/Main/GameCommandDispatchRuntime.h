@@ -12,9 +12,10 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Game/Systems/ZergSystem.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "Main/GameLoop/InputHandler.h"
-#include "UI/HudState.h"
+#include "UI/Hud.h"
 
 namespace Game::Client::GameLoop
 {
@@ -65,6 +66,27 @@ inline void ExecuteHudCommandSlot(
     }
 }
 
+inline bool ExecuteHudCommandIndex(
+    Core::ECS::EntityManager& EntityManager,
+    const std::vector<int>& EntityIDs,
+    UI::Hud& Hud,
+    int CommandIndex)
+{
+    auto& Defs = Hud.GetButtonDefs();
+    if (CommandIndex < 0 || CommandIndex >= static_cast<int>(Defs.size()))
+        return false;
+
+    const auto& CommandDef = Defs[static_cast<size_t>(CommandIndex)];
+    if (CommandDef.Label.empty())
+        return false;
+    if (!CommandDef.Enabled)
+        return false;
+
+    ExecuteHudCommandSlot(EntityManager, EntityIDs, CommandDef);
+    Hud.OnButtonInvoked(CommandIndex);
+    return true;
+}
+
 inline void ExecuteKeyboardCommandShortcut(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
@@ -96,7 +118,7 @@ inline void ExecuteKeyboardCommandShortcut(
     }
 }
 
-inline void ExecutePendingTargetCommand(
+inline bool ExecutePendingTargetCommand(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
     UI::PendingTargetMode Mode,
@@ -105,37 +127,65 @@ inline void ExecutePendingTargetCommand(
     const Core::Math::Vec2& Target)
 {
     if (EntityIDs.empty())
-        return;
+        return false;
 
     switch (Mode)
     {
     case UI::PendingTargetMode::BuildPlacement:
-        Game::Systems::BuildingSystem::StartBuild(
+    {
+        const auto BuildDef = Game::Races::GetUnitDefByID(BuildDefID);
+        if (BuildDef.RaceType == Game::Components::Race::Zerg)
+        {
+            int PlayerID = 0;
+            if (auto* Player = EntityManager.GetComponent<Game::Components::PlayerComponent>(EntityIDs[0]))
+                PlayerID = Player->PlayerID;
+            if (!Game::Systems::BuildingSystem::IsPlacementValid(EntityManager, BuildDefID, Target, PlayerID))
+                return false;
+            return Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
+                EntityManager, EntityIDs[0], BuildDefID, Target);
+        }
+        return Game::Systems::BuildingSystem::StartBuild(
             EntityManager, EntityIDs[0], BuildDefID, Game::Systems::BuildTarget::FromPosition(Target));
-        break;
+    }
     case UI::PendingTargetMode::BuildRefinery:
         if (ClickTarget.ResourceEntityID >= 0)
-            Game::Systems::BuildingSystem::StartBuild(
+        {
+            const auto BuildDef = Game::Races::GetUnitDefByID(BuildDefID);
+            const bool Built = Game::Systems::BuildingSystem::StartBuild(
                 EntityManager, EntityIDs[0], BuildDefID, Game::Systems::BuildTarget::FromEntity(ClickTarget.ResourceEntityID));
-        break;
+            if (Built && BuildDef.RaceType == Game::Components::Race::Zerg)
+                EntityManager.DestroyEntity(EntityIDs[0]);
+            return Built;
+        }
+        return false;
     case UI::PendingTargetMode::Harvest:
         if (ClickTarget.ResourceEntityID >= 0)
-            Game::Systems::HarvestSystem::IssueHarvest(EntityManager, EntityIDs, ClickTarget.ResourceEntityID);
-        break;
+            return Game::Systems::HarvestSystem::IssueHarvest(EntityManager, EntityIDs, ClickTarget.ResourceEntityID);
+        return false;
     case UI::PendingTargetMode::Move:
         Game::Systems::CommandSystem::IssueMove(EntityManager, EntityIDs, Target);
-        break;
+        return true;
     case UI::PendingTargetMode::AttackMove:
+        if (ClickTarget.EnemyEntityID >= 0)
+        {
+            auto Attackers = FilterAttackersForTarget(EntityManager, EntityIDs, ClickTarget.EnemyEntityID);
+            if (Attackers.empty())
+                return false;
+            Game::Systems::CombatSystem::IssueAttack(EntityManager, Attackers, ClickTarget.EnemyEntityID);
+            return true;
+        }
         Game::Systems::CombatSystem::IssueAttackMove(EntityManager, EntityIDs, Target);
-        break;
+        return true;
     case UI::PendingTargetMode::Patrol:
         IssuePatrolCommand(EntityManager, EntityIDs, Target);
-        break;
+        return true;
     case UI::PendingTargetMode::Follow:
+        if (ClickTarget.AnyEntityID < 0)
+            return false;
         IssueFollowCommand(EntityManager, EntityIDs, ClickTarget.AnyEntityID);
-        break;
+        return true;
     default:
-        break;
+        return false;
     }
 }
 

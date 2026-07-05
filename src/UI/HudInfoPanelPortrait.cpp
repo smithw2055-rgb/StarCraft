@@ -82,9 +82,9 @@ void Hud::DrawInfoPanelPortraits(Core::ECS::EntityManager& Entities,
         (PreviewUsesWireframe && UIAssets.HasCache() && mState.InfoPanel.PreviewChkUnitId >= 0)
         ? UIAssets.GetWireframeOpaqueBounds(mState.InfoPanel.PreviewChkUnitId)
         : nullptr;
-    const auto* PortraitImage = ResolvePortraitFrameForSelection(
+    const auto* PortraitImage = ResolvePortraitFrameForChkUnitId(
         UIAssets,
-        mState.Selection.SelectedTerranDefId,
+        mState.InfoPanel.PreviewChkUnitId,
         GetAnimatedSelectionFallbackImage(Entities));
 
     D.DrawRect((float)PreviewPanel.X, (float)PreviewPanel.Y,

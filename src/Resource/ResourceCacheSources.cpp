@@ -189,8 +189,6 @@ std::vector<std::string> ResourceCache::BuildExtractedAssetCandidates(const std:
     {
         const std::string Suffix = Lower.substr(8);
         AddUniquePath(Candidates, Seen, "textures/tilesets/" + Suffix);
-        if (Ext == ".vx4")
-            AddUniquePath(Candidates, Seen, "tileset/" + Lower.substr(8) + "ex");
     }
 
     if (Lower.rfind("unit/", 0) == 0)

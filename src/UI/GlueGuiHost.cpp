@@ -1,13 +1,11 @@
 #include "GlueGuiHost.h"
 #include "GlueAnimatedImage.h"
+#include "GlueComponentRegistration.h"
 #include "GlueMenuController.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 
-#include "GlueMenuController.h"
-
-#include <NsCore/RegisterComponent.h>
 #include <NsGui/IView.h>
 #include <NsGui/IRenderer.h>
 #include <NsGui/IntegrationAPI.h>
@@ -40,11 +38,10 @@ bool GlueGuiHost::Initialize(const std::string& AssetRoot, int Width, int Height
 {
     if (mInitialized) return true;
 
-    // Register custom Aero components BEFORE init
-    Aero::RegisterComponent<UI::Glue::GlueAnimatedImage>();
-    Aero::RegisterComponent<UI::Glue::GlueMenuController>();
+    UI::Glue::RegisterGlueComponents(true);
 
     mAssetRoot = AssetRoot;
+    UI::Glue::GlueAnimatedImage::SetAssetRoot(mAssetRoot);
     mDpiScale = GetGlueDpiScale();
     mWidth = std::max(1, Width);
     mHeight = std::max(1, Height);
@@ -161,10 +158,11 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
     if (!mInitialized || !mView || !EventPtr) return false;
 
     const sapp_event* E = static_cast<const sapp_event*>(EventPtr);
-    int RawX = static_cast<int>(std::lround(E->mouse_x));
-    int RawY = static_cast<int>(std::lround(E->mouse_y));
-    int X = static_cast<int>(std::lround(E->mouse_x * mDpiScale));
-    int Y = static_cast<int>(std::lround(E->mouse_y * mDpiScale));
+    // Sokol mouse coordinates are already in framebuffer pixels. Aero::IView
+    // converts them back to DIPs using SetScale(), so applying DPI here would
+    // double-scale hit testing on high-DPI displays.
+    int X = static_cast<int>(std::lround(E->mouse_x));
+    int Y = static_cast<int>(std::lround(E->mouse_y));
 
     switch (E->type)
     {
@@ -180,18 +178,18 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
         Aero::MouseButton Btn = Aero::MouseButton_Left;
         if (E->mouse_button == SAPP_MOUSEBUTTON_RIGHT) Btn = Aero::MouseButton_Right;
         else if (E->mouse_button == SAPP_MOUSEBUTTON_MIDDLE) Btn = Aero::MouseButton_Middle;
+        if (mView->MouseButtonUp(X, Y, Btn))
+            return true;
+
         bool Handled = false;
         if (E->mouse_button == SAPP_MOUSEBUTTON_LEFT && mMenuControl)
         {
             Handled = mMenuControl->HandleFallbackClick(static_cast<float>(X), static_cast<float>(Y),
                                                         static_cast<float>(mWidth), static_cast<float>(mHeight));
-            if (!Handled)
-                Handled = mMenuControl->HandleFallbackClick(static_cast<float>(RawX), static_cast<float>(RawY),
-                                                            static_cast<float>(mWidth), static_cast<float>(mHeight));
         }
         if (Handled)
             return true;
-        return mView->MouseButtonUp(X, Y, Btn);
+        return false;
     }
     case SAPP_EVENTTYPE_MOUSE_MOVE:
         return mView->MouseMove(X, Y);

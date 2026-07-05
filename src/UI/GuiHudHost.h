@@ -10,6 +10,8 @@
 #include <NsGui/UserControl.h>
 #include <NsRender/RenderDevice.h>
 
+#include "UI/HudMinimapState.h"
+
 namespace Aero {
 class Border;
 class Image;
@@ -19,12 +21,13 @@ class TextBlock;
 class Canvas;
 }
 
-namespace AeroApp {
-class MediaElement;
-}
-
 namespace Game::Client::UI
 {
+
+namespace Glue
+{
+class GlueAnimatedImage;
+}
 
 struct ScreenRect
 {
@@ -85,6 +88,9 @@ public:
 
     void SetResources(int Minerals, int Gas, int SupplyUsed, int SupplyMax,
                       const std::string& TimeText = "");
+    void SetResourceIconUris(const std::string& MineralUri,
+                             const std::string& GasUri,
+                             const std::string& SupplyUri);
     void SetSelection(const std::string& Name, int Count,
                       float Hp, float MaxHp,
                       float Shields, float MaxShields,
@@ -100,6 +106,10 @@ public:
     void SetHoveredCommand(int Index);
     void SetPressedCommand(int Index);
     void SetMultiSelection(const std::vector<ScSelectionInfo>& Units, int PrimaryHandle);
+    void SetMinimapDots(const std::vector<HudMinimapDot>& Dots);
+    void SetCampaignPings(const std::vector<HudMinimapPing>& Pings,
+                          int MapWidthTiles,
+                          int MapHeightTiles);
 
     int HitCommandButton(float X, float Y) const;
     int HitMinimapButton(float X, float Y) const;
@@ -118,11 +128,15 @@ public:
 private:
     static constexpr int kHudHeight = 280;
     static constexpr int kMinimapSize = 236;
+    static constexpr int kMaxMinimapDotVisuals = 32;
+    static constexpr int kMaxCampaignPingVisuals = 4;
 
     void CacheElements();
     void LogMissingElements() const;
     void CacheRects();
     void ApplyState();
+    void ApplyMinimapDots();
+    void ApplyCampaignPings();
     void UpdateLayoutMetrics();
 
     ScreenRect GetElementRect(Aero::FrameworkElement* Element) const;
@@ -136,13 +150,16 @@ private:
     Aero::TextBlock* MineralText_ = nullptr;
     Aero::TextBlock* GasText_ = nullptr;
     Aero::TextBlock* SupplyText_ = nullptr;
+    Aero::Image* MineralIcon_ = nullptr;
+    Aero::Image* GasIcon_ = nullptr;
+    Aero::Image* SupplyIcon_ = nullptr;
     Aero::TextBlock* TimeText_ = nullptr;
     Aero::FrameworkElement* BottomHudScale_ = nullptr;
 
     Aero::FrameworkElement* InfoPanel_ = nullptr;
     Aero::Border* PortraitViewport_ = nullptr;
     Aero::Image* PortraitImage_ = nullptr;
-    AeroApp::MediaElement* PortraitMedia_ = nullptr;
+    Glue::GlueAnimatedImage* PortraitVideo_ = nullptr;
     Aero::TextBlock* UnitNameText_ = nullptr;
 
     Aero::Border* HpFill_ = nullptr;
@@ -175,7 +192,9 @@ private:
     std::array<Aero::TextBlock*, 9> CommandNumbers_{};
 
     Aero::Border* Miniviewport_ = nullptr;
-    Aero::Border* MinimapContentViewport_ = nullptr;
+    Aero::FrameworkElement* MinimapContentViewport_ = nullptr;
+    std::array<Aero::Border*, kMaxMinimapDotVisuals> MinimapDots_{};
+    std::array<Aero::Border*, kMaxCampaignPingVisuals> MinimapPings_{};
     Aero::FrameworkElement* MiniMapTerrainButton_ = nullptr;
     Aero::FrameworkElement* MiniMapAllyButton_ = nullptr;
     Aero::FrameworkElement* MiniMapFogButton_ = nullptr;
@@ -184,12 +203,18 @@ private:
     Aero::TextBlock* TooltipText_ = nullptr;
     Aero::FrameworkElement* TooltipCostRow_ = nullptr;
     Aero::FrameworkElement* TooltipMineralCost_ = nullptr;
+    Aero::Image* TooltipMineralIcon_ = nullptr;
     Aero::TextBlock* TooltipMineralCostText_ = nullptr;
     Aero::FrameworkElement* TooltipGasCost_ = nullptr;
+    Aero::Image* TooltipGasIcon_ = nullptr;
     Aero::TextBlock* TooltipGasCostText_ = nullptr;
+    Aero::FrameworkElement* TooltipSupplyCost_ = nullptr;
+    Aero::Image* TooltipSupplyIcon_ = nullptr;
+    Aero::TextBlock* TooltipSupplyCostText_ = nullptr;
 
     Aero::FrameworkElement* SelectionPanel_ = nullptr;
     std::array<Aero::Border*, 6> SelectSlots_{};
+    std::array<Aero::Image*, 6> SelectImages_{};
     std::array<Aero::Border*, 6> SelectColors_{};
     std::array<Aero::Border*, 6> SelectHps_{};
 
@@ -208,6 +233,15 @@ private:
     int SupplyUsed_ = 0;
     int SupplyMax_ = 200;
     std::string TimeValue_ = "00:00";
+    std::string MineralIconUri_;
+    std::string GasIconUri_;
+    std::string SupplyIconUri_;
+    std::string AppliedMineralIconUri_;
+    std::string AppliedGasIconUri_;
+    std::string AppliedSupplyIconUri_;
+    std::string AppliedTooltipMineralIconUri_;
+    std::string AppliedTooltipGasIconUri_;
+    std::string AppliedTooltipSupplyIconUri_;
 
     std::string UnitName_ = "No unit selected";
     int UnitCount_ = 0;
@@ -223,7 +257,9 @@ private:
     std::string QueueTextValue_;
     float QueueProgressRatio_ = 0.0f;
     std::string PortraitIconUri_;
-    std::string AppliedPortraitMediaUri_;
+    std::string AppliedPortraitImageUri_;
+    std::string AppliedPortraitVideoUri_;
+    bool AppliedPortraitVideoReady_ = false;
 
     bool TooltipVisible_ = false;
     std::string TooltipValue_;
@@ -249,9 +285,15 @@ private:
     int PressedCommandIndex_ = -1;
 
     std::array<ScSelectionInfo, 6> MultiSelectStates_{};
+    std::array<std::string, 6> MultiSelectAppliedImageUris_{};
     std::array<bool, 6> MultiSelectVisible_{};
     std::array<ScreenRect, 6> MultiSelectRects_{};
     int MultiSelectPrimaryHandle_ = -1;
+
+    std::vector<HudMinimapPing> CampaignPings_;
+    std::vector<HudMinimapDot> MinimapDotsState_;
+    int CampaignMapWidth_ = 0;
+    int CampaignMapHeight_ = 0;
 
     ScreenRect MinimapRect_;
     ScreenRect PortraitRect_;

@@ -36,6 +36,57 @@ namespace
         return -1;
     }
 
+    void ClearMotion(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->CurrentVelocity = {0.0f, 0.0f};
+        }
+    }
+
+    void StopHarvestCommand(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Cmd = EM.GetComponent<CommandComponent>(EntityID))
+        {
+            Cmd->CurrentCommand = CommandType::Stop;
+            Cmd->TargetEntityID = -1;
+        }
+        ClearMotion(EM, EntityID);
+    }
+
+    bool IsValidDepotForReturn(Core::ECS::EntityManager& EM,
+                               int DepotID,
+                               int PlayerID,
+                               ResourceType Type)
+    {
+        auto* Building = EM.GetComponent<BuildingComponent>(DepotID);
+        auto* Owner = EM.GetComponent<PlayerComponent>(DepotID);
+        auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
+        auto* DepotUnit = EM.GetComponent<UnitComponent>(DepotID);
+        if (!Building || !Owner || !DepotTrans || !DepotUnit)
+            return false;
+        if (Building->UnderConstruction || DepotUnit->HitPoints <= 0)
+            return false;
+        if (Owner->PlayerID != PlayerID)
+            return false;
+
+        const int NexusDefID = Game::Races::GetUnitDefID("Nexus");
+        const int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
+        const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
+        const int LairDefID = Game::Races::GetUnitDefID("Lair");
+        const int HiveDefID = Game::Races::GetUnitDefID("Hive");
+        const int DefID = ResolveBuildingDefID(EM, DepotID);
+        const bool IsResourceType =
+            Type == ResourceType::Minerals || Type == ResourceType::VespeneGas;
+        const bool IsDepot =
+            DefID == CommandCenterDefID || DefID == NexusDefID ||
+            DefID == HatcheryDefID || DefID == LairDefID || DefID == HiveDefID;
+        return IsResourceType && IsDepot;
+    }
+
     float HarvestInteractionRange(const Core::ECS::EntityManager& EM, int TargetResourceID)
     {
         auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
@@ -137,7 +188,7 @@ bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
 {
     auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
     auto* Resource = MutableEM.GetComponent<ResourceComponent>(TargetResourceID);
-    if (!Resource || Resource->IsDepleted)
+    if (!Resource || Resource->IsDepleted || Resource->Amount <= 0)
     {
         SetReason(OutReason, "target is not an active resource");
         return false;
@@ -148,6 +199,11 @@ bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
     if (!Unit || !Transform)
     {
         SetReason(OutReason, "unit missing components");
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        SetReason(OutReason, "worker is not alive");
         return false;
     }
 
@@ -244,36 +300,14 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
         return -1;
 
     const int PlayerID = HarvesterPlayer ? HarvesterPlayer->PlayerID : 0;
-    // Multi-race depot support
-    const int NexusDefID = Game::Races::GetUnitDefID("Nexus");
-    const int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
-    const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
-    const int LairDefID = Game::Races::GetUnitDefID("Lair");
-    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
-
     int BestID = -1;
     float BestDist = std::numeric_limits<float>::max();
 
     auto Depots = EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>();
     for (int DepotID : Depots)
     {
-        auto* Building = EM.GetComponent<BuildingComponent>(DepotID);
-        auto* Owner = EM.GetComponent<PlayerComponent>(DepotID);
         auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
-        if (!Building || !Owner || !DepotTrans || Building->UnderConstruction)
-            continue;
-        if (Owner->PlayerID != PlayerID)
-            continue;
-
-        const int DefID = ResolveBuildingDefID(EM, DepotID);
-        const bool IsValidMineralDepot =
-            DefID == CommandCenterDefID || DefID == NexusDefID ||
-            DefID == HatcheryDefID || DefID == LairDefID || DefID == HiveDefID;
-
-        const bool IsValidDepot =
-            (Type == ResourceType::Minerals || Type == ResourceType::VespeneGas) &&
-            IsValidMineralDepot;
-        if (!IsValidDepot)
+        if (!DepotTrans || !IsValidDepotForReturn(EM, DepotID, PlayerID, Type))
             continue;
 
         float Dist = HarvesterTrans->Position.DistanceTo(DepotTrans->Position);
@@ -291,9 +325,16 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
 {
     auto* Trans = EM.GetComponent<TransformComponent>(ID);
     auto* Harvest = EM.GetComponent<HarvestComponent>(ID);
+    auto* Unit = EM.GetComponent<UnitComponent>(ID);
     auto* WorkerOwner = EM.GetComponent<PlayerComponent>(ID);
     if (!Trans || !Harvest)
         return;
+    if (!Unit || Unit->HitPoints <= 0)
+    {
+        Harvest->State = HarvestState::Idle;
+        StopHarvestCommand(EM, ID);
+        return;
+    }
 
     const int WorkerPlayerID = WorkerOwner ? WorkerOwner->PlayerID : 0;
 
@@ -408,6 +449,25 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 if (Harvest->ReturnBuildingID == -1)
                 {
                     Harvest->State = HarvestState::Idle;
+                    break;
+                }
+                if (auto* DepotTrans =
+                        EM.GetComponent<TransformComponent>(Harvest->ReturnBuildingID))
+                {
+                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID,
+                                     DepotTrans->Position,
+                                     Harvest->ReturnBuildingID, 28.0f);
+                }
+                return;
+            }
+            if (!IsValidDepotForReturn(EM, Harvest->ReturnBuildingID,
+                                       WorkerPlayerID, Harvest->CarryingType))
+            {
+                Harvest->ReturnBuildingID = FindNearestDepot(EM, ID, Harvest->CarryingType);
+                if (Harvest->ReturnBuildingID == -1)
+                {
+                    Harvest->State = HarvestState::Idle;
+                    StopHarvestCommand(EM, ID);
                     break;
                 }
                 if (auto* DepotTrans =

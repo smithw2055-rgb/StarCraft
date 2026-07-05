@@ -10,16 +10,14 @@ namespace Aero {
 class Button;
 class Border;
 class FrameworkElement;
+struct MouseEventArgs;
 class TextBlock;
-}
-
-namespace AeroApp {
-struct ExceptionRoutedEventArgs;
-class MediaElement;
 }
 
 namespace Game::Client::UI::Glue
 {
+
+class GlueAnimatedImage;
 
 class GlueMenuController final : public Aero::UserControl
 {
@@ -29,6 +27,7 @@ public:
     GlueMenuController() = default;
 
     void Initialize();
+    void Update(double TimeSeconds);
     void ApplyState();
 
     using ActionCallback = std::function<void(const std::string& Action)>;
@@ -41,6 +40,7 @@ public:
     void OnLoadGame(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnBackToMain(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnExit(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
+    void OnIntro(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnStartOriginal(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnStartExpansion(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnStartCustomGame(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
@@ -50,16 +50,14 @@ public:
     void OnZergTab(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnProtossTab(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnLanguageToggle(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
-    void OnCampaignMediaEnded(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
-    void OnCampaignMediaOpened(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
-    void OnCampaignMediaFailed(Aero::BaseComponent* Sender, const AeroApp::ExceptionRoutedEventArgs& Args);
 
     void SetSelectedMap(const std::string& MapName);
+    int GetCampaignRace() const { return mCampaignRace; }
     void SetCampaignRace(int RaceIndex); // 0=Terran, 1=Zerg, 2=Protoss
     bool HandleFallbackClick(float ViewX, float ViewY, float ViewWidth, float ViewHeight);
 
 private:
-    enum class Page : uint8_t { MainMenu, SinglePlayer, Campaign, CustomGame, Options, LoadGame };
+    enum class Page : uint8_t { MainMenu, Cinematics, SinglePlayer, Campaign, CustomGame, Options, LoadGame };
     enum class Language : uint8_t { English, Chinese };
 
     void CacheElements();
@@ -69,10 +67,21 @@ private:
     void ToggleLanguage();
     void ApplyLanguage();
     void SetTextPairVisibility(Aero::TextBlock* English, Aero::TextBlock* Chinese);
-    void PlayCampaignMedia();
     void LoadCampaignProgress();
     void RefreshCampaignPage();
     int GetUnlockedMissionCount() const;
+    void EmitMenuHover();
+    void EmitMenuClick();
+    void CacheAnimatedElements();
+    void SetMainMenuHover(int Index);
+    void StopMainMenuAnimations();
+    void OnMainSingleMouseEnter(Aero::BaseComponent* Sender, const Aero::MouseEventArgs& Args);
+    void OnMainMultiMouseEnter(Aero::BaseComponent* Sender, const Aero::MouseEventArgs& Args);
+    void OnMainExitMouseEnter(Aero::BaseComponent* Sender, const Aero::MouseEventArgs& Args);
+    void OnMainMouseLeave(Aero::BaseComponent* Sender, const Aero::MouseEventArgs& Args);
+    void SetCampaignAnimationsEnabled(bool Enabled, bool RestartActive);
+    void ApplyCampaignAnimationState(bool RestartActive);
+    void SetCampaignMaskTarget(int Set, int Race, float Opacity);
 
     ActionCallback mActionCallback;
 
@@ -86,6 +95,7 @@ private:
 
     // Page borders
     Aero::Border* mMainMenuPage = nullptr;
+    Aero::Border* mCinematicsPage = nullptr;
     Aero::Border* mSinglePlayerPage = nullptr;
     Aero::Border* mCampaignPage = nullptr;
     Aero::Border* mCustomGamePage = nullptr;
@@ -98,8 +108,10 @@ private:
     Aero::Button* mCustomGameBtn = nullptr;
     Aero::Button* mMultiplayerBtn = nullptr;
     Aero::Button* mEditorBtn = nullptr;
+    Aero::Button* mIntroBtn = nullptr;
     Aero::Button* mExitBtn = nullptr;
     Aero::Button* mLanguageBtn = nullptr;
+    Aero::Button* mCinematicsBackBtn = nullptr;
 
     Aero::TextBlock* mMainSingleLabelEn = nullptr;
     Aero::TextBlock* mMainSingleLabelZh = nullptr;
@@ -107,6 +119,8 @@ private:
     Aero::TextBlock* mMainMultiplayerLabelZh = nullptr;
     Aero::TextBlock* mMainOptionsLabelEn = nullptr;
     Aero::TextBlock* mMainOptionsLabelZh = nullptr;
+    Aero::TextBlock* mMainFavoritesLabelEn = nullptr;
+    Aero::TextBlock* mMainFavoritesLabelZh = nullptr;
     Aero::TextBlock* mMainHotkeysLabelEn = nullptr;
     Aero::TextBlock* mMainHotkeysLabelZh = nullptr;
     Aero::TextBlock* mMainCreditsLabelEn = nullptr;
@@ -117,6 +131,8 @@ private:
     Aero::TextBlock* mMainExitLabelZh = nullptr;
     Aero::TextBlock* mLanguageLabelEn = nullptr;
     Aero::TextBlock* mLanguageLabelZh = nullptr;
+    GlueAnimatedImage* mMainMenuVideos[3] = {};
+    int mMainMenuHover = -1;
 
     // Single player buttons
     Aero::Button* mOriginalBtn = nullptr;
@@ -143,10 +159,15 @@ private:
     Aero::Button* mCampaignLoadBtn = nullptr;
     Aero::Button* mCampaignPlayCustomBtn = nullptr;
     Aero::Button* mCampaignMissionBtns[10] = {};
-    AeroApp::MediaElement* mCampaignMedia[6] = {};
     Aero::FrameworkElement* mCampaignOriginalVisuals = nullptr;
     Aero::FrameworkElement* mCampaignExpansionVisuals = nullptr;
     Aero::FrameworkElement* mCampaignRaceHighlights[2][3] = {};
+    GlueAnimatedImage* mCampaignRaceVideos[2][3][2] = {};
+    GlueAnimatedImage* mCampaignRaceSelectedVideos[2][3] = {};
+    Aero::FrameworkElement* mCampaignRaceMasks[2][3] = {};
+    float mCampaignRaceMaskOpacity[2][3] = {};
+    float mCampaignRaceMaskTarget[2][3] = {};
+    bool mCampaignAnimationsEnabled = false;
     Aero::TextBlock* mCampaignTitleText = nullptr;
     Aero::TextBlock* mCampaignSetText = nullptr;
     Aero::TextBlock* mCampaignProgressText = nullptr;

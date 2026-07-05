@@ -5,6 +5,7 @@
 #include "Main/AppRuntime.h"
 #include "Main/CampaignRuntime.h"
 #include "Main/GameAudioRuntime.h"
+#include "Main/GameInteractionSmokeRuntime.h"
 #include "Main/GameMenuRuntime.h"
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
@@ -37,6 +38,7 @@ struct GameRuntimeState
     GameAppRuntimeState App;
     GameClientRuntimeState Client;
     GameSessionRuntimeState Session;
+    GameInteractionSmokeState InteractionSmoke;
 };
 
 } // namespace Game::Client::GameLoop

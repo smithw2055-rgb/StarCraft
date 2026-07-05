@@ -15,7 +15,6 @@ struct GuiRuntime
     UI::GlueGuiHost GlueGui;
     bool UseGui = false;
     bool GuiInitialized = false;
-    bool GuiD3D11MediaInitialized = false;
     bool GlueGuiInitialized = false;
 #endif
 };

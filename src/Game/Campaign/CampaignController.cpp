@@ -1,6 +1,7 @@
 #include "Game/Campaign/CampaignController.h"
 
 #include "Core/Utils/Logger.h"
+#include "Game/Components.h"
 
 #include <algorithm>
 #include <cctype>
@@ -93,10 +94,11 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
     mActive = false;
     mState = CampaignState::Playing;
     mStateTimer = 0.0f;
-    mActivePortraitUnitID = 0;
+    mActivePortraitUnitID = kNoPortraitUnitID;
     mSyncedObjectiveSourceCount = 0;
     mObjectives.clear();
     mMessages.clear();
+    mLeaderboard = {};
     mMissionName = "StarCraft Scenario";
     mTriggerVM = std::make_unique<Trigger::TriggerVM>();
 
@@ -126,11 +128,17 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
 
 void CampaignController::Update(Core::ECS::EntityManager& EM, float DeltaTime)
 {
-    if (!mActive || mState != CampaignState::Playing || !mTriggerVM)
+    if (!mActive || !mTriggerVM)
         return;
+    if (mState != CampaignState::Playing)
+    {
+        RefreshLeaderboardValue(EM);
+        return;
+    }
 
     mStateTimer += DeltaTime;
     mTriggerVM->Update(EM, DeltaTime);
+    SyncLeaderboardFromTriggerVM(EM);
     SyncMessagesFromTriggerVM(DeltaTime);
     SyncObjectivesFromTriggerVM();
     SyncStateFromTriggerVM();
@@ -140,10 +148,11 @@ void CampaignController::Reset()
 {
     mState = CampaignState::Playing;
     mStateTimer = 0.0f;
-    mActivePortraitUnitID = 0;
+    mActivePortraitUnitID = kNoPortraitUnitID;
     mSyncedObjectiveSourceCount = 0;
     mObjectives.clear();
     mMessages.clear();
+    mLeaderboard = {};
     if (mTriggerVM)
         mTriggerVM->Reset();
 }
@@ -210,6 +219,57 @@ void CampaignController::SyncObjectivesFromTriggerVM()
     mSyncedObjectiveSourceCount = VmObjectives.size();
 }
 
+void CampaignController::SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& EM)
+{
+    if (!mTriggerVM)
+        return;
+
+    for (const auto& Event : mTriggerVM->GetEvents())
+    {
+        switch (Event.ActionID)
+        {
+            case 17: // Leaderboard control.
+            {
+                mLeaderboard.Active = true;
+                mLeaderboard.ActionID = Event.ActionID;
+                mLeaderboard.Label = Event.Text.empty() ? "Units" : Event.Text;
+                mLeaderboard.UnitID = (uint16_t)Event.Data;
+                mLeaderboard.PlayerID = Event.PlayerID;
+                break;
+            }
+            case 32: // Leaderboard computer players.
+                mLeaderboard.IncludeComputerPlayers = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    RefreshLeaderboardValue(EM);
+}
+
+void CampaignController::RefreshLeaderboardValue(Core::ECS::EntityManager& EM)
+{
+    if (!mLeaderboard.Active)
+        return;
+
+    int Count = 0;
+    for (int EntityID : EM.GetEntitiesWith<Components::UnitComponent,
+                                           Components::PlayerComponent>())
+    {
+        auto* Unit = EM.GetComponent<Components::UnitComponent>(EntityID);
+        auto* Player = EM.GetComponent<Components::PlayerComponent>(EntityID);
+        if (!Unit || !Player || Unit->HitPoints <= 0)
+            continue;
+        if (Unit->ChkUnitID != (int)mLeaderboard.UnitID)
+            continue;
+        if (!mLeaderboard.IncludeComputerPlayers && Player->PlayerID != mLeaderboard.PlayerID)
+            continue;
+        ++Count;
+    }
+    mLeaderboard.CurrentValue = Count;
+}
+
 void CampaignController::SyncMessagesFromTriggerVM(float DeltaTime)
 {
     for (auto& Message : mMessages)
@@ -228,12 +288,23 @@ void CampaignController::SyncMessagesFromTriggerVM(float DeltaTime)
             mActivePortraitUnitID = Event.Data;
             for (auto It = mMessages.rbegin(); It != mMessages.rend(); ++It)
             {
-                if (It->PortraitUnitID == 0)
+                if (It->PortraitUnitID == kNoPortraitUnitID)
                 {
                     It->PortraitUnitID = Event.Data;
                     break;
                 }
             }
+
+            CampaignMessage Message;
+            Message.ActionID = Event.ActionID;
+            Message.PlayerID = Event.PlayerID;
+            Message.Data = Event.Data;
+            Message.PortraitUnitID = Event.Data;
+            Message.Position = Event.Position;
+            Message.TimeRemaining = Event.DurationMs > 0
+                ? std::max(1.0f, (float)Event.DurationMs / 1000.0f)
+                : 3.0f;
+            mMessages.push_back(std::move(Message));
             continue;
         }
 
@@ -250,7 +321,10 @@ void CampaignController::SyncMessagesFromTriggerVM(float DeltaTime)
                 Message.ActionID = Event.ActionID;
                 Message.PlayerID = Event.PlayerID;
                 Message.Data = Event.Data;
-                Message.PortraitUnitID = Event.Data != 0 ? Event.Data : mActivePortraitUnitID;
+                if (Event.ActionID == 7)
+                    Message.PortraitUnitID = Event.Data;
+                else
+                    Message.PortraitUnitID = mActivePortraitUnitID;
                 Message.SoundPath = Event.SoundPath;
                 Message.Position = Event.Position;
                 Message.TimeRemaining = Event.DurationMs > 0

@@ -45,15 +45,68 @@ namespace
                                             const TransformComponent& Trans,
                                             const CombatComponent* Combat)
     {
-        if (!Combat || Combat->TargetEntityID < 0)
+        if (!Combat)
             return {std::cos(0.0f), std::sin(0.0f)};
-        if (auto* TargetTrans = EM.GetComponent<TransformComponent>(Combat->TargetEntityID))
+
+        auto DirectionToEntity = [&](int EntityID) -> Core::Math::Vec2
         {
-            const auto Delta = TargetTrans->Position - Trans.Position;
-            if (Delta.Length() > 0.001f)
-                return Delta.Normalized();
+            if (EntityID < 0)
+                return {};
+            if (auto* TargetTrans = EM.GetComponent<TransformComponent>(EntityID))
+            {
+                const auto Delta = TargetTrans->Position - Trans.Position;
+                if (Delta.Length() > 0.001f)
+                    return Delta.Normalized();
+            }
+            return {};
+        };
+
+        if (Combat->PendingAttackFrame)
+        {
+            const auto PendingEntityDirection = DirectionToEntity(Combat->PendingAttackTargetEntityID);
+            if (PendingEntityDirection.Length() > 0.001f)
+                return PendingEntityDirection;
+
+            const auto PendingPosDelta = Combat->PendingAttackTargetPos - Trans.Position;
+            if (PendingPosDelta.Length() > 0.001f)
+                return PendingPosDelta.Normalized();
         }
+
+        const auto TargetEntityDirection = DirectionToEntity(Combat->TargetEntityID);
+        if (TargetEntityDirection.Length() > 0.001f)
+            return TargetEntityDirection;
+
         return {std::cos(0.0f), std::sin(0.0f)};
+    }
+
+    void ApplyAttackDirection(Core::ECS::EntityManager& EM,
+                              const TransformComponent& Trans,
+                              const CombatComponent* Combat,
+                              Game::IScriptVM::SpriteContext& Ctx)
+    {
+        const auto Direction = ResolveAttackDirection(EM, Trans, Combat);
+        Ctx.CurrentDirection = DirectionToIScriptDirection(Direction);
+        Ctx.FlDirect = Ctx.CurrentDirection;
+
+        if (Combat && Combat->PendingAttackFrame)
+        {
+            Core::Math::Vec2 Delta = Combat->PendingAttackTargetPos - Trans.Position;
+            if (Combat->PendingAttackTargetEntityID >= 0)
+            {
+                if (auto* TargetTrans = EM.GetComponent<TransformComponent>(Combat->PendingAttackTargetEntityID))
+                    Delta = TargetTrans->Position - Trans.Position;
+            }
+            if (Delta.Length() > 0.001f)
+                Ctx.TargetRangePixels = (int)Delta.Length();
+            Ctx.TargetArc = 0;
+        }
+    }
+
+    bool IsFrozenByStatus(const StatusEffectComponent* Status)
+    {
+        return Status && (Status->HasEffect(StatusEffect::Stasis) ||
+                          Status->HasEffect(StatusEffect::Lockdown) ||
+                          Status->HasEffect(StatusEffect::Maelstrom));
     }
 
     Core::Math::Vec2 ResolveAnimationDirection(Core::ECS::EntityManager& EM,
@@ -475,19 +528,22 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
                                              const PlayerComponent* Player,
                                              CombatComponent* Combat,
                                              const BuildingComponent* Bldg,
+                                             const StatusEffectComponent* Status,
                                              const ProductionComponent* Prod)
 {
     auto& State = mScriptStates[EntityID];
 
     const bool IsEffect = mSystemMgr.GetEntityManager().GetComponent<EffectComponent>(EntityID) != nullptr;
-    if (IsEffect)
+    if (IsEffect && !mSystemMgr.GetEntityManager().GetComponent<UnitComponent>(EntityID))
         return false;
 
     const bool IsBuilding = Bldg != nullptr;
     const bool UnderConstruction = Bldg && Bldg->UnderConstruction;
     const bool IsWorking =
         Prod && (Prod->CurrentTrainingUnitDefID >= 0 || !Prod->Queue.empty());
-    const bool IsPendingAttack = Combat && Combat->PendingAttackFrame;
+    const bool IsFrozen = IsFrozenByStatus(Status);
+    const bool IsPendingAttack =
+        Combat && Combat->PendingAttackFrame && !IsFrozen;
 
     EnsureIScriptLoaded();
     if (!sIScriptDB.IsLoaded())
@@ -556,6 +612,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
 
     if (NeedStart)
     {
+        const int PreviousAnim = State.AnimID;
         const int EntryPC = Script->AnimationPC[(size_t)TargetAnim];
         State.VM.LoadScript(TargetAnim, &sIScriptDB.GetProgram().ProgramData, EntryPC);
         auto& Ctx = State.VM.GetContext();
@@ -568,10 +625,8 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.ScriptID = ImageInfo->IScriptID;
         State.AnimID = TargetAnim;
         State.StepAccumulator = 0.0f;
-        if (ImageOrScriptChanged ||
-            TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
-            TargetAnim == Game::IScriptAnims::Anim_AirAttkInit ||
-            UnderConstruction)
+        if (ShouldClearImageTreeForAnimRestart(
+                IsBuilding, ImageOrScriptChanged, PreviousAnim, TargetAnim, UnderConstruction))
         {
             ClearImageTree(EntityID);
         }
@@ -582,28 +637,27 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     if (!IsBuilding)
     {
         const Core::Math::Vec2 AnimDirection =
-            ResolveAnimationDirection(mSystemMgr.GetEntityManager(), DesiredState, Trans, Path, Combat);
+            ResolveAnimationDirection(
+                mSystemMgr.GetEntityManager(),
+                DesiredState,
+                Trans,
+                Path,
+                IsFrozen ? nullptr : Combat);
         Ctx.CurrentDirection = DirectionToIScriptDirection(AnimDirection);
         Ctx.FlDirect = Ctx.CurrentDirection;
         if (Ctx.HasDirectionalFrames)
             State.VM.RefreshDirectionalFrame();
     }
 
-    if (Combat && Combat->PendingAttackFrame)
+    if (IsPendingAttack)
     {
         Ctx.IsAttacking = true;
-        if (Combat->PendingAttackTargetEntityID >= 0)
-        {
-            if (auto* TargetTrans = mSystemMgr.GetEntityManager().GetComponent<TransformComponent>(Combat->PendingAttackTargetEntityID))
-            {
-                const auto Delta = TargetTrans->Position - Trans.Position;
-                Ctx.TargetRangePixels = (int)Delta.Length();
-                Ctx.CurrentDirection = DirectionToIScriptDirection(Delta);
-                Ctx.FlDirect = Ctx.CurrentDirection;
-                Ctx.TargetArc = 0;
-                State.VM.RefreshDirectionalFrame();
-            }
-        }
+        ApplyAttackDirection(mSystemMgr.GetEntityManager(), Trans, Combat, Ctx);
+        State.VM.RefreshDirectionalFrame();
+    }
+    else
+    {
+        Ctx.IsAttacking = false;
     }
     Ctx.IsWalking = DesiredState == AnimState::Walking;
 
@@ -625,7 +679,9 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
 
     ConsumeIScriptEvents(EntityID, State, Trans, Player, Combat);
 
-    Render.FrameIndex = std::clamp(State.VM.GetCurrentFrame(), 0, std::max(0, Render.TotalFrames - 1));
+    const int ScriptFrame = std::max(0, State.VM.GetCurrentFrame());
+    Render.TotalFrames = std::max(Render.TotalFrames, ScriptFrame + 1);
+    Render.FrameIndex = std::clamp(ScriptFrame, 0, std::max(0, Render.TotalFrames - 1));
     Render.Flipped = State.VM.GetContext().FlipState;
 
     if (!State.VM.IsRunning() &&
@@ -685,12 +741,13 @@ void AnimationSystem::Update(float DeltaTime)
         auto* Path = EM.GetComponent<PathfindingComponent>(Eid);
         auto* Bldg = EM.GetComponent<BuildingComponent>(Eid);
         auto* Morph = EM.GetComponent<MorphComponent>(Eid);
+        auto* Status = EM.GetComponent<StatusEffectComponent>(Eid);
         auto* Prod = EM.GetComponent<ProductionComponent>(Eid);
         auto* Player = EM.GetComponent<PlayerComponent>(Eid);
 
-        AnimState State = GetAnimStateFromComponents(Cmd, Combat, Path, Unit, Bldg, Morph);
+        AnimState State = GetAnimStateFromComponents(Cmd, Combat, Path, Unit, Bldg, Morph, Status);
 
-        if (UpdateIScriptAnimation(Eid, DeltaTime, State, *Render, *Trans, Path, Player, Combat, Bldg, Prod))
+        if (UpdateIScriptAnimation(Eid, DeltaTime, State, *Render, *Trans, Path, Player, Combat, Bldg, Status, Prod))
             continue;
 
         // Look up animation clip

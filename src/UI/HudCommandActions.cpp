@@ -7,6 +7,16 @@
 namespace Game::Client::UI
 {
 
+namespace
+{
+    bool IsGasBuildingDefID(int DefID)
+    {
+        return DefID == Game::Races::GetUnitDefID("Refinery") ||
+               DefID == Game::Races::GetUnitDefID("Extractor") ||
+               DefID == Game::Races::GetUnitDefID("Assimilator");
+    }
+}
+
 void Hud::CancelPendingTarget()
 {
     mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::None;
@@ -42,7 +52,7 @@ void Hud::OnButtonInvoked(int ButtonIndex)
         {
             mState.CommandPanel.PendingBuildDefID = Button.TargetUnitDefID;
             mState.CommandPanel.PendingTargetModeValue =
-                (Button.TargetUnitDefID == Game::Races::GetUnitDefID("Refinery"))
+                IsGasBuildingDefID(Button.TargetUnitDefID)
                     ? PendingTargetMode::BuildRefinery
                     : PendingTargetMode::BuildPlacement;
         }

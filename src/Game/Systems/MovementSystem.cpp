@@ -4,6 +4,7 @@
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
+#include "Game/Pathfinding/AStar.h"
 #include "Core/Math/Vec2.h"
 
 #include <unordered_map>
@@ -28,6 +29,8 @@ namespace
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
         if (!Trans || !Unit)
+            return false;
+        if (Unit->HitPoints <= 0)
             return false;
         if (EM.GetComponent<ResourceComponent>(ID))
             return false;
@@ -131,6 +134,13 @@ namespace
         Path.PathIndex = 0;
         Path.CurrentSpeed = 0.0f;
         Path.CurrentVelocity = {0.0f, 0.0f};
+    }
+
+    static float MovementSpeedMultiplier(const StatusEffectComponent* Status)
+    {
+        if (Status && Status->HasEffect(StatusEffect::Ensnare))
+            return 0.5f;
+        return 1.0f;
     }
 
     static bool IsWalkableWorldPosition(const Game::Map::GameMap& Map,
@@ -243,6 +253,40 @@ namespace
             }
         }
         return Proposed;
+    }
+
+    static int TerrainClearanceForPath(const PathfindingComponent& Path)
+    {
+        return Path.CollisionRadius > 16 ? Path.CollisionRadius : 0;
+    }
+
+    static void RefreshPathToTarget(Core::ECS::EntityManager& EM,
+                                    Core::ECS::EntityID EntityID,
+                                    const Game::Map::GameMap* Map,
+                                    const Core::Math::Vec2& Target)
+    {
+        auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+        auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        if (!Trans || !Path)
+            return;
+
+        Path->Path.clear();
+        Path->PathIndex = 0;
+
+        if (Path->IsAir || !Map)
+        {
+            Path->Path.push_back(Target);
+            return;
+        }
+
+        auto Result = Game::Pathfinding::AStar::FindPath(
+            *Map,
+            Trans->Position,
+            Target,
+            1000,
+            TerrainClearanceForPath(*Path));
+        if (Result.Found && !Result.Waypoints.empty())
+            Path->Path = std::move(Result.Waypoints);
     }
 
     static constexpr float kRepulseForce = 80.0f;     // push force scalar
@@ -392,8 +436,6 @@ void MovementSystem::Update(float DeltaTime)
         {
             PathComp->CurrentSpeed = 0.0f;
             PathComp->CurrentVelocity = {0.0f, 0.0f};
-            PathComp->Path.clear();
-            PathComp->PathIndex = 0;
             continue;
         }
 
@@ -415,7 +457,10 @@ void MovementSystem::Update(float DeltaTime)
                 {
                     float Dist = Trans->Position.DistanceTo(TTrans->Position);
                     if (Dist > 32.0f)
-                        CommandSystem::IssueMove(EM, {ID}, TTrans->Position);
+                    {
+                        Cmd->TargetPosition = TTrans->Position;
+                        RefreshPathToTarget(EM, ID, mMap, TTrans->Position);
+                    }
                 }
             }
             continue;
@@ -475,7 +520,8 @@ void MovementSystem::Update(float DeltaTime)
             }
 
             // Speed management with acceleration
-            float TargetSpd = PathComp->TargetSpeed;
+            const float TargetSpd =
+                PathComp->TargetSpeed * MovementSpeedMultiplier(Status);
             float CurSpd = PathComp->CurrentSpeed;
             if (CurSpd < TargetSpd)
                 CurSpd = std::min(TargetSpd, CurSpd + PathComp->Acceleration * Dt);
@@ -530,8 +576,8 @@ void MovementSystem::Update(float DeltaTime)
                 }
                 PathComp->PathIndex++;
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
-                    AppliedMove.Normalized() * PathComp->TargetSpeed :
-                    MoveDir * PathComp->TargetSpeed;
+                    AppliedMove.Normalized() * TargetSpd :
+                    MoveDir * TargetSpd;
             }
             else
             {
@@ -558,6 +604,8 @@ void MovementSystem::Update(float DeltaTime)
         if (PathComp->PathIndex >= (int)Path.size())
         {
             ClearMotion(*PathComp);
+            if (Cmd && Cmd->HasPendingOrders())
+                CommandSystem::AdvanceQueue(EM, ID);
         }
     }
 }

@@ -11,6 +11,7 @@ bool ResourceCache::LoadCommandButtonGraphics(const GrpDecodeOptions& CommandBut
 {
     bool LoadedAny = false;
     LoadedAny |= LoadPreferredUIFrames("sprites\\cmdbtns\\cmdicons.grp", mUI.CommandIcons, CommandButtonOptions, nullptr, false, "command icons");
+    ExportPreferredUIFramesForGui("sprites\\cmdbtns\\cmdicons.grp", mUI.CommandIconUris, CommandButtonOptions, false, "command icons");
     LoadedAny |= LoadPreferredUIFrames("sprites\\cmdbtns\\cmdicons.grp", mUI.CommandIconMasks, CommandButtonOptions, nullptr, true, "command icon masks");
     LoadedAny |= LoadPreferredUIFrames("sprites\\cmdbtns\\tcmdbtns.grp",
                                       mUI.CommandButtonSkins[static_cast<size_t>(CommandButtonSkinSet::Terran)],
@@ -35,6 +36,8 @@ bool ResourceCache::LoadCommandButtonGraphics(const GrpDecodeOptions& CommandBut
 
 bool ResourceCache::LoadUIIconGraphics()
 {
+    ExportPreferredUIFramesForGui("game\\icons.grp", mUI.IconUris, {}, false, "UI icons");
+
     bool LoadedHdIcons = false;
     if (mSources.UseExtractedAssets)
     {

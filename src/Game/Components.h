@@ -87,6 +87,7 @@ enum class StatusEffect : uint8_t
     DisruptionWeb   = 12,  // ground units inside cannot fire
     DarkSwarm       = 13,  // ground units inside immune to ranged
     Storm           = 14,  // psionic storm DoT (special, not on unit but area)
+    Hallucination   = 15,  // blue-white visual duplicate
 };
 
 enum class Elevation : uint8_t
@@ -250,12 +251,16 @@ struct UnitComponent
     int ShieldPoints = 0;
     int MaxShieldPoints = 0;
     float ShieldRegenAccumulator = 0.0f;
+    float PlagueDamageAccumulator = 0.0f;
+    float IrradiateDamageAccumulator = 0.0f;
     int EnergyPoints = 0;
     int MaxEnergyPoints = 0;
     int Armor = 0;
     float Speed = 2.0f;
     int SightRange = 8;
     int SupplyCost = 1;
+    int HangarCount = 0;
+    bool IsInvincible = false;
     bool IsDetector = false;
 };
 
@@ -508,6 +513,14 @@ struct VisionComponent
     bool HasBeenSeen[8] = {};
 };
 
+struct RevealAreaComponent
+{
+    int PlayerID = 0;
+    int SightRange = 1;
+    float DurationRemaining = 0.0f;
+    bool ProvidesDetection = false;
+};
+
 struct BulletComponent
 {
     int SourceEntityID = -1;
@@ -524,6 +537,7 @@ struct BulletComponent
     int TargetEntityID = -1;
     bool HasHit = false;
     int DamageUpgradeBonus = 0;
+    bool IsRangedAttack = false;
 };
 
 struct StatusEffectComponent

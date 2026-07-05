@@ -12,7 +12,6 @@ namespace Resource::Graphics
 
 struct TilesetData
 {
-    std::vector<uint8_t> Vr4;
     std::vector<uint16_t> Vx4;        // 16 uint16 per megatile
     std::vector<uint16_t> Cv5;        // 16 uint16 per group
     std::vector<uint16_t> Vf4;        // 16 uint16 per megatile (walkability)

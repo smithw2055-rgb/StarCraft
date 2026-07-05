@@ -1,28 +1,48 @@
 #include "Main/GameGuiBootstrap.h"
 
+#include <memory>
 #include <utility>
 
 #include "Core/Utils/Logger.h"
 #include "Main/GuiRuntime.h"
-#include "third_party/sokol/sokol_gfx.h"
 
 #if ENABLE_GUI_UI
 #include <NsApp/ApplicationLauncher.h>
+#include <NsApp/Display.h>
 #include <NsApp/LocalFontProvider.h>
 #include <NsApp/LocalTextureProvider.h>
 #include <NsApp/LocalXamlProvider.h>
-#include <NsApp/MediaElement.h>
 #include <NsApp/ThemeProviders.h>
 #include <NsCore/RegisterComponent.h>
 #include <NsGui/IntegrationAPI.h>
 #include <NsGui/Uri.h>
-#if defined(SOKOL_D3D11)
-#include "D3D11MediaPlayer.h"
-#endif
 #endif
 
 namespace Game::Client::GameLoop
 {
+
+#if ENABLE_GUI_UI
+namespace
+{
+class EmbeddedAudioDisplay final : public AeroApp::Display
+{
+public:
+    void EnterMessageLoop(bool) override {}
+    void* GetNativeHandle() const override { return nullptr; }
+    uint32_t GetClientWidth() const override { return 0; }
+    uint32_t GetClientHeight() const override { return 0; }
+};
+
+std::unique_ptr<EmbeddedAudioDisplay> gAeroAudioDisplay;
+
+void PlayAeroAudio(void* User, const Aero::Uri& Uri, float Volume)
+{
+    auto* Display = static_cast<AeroApp::Display*>(User);
+    if (Display)
+        Display->PlayAudio(Uri, Volume);
+}
+}
+#endif
 
 void InitializeGuiRuntime(
     GuiRuntime& Gui,
@@ -39,13 +59,8 @@ void InitializeGuiRuntime(
 
     Gui.GuiInitialized = true;
     AeroApp::Launcher::RegisterAppComponents();
-#if defined(SOKOL_D3D11)
-    AeroApp::D3D11MediaPlayer::Init();
-    AeroApp::MediaElement::SetCreateMediaPlayerCallback(
-        &AeroApp::D3D11MediaPlayer::Create,
-        const_cast<void*>(sg_d3d11_device()));
-    Gui.GuiD3D11MediaInitialized = true;
-#endif
+    gAeroAudioDisplay = std::make_unique<EmbeddedAudioDisplay>();
+    Aero::GUI::SetPlayAudioCallback(gAeroAudioDisplay.get(), &PlayAeroAudio);
     Aero::GUI::SetXamlProvider(Aero::MakePtr<AeroApp::LocalXamlProvider>(AssetRoot.c_str()));
     Aero::GUI::SetTextureProvider(Aero::MakePtr<AeroApp::LocalTextureProvider>(AssetRoot.c_str()));
     Aero::GUI::SetFontProvider(Aero::MakePtr<AeroApp::LocalFontProvider>(AssetRoot.c_str()));
@@ -67,9 +82,11 @@ void InitializeGuiRuntime(
             "Gui HUD unavailable; Native Terran HUD is active in-game");
     }
 
-    Gui.GlueGuiInitialized = Gui.GlueGui.Initialize("", Width, Height);
+    Gui.GlueGuiInitialized = Gui.GlueGui.Initialize(AssetRoot, Width, Height);
     if (Gui.GlueGuiInitialized)
+    {
         Gui.GlueGui.SetActionCallback(std::move(GlueActionCallback));
+    }
 #else
     (void)AssetRoot;
     (void)Width;
@@ -86,14 +103,8 @@ void ShutdownGuiRuntime(GuiRuntime& Gui)
         Gui.GlueGui.Shutdown();
     if (Gui.GuiInitialized)
     {
-#if defined(SOKOL_D3D11)
-        if (Gui.GuiD3D11MediaInitialized)
-        {
-            AeroApp::MediaElement::SetCreateMediaPlayerCallback(nullptr, nullptr);
-            AeroApp::D3D11MediaPlayer::Shutdown();
-            Gui.GuiD3D11MediaInitialized = false;
-        }
-#endif
+        Aero::GUI::SetPlayAudioCallback(nullptr, nullptr);
+        gAeroAudioDisplay.reset();
         Aero::GUI::Shutdown();
         Gui.GuiInitialized = false;
     }

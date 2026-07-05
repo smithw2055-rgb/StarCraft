@@ -47,12 +47,45 @@ inline StartRace RaceFromScriptRace(uint8_t Race)
     }
 }
 
+inline size_t ScriptPlayerDataIndex(const GameSession& Session, int PlayerId)
+{
+    const auto& Data = Session.GetScriptData();
+    const bool OneBasedPlayerSlots =
+        Data.Players[0].Owner == 0 &&
+        std::any_of(Data.Players.begin() + 1, Data.Players.begin() + 9,
+            [](const Game::Trigger::SCRPlayerInfo& Info) { return Info.Owner != 0; });
+    if (OneBasedPlayerSlots && PlayerId >= 0 && PlayerId < 8)
+        return (size_t)PlayerId + 1u;
+    if (PlayerId >= 0 && PlayerId < (int)Data.Players.size())
+        return (size_t)PlayerId;
+    return 0u;
+}
+
+inline bool ShouldEnsurePlayableStart(const GameSession& Session, int PlayerId)
+{
+    const auto& Data = Session.GetScriptData();
+    if (Data.RawData.empty())
+        return true;
+
+    const uint8_t Owner = Data.Players[ScriptPlayerDataIndex(Session, PlayerId)].Owner;
+    return Owner == 5 || Owner == 6; // Computer or Human; skip Rescue Passive and Neutral slots.
+}
+
+inline bool IsComputerPlayer(const GameSession& Session, int PlayerId)
+{
+    const auto& Data = Session.GetScriptData();
+    if (Data.RawData.empty())
+        return PlayerId > 0;
+    return Data.Players[ScriptPlayerDataIndex(Session, PlayerId)].Owner == 5;
+}
+
 inline StartRace RaceFromScriptPlayer(const GameSession& Session, int PlayerId)
 {
     if (PlayerId < 0 || PlayerId >= (int)Session.GetScriptData().Players.size())
         return StartRace::Terran;
 
-    return RaceFromScriptRace(Session.GetScriptData().Players[(size_t)PlayerId].Race);
+    return RaceFromScriptRace(
+        Session.GetScriptData().Players[ScriptPlayerDataIndex(Session, PlayerId)].Race);
 }
 
 inline StartRace RaceFromChkUnitID(int ChkUnitID, StartRace Fallback)
@@ -158,6 +191,9 @@ inline void EnsurePlayableStart(GameSession& Session,
 {
     (void)IsMineralUnit;
     (void)IsGeyserUnit;
+
+    if (!Detail::ShouldEnsurePlayableStart(Session, PlayerId))
+        return;
 
     const Game::Client::StartLocation* ChosenStart = nullptr;
     for (const auto& StartLocation : Session.GetMapData().StartLocations)
@@ -298,7 +334,7 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session)
         Resources.SupplyMax = 0;
     }
 
-    bool HasPlayer1 = false;
+    bool HasPlayerUnits[8] = {};
     for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent,
                                       Game::Components::PlayerComponent>())
     {
@@ -306,21 +342,25 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session)
         auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
         if (!Unit || !Player)
             continue;
-        if (Player->PlayerID == 1)
-            HasPlayer1 = true;
+        if (Player->PlayerID >= 0 && Player->PlayerID < 8)
+            HasPlayerUnits[Player->PlayerID] = true;
         const int UnitDefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         if (UnitDefID >= 0 && Player->PlayerID >= 0 && Player->PlayerID < 8)
         {
             const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
             auto& Resources = Game::Systems::HarvestSystem::GetResources(Player->PlayerID);
-            if (Def.IsBuilding)
-                Resources.SupplyMax += Def.SupplyCost;
-            else
+            const int SupplyProvided = Game::Races::GetSupplyProvidedByDefID(UnitDefID);
+            if (SupplyProvided > 0)
+                Resources.SupplyMax += SupplyProvided;
+            if (!Def.IsBuilding)
                 Resources.SupplyUsed += Def.SupplyCost;
         }
     }
-    if (HasPlayer1)
-        SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(SysMgr, 1, 0));
+    for (int PlayerId = 1; PlayerId < 8; ++PlayerId)
+    {
+        if (HasPlayerUnits[PlayerId] && Detail::IsComputerPlayer(Session, PlayerId))
+            SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(SysMgr, PlayerId, 0));
+    }
 }
 
 } // namespace Game::Client::GameLoop::GameSessionBootstrap

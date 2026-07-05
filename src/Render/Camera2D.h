@@ -84,7 +84,7 @@ public:
         if (mHasBounds) ClampToBounds();
     }
 
-    // Screen pixel position â†?world (top-left origin in world)
+    // Screen pixel position -> world (top-left origin in world)
     void ScreenToWorld(float ScreenX, float ScreenY, float& WorldX, float& WorldY) const
     {
         float HalfW = (mViewportW * 0.5f) / mZoom;
@@ -93,7 +93,7 @@ public:
         WorldY = (mY - HalfH) + ScreenY / mZoom;
     }
 
-    // World â†?screen pixel
+    // World -> screen pixel
     void WorldToScreen(float WorldX, float WorldY, float& ScreenX, float& ScreenY) const
     {
         float HalfW = (mViewportW * 0.5f) / mZoom;

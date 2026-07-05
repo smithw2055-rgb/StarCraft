@@ -12,6 +12,11 @@ const std::vector<GpuImage>* ResourceCache::GetUIIcons()
     return mUI.Icons.empty() ? nullptr : &mUI.Icons;
 }
 
+const std::vector<std::string>* ResourceCache::GetUIIconUris()
+{
+    return mUI.IconUris.empty() ? nullptr : &mUI.IconUris;
+}
+
 const std::vector<GpuImage>* ResourceCache::GetCommandIcons()
 {
     return mUI.CommandIcons.empty() ? nullptr : &mUI.CommandIcons;
@@ -20,6 +25,11 @@ const std::vector<GpuImage>* ResourceCache::GetCommandIcons()
 const std::vector<GpuImage>* ResourceCache::GetCommandIconMasks()
 {
     return mUI.CommandIconMasks.empty() ? nullptr : &mUI.CommandIconMasks;
+}
+
+const std::vector<std::string>* ResourceCache::GetCommandIconUris()
+{
+    return mUI.CommandIconUris.empty() ? nullptr : &mUI.CommandIconUris;
 }
 
 const std::vector<GpuImage>* ResourceCache::GetCommandButtonSkins(CommandButtonSkinSet SkinSet)

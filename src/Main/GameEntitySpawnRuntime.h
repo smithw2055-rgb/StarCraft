@@ -17,6 +17,13 @@
 namespace Game::Client::GameLoop::GameEntitySpawnRuntime
 {
 
+inline int NormalizeChkPlayerID(uint8_t ChkOwner)
+{
+    if (ChkOwner >= 1 && ChkOwner <= 8)
+        return (int)ChkOwner - 1;
+    return (int)ChkOwner;
+}
+
 template <typename ResolveImageIdT, typename ResolveSubunitImageIdT, typename ResolveCollisionBoundsT>
 inline void SpawnChkEntities(GameSession& Session,
                              ResolveImageIdT&& ResolveImageID,
@@ -70,7 +77,7 @@ inline void SpawnChkEntities(GameSession& Session,
         }
 
         auto& Player = EM.AddComponent<Game::Components::PlayerComponent>(EntityID);
-        Player.PlayerID = UnitPlacement.Owner;
+        Player.PlayerID = NormalizeChkPlayerID(UnitPlacement.Owner);
 
         auto& RenderComp = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
         RenderComp.ImageID = (uint32_t)ResolveImageID(UnitPlacement.UnitID);

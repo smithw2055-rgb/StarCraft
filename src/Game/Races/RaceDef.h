@@ -62,5 +62,6 @@ UnitDef GetUnitDefByID(int ID);
 int GetUnitDefID(const std::string& Name);
 int GetUnitDefIDByChkUnitID(int ChkUnitID);
 int GetTerranDefIDByChkUnitID(int ChkUnitID);
+int GetSupplyProvidedByDefID(int ID);
 
 } // namespace Game::Races

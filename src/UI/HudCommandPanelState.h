@@ -144,6 +144,9 @@ struct CmdButtonDef
     int TargetUnitDefID = -1;
     int IconIndex = -1;
     int NextMenuPage = 0;
+    int MineralCost = 0;
+    int GasCost = 0;
+    int SupplyCost = 0;
     bool Enabled = false;
     HudVisualId VisualId = HudVisualId::None;
 

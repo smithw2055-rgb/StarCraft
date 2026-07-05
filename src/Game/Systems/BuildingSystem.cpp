@@ -167,8 +167,28 @@ namespace
         return -1;
     }
 
-    bool HasCompletedBuilding(const Core::ECS::EntityManager& EM, int PlayerID, int RequiredDefID)
+    int NormalizeRequiredDefIDForRace(int RequiredDefID, Race RaceType)
     {
+        const auto Candidate = Races::GetUnitDefByID(RequiredDefID);
+        if (Candidate.Name != "Unknown" && Candidate.RaceType == RaceType)
+            return RequiredDefID;
+
+        if (RaceType == Race::Zerg)
+            return (int)Races::GetTerranDefs().size() + RequiredDefID;
+        if (RaceType == Race::Protoss)
+            return (int)Races::GetTerranDefs().size() +
+                   (int)Races::GetZergDefs().size() +
+                   RequiredDefID;
+        return RequiredDefID;
+    }
+
+    bool HasCompletedBuilding(const Core::ECS::EntityManager& EM,
+                              int PlayerID,
+                              int RequiredDefID,
+                              Race RequiredRace)
+    {
+        const int NormalizedRequiredDefID =
+            NormalizeRequiredDefIDForRace(RequiredDefID, RequiredRace);
         auto EntityIds =
             const_cast<Core::ECS::EntityManager&>(EM)
                 .GetEntitiesWith<BuildingComponent, PlayerComponent>();
@@ -180,10 +200,105 @@ namespace
                 const_cast<Core::ECS::EntityManager&>(EM).GetComponent<PlayerComponent>(EntityID);
             if (!Building || !Player || Player->PlayerID != PlayerID || Building->UnderConstruction)
                 continue;
-            if (ResolveDefID(EM, EntityID) == RequiredDefID)
+            if (ResolveDefID(EM, EntityID) == NormalizedRequiredDefID)
                 return true;
         }
         return false;
+    }
+
+    bool IsGasBuildingDefID(int BuildingDefID)
+    {
+        return BuildingDefID == Game::Races::GetUnitDefID("Refinery") ||
+               BuildingDefID == Game::Races::GetUnitDefID("Extractor") ||
+               BuildingDefID == Game::Races::GetUnitDefID("Assimilator");
+    }
+
+    bool HasPylonPowerAtPosition(const Core::ECS::EntityManager& EM,
+                                 Core::Math::Vec2 Position,
+                                 int PlayerID)
+    {
+        if (!gMap)
+            return false;
+
+        int TargetTileX = 0;
+        int TargetTileY = 0;
+        gMap->WorldToTile(Position, TargetTileX, TargetTileY);
+
+        const int PylonDefID = Game::Races::GetUnitDefID("Pylon");
+        const int PylonChkID = Game::Races::GetUnitDefByID(PylonDefID).ChkUnitID;
+        auto Entities =
+            const_cast<Core::ECS::EntityManager&>(EM)
+                .GetEntitiesWith<TransformComponent, BuildingComponent, UnitComponent, PlayerComponent>();
+        for (int EntityID : Entities)
+        {
+            auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+            auto* Transform = MutableEM.GetComponent<TransformComponent>(EntityID);
+            auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
+            auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+            auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            if (!Transform || !Building || !Unit || !Player)
+                continue;
+            if (Player->PlayerID != PlayerID || Building->UnderConstruction || Unit->HitPoints <= 0)
+                continue;
+            if (Unit->ChkUnitID != PylonChkID)
+                continue;
+
+            int PylonTileX = 0;
+            int PylonTileY = 0;
+            gMap->WorldToTile(Transform->Position, PylonTileX, PylonTileY);
+            const int Dy = std::abs(TargetTileY - PylonTileY);
+            if (Dy > 3)
+                continue;
+            const int MaxDx = 4 - (Dy > 2 ? Dy - 2 : 0);
+            if (std::abs(TargetTileX - PylonTileX) <= MaxDx)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool IsFootprintPlacementValid(Core::ECS::EntityManager& EM,
+                                   int BuildingDefID,
+                                   Core::Math::Vec2 Position,
+                                   int IgnoreEntityID = -1)
+    {
+        if (!gMap)
+            return false;
+
+        const TileRect CandidateRect =
+            BuildingTileRect(*gMap, Position, BuildingFootprintSizeForDef(BuildingDefID));
+
+        for (int TY = CandidateRect.Top; TY <= CandidateRect.Bottom; ++TY)
+        {
+            for (int TX = CandidateRect.Left; TX <= CandidateRect.Right; ++TX)
+            {
+                if (!gMap->IsInBounds(TX, TY) || !gMap->IsBuildable(TX, TY))
+                    return false;
+            }
+        }
+
+        auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+        for (auto EntityID : Entities)
+        {
+            if (EntityID == IgnoreEntityID)
+                continue;
+
+            auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
+            auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+            if (!Transform || !Building || Building->IsLifted)
+                continue;
+
+            const int ExistingDefID = ResolveDefID(EM, EntityID);
+            if (ExistingDefID < 0)
+                continue;
+
+            const TileRect ExistingRect =
+                BuildingTileRect(*gMap, Transform->Position, BuildingFootprintSizeForDef(ExistingDefID));
+            if (RectsOverlap(CandidateRect, ExistingRect))
+                return false;
+        }
+
+        return true;
     }
 
     Core::Math::Vec2 ComputeAddonPosition(const Core::ECS::EntityManager& EM, int ParentBuildingID)
@@ -246,6 +361,10 @@ namespace
         Building.TotalBuildTime = (float)Def.BuildTime;
         Building.CanLiftOff = Def.CanLiftOff;
         Building.IsAddon = Def.IsAddon;
+        Building.RequiresCreep = Def.RequiresCreep;
+        Building.RequiresPylon = Def.RequiresPylon;
+        Building.HasPylonPower = !Def.RequiresPylon ||
+            HasPylonPowerAtPosition(EM, Position, PlayerID);
         Building.BuildProgress = UnderConstruction ? 0.0f : (float)Def.BuildTime;
 
         auto& Unit = EM.AddComponent<UnitComponent>(EntityID);
@@ -301,6 +420,10 @@ namespace
         Building->TotalBuildTime = (float)Def.BuildTime;
         Building->CanLiftOff = Def.CanLiftOff;
         Building->IsAddon = false;
+        Building->RequiresCreep = Def.RequiresCreep;
+        Building->RequiresPylon = Def.RequiresPylon;
+        Building->HasPylonPower = !Def.RequiresPylon ||
+            HasPylonPowerAtPosition(EM, Transform->Position, PlayerID);
         Building->BuildProgress = 0.0f;
 
         ApplyUnitDefinition(*Unit, Def, true);
@@ -361,38 +484,9 @@ bool BuildingSystem::IsPlacementValid(Core::ECS::EntityManager& EM,
     auto& Resources = HarvestSystem::GetResources(BuilderPlayerID);
     if (Resources.Minerals < Def.MineralCost || Def.GasCost > Resources.VespeneGas)
         return false;
-
-    const TileRect CandidateRect =
-        BuildingTileRect(*gMap, Position, BuildingFootprintSizeForDef(BuildingDefID));
-
-    for (int TY = CandidateRect.Top; TY <= CandidateRect.Bottom; ++TY)
-    {
-        for (int TX = CandidateRect.Left; TX <= CandidateRect.Right; ++TX)
-        {
-            if (!gMap->IsInBounds(TX, TY) || !gMap->IsBuildable(TX, TY))
-                return false;
-        }
-    }
-
-    auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
-    for (auto EntityID : Entities)
-    {
-        auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
-        auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
-        if (!Transform || !Building || Building->IsLifted)
-            continue;
-
-        const int ExistingDefID = ResolveDefID(EM, EntityID);
-        if (ExistingDefID < 0)
-            continue;
-
-        const TileRect ExistingRect =
-            BuildingTileRect(*gMap, Transform->Position, BuildingFootprintSizeForDef(ExistingDefID));
-        if (RectsOverlap(CandidateRect, ExistingRect))
-            return false;
-    }
-
-    return true;
+    if (Def.RequiresPylon && !HasPylonPowerAtPosition(EM, Position, BuilderPlayerID))
+        return false;
+    return IsFootprintPlacementValid(EM, BuildingDefID, Position);
 }
 
 bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
@@ -417,6 +511,14 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
         return false;
     }
 
+    auto* BuilderUnit =
+        const_cast<Core::ECS::EntityManager&>(EM).GetComponent<UnitComponent>(BuilderID);
+    if (!BuilderUnit || BuilderUnit->HitPoints <= 0)
+    {
+        SetReason(OutReason, "builder is not alive");
+        return false;
+    }
+
     auto* BuilderPlayer =
         const_cast<Core::ECS::EntityManager&>(EM).GetComponent<PlayerComponent>(BuilderID);
     int PlayerID = BuilderPlayer ? BuilderPlayer->PlayerID : 0;
@@ -437,6 +539,11 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
             SetReason(OutReason, "add-on parent is not ready");
             return false;
         }
+        if (BuilderBuilding->IsLifted)
+        {
+            SetReason(OutReason, "add-on parent is lifted");
+            return false;
+        }
         if (BuilderDefID != Def.AddonOnBuildingDefID)
         {
             SetReason(OutReason, "wrong parent building for add-on");
@@ -453,18 +560,22 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "only SCV can place Terran buildings");
         return false;
     }
+    else if (Def.RaceType == Race::Protoss && BuilderDefID != Races::GetUnitDefID("Probe"))
+    {
+        SetReason(OutReason, "only Probe can place Protoss buildings");
+        return false;
+    }
 
     for (int RequiredDefID : Def.RequiredBuildings)
     {
-        if (!HasCompletedBuilding(EM, PlayerID, RequiredDefID))
+        if (!HasCompletedBuilding(EM, PlayerID, RequiredDefID, Def.RaceType))
         {
             SetReason(OutReason, "required building missing");
             return false;
         }
     }
 
-    const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
-    if (!Def.IsAddon && BuildingDefID == RefineryDefID)
+    if (!Def.IsAddon && IsGasBuildingDefID(BuildingDefID))
     {
         if (!CheckPlacement)
             return true;
@@ -490,9 +601,9 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
         }
 
         const int TargetDefID = ResolveDefID(EM, Target.TargetEntityID);
-        if (TargetDefID == RefineryDefID)
+        if (IsGasBuildingDefID(TargetDefID))
         {
-            SetReason(OutReason, "geyser already has a refinery");
+            SetReason(OutReason, "geyser already has a gas building");
             return false;
         }
         return true;
@@ -537,8 +648,7 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
     Resources.VespeneGas -= Def.GasCost;
 
     int EntityID = -1;
-    if (BuildingDefID == Game::Races::GetUnitDefID("Refinery") &&
-        Target.Type == BuildTargetType::TargetEntity)
+    if (IsGasBuildingDefID(BuildingDefID) && Target.Type == BuildTargetType::TargetEntity)
     {
         EntityID = ClaimRefineryTarget(EM, BuilderID, BuildingDefID, Target.TargetEntityID, PlayerID);
     }
@@ -599,11 +709,17 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     else
     {
         auto* BuilderTransform = EM.GetComponent<TransformComponent>(Building->BuilderUnitID);
+        auto* BuilderUnit = EM.GetComponent<UnitComponent>(Building->BuilderUnitID);
         if (Building->IsAddon && Building->BuilderUnitID >= 0)
         {
-            BuilderNearby = true;
+            auto* ParentBuilding = EM.GetComponent<BuildingComponent>(Building->BuilderUnitID);
+            BuilderNearby =
+                ParentBuilding &&
+                !ParentBuilding->UnderConstruction &&
+                BuilderUnit &&
+                BuilderUnit->HitPoints > 0;
         }
-        else if (BuilderTransform)
+        else if (BuilderTransform && BuilderUnit && BuilderUnit->HitPoints > 0)
         {
             float Distance = Transform->Position.DistanceTo(BuilderTransform->Position);
             BuilderNearby = Distance < 48.0f;
@@ -633,8 +749,8 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     if (auto* Player = EM.GetComponent<PlayerComponent>(EntityID))
         PlayerID = Player->PlayerID;
 
-    auto Def = Races::GetUnitDefByID(Building->BuildingDefID);
-    HarvestSystem::GetResources(PlayerID).SupplyMax += Def.SupplyCost;
+    HarvestSystem::GetResources(PlayerID).SupplyMax +=
+        Races::GetSupplyProvidedByDefID(Building->BuildingDefID);
 
     if (auto* BuilderCommand = EM.GetComponent<CommandComponent>(Building->BuilderUnitID))
         BuilderCommand->CurrentCommand = CommandType::Stop;
@@ -653,6 +769,8 @@ bool BuildingSystem::LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingI
     Bldg->IsLifted = true;
     Unit->Speed = 2.0f; // Flying speed
     Unit->SupplyCost = 0; // Supply freed during flight
+    if (auto* Render = EM.GetComponent<RenderComponent>(BuildingID))
+        Render->Layer = RenderLayer::AirUnits;
 
     auto* PathPtr = EM.GetComponent<PathfindingComponent>(BuildingID);
     auto& Path = PathPtr ? *PathPtr : EM.AddComponent<PathfindingComponent>(BuildingID);
@@ -671,13 +789,14 @@ bool BuildingSystem::LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
     auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
     if (!Bldg || !Unit || !Bldg->IsLifted) return false;
 
-    // Check placement validity at new position
-    if (!IsPlacementValid(EM, Bldg->BuildingDefID, Position, 0))
+    if (!IsFootprintPlacementValid(EM, Bldg->BuildingDefID, Position, BuildingID))
         return false;
 
     Bldg->IsLifted = false;
     Unit->Speed = 0.0f;
     Unit->SupplyCost = Game::Races::GetUnitDefByID(Bldg->BuildingDefID).SupplyCost;
+    if (auto* Render = EM.GetComponent<RenderComponent>(BuildingID))
+        Render->Layer = RenderLayer::Buildings;
 
     auto* Trans = EM.GetComponent<TransformComponent>(BuildingID);
     if (Trans) Trans->Position = Position;

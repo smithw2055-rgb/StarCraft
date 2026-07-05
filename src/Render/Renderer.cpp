@@ -106,6 +106,12 @@ void EndFrame()
     Commit();
 }
 
+void ResetStateCache()
+{
+    if (g_active)
+        sg_reset_state_cache();
+}
+
 
 void SetClearColor(float R, float G, float B, float A)
 {

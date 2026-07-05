@@ -6,8 +6,10 @@
 #include "Core/Utils/Logger.h"
 #include "third_party/sokol/sokol_app.h"
 
+#include <algorithm>
 #include <limits>
 #include <cstring>
+#include <cstdlib>
 
 namespace Render
 {
@@ -22,6 +24,12 @@ namespace
     const int kMaxBatchIndices = 16384;
     const int kFrameBufferVerts = 131072;
     const int kFrameBufferIndices = 262144;
+
+    bool DebugDraw2DEnabled()
+    {
+        static const bool Enabled = std::getenv("STARCRAFT_DEBUG_DRAW2D") != nullptr;
+        return Enabled;
+    }
 }
 
 bool Draw2D::Init()
@@ -123,14 +131,71 @@ void Draw2D::Shutdown()
     }
 }
 
-void Draw2D::SetPipeline(bool AlphaBlend)
+void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material)
 {
+    if (mCurrentMaterial != Material)
+    {
+        Flush();
+        mCurrentMaterial = Material;
+    }
     if (mCurrentAlphaBlend != AlphaBlend)
     {
+        Flush();
         mShader.RebuildPipeline(AlphaBlend, false);
         mCurrentAlphaBlend = AlphaBlend;
     }
-    mShader.BindPipeline();
+    if (Material == BatchMaterial::HealthBar)
+        mShader.BindHealthBarPipeline();
+    else if (Material == BatchMaterial::SpriteEffect)
+        mShader.BindSpriteEffectPipeline();
+    else
+        mShader.BindPipeline();
+}
+
+void Draw2D::SetHealthBarParams(float Fraction, Color Fill)
+{
+    Fraction = std::clamp(Fraction, 0.0f, 1.0f);
+    Flush();
+    auto ToFloat = [](uint8_t V) { return (float)V / 255.0f; };
+    mHealthBarParams.SolidColor[0] = ToFloat(Fill.R);
+    mHealthBarParams.SolidColor[1] = ToFloat(Fill.G);
+    mHealthBarParams.SolidColor[2] = ToFloat(Fill.B);
+    mHealthBarParams.SolidColor[3] = ToFloat(Fill.A);
+    mHealthBarParams.MultiplyColor[0] = Fraction;
+    mHealthBarParams.MultiplyColor[1] = Fraction;
+    mHealthBarParams.MultiplyColor[2] = 0.0f;
+    mHealthBarParams.MultiplyColor[3] = 1.0f;
+    mHealthBarParams.TeamColor[0] = ToFloat(Fill.R);
+    mHealthBarParams.TeamColor[1] = ToFloat(Fill.G);
+    mHealthBarParams.TeamColor[2] = ToFloat(Fill.B);
+    mHealthBarParams.TeamColor[3] = ToFloat(Fill.A);
+}
+
+void Draw2D::SetSpriteEffectParams(float Hallucination,
+                                   float Cloaked,
+                                   float Brighten,
+                                   float Shadow,
+                                   Color TeamColor,
+                                   bool UseTeamColor)
+{
+    Flush();
+    auto ToFloat = [](uint8_t V) { return (float)V / 255.0f; };
+    mSpriteEffectParams.MultiplyColor[0] = 1.0f;
+    mSpriteEffectParams.MultiplyColor[1] = 1.0f;
+    mSpriteEffectParams.MultiplyColor[2] = 1.0f;
+    mSpriteEffectParams.MultiplyColor[3] = 1.0f;
+    mSpriteEffectParams.TeamColor[0] = ToFloat(TeamColor.R);
+    mSpriteEffectParams.TeamColor[1] = ToFloat(TeamColor.G);
+    mSpriteEffectParams.TeamColor[2] = ToFloat(TeamColor.B);
+    mSpriteEffectParams.TeamColor[3] = ToFloat(TeamColor.A);
+    mSpriteEffectParams.EffectData[0] = std::clamp(Hallucination, 0.0f, 1.0f);
+    mSpriteEffectParams.EffectData[1] = std::clamp(Cloaked, 0.0f, 1.0f);
+    mSpriteEffectParams.EffectData[2] = std::clamp(Brighten, 0.0f, 1.0f);
+    mSpriteEffectParams.EffectData[3] = UseTeamColor ? 1.0f : 0.0f;
+    mSpriteEffectParams.EffectMode[0] = std::clamp(Shadow, 0.0f, 1.0f);
+    mSpriteEffectParams.EffectMode[1] = 0.0f;
+    mSpriteEffectParams.EffectMode[2] = 0.0f;
+    mSpriteEffectParams.EffectMode[3] = 0.0f;
 }
 
 void Draw2D::EnsureCapacity(int V, int I)
@@ -144,6 +209,8 @@ void Draw2D::BeginFrame(const Camera2D& Camera)
     mVertices.clear();
     mIndices.clear();
     mCurrentTexture = mWhiteTexture;
+    mCurrentTeamColorMask = {};
+    mCurrentMaterial = BatchMaterial::Textured;
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
     mFrameWidth = Camera.GetViewportWidth();
@@ -160,6 +227,8 @@ void Draw2D::BeginFrameScreen()
     mVertices.clear();
     mIndices.clear();
     mCurrentTexture = mWhiteTexture;
+    mCurrentTeamColorMask = {};
+    mCurrentMaterial = BatchMaterial::Textured;
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
     mFrameWidth = Core::Platform::GetWindowWidth();
@@ -218,7 +287,7 @@ void Draw2D::Flush()
     }
 
     static int FlushCount = 5;
-    if (FlushCount > 0)
+    if (DebugDraw2DEnabled() && FlushCount > 0)
     {
         FlushCount--;
         Core::Utils::Logger::Info("Draw2D",
@@ -279,6 +348,14 @@ void Draw2D::Flush()
 
     // Apply uniforms (mat4 mvp)
     sg_apply_uniforms(0, { &mCurrentProjection, sizeof(mCurrentProjection) });
+    if (mCurrentMaterial == BatchMaterial::HealthBar)
+    {
+        mShader.ApplyHealthBarParams(mHealthBarParams);
+    }
+    else if (mCurrentMaterial == BatchMaterial::SpriteEffect)
+    {
+        mShader.ApplySpriteEffectParams(mSpriteEffectParams);
+    }
 
     // Bind pipeline + resources
     sg_bindings B = {};
@@ -286,8 +363,17 @@ void Draw2D::Flush()
     B.vertex_buffer_offsets[0] = VertexOffset;
     B.index_buffer = Render::ToSokol(mCurrentIbuf.Buffer);
     B.index_buffer_offset = IndexOffset;
-    B.views[0] = Render::ToSokol(mCurrentTexture.View);
-    B.samplers[0] = Render::ToSokol(mShader.GetSampler().Sampler);
+    if (mCurrentMaterial == BatchMaterial::Textured ||
+        mCurrentMaterial == BatchMaterial::SpriteEffect)
+    {
+        B.views[0] = Render::ToSokol(mCurrentTexture.View);
+        B.samplers[0] = Render::ToSokol(mShader.GetSampler().Sampler);
+        if (mCurrentMaterial == BatchMaterial::SpriteEffect)
+        {
+            B.views[1] = Render::ToSokol(
+                mCurrentTeamColorMask.Valid() ? mCurrentTeamColorMask.View : mWhiteTexture.View);
+        }
+    }
     sg_apply_bindings(&B);
 
     sg_draw(0, mIndicesInBatch, 1);
@@ -307,14 +393,49 @@ void Draw2D::DrawSprite(const GpuTextureHandle& Texture,
                         Color Tint, bool FlipX)
 {
     if (Texture.Image.id == 0) return;
-    if (mCurrentTexture.Image.id != Texture.Image.id)
+    if (mCurrentTexture.Image.id != Texture.Image.id || mCurrentMaterial != BatchMaterial::Textured)
     {
         Flush();
         mCurrentTexture = Texture;
     }
-    SetPipeline(true);
+    SetPipeline(true, BatchMaterial::Textured);
     AddQuad(X, Y, W, H, U0, V0, U1, V1, Tint, FlipX);
     if (mVerticesInBatch + 4 > kMaxBatchVerts) Flush();
+}
+
+void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
+                              float X, float Y, float W, float H,
+                              float U0, float V0, float U1, float V1,
+                              Color Tint,
+                              bool FlipX,
+                              float Hallucination,
+                              float Cloaked,
+                              float Brighten,
+                              float Shadow,
+                              Color TeamColor,
+                              const GpuTextureHandle* TeamColorMask)
+{
+    if (Texture.Image.id == 0) return;
+    const bool UseTeamColor = TeamColorMask && TeamColorMask->Valid();
+    if (mCurrentTexture.Image.id != Texture.Image.id || mCurrentMaterial != BatchMaterial::SpriteEffect)
+    {
+        Flush();
+        mCurrentTexture = Texture;
+    }
+    if (UseTeamColor && mCurrentTeamColorMask.Image.id != TeamColorMask->Image.id)
+    {
+        Flush();
+        mCurrentTeamColorMask = *TeamColorMask;
+    }
+    else if (!UseTeamColor && mCurrentTeamColorMask.Valid())
+    {
+        Flush();
+        mCurrentTeamColorMask = {};
+    }
+    SetSpriteEffectParams(Hallucination, Cloaked, Brighten, Shadow, TeamColor, UseTeamColor);
+    SetPipeline(true, BatchMaterial::SpriteEffect);
+    AddQuad(X, Y, W, H, U0, V0, U1, V1, Tint, FlipX);
+    Flush();
 }
 
 void Draw2D::DrawSpriteFromImage(const GpuTextureHandle& Texture,
@@ -330,9 +451,17 @@ void Draw2D::DrawRect(float X, float Y, float W, float H, Color C)
         Flush();
         mCurrentTexture = mWhiteTexture;
     }
-    SetPipeline(true);
+    SetPipeline(true, BatchMaterial::Textured);
     AddQuad(X, Y, W, H, 0.0f, 0.0f, 1.0f, 1.0f, C, false);
     if (mVerticesInBatch + 4 > kMaxBatchVerts) Flush();
+}
+
+void Draw2D::DrawHealthBar(float X, float Y, float W, float H, float Fraction, Color Fill)
+{
+    SetHealthBarParams(Fraction, Fill);
+    SetPipeline(true, BatchMaterial::HealthBar);
+    AddQuad(X, Y, W, H, 0.0f, 0.0f, 1.0f, 1.0f, Fill, false);
+    Flush();
 }
 
 void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Thickness)
@@ -346,12 +475,12 @@ void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Th
 void Draw2D::DrawText(const std::string& Text, float X, float Y, float Size, Color C)
 {
     if (mFontTexture.Image.id == 0) return;
-    if (mCurrentTexture.Image.id != mFontTexture.Image.id)
+    if (mCurrentTexture.Image.id != mFontTexture.Image.id || mCurrentMaterial != BatchMaterial::Textured)
     {
         Flush();
         mCurrentTexture = mFontTexture;
     }
-    SetPipeline(true);
+    SetPipeline(true, BatchMaterial::Textured);
     float Cur = X;
     for (char Ch : Text)
     {

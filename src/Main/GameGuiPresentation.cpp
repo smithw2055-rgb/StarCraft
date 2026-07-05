@@ -3,6 +3,7 @@
 #include "Client/ClientRuntime.h"
 #include "Core/Platform/Platform.h"
 #include "Main/GameLoop/HudResourceSync.h"
+#include "Main/GameHudPresentation.h"
 #include "Main/GuiRuntime.h"
 #include "Main/AppRuntime.h"
 #include "Main/GameSession.h"
@@ -77,8 +78,32 @@ bool HandleGlueMenuPresentationEvent(GuiRuntime& Gui, const void* Event)
     return false;
 }
 
+void ResizeGuiPresentationForState(GuiRuntime& Gui, GameState State)
+{
+#if ENABLE_GUI_UI
+    const int Width = Core::Platform::GetWindowWidth();
+    const int Height = Core::Platform::GetWindowHeight();
+    if (State == GameState::MainMenu)
+    {
+        if (Gui.GlueGuiInitialized)
+            Gui.GlueGui.Resize(Width, Height);
+    }
+    else if (Gui.MainGui.IsActive())
+    {
+        Gui.MainGui.Resize(Width, Height);
+    }
+#else
+    (void)Gui;
+    (void)State;
+#endif
+}
+
 void HandleGuiPresentationEventForState(GuiRuntime& Gui, GameState State, const void* Event)
 {
+    const sapp_event* E = static_cast<const sapp_event*>(Event);
+    if (E && E->type == SAPP_EVENTTYPE_RESIZED)
+        ResizeGuiPresentationForState(Gui, State);
+
     if (State == GameState::MainMenu)
     {
         HandleGlueMenuPresentationEvent(Gui, Event);
@@ -97,6 +122,8 @@ void UpdateGuiPresentationLayer(
 #if ENABLE_GUI_UI
     if (Gui.UseGui && Gui.MainGui.IsActive())
     {
+        SyncCampaignPingsToHud(Hud, Client, Session.GetMapData().Width, Session.GetMapData().Height);
+        SyncMinimapDotsToHud(Hud, Session.Entities());
         const auto HudResources = CaptureHudResourceState(Hud);
         Gui.MainGui.SetResources(
             HudResources.MineralCount,
@@ -104,12 +131,10 @@ void UpdateGuiPresentationLayer(
             HudResources.SupplyUsed,
             HudResources.SupplyMax);
         Gui.MainGui.Update(
-            Session.Entities(),
-            Client.GetSelectedIds(),
-            Core::Platform::GetAbsoluteTime());
-        Gui.MainGui.Resize(
-            Core::Platform::GetWindowWidth(),
-            Core::Platform::GetWindowHeight());
+             Session.Entities(),
+             Client.GetSelectedIds(),
+             Hud,
+             Core::Platform::GetAbsoluteTime());
         Gui.MainGui.RenderOffscreen();
         sg_reset_state_cache();
     }
@@ -135,12 +160,12 @@ void HandleGuiHudPresentationEvent(GuiRuntime& Gui, const void* Event)
     const sapp_event* E = static_cast<const sapp_event*>(Event);
     if (Gui.UseGui && Gui.MainGui.IsActive() && E)
     {
-        Gui.MainGui.HandleEvent(E);
+        const bool HandledByGui = Gui.MainGui.HandleEvent(E);
         if (E->type == SAPP_EVENTTYPE_MOUSE_DOWN ||
             E->type == SAPP_EVENTTYPE_MOUSE_UP ||
             E->type == SAPP_EVENTTYPE_MOUSE_SCROLL)
         {
-            if (Gui.MainGui.IsPointInHud(E->mouse_x, E->mouse_y))
+            if (HandledByGui || Gui.MainGui.IsPointInHud(E->mouse_x, E->mouse_y))
                 sapp_consume_event();
         }
     }

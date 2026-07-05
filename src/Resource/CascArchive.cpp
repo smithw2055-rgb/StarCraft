@@ -117,7 +117,7 @@ std::optional<std::vector<uint8_t>> CascArchive::ReadFile(const std::string& Fil
         }
     }
 
-    // Step 2: Try with alternate separators (forwardâ†”backslash)
+    // Step 2: Try with alternate separators (forward slash -> backslash)
     std::string Alt;
     for (char C : FilePath)
     {
@@ -139,8 +139,7 @@ std::optional<std::vector<uint8_t>> CascArchive::ReadFile(const std::string& Fil
     }
 
     // Step 3: Find the file via CascFindFirstFile.
-    // SC:R CASC stores tileset paths with mixed case and "ex" suffix,
-    // e.g. "Tileset/badlands.vx4" â†?find returns "TileSet\badlands.vx4ex".
+    // SC:R CASC can store logical paths with mixed case.
     // Must save ALL find data BEFORE CascFindClose (Windows safety).
     CASC_FIND_DATA FindData;
     HANDLE FindHandle = CascFindFirstFile(mStorageHandle, FilePath.c_str(), &FindData, nullptr);

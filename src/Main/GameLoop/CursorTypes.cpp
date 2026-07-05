@@ -223,15 +223,13 @@ std::vector<Core::ECS::EntityID> FilterHarvesters(Core::ECS::EntityManager& EM,
 {
     std::vector<Core::ECS::EntityID> Harvesters;
     Harvesters.reserve(EcsIds.size());
-    const int ScvDefId = Game::Races::GetUnitDefID("SCV");
-    const int DroneDefId = Game::Races::GetUnitDefID("Drone");
-    const int ProbeDefId = Game::Races::GetUnitDefID("Probe");
     for (int EntityId : EcsIds)
     {
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
         if (!Unit) continue;
-        const int UnitDefId = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
-        if (UnitDefId == ScvDefId || UnitDefId == DroneDefId || UnitDefId == ProbeDefId)
+        const bool MatchesRawWorkerId =
+            Unit->ChkUnitID == 0x07 || Unit->ChkUnitID == 0x29 || Unit->ChkUnitID == 0x2D;
+        if (MatchesRawWorkerId)
             Harvesters.push_back(EntityId);
     }
     return Harvesters;

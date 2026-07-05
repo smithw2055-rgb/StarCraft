@@ -142,60 +142,67 @@ namespace
 
 std::string MapLoader::FindDefaultMap(const std::string& InstallPath)
 {
-    static const char* kCandidates[] = {
-        "./assets/locales/zhCN/Assets/campaign/Terran/Terran01/staredit/scenario.chk",
-        "./assets/locales/enUS/Assets/campaign/Zerg/tutorial/staredit/scenario.chk",
-        "./assets/locales/zhCN/Assets/campaign/Zerg/tutorial/staredit/scenario.chk",
+    static const char* kSinglePlayerCandidates[] = {
         "(2)Astral Balance.scm",
         "(2)Astral Balance.scx",
         "(4)Andromeda.scx",
         "(2)Ancient City.scm",
         nullptr
     };
-    std::vector<std::string> Dirs = {
-        "",
+    std::vector<std::string> MapDirs = {
         "./assets/maps/BroodWar/",
         "./assets/maps/",
     };
+    if (!InstallPath.empty())
+    {
+        MapDirs.push_back(InstallPath + "/assets/maps/BroodWar/");
+        MapDirs.push_back(InstallPath + "/assets/maps/");
+    }
 
     const std::string ExeDir = GetExecutableDir();
     if (!ExeDir.empty())
     {
         std::filesystem::path Base(ExeDir);
-        Dirs.push_back((Base / "assets/maps/BroodWar").string() + "/");
-        Dirs.push_back((Base / "assets/maps").string() + "/");
-        Dirs.push_back((Base / "../assets/maps/BroodWar").lexically_normal().string() + "/");
-        Dirs.push_back((Base / "../assets/maps").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "assets/maps/BroodWar").string() + "/");
+        MapDirs.push_back((Base / "assets/maps").string() + "/");
+        MapDirs.push_back((Base / "../assets/maps/BroodWar").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "../assets/maps").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "../../assets/maps/BroodWar").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "../../assets/maps").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "../../../assets/maps/BroodWar").lexically_normal().string() + "/");
+        MapDirs.push_back((Base / "../../../assets/maps").lexically_normal().string() + "/");
     }
-    Dirs.push_back(InstallPath + "/maps/BroodWar/");
-    Dirs.push_back(InstallPath + "/maps/");
-    Dirs.push_back(InstallPath + "/Maps/BroodWar/");
-    Dirs.push_back(InstallPath + "/Maps/");
-    Dirs.push_back("./Resources/Maps/BroodWar/");
-    Dirs.push_back("./Resources/Maps/");
-    Dirs.push_back("./maps/BroodWar/");
-    Dirs.push_back("./maps/");
-    for (auto& Dir : Dirs)
+
+    auto TryCandidates = [](const std::vector<std::string>& Dirs, const char* const* Candidates) -> std::string
     {
-        for (int I = 0; kCandidates[I]; ++I)
+        for (const auto& Dir : Dirs)
         {
-            std::string P = Dir + kCandidates[I];
-            struct stat Buf;
-            if (stat(P.c_str(), &Buf) == 0)
+            for (int I = 0; Candidates[I]; ++I)
             {
-                Core::Utils::Logger::Info("MapLoader", "Selected default map: " + P);
-                return P;
-            }
-            std::string Alt = Dir;
-            for (auto& C : Alt) if (C == '/') C = '\\';
-            P = Alt + kCandidates[I];
-            if (stat(P.c_str(), &Buf) == 0)
-            {
-                Core::Utils::Logger::Info("MapLoader", "Selected default map: " + P);
-                return P;
+                std::string P = Dir + Candidates[I];
+                struct stat Buf;
+                if (stat(P.c_str(), &Buf) == 0)
+                {
+                    Core::Utils::Logger::Info("MapLoader", "Selected default map: " + P);
+                    return P;
+                }
+                std::string Alt = Dir;
+                for (auto& C : Alt) if (C == '/') C = '\\';
+                P = Alt + Candidates[I];
+                if (stat(P.c_str(), &Buf) == 0)
+                {
+                    Core::Utils::Logger::Info("MapLoader", "Selected default map: " + P);
+                    return P;
+                }
             }
         }
-    }
+        return {};
+    };
+
+    if (std::string Map = TryCandidates(MapDirs, kSinglePlayerCandidates); !Map.empty())
+        return Map;
+
+    Core::Utils::Logger::Warning("MapLoader", "No default single-player map found under assets/maps");
     return {};
 }
 

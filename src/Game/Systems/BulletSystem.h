@@ -37,7 +37,8 @@ private:
                            int SourcePlayerID,
                            int SourceEntityID,
                            Components::SplashType Splash,
-                           Components::Elevation TargetElev);
+                           Components::Elevation TargetElev,
+                           bool IsRangedAttack);
 
     Core::ECS::SystemManager& mSystemMgr;
 };

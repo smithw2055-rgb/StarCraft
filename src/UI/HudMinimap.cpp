@@ -60,9 +60,42 @@ void Hud::DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
         const int PY = MinimapWorldToScreenY(ContentRect, Transform->Position.Y, MapPxH);
         const int PlayerId = Player ? Player->PlayerID : 11;
         const Render::Color Dot = (PlayerId == 0) ? Render::Color(80, 200, 255, 255)
-                                                  : Render::Color(220, 60, 60, 255);
+                                                   : Render::Color(220, 60, 60, 255);
         D.DrawRect((float)PX, (float)PY, 2.0f, 2.0f, Dot);
     });
+
+    for (const auto& Ping : mState.Minimap.CampaignPings)
+    {
+        int PX = 0;
+        int PY = 0;
+        if (!MinimapWorldToScreenPoint(Layout.MinimapRect,
+                                       MapWidthTiles,
+                                       MapHeightTiles,
+                                       Ping.Position.X,
+                                       Ping.Position.Y,
+                                       PX,
+                                       PY))
+            continue;
+        const float T = std::clamp(Ping.TimeRemaining / 4.0f, 0.0f, 1.0f);
+        const float Radius = 4.0f + (1.0f - T) * 9.0f;
+        const Render::Color PingColor(80, 210, 255, (uint8_t)(100 + 140 * T));
+        D.DrawRectLines((float)PX - Radius,
+                        (float)PY - Radius,
+                        Radius * 2.0f,
+                        Radius * 2.0f,
+                        PingColor,
+                        1.0f);
+        D.DrawRect((float)PX - 1.0f,
+                   (float)PY - Radius,
+                   2.0f,
+                   Radius * 2.0f,
+                   PingColor);
+        D.DrawRect((float)PX - Radius,
+                   (float)PY - 1.0f,
+                   Radius * 2.0f,
+                   2.0f,
+                   PingColor);
+    }
 }
 
 } // namespace Game::Client::UI

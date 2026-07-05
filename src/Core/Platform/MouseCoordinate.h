@@ -15,15 +15,17 @@ inline MouseScale ComputeMouseScale(int WindowWidth,
                                     int FramebufferHeight,
                                     float DpiFallback)
 {
+    (void)WindowWidth;
+    (void)WindowHeight;
+    (void)FramebufferWidth;
+    (void)FramebufferHeight;
+    (void)DpiFallback;
+    // Sokol reports sapp_event.mouse_x/y in framebuffer pixels. Rendering,
+    // camera, HUD, and selection also use framebuffer pixels, so applying the
+    // window-to-framebuffer ratio here double-scales the pointer on high DPI.
     MouseScale Scale;
-    Scale.X = (WindowWidth > 0 && FramebufferWidth > 0)
-        ? (float)FramebufferWidth / (float)WindowWidth
-        : DpiFallback;
-    Scale.Y = (WindowHeight > 0 && FramebufferHeight > 0)
-        ? (float)FramebufferHeight / (float)WindowHeight
-        : DpiFallback;
-    if (Scale.X <= 0.0f) Scale.X = 1.0f;
-    if (Scale.Y <= 0.0f) Scale.Y = 1.0f;
+    Scale.X = 1.0f;
+    Scale.Y = 1.0f;
     return Scale;
 }
 

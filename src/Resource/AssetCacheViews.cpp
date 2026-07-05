@@ -86,6 +86,11 @@ const std::vector<GpuImage>* UIAssetCacheView::GetUIIcons() const
     return mCache ? mCache->GetUIIcons() : nullptr;
 }
 
+const std::vector<std::string>* UIAssetCacheView::GetUIIconUris() const
+{
+    return mCache ? mCache->GetUIIconUris() : nullptr;
+}
+
 const std::vector<GpuImage>* UIAssetCacheView::GetCommandIcons() const
 {
     return mCache ? mCache->GetCommandIcons() : nullptr;
@@ -94,6 +99,11 @@ const std::vector<GpuImage>* UIAssetCacheView::GetCommandIcons() const
 const std::vector<GpuImage>* UIAssetCacheView::GetCommandIconMasks() const
 {
     return mCache ? mCache->GetCommandIconMasks() : nullptr;
+}
+
+const std::vector<std::string>* UIAssetCacheView::GetCommandIconUris() const
+{
+    return mCache ? mCache->GetCommandIconUris() : nullptr;
 }
 
 const std::vector<GpuImage>* UIAssetCacheView::GetCommandButtonSkins(CommandButtonSkinSet SkinSet) const
@@ -119,6 +129,11 @@ const ImageOpaqueBounds* UIAssetCacheView::GetWireframeOpaqueBounds(int FrameInd
 const PortraitClip* UIAssetCacheView::GetPortraitClip(const std::string& PortraitKey) const
 {
     return mCache ? mCache->GetPortraitClip(PortraitKey) : nullptr;
+}
+
+const PortraitFrame* UIAssetCacheView::GetPortraitFrame(const std::string& PortraitKey, double TimeSeconds) const
+{
+    return mCache ? mCache->GetPortraitFrame(PortraitKey, TimeSeconds) : nullptr;
 }
 
 GpuImage UIAssetCacheView::GetHudAggIcons() const

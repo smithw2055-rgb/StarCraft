@@ -1,11 +1,14 @@
 #include "Resource/GameDataLoader.h"
+#include "Resource/GrpDecoder.h"
 
 #include "Game/DataEnums.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <array>
 #include <string>
 #include <vector>
@@ -30,6 +33,48 @@ namespace
             std::istreambuf_iterator<char>());
     }
 
+    std::optional<std::vector<uint8_t>> TryReadAll(const std::string& Path)
+    {
+        std::ifstream File(Path, std::ios::binary);
+        if (!File.good())
+            return std::nullopt;
+
+        return std::vector<uint8_t>(
+            std::istreambuf_iterator<char>(File),
+            std::istreambuf_iterator<char>());
+    }
+
+    std::vector<uint8_t> ReadSpriteAsset(std::string Path)
+    {
+        std::replace(Path.begin(), Path.end(), '\\', '/');
+        if (auto Data = TryReadAll("assets/" + Path))
+            return *Data;
+        if (auto Data = TryReadAll("assets/unit/" + Path))
+            return *Data;
+        if (auto Data = TryReadAll("assets/arr/" + Path))
+            return *Data;
+        if (auto Data = TryReadAll("assets/data/" + Path))
+            return *Data;
+
+        Require(false, ("open sprite asset " + Path).c_str());
+        return {};
+    }
+
+    bool HasTeamColorPixels(const Resource::GrpSprite& Sprite)
+    {
+        for (const auto& Frame : Sprite.Frames)
+        {
+            const int PixelCount = Frame.Width * Frame.Height;
+            for (int P = 0; P < PixelCount; ++P)
+            {
+                const uint8_t Index = Sprite.RawFrameData[(size_t)Frame.Offset + (size_t)P];
+                if (Index >= 8 && Index < 16)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     void RequireUnitMainImage(Resource::GameDataLoader& Loader,
                               uint32_t ChkUnitID,
                               const char* Name)
@@ -43,6 +88,21 @@ namespace
 
         const std::string Path = Loader.ResolveImageGrpPath(ImageID);
         Require(!Path.empty(), "unit main image resolves to a GRP path");
+    }
+
+    void RequireUnitTeamColorMaskSource(Resource::GameDataLoader& Loader,
+                                        uint32_t ChkUnitID,
+                                        const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitImageID(ChkUnitID);
+        Require(ImageID != UINT32_MAX, Name);
+
+        const std::string Path = Loader.ResolveImageGrpPath(ImageID);
+        Require(!Path.empty(), "team-color unit image resolves to a GRP path");
+
+        auto Sprite = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(Path));
+        Require(Sprite.has_value(), "team-color unit GRP decodes");
+        Require(HasTeamColorPixels(*Sprite), "team-color unit GRP contains palette remap indices");
     }
 
     void RequireSelectionCircleImage(Resource::GameDataLoader& Loader,
@@ -128,6 +188,8 @@ int main()
     RequireUnitMainImage(Loader, 5, "Tank image");
     RequireUnitMainImage(Loader, 12, "Battlecruiser image");
     RequireUnitMainImage(Loader, 124, "Missile Turret image");
+    RequireUnitTeamColorMaskSource(Loader, 0, "Marine team-color source");
+    RequireUnitTeamColorMaskSource(Loader, 7, "SCV team-color source");
 
     Require(Game::Data::IsAirUnitType(11), "Dropship is treated as air");
     Require(Game::Data::IsAirUnitType(12), "Battlecruiser is treated as air");
@@ -137,6 +199,7 @@ int main()
 
     size_t ShadowCount = 0;
     size_t ShadowWithParentCount = 0;
+    size_t DecodableShadowCount = 0;
     for (const auto& Relation : Loader.GetImageRelations())
     {
         if (!Relation.IsShadow())
@@ -144,11 +207,24 @@ int main()
         ++ShadowCount;
         if (Relation.HasParent())
             ++ShadowWithParentCount;
+
+        if (DecodableShadowCount == 0)
+        {
+            const std::string Path = Loader.ResolveImageGrpPath(Relation.ImageID);
+            if (!Path.empty())
+            {
+                auto Sprite = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(Path));
+                if (Sprite.has_value() && !Sprite->Frames.empty())
+                    ++DecodableShadowCount;
+            }
+        }
     }
 
     Require(ShadowCount > 0, "images.rel contains shadow relations");
     Require(ShadowWithParentCount == ShadowCount,
         "shadow relations are parented overlays, not standalone main images");
+    Require(DecodableShadowCount > 0,
+        "shadow overlay relation resolves to decodable GRP frames");
 
     std::printf("SpriteImageDataTest passed\n");
     return 0;

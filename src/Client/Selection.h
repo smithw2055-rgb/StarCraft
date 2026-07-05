@@ -34,6 +34,12 @@ public:
     bool IsDragging() const { return mPhase == Phase::Dragging; }
     void GetDragRectWorld(float& X, float& Y, float& W, float& H) const;
     void GetDragRectScreen(float& X, float& Y, float& W, float& H) const;
+    int PickEntityAtWorld(Core::ECS::EntityManager& Entities, float WorldX, float WorldY) const;
+    std::vector<int> CollectRectSelection(Core::ECS::EntityManager& Entities,
+                                          float WorldX,
+                                          float WorldY,
+                                          float WorldW,
+                                          float WorldH) const;
 
     int Count() const;
     int Get(int Index) const;

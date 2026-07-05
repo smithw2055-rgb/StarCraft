@@ -111,6 +111,10 @@ public:
     static int GetResearchLevel(int PlayerID, ResearchId ResearchId);
     static bool HasResearch(int PlayerID, ResearchId ResearchId);
     static std::string_view GetResearchDisplayName(ResearchId ResearchId);
+    static bool GetResearchCost(ResearchId ResearchId,
+                                int PlayerID,
+                                int& OutMinerals,
+                                int& OutGas);
 
     static int GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID);

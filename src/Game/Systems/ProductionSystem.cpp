@@ -1,10 +1,12 @@
 #include "Game/Systems/ProductionSystem.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "Core/Utils/Logger.h"
 #include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 
 namespace Game::Systems
@@ -63,6 +65,37 @@ namespace
         }
         return false;
     }
+
+    int NormalizeDefIDForRace(int DefID, Race RaceType)
+    {
+        if (DefID < 0)
+            return DefID;
+
+        const auto Candidate = Races::GetUnitDefByID(DefID);
+        if (Candidate.Name != "Unknown" && Candidate.RaceType == RaceType)
+            return DefID;
+
+        if (RaceType == Race::Zerg)
+            return (int)Races::GetTerranDefs().size() + DefID;
+        if (RaceType == Race::Protoss)
+            return (int)Races::GetTerranDefs().size() +
+                   (int)Races::GetZergDefs().size() +
+                   DefID;
+        return DefID;
+    }
+
+    void RefundTrainingReservation(Core::ECS::EntityManager& EM,
+                                   int ProducerID,
+                                   int UnitDefID)
+    {
+        auto Def = Races::GetUnitDefByID(UnitDefID);
+        auto* Player = EM.GetComponent<PlayerComponent>(ProducerID);
+        const int PlayerID = Player ? Player->PlayerID : 0;
+        auto& Res = HarvestSystem::GetResources(PlayerID);
+        Res.Minerals += Def.MineralCost;
+        Res.VespeneGas += Def.GasCost;
+        Res.SupplyUsed = std::max(0, Res.SupplyUsed - Def.SupplyCost);
+    }
 }
 
 void ProductionSystem::SetImageResolver(ImageIDResolver Resolver)
@@ -80,6 +113,7 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
                                 std::string* OutReason)
 {
     auto* Building = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<BuildingComponent>(BuildingID);
+    auto* ProducerUnit = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<UnitComponent>(BuildingID);
     auto* Player = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<PlayerComponent>(BuildingID);
     if (!Building)
     {
@@ -91,6 +125,21 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "producer is still under construction");
         return false;
     }
+    if (Building->IsLifted)
+    {
+        SetReason(OutReason, "producer is lifted");
+        return false;
+    }
+    if (!ProducerUnit || ProducerUnit->HitPoints <= 0)
+    {
+        SetReason(OutReason, "producer is not operational");
+        return false;
+    }
+    if (!const_cast<Core::ECS::EntityManager&>(EM).GetComponent<TransformComponent>(BuildingID))
+    {
+        SetReason(OutReason, "producer missing transform");
+        return false;
+    }
 
     auto Def = Races::GetUnitDefByID(UnitDefID);
     if (Def.IsBuilding)
@@ -100,7 +149,8 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
     }
 
     int ProducerDefID = ResolveBuildingDefID(EM, BuildingID);
-    if (ProducerDefID >= 0 && Def.ProducedBy >= 0 && ProducerDefID != Def.ProducedBy)
+    const int RequiredProducerDefID = NormalizeDefIDForRace(Def.ProducedBy, Def.RaceType);
+    if (ProducerDefID >= 0 && RequiredProducerDefID >= 0 && ProducerDefID != RequiredProducerDefID)
     {
         SetReason(OutReason, "wrong producer for " + Def.Name);
         return false;
@@ -121,8 +171,12 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
 
     for (int RequiredDefID : Def.RequiredBuildings)
     {
-        auto RequiredDef = Races::GetUnitDefByID(RequiredDefID);
-        if (RequiredDef.IsAddon && RequiredDef.AddonOnBuildingDefID == Def.ProducedBy)
+        const int NormalizedRequiredDefID =
+            NormalizeDefIDForRace(RequiredDefID, Def.RaceType);
+        auto RequiredDef = Races::GetUnitDefByID(NormalizedRequiredDefID);
+        const int RequiredAddonParentDefID =
+            NormalizeDefIDForRace(RequiredDef.AddonOnBuildingDefID, RequiredDef.RaceType);
+        if (RequiredDef.IsAddon && RequiredAddonParentDefID == RequiredProducerDefID)
         {
             if (Building->AddonID < 0 || !EM.IsAlive(Building->AddonID))
             {
@@ -131,7 +185,7 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
             }
             int AddonDefID = ResolveBuildingDefID(EM, Building->AddonID);
             auto* AddonBuilding = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<BuildingComponent>(Building->AddonID);
-            if (AddonDefID != RequiredDefID || (AddonBuilding && AddonBuilding->UnderConstruction))
+            if (AddonDefID != NormalizedRequiredDefID || (AddonBuilding && AddonBuilding->UnderConstruction))
             {
                 SetReason(OutReason, "required add-on incomplete");
                 return false;
@@ -139,7 +193,7 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
             continue;
         }
 
-        if (!IsCompletedBuildingDef(EM, PlayerID, RequiredDefID))
+        if (!IsCompletedBuildingDef(EM, PlayerID, NormalizedRequiredDefID))
         {
             SetReason(OutReason, "required building missing");
             return false;
@@ -244,6 +298,11 @@ void ProductionSystem::ProcessTraining(Core::ECS::EntityManager& EM, int EntityI
     if (!Prod || Prod->Queue.empty())
         return;
 
+    auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Building || Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+        return;
+
     if (Prod->CurrentTrainingUnitDefID == -1)
     {
         Prod->CurrentTrainingUnitDefID = Prod->Queue.front();
@@ -265,6 +324,13 @@ void ProductionSystem::ProcessTraining(Core::ECS::EntityManager& EM, int EntityI
     {
         Core::Utils::Logger::Info("ProductionSystem",
             "Trained " + Def.Name + " (entity " + std::to_string(NewUnitID) + ")");
+    }
+    else
+    {
+        RefundTrainingReservation(EM, EntityID, TrainedDefID);
+        Core::Utils::Logger::Warning("ProductionSystem",
+            "Failed to spawn " + Def.Name + " from producer " + std::to_string(EntityID) +
+            "; refunded reserved resources and supply");
     }
 
     Prod->Queue.erase(Prod->Queue.begin());
@@ -368,7 +434,19 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
     int PlayerID = 0;
     if (auto* SrcPlayer = EM.GetComponent<PlayerComponent>(BuildingID))
         PlayerID = SrcPlayer->PlayerID;
-    return DebugSpawnUnit(EM, UnitDefID, SpawnPos, PlayerID);
+    const int NewUnitID = DebugSpawnUnit(EM, UnitDefID, SpawnPos, PlayerID);
+    if (NewUnitID >= 0)
+    {
+        if (const auto* ProducerCmd = EM.GetComponent<CommandComponent>(BuildingID);
+            ProducerCmd && ProducerCmd->HasRallyPoint)
+        {
+            Order RallyOrder;
+            RallyOrder.Type = OrderType::Move;
+            RallyOrder.TargetPosition = ProducerCmd->RallyPoint;
+            CommandSystem::IssueOrder(EM, NewUnitID, RallyOrder, false);
+        }
+    }
+    return NewUnitID;
 }
 
 } // namespace Game::Systems

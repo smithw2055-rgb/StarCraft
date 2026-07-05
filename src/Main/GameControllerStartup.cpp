@@ -39,10 +39,10 @@ void GameController::InitGameSystems()
     if (!InitializeClientResourcesAndSystemAssetResolvers(mRuntime.Client.Runtime, mRuntime.App.Runtime.InstallPath))
         return;
 
-    ResolveAndLoadStartupMap(
+    if (!ResolveAndLoadStartupMap(
         mRuntime.App.Runtime,
-        [this]() { return LoadRealMapIntoSession(mRuntime.App.Runtime, mRuntime.Session.Game, mRuntime.Client.Runtime); },
-        [this]() { ConfigureSyntheticSkirmishMapIntoSession(mRuntime.Session.Game, mRuntime.Client.Runtime); });
+        [this]() { return LoadRealMapIntoSession(mRuntime.App.Runtime, mRuntime.Session.Game, mRuntime.Client.Runtime); }))
+        return;
 
     InitializeGameplayRuntime(
         mRuntime.App.Runtime,

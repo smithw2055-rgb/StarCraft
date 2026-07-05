@@ -17,6 +17,7 @@ namespace Resource::Graphics
 struct DecodedFrame
 {
     std::vector<uint8_t> Rgba; // RGBA8888
+    std::vector<uint8_t> TeamColorMaskRgba; // RGBA8888, red channel is remap weight
     int Width = 0;
     int Height = 0;
     int OriginX = 0;
@@ -36,6 +37,9 @@ struct GrpDecodeOptions
     bool TransparentIndexZero = true;
     bool TransparentBlack = false;
     bool UseIndexRemap = false;
+    bool GenerateTeamColorMask = true;
+    uint8_t TeamColorIndexStart = 8;
+    uint8_t TeamColorIndexCount = 8;
     int16_t IndexRemap[256] = {};
     RawColor TransparentRgb = RawColor(0, 0, 0, 0);
 

@@ -17,7 +17,6 @@ namespace Game::Client
 namespace
 {
     constexpr float kTwoPi = 6.28318530718f;
-    constexpr uint32_t kSelectionCircleBaseImageId = 561;
 
     struct FootprintVisual
     {
@@ -30,7 +29,6 @@ namespace
     struct SelectionVisual
     {
         FootprintVisual Footprint;
-        const Resource::Graphics::GpuImage* CircleImage = nullptr;
     };
 
     const std::vector<Resource::Graphics::GpuImage>* ResolveFramesFor(
@@ -55,23 +53,23 @@ namespace
         }
     }
 
-    void DrawSolidFootprintEllipse(Render::Draw2D& Draw,
-                                   float CenterX,
-                                   float CenterY,
-                                   float RadiusX,
-                                   float RadiusY)
+    void DrawFootprintEllipseOutline(Render::Draw2D& Draw,
+                                     float CenterX,
+                                     float CenterY,
+                                     float RadiusX,
+                                     float RadiusY)
     {
-        const Render::Color Shadow(0, 36, 0, 170);
-        const Render::Color Glow(72, 255, 96, 255);
-        const int Segments = std::max(72, (int)std::lround(RadiusX * 2.6f));
+        const int Segments = std::max(96, (int)std::lround(RadiusX * 3.0f));
+        const Render::Color Shadow(0, 28, 0, 220);
+        const Render::Color Green(70, 255, 86, 255);
         for (int I = 0; I < Segments; ++I)
         {
             const float T = (float)I / (float)Segments;
             const float Angle = T * kTwoPi;
             const float PX = CenterX + std::cos(Angle) * RadiusX;
             const float PY = CenterY + std::sin(Angle) * RadiusY;
-            Draw.DrawRect(PX - 1.5f, PY - 1.5f, 3.0f, 3.0f, Shadow);
-            Draw.DrawRect(PX - 0.75f, PY - 0.75f, 1.5f, 1.5f, Glow);
+            Draw.DrawRect(PX - 1.25f, PY - 1.25f, 2.5f, 2.5f, Shadow);
+            Draw.DrawRect(PX - 0.65f, PY - 0.65f, 1.3f, 1.3f, Green);
         }
     }
 
@@ -92,23 +90,11 @@ namespace
                           Render::Color Fill)
     {
         Frac = std::clamp(Frac, 0.0f, 1.0f);
-        const int SegmentCount = std::clamp((int)std::lround(Width / 4.0f), 7, 32);
-        const float Gap = 1.0f;
-        const float Height = 4.0f;
-        const float SegmentW = std::max(2.0f, (Width - Gap * (SegmentCount - 1)) / (float)SegmentCount);
-        const float TotalW = SegmentW * SegmentCount + Gap * (SegmentCount - 1);
-        const float X0 = CenterX - TotalW * 0.5f;
-        const int FilledSegments = (int)std::ceil(Frac * (float)SegmentCount);
+        const float Height = 5.0f;
+        const float X0 = CenterX - Width * 0.5f;
         const Render::Color Border(0, 0, 0, 235);
-        const Render::Color Back(20, 36, 20, 230);
-        for (int I = 0; I < SegmentCount; ++I)
-        {
-            const float X = X0 + (SegmentW + Gap) * (float)I;
-            Draw.DrawRect(X - 1.0f, Y - 1.0f, SegmentW + 2.0f, Height + 2.0f, Border);
-            Draw.DrawRect(X, Y, SegmentW, Height, Back);
-            if (I < FilledSegments)
-                Draw.DrawRect(X, Y, SegmentW, Height, Fill);
-        }
+        Draw.DrawRect(X0 - 1.0f, Y - 1.0f, Width + 2.0f, Height + 2.0f, Border);
+        Draw.DrawHealthBar(X0, Y, Width, Height, Frac, Fill);
     }
 
     void DrawSegmentedStatusBars(Render::Draw2D& Draw,
@@ -246,32 +232,10 @@ namespace
         return SpriteID != UINT32_MAX ? Loader->FindSpriteByID(SpriteID) : nullptr;
     }
 
-    const Resource::Graphics::GpuImage* FindSelectionCircleImage(
-        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets,
-        const Resource::SpriteEntry* Sprite)
-    {
-        if (!SpriteAssets.HasCache() || !Sprite)
-            return nullptr;
-
-        const int PixelSize = SelectionCirclePixelSize((int)Sprite->SelectionCircle);
-        if (PixelSize <= 0)
-            return nullptr;
-
-        const uint32_t ImageId = kSelectionCircleBaseImageId + Sprite->SelectionCircle;
-        const auto* Frames = SpriteAssets.GetDatImageFrames(ImageId);
-        if (!Frames || Frames->empty())
-            return nullptr;
-
-        const auto& Img = (*Frames)[0];
-        return Img.Valid() ? &Img : nullptr;
-    }
-
     FootprintVisual FootprintFromSpriteCircle(float X,
                                               float Y,
-                                              const Resource::SpriteEntry* Sprite,
-                                              const Resource::Graphics::GpuImage* CircleImage)
+                                              const Resource::SpriteEntry* Sprite)
     {
-        (void)CircleImage;
         if (Sprite)
         {
             const BuildingFootprintSpec F =
@@ -296,10 +260,10 @@ namespace
         Game::Components::UnitSize Size,
         float VisualRadius)
     {
+        (void)SpriteAssets;
         const auto* Sprite = FindUnitSpriteData(DataAssets, ChkUnitID);
         if (Sprite && SelectionCirclePixelSize((int)Sprite->SelectionCircle) > 0)
-            return FootprintFromSpriteCircle(
-                X, Y, Sprite, FindSelectionCircleImage(SpriteAssets, Sprite));
+            return FootprintFromSpriteCircle(X, Y, Sprite);
 
         const auto* UnitData = FindUnitData(DataAssets, ChkUnitID);
         if (UnitData && UnitData->DimensionWidth() > 0 && UnitData->DimensionHeight() > 0)
@@ -323,36 +287,21 @@ namespace
         if (const auto* Sprite = FindUnitSpriteData(DataAssets, ChkUnitID);
             Sprite && SelectionCirclePixelSize((int)Sprite->SelectionCircle) > 0)
         {
-            const auto* CircleImage = FindSelectionCircleImage(SpriteAssets, Sprite);
             return {
-                FootprintFromSpriteCircle(X, Y, Sprite, CircleImage),
-                CircleImage
+                FootprintFromSpriteCircle(X, Y, Sprite)
             };
         }
 
         return {
             SelectionFootprintForUnit(DataAssets, SpriteAssets, ChkUnitID,
-                                      X, Y, IsBuilding, Size, VisualRadius),
-            nullptr
+                                      X, Y, IsBuilding, Size, VisualRadius)
         };
     }
 
     void DrawSelectionVisual(Render::Draw2D& Draw, const SelectionVisual& Visual)
     {
         const FootprintVisual& F = Visual.Footprint;
-        if (Visual.CircleImage && Visual.CircleImage->Valid())
-        {
-            Draw.DrawSprite(*Visual.CircleImage,
-                            F.CenterX - F.RadiusX,
-                            F.CenterY - F.RadiusY,
-                            F.RadiusX * 2.0f,
-                            F.RadiusY * 2.0f,
-                            0.0f, 0.0f, 1.0f, 1.0f,
-                            Render::Color(84, 255, 84, 255), false);
-            return;
-        }
-
-        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+        DrawFootprintEllipseOutline(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
     }
 
     float StatusBarWidthFromSpriteData(
@@ -468,6 +417,79 @@ namespace
             return 3;
         return 1;
     }
+
+    struct SpriteVisualEffect
+    {
+        float Hallucination = 0.0f;
+        float Cloaked = 0.0f;
+        float Brighten = 0.0f;
+        float Shadow = 0.0f;
+
+        bool Any() const
+        {
+            return Hallucination > 0.0f || Cloaked > 0.0f ||
+                   Brighten > 0.0f || Shadow > 0.0f;
+        }
+    };
+
+    bool HasStatusEffect(Core::ECS::EntityManager& Entities,
+                         int EntityId,
+                         Game::Components::StatusEffect Effect)
+    {
+        auto* Status = Entities.GetComponent<Game::Components::StatusEffectComponent>(EntityId);
+        return Status && Status->HasEffect(Effect);
+    }
+
+    SpriteVisualEffect ResolveSpriteVisualEffect(Core::ECS::EntityManager& Entities, int EntityId)
+    {
+        SpriteVisualEffect Effect;
+        if (auto* Cloak = Entities.GetComponent<Game::Components::CloakComponent>(EntityId);
+            Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed))
+        {
+            Effect.Cloaked = 1.0f;
+        }
+
+        if (HasStatusEffect(Entities, EntityId, Game::Components::StatusEffect::Hallucination))
+            Effect.Hallucination = 1.0f;
+
+        return Effect;
+    }
+
+    void DrawSpriteWithEffect(Render::Draw2D& Draw,
+                              const Resource::Graphics::GpuImage& Img,
+                              float X,
+                              float Y,
+                              float W,
+                              float H,
+                              Render::Color Tint,
+                              bool Flipped,
+                              const SpriteVisualEffect& Effect,
+                              const Game::Components::PlayerComponent* Player)
+    {
+        SpriteVisualEffect Effective = Effect;
+        if (Img.ShadowSprite)
+            Effective.Shadow = 1.0f;
+
+        const bool UseTeamColor =
+            Effective.Shadow <= 0.0f && Player && Img.TeamColorMask.Valid();
+        if (Effective.Any() || UseTeamColor)
+        {
+            Draw.DrawSpriteEffect(Img, X, Y, W, H,
+                                  0.0f, 0.0f, 1.0f, 1.0f,
+                                  Tint, Flipped,
+                                  Effective.Hallucination,
+                                  Effective.Cloaked,
+                                  Effective.Brighten,
+                                  Effective.Shadow,
+                                  UseTeamColor ? Player->PlayerColor : Render::Colors::White(),
+                                  UseTeamColor ? &Img.TeamColorMask : nullptr);
+            return;
+        }
+
+        Draw.DrawSprite(Img, X, Y, W, H,
+                        0.0f, 0.0f, 1.0f, 1.0f,
+                        Tint, Flipped);
+    }
 }
 
 void EntityRenderer::ResolveFrames(EntityManager& Entities)
@@ -513,19 +535,19 @@ void EntityRenderer::DrawSelectionMarker(const Entity& E)
     if (E.Kind == EntityKind::Unit)
     {
         const FootprintVisual F = UnitFootprint(E.X, E.Y, E.Size, FrameHalfW, FrameHalfH);
-        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+        DrawFootprintEllipseOutline(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
         return;
     }
 
     if (E.Kind == EntityKind::Building)
     {
         const FootprintVisual F = BuildingFootprint(E.X, E.Y, E.ChkUnitId, FrameHalfW, FrameHalfH);
-        DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+        DrawFootprintEllipseOutline(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
         return;
     }
 
     const FootprintVisual F = FallbackFootprint(E.X, E.Y, std::max(32.0f, FrameHalfW * 2.0f));
-    DrawSolidFootprintEllipse(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
+    DrawFootprintEllipseOutline(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
 }
 
 void EntityRenderer::DrawImageNode(const Entity& E, const EntityImageNode& Node, float OffsetX, float OffsetY) const
@@ -862,6 +884,7 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
 
     auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
     auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+    auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);
     if (!Trans || !RenderComp)
         return;
 
@@ -880,12 +903,16 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
     const float HH = Img.Height * 0.5f;
     OffsetX = RenderComp->Flipped ? -OffsetX : OffsetX;
     const bool Flipped = RenderComp->Flipped != Node.Flipped;
-    Render::g_Draw2D.DrawSprite(Img,
-                                Trans->Position.X + OffsetX - HW,
-                                Trans->Position.Y + OffsetY - HH,
-                                (float)Img.Width, (float)Img.Height,
-                                0.0f, 0.0f, 1.0f, 1.0f,
-                                Render::Colors::White(), Flipped);
+    DrawSpriteWithEffect(Render::g_Draw2D,
+                         Img,
+                         Trans->Position.X + OffsetX - HW,
+                         Trans->Position.Y + OffsetY - HH,
+                         (float)Img.Width,
+                         (float)Img.Height,
+                         Render::Colors::White(),
+                         Flipped,
+                         ResolveSpriteVisualEffect(Entities, EntityId),
+                         Player);
 }
 
 void EntityRenderer::DrawImageNodeTree(Core::ECS::EntityManager& Entities,
@@ -1011,6 +1038,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
         const bool ShowHealthBar = !IsResource && Unit->MaxHitPoints > 0 && IsSelected;
+        const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(Entities, EntityId);
 
         if (IsSelected)
             DrawSelectionVisual(Draw, GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding));
@@ -1035,11 +1063,16 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             {
                 const float HW = Img.Width * 0.5f;
                 const float HH = Img.Height * 0.5f;
-                Draw.DrawSprite(Img,
-                                Trans->Position.X - HW, Trans->Position.Y - HH,
-                                (float)Img.Width, (float)Img.Height,
-                                0.0f, 0.0f, 1.0f, 1.0f,
-                                RenderComp->Tint, RenderComp->Flipped);
+                DrawSpriteWithEffect(Draw,
+                                     Img,
+                                     Trans->Position.X - HW,
+                                     Trans->Position.Y - HH,
+                                     (float)Img.Width,
+                                     (float)Img.Height,
+                                     RenderComp->Tint,
+                                     RenderComp->Flipped,
+                                     VisualEffect,
+                                     Player);
                 DrewSprite = true;
 
                 if (RenderComp->SubunitImageID != UINT32_MAX)
@@ -1054,14 +1087,16 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                         {
                             const float SubHW = SubImg.Width * 0.5f;
                             const float SubHH = SubImg.Height * 0.5f;
-                            Draw.DrawSprite(SubImg,
-                                            Trans->Position.X - SubHW,
-                                            Trans->Position.Y - SubHH,
-                                            (float)SubImg.Width,
-                                            (float)SubImg.Height,
-                                            0.0f, 0.0f, 1.0f, 1.0f,
-                                            RenderComp->Tint,
-                                            RenderComp->Flipped);
+                            DrawSpriteWithEffect(Draw,
+                                                 SubImg,
+                                                 Trans->Position.X - SubHW,
+                                                 Trans->Position.Y - SubHH,
+                                                 (float)SubImg.Width,
+                                                 (float)SubImg.Height,
+                                                 RenderComp->Tint,
+                                                 RenderComp->Flipped,
+                                                 VisualEffect,
+                                                 Player);
                         }
                     }
                 }

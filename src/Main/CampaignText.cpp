@@ -63,7 +63,8 @@ const char* CampaignMessageKind(uint8_t ActionID)
     {
         case 7: return "TRANSMISSION";
         case 8: return "AUDIO";
-        case 41: return "PORTRAIT";
+        case 29: return "PORTRAIT";
+        case 41: return "SCENARIO";
         default: return "BRIEFING";
     }
 }

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -25,6 +26,110 @@ namespace
         std::transform(Lower.begin(), Lower.end(), Lower.begin(),
             [](unsigned char C) { return (char)std::tolower(C); });
         return Lower;
+    }
+
+    PortraitFrame UploadPortraitFrame(const DecodedVideoFrame& DecodedFrame)
+    {
+        PortraitFrame Frame = {};
+        Frame.Image = UploadRgbaFull(DecodedFrame.Image.Width,
+                                     DecodedFrame.Image.Height,
+                                     DecodedFrame.Image.Rgba.data());
+        Frame.DurationSeconds = DecodedFrame.DurationSeconds;
+        return Frame;
+    }
+
+    bool SetStreamingPortraitFrame(PortraitClip& Clip, const DecodedVideoFrame& DecodedFrame)
+    {
+        PortraitFrame NewFrame = UploadPortraitFrame(DecodedFrame);
+        if (!NewFrame.Image.Valid())
+            return false;
+
+        DestroyImage(Clip.CurrentFrame.Image);
+        Clip.CurrentFrame = std::move(NewFrame);
+        Clip.Width = std::max(Clip.Width, DecodedFrame.Image.Width);
+        Clip.Height = std::max(Clip.Height, DecodedFrame.Image.Height);
+        return true;
+    }
+
+    bool OpenStreamingPortraitSegment(PortraitClip& Clip, size_t StartIndex)
+    {
+        if (Clip.WebmPaths.empty())
+            return false;
+
+        for (size_t Attempt = 0; Attempt < Clip.WebmPaths.size(); ++Attempt)
+        {
+            const size_t Index = (StartIndex + Attempt) % Clip.WebmPaths.size();
+            Clip.WebmDecoder.Close();
+            if (!Clip.WebmDecoder.Open(Clip.WebmPaths[Index]))
+                continue;
+
+            DecodedVideoFrame Frame = {};
+            if (!Clip.WebmDecoder.ReadNextFrame(Frame))
+                continue;
+
+            if (!SetStreamingPortraitFrame(Clip, Frame))
+                continue;
+
+            Clip.ActiveWebmPath = Index;
+            return true;
+        }
+
+        return false;
+    }
+
+    const PortraitFrame* StaticPortraitFrameAt(const PortraitClip& Clip, double TimeSeconds)
+    {
+        if (Clip.Frames.empty())
+            return nullptr;
+
+        double TotalSeconds = 0.0;
+        for (const auto& Frame : Clip.Frames)
+            TotalSeconds += std::max(0.01f, Frame.DurationSeconds);
+
+        double LocalTime = TotalSeconds > 0.0 ? std::fmod(TimeSeconds, TotalSeconds) : 0.0;
+        for (const auto& Frame : Clip.Frames)
+        {
+            LocalTime -= std::max(0.01f, Frame.DurationSeconds);
+            if (LocalTime <= 0.0)
+                return &Frame;
+        }
+
+        return &Clip.Frames.back();
+    }
+
+    const PortraitFrame* StreamingPortraitFrameAt(PortraitClip& Clip, double TimeSeconds)
+    {
+        if (!Clip.CurrentFrame.Image.Valid())
+            return nullptr;
+
+        if (Clip.NextFrameTimeSeconds <= 0.0 || TimeSeconds < Clip.NextFrameTimeSeconds - 1.0)
+        {
+            Clip.NextFrameTimeSeconds = TimeSeconds + std::max(0.01f, Clip.CurrentFrame.DurationSeconds);
+            return &Clip.CurrentFrame;
+        }
+
+        int AdvanceBudget = 180;
+        while (TimeSeconds >= Clip.NextFrameTimeSeconds && AdvanceBudget-- > 0)
+        {
+            DecodedVideoFrame Frame = {};
+            if (!Clip.WebmDecoder.ReadNextFrame(Frame))
+            {
+                const size_t NextSegment = Clip.WebmPaths.empty() ? 0 : (Clip.ActiveWebmPath + 1) % Clip.WebmPaths.size();
+                if (!OpenStreamingPortraitSegment(Clip, NextSegment))
+                    break;
+            }
+            else
+            {
+                SetStreamingPortraitFrame(Clip, Frame);
+            }
+
+            Clip.NextFrameTimeSeconds += std::max(0.01f, Clip.CurrentFrame.DurationSeconds);
+        }
+
+        if (AdvanceBudget <= 0)
+            Clip.NextFrameTimeSeconds = TimeSeconds + std::max(0.01f, Clip.CurrentFrame.DurationSeconds);
+
+        return Clip.CurrentFrame.Image.Valid() ? &Clip.CurrentFrame : nullptr;
     }
 }
 
@@ -47,6 +152,34 @@ const PortraitClip* ResourceCache::GetPortraitClip(const std::string& PortraitKe
     auto [It, Inserted] = mUI.PortraitClips.emplace(Key, std::move(Clip));
     (void)Inserted;
     return It->second.Valid() ? &It->second : nullptr;
+}
+
+const PortraitFrame* ResourceCache::GetPortraitFrame(const std::string& PortraitKey, double TimeSeconds)
+{
+    if (PortraitKey.empty())
+        return nullptr;
+
+    const std::string Key = ToLowerCopy(PortraitKey);
+    auto It = mUI.PortraitClips.find(Key);
+    if (It == mUI.PortraitClips.end())
+    {
+        PortraitClip Clip = {};
+        if (!LoadPortraitClip(Key, Clip))
+        {
+            mUI.PortraitClips.emplace(Key, PortraitClip{});
+            return nullptr;
+        }
+
+        It = mUI.PortraitClips.emplace(Key, std::move(Clip)).first;
+    }
+
+    PortraitClip& Clip = It->second;
+    if (!Clip.Valid())
+        return nullptr;
+
+    if (Clip.StreamingWebm)
+        return StreamingPortraitFrameAt(Clip, TimeSeconds);
+    return StaticPortraitFrameAt(Clip, TimeSeconds);
 }
 
 bool ResourceCache::LoadPortraitClip(const std::string& PortraitKey, PortraitClip& OutClip)
@@ -77,32 +210,32 @@ bool ResourceCache::LoadPortraitClip(const std::string& PortraitKey, PortraitCli
     });
 
     PortraitClip Clip = {};
-    for (const auto& ClipPath : Clips)
+    if (!Clips.empty())
     {
-        std::optional<std::vector<DecodedVideoFrame>> FramesOpt;
-        if (mMediaFoundationInitialized)
-            FramesOpt = DecodeVideoFramesFromFile(ClipPath);
-        if (!FramesOpt || FramesOpt->empty())
+        Clip.StreamingWebm = true;
+        Clip.WebmPaths = Clips;
+        if (OpenStreamingPortraitSegment(Clip, 0))
         {
-            Core::Utils::Logger::Warning("ResourceCache",
-                "Failed to decode portrait clip: " + ClipPath.string());
-            continue;
+            size_t EncodedFrames = Clip.WebmDecoder.EncodedFrameCount();
+            for (size_t I = 1; I < Clip.WebmPaths.size(); ++I)
+            {
+                WebmVideoDecoder Probe;
+                if (Probe.Open(Clip.WebmPaths[I]))
+                    EncodedFrames += Probe.EncodedFrameCount();
+            }
+
+            Core::Utils::Logger::Info("ResourceCache",
+                "Loaded portrait clip " + PortraitKey + ": streaming " +
+                std::to_string(Clip.WebmPaths.size()) + " webm files, " +
+                std::to_string(EncodedFrames) + " encoded frames");
+            OutClip = std::move(Clip);
+            return true;
         }
 
-        for (auto& DecodedFrame : *FramesOpt)
-        {
-            PortraitFrame Frame = {};
-            Frame.Image = UploadRgbaFull(DecodedFrame.Image.Width,
-                                         DecodedFrame.Image.Height,
-                                         DecodedFrame.Image.Rgba.data());
-            Frame.DurationSeconds = DecodedFrame.DurationSeconds;
-            if (!Frame.Image.Valid())
-                continue;
-
-            Clip.Width = std::max(Clip.Width, DecodedFrame.Image.Width);
-            Clip.Height = std::max(Clip.Height, DecodedFrame.Image.Height);
-            Clip.Frames.push_back(std::move(Frame));
-        }
+        Core::Utils::Logger::Warning("ResourceCache",
+            "Failed to open streaming portrait webm clip: " + PortraitKey);
+        DestroyImage(Clip.CurrentFrame.Image);
+        Clip = {};
     }
 
     if (!Clip.Valid())

@@ -39,6 +39,42 @@ namespace
         const char* Value = std::getenv("STARCRAFT_DEBUG_SPRITE_LOADS");
         return Value && Value[0] == '1';
     }
+
+    std::vector<uint8_t> ScaleMaskRgbaNearest(const DecodedFrame& Source, int Width, int Height)
+    {
+        if (Source.TeamColorMaskRgba.empty() ||
+            Source.Width <= 0 || Source.Height <= 0 ||
+            Width <= 0 || Height <= 0)
+        {
+            return {};
+        }
+
+        std::vector<uint8_t> Mask((size_t)Width * (size_t)Height * 4u, 0);
+        for (int Y = 0; Y < Height; ++Y)
+        {
+            const int SrcY = std::min(Source.Height - 1, (Y * Source.Height) / Height);
+            for (int X = 0; X < Width; ++X)
+            {
+                const int SrcX = std::min(Source.Width - 1, (X * Source.Width) / Width);
+                const size_t Src = ((size_t)SrcY * (size_t)Source.Width + (size_t)SrcX) * 4u;
+                const size_t Dst = ((size_t)Y * (size_t)Width + (size_t)X) * 4u;
+                Mask[Dst + 0] = Source.TeamColorMaskRgba[Src + 0];
+                Mask[Dst + 1] = Source.TeamColorMaskRgba[Src + 1];
+                Mask[Dst + 2] = Source.TeamColorMaskRgba[Src + 2];
+                Mask[Dst + 3] = Source.TeamColorMaskRgba[Src + 3];
+            }
+        }
+        return Mask;
+    }
+
+    void AttachTeamColorMask(GpuImage& Frame, int Width, int Height, const std::vector<uint8_t>& MaskRgba)
+    {
+        if (MaskRgba.empty())
+            return;
+
+        GpuImage Mask = UploadRgbaFull(Width, Height, MaskRgba.data());
+        Frame.TeamColorMask = Mask;
+    }
 }
 
 const std::vector<GpuImage>* ResourceCache::GetSpriteFrames(uint32_t ImageID)
@@ -59,17 +95,21 @@ const std::vector<GpuImage>* ResourceCache::GetDatImageFrames(uint32_t ImageID)
     auto It = mSprites.FramesByImageId.find(CacheKey);
     if (It != mSprites.FramesByImageId.end()) return &It->second;
 
-    if (const auto* Relation = mData.Loader.FindImageRelationByID(ImageID);
-        Relation && Relation->IsShadow())
-    {
-        auto& Out = mSprites.FramesByImageId[CacheKey];
-        return &Out;
-    }
+    const auto* Relation = mData.Loader.FindImageRelationByID(ImageID);
+    const bool IsShadowSprite = Relation && Relation->IsShadow();
 
     std::string GrpPath = mData.Loader.ResolveImageGrpPath(ImageID);
     if (GrpPath.empty()) return nullptr;
 
-    return LoadSpriteFramesForPath(CacheKey, GrpPath, "DAT image");
+    const std::vector<GpuImage>* Frames = LoadSpriteFramesForPath(CacheKey, GrpPath, "DAT image");
+    if (IsShadowSprite && Frames)
+    {
+        auto CacheIt = mSprites.FramesByImageId.find(CacheKey);
+        if (CacheIt != mSprites.FramesByImageId.end())
+            for (auto& Frame : CacheIt->second)
+                Frame.ShadowSprite = true;
+    }
+    return Frames;
 }
 
 const std::vector<GpuImage>* ResourceCache::GetSpriteOverlayFrames(uint32_t SpriteID)
@@ -84,6 +124,26 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
                                                                     const std::string& GrpPath,
                                                                     const char* DebugLabel)
 {
+    auto ReadClassicGrpData = [&]() -> std::optional<std::vector<uint8_t>>
+    {
+        std::optional<std::vector<uint8_t>> GrpData;
+        if (mSources.IsCasc)
+        {
+            GrpData = ReadFile(GrpPath);
+            if (!GrpData) GrpData = ReadFile("arr/" + GrpPath);
+            if (!GrpData) GrpData = ReadFile("arr\\" + GrpPath);
+            if (!GrpData) GrpData = ReadFile("data/" + GrpPath);
+            if (!GrpData) GrpData = ReadFile("data\\" + GrpPath);
+        }
+        else
+        {
+            GrpData = ReadWithFallback(GrpPath);
+            if (!GrpData) GrpData = ReadWithFallback("arr/" + GrpPath);
+            if (!GrpData) GrpData = ReadWithFallback("data/" + GrpPath);
+        }
+        return GrpData;
+    };
+
     if (!PreferClassicEffectSprite(GrpPath) &&
         GrpPath.size() > 4 &&
         ToLowerCopy(GrpPath.substr(GrpPath.size() - 4)) == ".grp")
@@ -95,10 +155,24 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
             auto HdFrames = LoadDdsGrpRgbaFrames(*HdData);
             if (HdFrames && !HdFrames->empty())
             {
+                std::optional<DecodedSprite> ClassicSprite;
+                if (auto ClassicGrpData = ReadClassicGrpData())
+                    ClassicSprite = DecodeGrpToRgba(*ClassicGrpData, mData.ActivePalette);
+
                 auto& Out = mSprites.FramesByImageId[CacheKey];
                 Out.reserve(HdFrames->size());
-                for (const auto& Frame : *HdFrames)
-                    Out.push_back(UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data()));
+                for (size_t I = 0; I < HdFrames->size(); ++I)
+                {
+                    const auto& FrameData = (*HdFrames)[I];
+                    GpuImage Frame = UploadRgbaFull(FrameData.Width, FrameData.Height, FrameData.Rgba.data());
+                    if (ClassicSprite && I < ClassicSprite->Frames.size())
+                    {
+                        const auto Mask = ScaleMaskRgbaNearest(
+                            ClassicSprite->Frames[I], FrameData.Width, FrameData.Height);
+                        AttachTeamColorMask(Frame, FrameData.Width, FrameData.Height, Mask);
+                    }
+                    Out.push_back(Frame);
+                }
 
                 if (ShouldLogSpriteLoads())
                 {
@@ -116,21 +190,7 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         }
     }
 
-    std::optional<std::vector<uint8_t>> GrpData;
-    if (mSources.IsCasc)
-    {
-        GrpData = ReadFile(GrpPath);
-        if (!GrpData) GrpData = ReadFile("arr/" + GrpPath);
-        if (!GrpData) GrpData = ReadFile("arr\\" + GrpPath);
-        if (!GrpData) GrpData = ReadFile("data/" + GrpPath);
-        if (!GrpData) GrpData = ReadFile("data\\" + GrpPath);
-    }
-    else
-    {
-        GrpData = ReadWithFallback(GrpPath);
-        if (!GrpData) GrpData = ReadWithFallback("arr/" + GrpPath);
-        if (!GrpData) GrpData = ReadWithFallback("data/" + GrpPath);
-    }
+    std::optional<std::vector<uint8_t>> GrpData = ReadClassicGrpData();
     if (!GrpData)
     {
         Core::Utils::Logger::Warning("ResourceCache",
@@ -150,7 +210,9 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
     Out.reserve(SpriteOpt->FrameCount());
     for (auto& F : SpriteOpt->Frames)
     {
-        Out.push_back(UploadRgbaFull(F.Width, F.Height, F.Rgba.data()));
+        GpuImage Frame = UploadRgbaFull(F.Width, F.Height, F.Rgba.data());
+        AttachTeamColorMask(Frame, F.Width, F.Height, F.TeamColorMaskRgba);
+        Out.push_back(Frame);
     }
 
     if (ShouldLogSpriteLoads() && (DebugLabel || (CacheKey >= 100 && CacheKey <= 103)))

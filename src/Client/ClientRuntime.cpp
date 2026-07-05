@@ -215,6 +215,11 @@ void ClientRuntime::AddCampaignPing(Core::Math::Vec2 Position)
     Effects->AddCampaignPing(Position);
 }
 
+const std::vector<CampaignPing>& ClientRuntime::GetCampaignPings() const
+{
+    return Effects->GetCampaignPings();
+}
+
 const std::vector<int>& ClientRuntime::GetSelectedIds() const
 {
     return Selector->GetSelected();

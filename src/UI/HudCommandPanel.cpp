@@ -10,6 +10,7 @@
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Game/Systems/ZergSystem.h"
 #include "UI/HudText.h"
 
 namespace Game::Client::UI
@@ -20,15 +21,15 @@ namespace
     using Game::Systems::TerranResearchId;
 
     constexpr int ZergDrone = 41;
-    constexpr int ZergHatchery = 86;
-    constexpr int ZergLair = 87;
-    constexpr int ZergHive = 88;
+    constexpr int ZergHatchery = 131;
+    constexpr int ZergLair = 132;
+    constexpr int ZergHive = 133;
 
     constexpr int ProtoProbe = 64;
-    constexpr int ProtoGateway = 129;
-    constexpr int ProtoNexus = 126;
-    constexpr int ProtoRoboticsFacility = 134;
-    constexpr int ProtoStargate = 135;
+    constexpr int ProtoNexus = 154;
+    constexpr int ProtoRoboticsFacility = 155;
+    constexpr int ProtoGateway = 160;
+    constexpr int ProtoStargate = 167;
 
     constexpr int IconBuild = 0;
     constexpr int IconBack = 1;
@@ -157,10 +158,17 @@ int Hud::ResolveSelectedTerranDefId(int SelectedEntityId,
                 EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
         {
             if (Building->BuildingDefID >= 0)
-                return Building->BuildingDefID;
+            {
+                const auto Def = Game::Races::GetUnitDefByID(Building->BuildingDefID);
+                return Def.RaceType == Game::Components::Race::Terran
+                    ? Building->BuildingDefID
+                    : -1;
+            }
         }
     }
-    return Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    return Def.RaceType == Game::Components::Race::Terran ? DefID : -1;
 }
 
 void Hud::BuildTerranPage(int SelectedEntityId,
@@ -215,16 +223,20 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
     auto BuildButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Build,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), BuildEnabled(DefId));
+                  IconForDef(DefId), BuildEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Train,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), TrainEnabled(DefId));
+                  IconForDef(DefId), TrainEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     auto ResearchButton = [&](int Slot,
@@ -235,6 +247,9 @@ void Hud::BuildTerranPage(int SelectedEntityId,
         const int PlayerID = PlayerIdForSelection();
         const bool Enabled = EcsEntities && SelectedEntityId > 0 &&
                      UpgradeSystem::CanStartResearch(*EcsEntities, SelectedEntityId, ToResearchId(ResearchId));
+        int MineralCost = 0;
+        int GasCost = 0;
+        UpgradeSystem::GetResearchCost(ToResearchId(ResearchId), PlayerID, MineralCost, GasCost);
         SetButton(Slot,
                   ResearchLabel(PlayerID, ResearchId, BaseLabel),
                   ActionKind::Research,
@@ -242,7 +257,11 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                   HudCommandId::None,
                   ResearchId,
                   IconIndex,
-                  Enabled);
+                  Enabled,
+                  0,
+                  HudVisualId::None,
+                  MineralCost,
+                  GasCost);
     };
 
     const int CommandCenter = Game::Races::GetUnitDefID("CommandCenter");
@@ -320,7 +339,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranUnitCommands:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -329,7 +348,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranMarine:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -338,7 +357,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranFirebat:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -356,7 +375,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranGhost:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -367,7 +386,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranVulture:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -376,7 +395,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranGoliath:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -385,7 +404,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranSiegeTank:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
@@ -394,7 +413,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranWraith:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
@@ -422,7 +441,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranBattlecruiser:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
@@ -431,7 +450,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
 
         case PageTerranValkyrie:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
-            SetCommandButton(1, "Atk Move", HudCommandId::AttackMove, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
@@ -547,23 +566,26 @@ void Hud::BuildZergPage(int SelectedEntityId,
     auto BuildEnabled = [&](int DefId) -> bool
     {
         return EcsEntities && SelectedEntityId > 0 &&
-               Game::Systems::BuildingSystem::CanBuild(
-                   *EcsEntities, SelectedEntityId, DefId,
-                   Game::Systems::BuildTarget{}, nullptr, false);
+               Game::Systems::ZergSystem::CanMorphDroneIntoBuilding(
+                   *EcsEntities, SelectedEntityId, DefId);
     };
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Train,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), TrainEnabled(DefId));
+                  IconForDef(DefId), TrainEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     auto BuildButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Build,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), BuildEnabled(DefId));
+                  IconForDef(DefId), BuildEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     const int Hatchery = Game::Races::GetUnitDefID("Hatchery");
@@ -637,21 +659,26 @@ void Hud::BuildProtossPage(int SelectedEntityId,
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Train,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), TrainEnabled(DefId));
+                  IconForDef(DefId), TrainEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     auto BuildButtonForDef = [&](int Slot, int DefId)
     {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Build,
                   DefId, HudCommandId::None, TerranResearchId::None,
-                  IconForDef(DefId), BuildEnabled(DefId));
+                  IconForDef(DefId), BuildEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
     const int Probe = Game::Races::GetUnitDefID("Probe");
     const int Nexus = Game::Races::GetUnitDefID("Nexus");
     const int Pylon = Game::Races::GetUnitDefID("Pylon");
+    const int Assimilator = Game::Races::GetUnitDefID("Assimilator");
     const int Gateway = Game::Races::GetUnitDefID("Gateway");
     const int Forge = Game::Races::GetUnitDefID("Forge");
     const int Zealot = Game::Races::GetUnitDefID("Zealot");
@@ -682,8 +709,9 @@ void Hud::BuildProtossPage(int SelectedEntityId,
         case PageProtossProbeBuild:
             BuildButtonForDef(0, Nexus);
             BuildButtonForDef(1, Pylon);
-            BuildButtonForDef(2, Gateway);
-            BuildButtonForDef(3, Forge);
+            BuildButtonForDef(2, Assimilator);
+            BuildButtonForDef(3, Gateway);
+            BuildButtonForDef(4, Forge);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
                       TerranResearchId::None, IconBack, true, PageProtossProbeMain);
             break;
