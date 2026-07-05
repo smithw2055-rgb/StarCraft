@@ -40,6 +40,38 @@ namespace
         return Value && Value[0] == '1';
     }
 
+    bool ForceClassicSprites()
+    {
+        const char* Value = std::getenv("STARCRAFT_FORCE_CLASSIC_SPRITES");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    bool HasVisiblePixels(const std::vector<uint8_t>& Rgba)
+    {
+        for (size_t I = 3; I < Rgba.size(); I += 4)
+            if (Rgba[I] != 0)
+                return true;
+        return false;
+    }
+
+    std::string DescribeRgba(const std::vector<uint8_t>& Rgba)
+    {
+        int Visible = 0;
+        int NonBlack = 0;
+        for (size_t I = 0; I + 3 < Rgba.size(); I += 4)
+        {
+            if (Rgba[I + 3] != 0)
+            {
+                ++Visible;
+                if (Rgba[I] != 0 || Rgba[I + 1] != 0 || Rgba[I + 2] != 0)
+                    ++NonBlack;
+            }
+        }
+        return "visible=" + std::to_string(Visible) +
+               " nonblack=" + std::to_string(NonBlack) +
+               " pixels=" + std::to_string(Rgba.size() / 4);
+    }
+
     std::vector<uint8_t> ScaleMaskRgbaNearest(const DecodedFrame& Source, int Width, int Height)
     {
         if (Source.TeamColorMaskRgba.empty() ||
@@ -144,7 +176,8 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         return GrpData;
     };
 
-    if (!PreferClassicEffectSprite(GrpPath) &&
+    if (!ForceClassicSprites() &&
+        !PreferClassicEffectSprite(GrpPath) &&
         GrpPath.size() > 4 &&
         ToLowerCopy(GrpPath.substr(GrpPath.size() - 4)) == ".grp")
     {
@@ -155,6 +188,24 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
             auto HdFrames = LoadDdsGrpRgbaFrames(*HdData);
             if (HdFrames && !HdFrames->empty())
             {
+                bool HdHasTransparentOnlyFrame = false;
+                for (const auto& FrameData : *HdFrames)
+                {
+                    if (!HasVisiblePixels(FrameData.Rgba))
+                    {
+                        HdHasTransparentOnlyFrame = true;
+                        break;
+                    }
+                }
+
+                if (HdHasTransparentOnlyFrame)
+                {
+                    Core::Utils::Logger::Warning("ResourceCache",
+                        "HD unit sprite contains a fully transparent frame: " + HdPath +
+                        "; falling back to classic GRP");
+                }
+                else
+                {
                 std::optional<DecodedSprite> ClassicSprite;
                 if (auto ClassicGrpData = ReadClassicGrpData())
                     ClassicSprite = DecodeGrpToRgba(*ClassicGrpData, mData.ActivePalette);
@@ -174,14 +225,15 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
                     Out.push_back(Frame);
                 }
 
-                if (ShouldLogSpriteLoads())
-                {
-                    Core::Utils::Logger::Info("ResourceCache",
-                        std::string("Loaded HD unit sprite: ") +
-                        (DebugLabel ? DebugLabel : "ImageID") + "=" + std::to_string(CacheKey) +
-                        " -> " + HdPath + " (" + std::to_string(Out.size()) + " frames)");
+                    if (ShouldLogSpriteLoads())
+                    {
+                        Core::Utils::Logger::Info("ResourceCache",
+                            std::string("Loaded HD unit sprite: ") +
+                            (DebugLabel ? DebugLabel : "ImageID") + "=" + std::to_string(CacheKey) +
+                            " -> " + HdPath + " (" + std::to_string(Out.size()) + " frames)");
+                    }
+                    return &Out;
                 }
-                return &Out;
             }
 
             Core::Utils::Logger::Warning("ResourceCache",
@@ -217,10 +269,14 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
 
     if (ShouldLogSpriteLoads() && (DebugLabel || (CacheKey >= 100 && CacheKey <= 103)))
     {
+        const std::string FirstFrameStats = SpriteOpt->Frames.empty()
+            ? std::string("empty")
+            : DescribeRgba(SpriteOpt->Frames.front().Rgba);
         Core::Utils::Logger::Info("ResourceCache",
             "Resource GRP: " + std::string(DebugLabel ? DebugLabel : "ImageID") +
             "=" + std::to_string(CacheKey) +
-            " -> " + GrpPath + " (" + std::to_string(Out.size()) + " frames)");
+            " -> " + GrpPath + " (" + std::to_string(Out.size()) + " frames, " +
+            FirstFrameStats + ")");
     }
     return &Out;
 }

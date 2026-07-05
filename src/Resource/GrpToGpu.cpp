@@ -115,6 +115,18 @@ GpuImage UploadRgbaFull(int Width, int Height, const uint8_t* Rgba)
     GpuImage Out;
     Out.Width = Width;
     Out.Height = Height;
+    if (Rgba && Width > 0 && Height > 0)
+    {
+        const size_t PixelCount = static_cast<size_t>(Width) * static_cast<size_t>(Height);
+        for (size_t I = 0; I < PixelCount; ++I)
+        {
+            if (Rgba[I * 4u + 3u] != 0)
+            {
+                Out.HasVisiblePixels = true;
+                break;
+            }
+        }
+    }
     Out.Image = Render::FromSokol(UploadRgba(Width, Height, Rgba));
     if (Out.Image.id == 0) return Out;
 

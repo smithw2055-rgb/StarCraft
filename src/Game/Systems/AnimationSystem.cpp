@@ -3,9 +3,11 @@
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Components.h"
 #include "Core/Audio/AudioSystem.h"
+#include "Core/Utils/Logger.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace Game::Systems
 {
@@ -14,6 +16,12 @@ using namespace Game::Components;
 
 namespace
 {
+    bool DebugIScriptRuntimeEnabled()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_ISCRIPT_RUNTIME");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
     int DirectionToIScriptDirection(Core::Math::Vec2 Direction)
     {
         if (Direction.Length() <= 0.001f)
@@ -147,10 +155,16 @@ bool AnimationSystem::HasIScriptAnimationForImage(int ImageID, int AnimID)
     if (!ImageInfo || ImageInfo->IScriptID < 0)
         return false;
     const auto* Script = sIScriptDB.FindScript(ImageInfo->IScriptID);
-    return Script &&
-           AnimID >= 0 &&
-           AnimID < (int)Script->AnimationPC.size() &&
-           Script->AnimationPC[(size_t)AnimID] > 0;
+    if (!Script)
+        return false;
+
+    auto HasAnim = [&](int CandidateAnimID) -> bool
+    {
+        return CandidateAnimID >= 0 &&
+               CandidateAnimID < (int)Script->AnimationPC.size() &&
+               Script->AnimationPC[(size_t)CandidateAnimID] > 0;
+    };
+    return ResolvePlayableIScriptAnimation(AnimID, HasAnim) >= 0;
 }
 
 int AnimationSystem::DirectionalFrameIndex(int BaseFrame,
@@ -557,6 +571,8 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     if (!Script)
         return false;
 
+    static int DebugIScriptRuntimeLogs = 80;
+
     auto HasAnim = [&](int AnimID) -> bool
     {
         return AnimID >= 0 &&
@@ -716,6 +732,24 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         {
             State.WasUnderConstruction = false;
         }
+    }
+
+    const bool DebugEntityImportant =
+        Player && (Player->PlayerID == 0 || Player->PlayerID == 1);
+    if (DebugIScriptRuntimeEnabled() && DebugIScriptRuntimeLogs > 0 && DebugEntityImportant)
+    {
+        --DebugIScriptRuntimeLogs;
+        Core::Utils::Logger::Info("IScriptRuntime",
+            "entity=" + std::to_string(EntityID) +
+            " image=" + std::to_string(Render.ImageID) +
+            " script=" + std::to_string(ImageInfo->IScriptID) +
+            " targetAnim=" + std::to_string(TargetAnim) +
+            " frame=" + std::to_string(Render.FrameIndex) +
+            " total=" + std::to_string(Render.TotalFrames) +
+            " init=" + std::to_string(HasAnim(Game::IScriptAnims::Anim_Init) ? 1 : 0) +
+            " starEdit=" + std::to_string(HasAnim(Game::IScriptAnims::Anim_StarEditInit) ? 1 : 0) +
+            " built=" + std::to_string(HasAnim(Game::IScriptAnims::Anim_Built) ? 1 : 0) +
+            " almostBuilt=" + std::to_string(HasAnim(Game::IScriptAnims::Anim_AlmostBuilt) ? 1 : 0));
     }
 
     return true;

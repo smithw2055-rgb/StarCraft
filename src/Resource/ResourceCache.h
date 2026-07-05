@@ -108,6 +108,7 @@ public:
 
     // Entity sprite keys now use CHK unit IDs directly.
     uint32_t ResolveImageID(int ChkUnitID);
+    uint32_t ResolveConstructionImageID(int ChkUnitID);
     uint32_t ResolveSubunitImageID(int ChkUnitID);
 
     // Read .pal via GameDataLoader convenience

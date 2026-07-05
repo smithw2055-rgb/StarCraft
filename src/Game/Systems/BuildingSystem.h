@@ -67,6 +67,7 @@ public:
 
     static void SetMap(const Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
+    static void SetConstructionImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
 
     static bool CanBuild(const Core::ECS::EntityManager& EM,
@@ -107,6 +108,13 @@ public:
                                            Core::Math::Vec2 Position,
                                            int PlayerID,
                                            int ParentBuildingID = -1);
+
+    static int DebugSpawnBuildingUnderConstruction(Core::ECS::EntityManager& EM,
+                                                   int BuildingDefID,
+                                                   Core::Math::Vec2 Position,
+                                                   int PlayerID,
+                                                   int BuilderID,
+                                                   int ParentBuildingID = -1);
 
     static bool IsPlacementValid(Core::ECS::EntityManager& EM,
                                   int BuildingDefID,

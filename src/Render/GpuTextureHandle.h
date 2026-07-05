@@ -20,7 +20,7 @@ struct GpuTextureHandle
     GpuImageHandle Image = {};
     GpuViewHandle View = {};
 
-    bool Valid() const { return Image.id != 0; }
+    bool Valid() const { return Image.id != 0 && View.id != 0; }
 };
 
 } // namespace Render

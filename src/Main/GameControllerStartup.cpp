@@ -56,6 +56,7 @@ void GameController::InitGameSystems()
                 mRuntime.Client.Hud,
                 mRuntime.Session.Campaign,
                 mRuntime.App.Runtime.MapPath,
+                mRuntime.App.Runtime.CampaignRuntimeEnabled,
                 mHasInitialCameraOverride);
         });
 

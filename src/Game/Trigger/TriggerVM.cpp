@@ -1341,9 +1341,13 @@ int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript
             Cmd->TargetEntityID < 0 &&
             Cmd->TargetPosition.DistanceTo(Target) <= kAIScriptRetargetPixels;
         const bool HasActivePath = Path && Path->PathIndex < (int)Path->Path.size();
+        const bool RecentlyFailedSameTarget =
+            Path &&
+            Path->HasRecentMoveFailure &&
+            Path->RecentFailedMoveTarget.DistanceTo(Target) <= kAIScriptRetargetPixels;
         const float NodeTolerance = Path ? Path->NodeTolerance : 0.0f;
         const bool IsAtTarget = Trans->Position.DistanceTo(Target) <= std::max(NodeTolerance, kAIScriptRetargetPixels);
-        if (SameAttackMove && (HasActivePath || IsAtTarget))
+        if ((SameAttackMove && (HasActivePath || IsAtTarget)) || RecentlyFailedSameTarget)
             continue;
 
         Order AttackOrder;

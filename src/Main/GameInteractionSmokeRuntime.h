@@ -21,7 +21,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Game::Client::GameLoop
@@ -30,6 +32,43 @@ namespace Game::Client::GameLoop
 struct GameInteractionSmokeState
 {
     bool Attempted = false;
+};
+
+struct GameInteractionDemoState
+{
+    enum class Stage
+    {
+        Init,
+        HarvestLoop,
+        ProductionQueue,
+        Construction,
+        GasConstruction,
+        GasHarvest,
+        BarracksConstruction,
+        MarineProduction,
+        Research,
+        Observe,
+        Done,
+        Failed
+    };
+
+    bool Enabled = false;
+    bool FrameProbeLogged = false;
+    bool Started = false;
+    Stage CurrentStage = Stage::Init;
+    float StageSeconds = 0.0f;
+    int WorkerID = -1;
+    int ResourceID = -1;
+    int DepotID = -1;
+    int TrainedUnitStartCount = 0;
+    int BuildSiteID = -1;
+    int RefineryID = -1;
+    int GasWorkerID = -1;
+    int BarracksID = -1;
+    int MarineStartCount = 0;
+    int EngineeringBayID = -1;
+    int ResearchStartLevel = 0;
+    int FocusEntityID = -1;
 };
 
 namespace InteractionSmoke
@@ -225,6 +264,27 @@ namespace InteractionSmoke
         {
             const auto& Button = Buttons[(size_t)Index];
             if (Button.Kind == UI::ActionKind::Command && Button.CommandId == CommandID)
+            {
+                if (OutIndex)
+                    *OutIndex = Index;
+                return &Button;
+            }
+        }
+        return nullptr;
+    }
+
+    inline const UI::CmdButtonDef* FindHudButtonByResearch(
+        const UI::Hud& Hud,
+        Game::Systems::TerranResearchId ResearchID,
+        int* OutIndex = nullptr)
+    {
+        const auto& Buttons = Hud.GetButtonDefs();
+        for (int Index = 0; Index < (int)Buttons.size(); ++Index)
+        {
+            const auto& Button = Buttons[(size_t)Index];
+            if ((Button.Kind == UI::ActionKind::Research ||
+                 Button.Kind == UI::ActionKind::Upgrade) &&
+                Button.ResearchId == ResearchID)
             {
                 if (OutIndex)
                     *OutIndex = Index;
@@ -1265,6 +1325,154 @@ namespace InteractionSmoke
         return true;
     }
 
+    inline bool VerifyResearch(GameSession& Session,
+                               Core::ECS::EntityManager& EM,
+                               ClientRuntime& Client,
+                               GuiRuntime& Gui,
+                               UI::Hud& Hud,
+                               int WorkerID,
+                               std::string& Error)
+    {
+        const int EngineeringBayDefID = Game::Races::GetUnitDefID("EngineeringBay");
+        if (EngineeringBayDefID < 0)
+        {
+            Fail(Error, "missing Engineering Bay definition for research verification");
+            return false;
+        }
+
+        auto* WorkerTrans = EM.GetComponent<Game::Components::TransformComponent>(WorkerID);
+        const Core::Math::Vec2 ResearchPos = WorkerTrans
+            ? WorkerTrans->Position + Core::Math::Vec2{96.0f, 64.0f}
+            : Core::Math::Vec2{96.0f, 64.0f};
+
+        const int EngineeringBayID =
+            Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+                EM, EngineeringBayDefID, ResearchPos, 0);
+        if (EngineeringBayID < 0)
+        {
+            Fail(Error, "could not spawn completed Engineering Bay for research verification");
+            return false;
+        }
+        if (!VerifyRenderableEntity(EM, Client, EngineeringBayID,
+                                    "research Engineering Bay", Error))
+        {
+            return false;
+        }
+
+        EnsurePlayerResources(0);
+        Hud.UpdateContext(EM, {EngineeringBayID});
+
+        constexpr Game::Systems::TerranResearchId HudResearchID =
+            Game::Systems::TerranResearchId::InfantryWeapons;
+        constexpr Game::Systems::ResearchId SystemResearchID =
+            Game::Systems::ResearchId::Terran_InfantryWeapons;
+
+        int ResearchButtonIndex = -1;
+        const auto* ResearchButton =
+            FindHudButtonByResearch(Hud, HudResearchID, &ResearchButtonIndex);
+        if (!ResearchButton || !ResearchButton->Enabled)
+        {
+            Fail(Error, "HUD did not expose an enabled Infantry Weapons upgrade button");
+            return false;
+        }
+        if (ResearchButton->Kind != UI::ActionKind::Upgrade)
+        {
+            Fail(Error, "HUD Infantry Weapons button is not marked as an upgrade action");
+            return false;
+        }
+
+        int ExpectedMinerals = 0;
+        int ExpectedGas = 0;
+        if (!Game::Systems::UpgradeSystem::GetResearchCost(
+                SystemResearchID, 0, ExpectedMinerals, ExpectedGas))
+        {
+            Fail(Error, "could not resolve Infantry Weapons upgrade cost");
+            return false;
+        }
+        if (ResearchButton->MineralCost != ExpectedMinerals ||
+            ResearchButton->GasCost != ExpectedGas)
+        {
+            Fail(Error, "HUD Infantry Weapons costs do not match upgrade data");
+            return false;
+        }
+        if (!VerifyHudButtonIcon(Hud, *ResearchButton, "Infantry Weapons upgrade", Error))
+            return false;
+        if (!VerifyGuiCommandClick(
+                Gui, EM, {EngineeringBayID}, Hud, ResearchButtonIndex,
+                "Infantry Weapons upgrade", Error))
+        {
+            return false;
+        }
+
+        auto& Resources = Game::Systems::HarvestSystem::GetResources(0);
+        const int StartMinerals = Resources.Minerals;
+        const int StartGas = Resources.VespeneGas;
+        const int StartLevel =
+            Game::Systems::UpgradeSystem::GetResearchLevel(0, SystemResearchID);
+
+        if (!ExecuteHudCommandIndex(EM, {EngineeringBayID}, Hud, ResearchButtonIndex))
+        {
+            Fail(Error, "HUD Infantry Weapons button did not start upgrade");
+            return false;
+        }
+
+        auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EngineeringBayID);
+        if (!Building || !Building->IsResearching ||
+            Building->ResearchingID != static_cast<int>(SystemResearchID))
+        {
+            Fail(Error, "Engineering Bay did not enter active upgrade state");
+            return false;
+        }
+        if (Resources.Minerals != StartMinerals - ExpectedMinerals ||
+            Resources.VespeneGas != StartGas - ExpectedGas)
+        {
+            Fail(Error, "Infantry Weapons upgrade did not deduct expected resources");
+            return false;
+        }
+
+        TickSystems(Session, 45, 1.0f);
+        const int EndLevel =
+            Game::Systems::UpgradeSystem::GetResearchLevel(0, SystemResearchID);
+        if (EndLevel != StartLevel + 1)
+        {
+            Fail(Error,
+                 "UpgradeSystem did not complete Infantry Weapons upgrade; level=" +
+                     std::to_string(EndLevel) +
+                     " start=" + std::to_string(StartLevel));
+            return false;
+        }
+        if (Building->IsResearching || Building->ResearchingID != -1)
+        {
+            Fail(Error, "Engineering Bay still marked as upgrading after completion");
+            return false;
+        }
+
+        Hud.UpdateContext(EM, {EngineeringBayID});
+        int NextMinerals = 0;
+        int NextGas = 0;
+        Game::Systems::UpgradeSystem::GetResearchCost(
+            SystemResearchID, 0, NextMinerals, NextGas);
+        int NextResearchButtonIndex = -1;
+        const auto* NextResearchButton =
+            FindHudButtonByResearch(Hud, HudResearchID, &NextResearchButtonIndex);
+        if (!NextResearchButton ||
+            NextResearchButton->Kind != UI::ActionKind::Upgrade ||
+            NextResearchButton->MineralCost != NextMinerals ||
+            NextResearchButton->GasCost != NextGas)
+        {
+            Fail(Error, "HUD did not refresh Infantry Weapons next-level upgrade costs");
+            return false;
+        }
+
+        Core::Utils::Logger::Info(
+            "InteractionSmoke",
+            "Interaction smoke completed upgrade=Infantry Weapons level=" +
+                std::to_string(EndLevel) +
+                " building=" + std::to_string(EngineeringBayID));
+        return true;
+    }
+
     inline bool CompleteTerranConstruction(GameSession& Session,
                                            Core::ECS::EntityManager& EM,
                                            int BuildingID,
@@ -1314,6 +1522,237 @@ namespace InteractionSmoke
         return true;
     }
 
+    inline bool VerifyBarracksMarineProduction(GameSession& Session,
+                                               Core::ECS::EntityManager& EM,
+                                               ClientRuntime& Client,
+                                               GuiRuntime& Gui,
+                                               UI::Hud& Hud,
+                                               int WorkerID,
+                                               int& OutBarracksID,
+                                               int& OutMarineID,
+                                               std::string& Error)
+    {
+        const int BarracksDefID = Game::Races::GetUnitDefIDByChkUnitID(0x6F);
+        const int MarineDefID = Game::Races::GetUnitDefIDByChkUnitID(0x00);
+        auto* WorkerTrans = EM.GetComponent<Game::Components::TransformComponent>(WorkerID);
+        if (BarracksDefID < 0 || MarineDefID < 0 || !WorkerTrans)
+        {
+            Fail(Error, "missing Barracks/Marine definitions or worker transform");
+            return false;
+        }
+
+        EnsurePlayerResources(0);
+        Core::Math::Vec2 BuildPos;
+        if (!FindBuildPlacementNear(Session, EM, BarracksDefID, WorkerTrans->Position, 0, BuildPos))
+        {
+            Fail(Error, "could not find a valid Barracks placement");
+            return false;
+        }
+
+        Hud.UpdateContext(EM, {WorkerID});
+        int BarracksButtonIndex = -1;
+        const auto* BarracksButton = FindHudButtonByTarget(
+            Hud, UI::ActionKind::Build, BarracksDefID, &BarracksButtonIndex);
+        if (!BarracksButton)
+        {
+            if (!VerifyGuiCommandClick(Gui, EM, {WorkerID}, Hud, 6,
+                                       "SCV basic build for Barracks", Error))
+            {
+                return false;
+            }
+            if (!ExecuteHudCommandIndex(EM, {WorkerID}, Hud, 6))
+            {
+                Fail(Error, "HUD SCV basic build submenu did not open for Barracks");
+                return false;
+            }
+            Hud.UpdateContext(EM, {WorkerID});
+            BarracksButton = FindHudButtonByTarget(
+                Hud, UI::ActionKind::Build, BarracksDefID, &BarracksButtonIndex);
+        }
+        if (!BarracksButton || !BarracksButton->Enabled)
+        {
+            Fail(Error, "HUD did not expose an enabled Barracks build button");
+            return false;
+        }
+
+        const auto BarracksDef = Game::Races::GetUnitDefByID(BarracksDefID);
+        if (BarracksButton->MineralCost != BarracksDef.MineralCost ||
+            BarracksButton->GasCost != BarracksDef.GasCost)
+        {
+            Fail(Error, "HUD Barracks build button costs do not match race data");
+            return false;
+        }
+        if (!VerifyHudButtonIcon(Hud, *BarracksButton, "Barracks build", Error))
+            return false;
+        if (!VerifyGuiCommandClick(
+                Gui, EM, {WorkerID}, Hud, BarracksButtonIndex, "Barracks build", Error))
+        {
+            return false;
+        }
+
+        auto& Resources = Game::Systems::HarvestSystem::GetResources(0);
+        const int MineralsBeforeBarracks = Resources.Minerals;
+        if (!ExecuteHudCommandIndex(EM, {WorkerID}, Hud, BarracksButtonIndex))
+        {
+            Fail(Error, "HUD Barracks build button did not enter placement mode");
+            return false;
+        }
+        if (!Hud.HasPendingTarget() ||
+            Hud.GetPendingTargetMode() != UI::PendingTargetMode::BuildPlacement ||
+            Hud.GetPendingBuildDefID() != BarracksDefID)
+        {
+            Fail(Error, "HUD Barracks build click did not enter build placement mode");
+            return false;
+        }
+
+        Game::Client::GameLoop::ClickTargetContext EmptyClickTarget;
+        if (!ExecutePendingTargetCommand(
+                EM,
+                {WorkerID},
+                Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(),
+                EmptyClickTarget,
+                BuildPos))
+        {
+            Fail(Error, "HUD Barracks placement command did not start construction");
+            return false;
+        }
+        Hud.CancelPendingTarget();
+        if (Resources.Minerals >= MineralsBeforeBarracks)
+        {
+            Fail(Error, "Barracks construction did not deduct minerals");
+            return false;
+        }
+
+        const int BarracksID = FindBuildingByDefAndBuilder(EM, BarracksDefID, WorkerID);
+        auto* BarracksRender = EM.GetComponent<Game::Components::RenderComponent>(BarracksID);
+        if (!EM.GetComponent<Game::Components::BuildingComponent>(BarracksID) ||
+            !EM.GetComponent<Game::Components::UnitComponent>(BarracksID) ||
+            !BarracksRender)
+        {
+            Fail(Error, "started Barracks missing construction components");
+            return false;
+        }
+        if (!VerifyRenderableEntity(EM, Client, BarracksID, "Barracks construction", Error))
+            return false;
+        if (!VerifyIScriptAnim(BarracksRender->ImageID, Game::IScriptAnims::Anim_AlmostBuilt,
+                               "Barracks construction", Error))
+        {
+            return false;
+        }
+        if (!CompleteTerranConstruction(Session, EM, BarracksID, WorkerID, "Barracks", Error))
+            return false;
+        if (!VerifyIScriptAnim(BarracksRender->ImageID, Game::IScriptAnims::Anim_Built,
+                               "completed Barracks", Error))
+        {
+            return false;
+        }
+
+        Hud.UpdateContext(EM, {BarracksID});
+        int MarineButtonIndex = -1;
+        const auto* MarineButton = FindHudButtonByTarget(
+            Hud, UI::ActionKind::Train, MarineDefID, &MarineButtonIndex);
+        if (!MarineButton || !MarineButton->Enabled)
+        {
+            Fail(Error, "HUD did not expose an enabled Marine train button");
+            return false;
+        }
+
+        const auto MarineDef = Game::Races::GetUnitDefByID(MarineDefID);
+        if (MarineButton->MineralCost != MarineDef.MineralCost ||
+            MarineButton->GasCost != MarineDef.GasCost ||
+            MarineButton->SupplyCost != MarineDef.SupplyCost)
+        {
+            Fail(Error, "HUD Marine train button costs do not match race data");
+            return false;
+        }
+        if (!VerifyHudButtonIcon(Hud, *MarineButton, "Marine train", Error))
+            return false;
+        if (!VerifyGuiCommandClick(
+                Gui, EM, {BarracksID}, Hud, MarineButtonIndex, "Marine train", Error))
+        {
+            return false;
+        }
+
+        const int StartMinerals = Resources.Minerals;
+        const int StartSupplyUsed = Resources.SupplyUsed;
+        const int StartMarines = CountOwnedUnitsByChk(EM, 0, 0x00);
+        if (!ExecuteHudCommandIndex(EM, {BarracksID}, Hud, MarineButtonIndex))
+        {
+            Fail(Error, "HUD Marine train button did not queue training");
+            return false;
+        }
+        if (Resources.Minerals >= StartMinerals)
+        {
+            Fail(Error, "Marine training did not deduct minerals");
+            return false;
+        }
+        if (Resources.SupplyUsed != StartSupplyUsed + MarineDef.SupplyCost)
+        {
+            Fail(Error,
+                 "Marine training did not reserve supply; supply=" +
+                     std::to_string(Resources.SupplyUsed) +
+                     " start=" + std::to_string(StartSupplyUsed) +
+                     " cost=" + std::to_string(MarineDef.SupplyCost));
+            return false;
+        }
+        Hud.UpdateContext(EM, {BarracksID});
+        const auto& QueueInfo = Hud.GetState().InfoPanel;
+        if (QueueInfo.QueueEntries.empty() || QueueInfo.QueueEntries[0] != "Marine")
+        {
+            Fail(Error, "HUD info panel did not expose queued Marine after train click");
+            return false;
+        }
+
+        TickSystems(Session, std::max(1, MarineDef.BuildTime + 2), 1.0f);
+        if (CountOwnedUnitsByChk(EM, 0, 0x00) <= StartMarines)
+        {
+            Fail(Error, "production system did not spawn a trained Marine");
+            return false;
+        }
+        if (Resources.SupplyUsed != StartSupplyUsed + MarineDef.SupplyCost)
+        {
+            Fail(Error,
+                 "completed Marine training did not keep supply occupied; supply=" +
+                     std::to_string(Resources.SupplyUsed) +
+                     " start=" + std::to_string(StartSupplyUsed) +
+                     " cost=" + std::to_string(MarineDef.SupplyCost));
+            return false;
+        }
+        Hud.UpdateContext(EM, {BarracksID});
+        if (!Hud.GetState().InfoPanel.QueueEntries.empty())
+        {
+            Fail(Error, "HUD info panel still showed queued Marine after production completed");
+            return false;
+        }
+
+        const int MarineID = FindNewestOwnedUnitByChk(EM, 0, 0x00);
+        if (!EM.GetComponent<Game::Components::RenderComponent>(MarineID) ||
+            !EM.GetComponent<Game::Components::PathfindingComponent>(MarineID))
+        {
+            Fail(Error, "trained Marine missing render or pathfinding components");
+            return false;
+        }
+        if (!VerifyRenderableEntity(EM, Client, MarineID, "trained Marine", Error))
+            return false;
+        if (auto* Render = EM.GetComponent<Game::Components::RenderComponent>(MarineID))
+        {
+            if (!VerifyIScriptAnim(Render->ImageID, Game::IScriptAnims::Anim_Init,
+                                   "trained Marine", Error))
+            {
+                return false;
+            }
+        }
+
+        OutBarracksID = BarracksID;
+        OutMarineID = MarineID;
+        Core::Utils::Logger::Info(
+            "InteractionSmoke",
+            "Interaction smoke trained Marine=" + std::to_string(MarineID) +
+                " from barracks=" + std::to_string(BarracksID));
+        return true;
+    }
+
     inline bool VerifyCampaignVictoryClosure(GameSession& Session,
                                              CampaignRuntime& Campaign,
                                              Core::ECS::EntityManager& EM,
@@ -1323,6 +1762,36 @@ namespace InteractionSmoke
                                              int WorkerID,
                                              std::string& Error)
     {
+        auto& Controller = Campaign.Controller();
+        if (Controller.GetState() == Game::Campaign::CampaignState::Victory)
+        {
+            const auto& Objectives = Controller.GetObjectives();
+            if (Objectives.empty())
+            {
+                Fail(Error, "campaign victory left objectives empty");
+                return false;
+            }
+            for (const auto& Objective : Objectives)
+            {
+                if (!Objective.Complete)
+                {
+                    Fail(Error, "campaign victory did not complete every objective");
+                    return false;
+                }
+            }
+            Core::Utils::Logger::Info(
+                "InteractionSmoke",
+                "Interaction smoke campaign already in victory: objectives=" +
+                    std::to_string(Objectives.size()));
+            return true;
+        }
+        if (Controller.GetState() == Game::Campaign::CampaignState::Defeat ||
+            Controller.GetState() == Game::Campaign::CampaignState::Draw)
+        {
+            Fail(Error, "campaign entered a non-victory outcome before closure");
+            return false;
+        }
+
         const int RaynorID = FindNewestUnitByChk(EM, 19);
         if (RaynorID < 0)
         {
@@ -1489,7 +1958,6 @@ namespace InteractionSmoke
             return false;
         }
 
-        auto& Controller = Campaign.Controller();
         for (int I = 0;
              I < 10 && Controller.GetState() == Game::Campaign::CampaignState::Playing &&
              !Controller.GetLeaderboard().Active;
@@ -1727,7 +2195,8 @@ namespace InteractionSmoke
             Fail(Error, "campaign script mission name does not match CHK scenario name");
             return false;
         }
-        if (Controller.GetState() != Game::Campaign::CampaignState::Playing)
+        if (Controller.GetState() == Game::Campaign::CampaignState::Defeat ||
+            Controller.GetState() == Game::Campaign::CampaignState::Draw)
         {
             Fail(Error, "campaign script entered an outcome state during interaction smoke");
             return false;
@@ -1750,7 +2219,8 @@ namespace InteractionSmoke
                 " locations=" + std::to_string(TriggerVM->GetLocationCount()) +
                 " objectives=" + std::to_string(Objectives.size()) +
                 " messages=" + std::to_string(Messages.size()) +
-                " mission=\"" + Controller.GetMissionName() + "\"");
+                " mission=\"" + Controller.GetMissionName() + "\"" +
+                " state=" + std::to_string((int)Controller.GetState()));
         return true;
     }
 
@@ -1956,6 +2426,15 @@ namespace InteractionSmoke
         int BuiltBuildingID = -1;
         if (!VerifyBuildingConstruction(Session, EM, Client, Gui, Hud, WorkerID, BuiltBuildingID, Error))
             return false;
+        if (!VerifyResearch(Session, EM, Client, Gui, Hud, WorkerID, Error))
+            return false;
+        int BarracksID = -1;
+        int MarineID = -1;
+        if (!VerifyBarracksMarineProduction(
+                Session, EM, Client, Gui, Hud, WorkerID, BarracksID, MarineID, Error))
+        {
+            return false;
+        }
         if (!IsAliveUnit(EM, AttackerID) || !IsAliveUnit(EM, TargetID))
         {
             Core::Math::Vec2 RefreshedCombatCenter = {0.0f, 0.0f};
@@ -1986,6 +2465,8 @@ namespace InteractionSmoke
                 " depot=" + std::to_string(DepotID) +
                 " trained=" + std::to_string(TrainedUnitID) +
                 " building=" + std::to_string(BuiltBuildingID) +
+                " barracks=" + std::to_string(BarracksID) +
+                " marine=" + std::to_string(MarineID) +
                 " attacker=" + std::to_string(AttackerID) +
                 " target=" + std::to_string(TargetID));
         return true;
@@ -2008,6 +2489,1042 @@ inline void RunInteractionSmokeIfRequested(GameInteractionSmokeState& State,
     std::string Error;
     if (!InteractionSmoke::Run(Session, Campaign, Client, Gui, Hud, Error))
         Core::Utils::Logger::Error("InteractionSmoke", "Interaction smoke failed: " + Error);
+}
+
+namespace InteractionDemo
+{
+    inline bool IsEnabled(const GameInteractionDemoState& State)
+    {
+        if (State.Enabled)
+            return true;
+        const char* Value = std::getenv("STARCRAFT_INTERACTION_DEMO");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    inline const char* StageName(GameInteractionDemoState::Stage Stage)
+    {
+        using StageT = GameInteractionDemoState::Stage;
+        switch (Stage)
+        {
+            case StageT::Init: return "init";
+            case StageT::HarvestLoop: return "harvest";
+            case StageT::ProductionQueue: return "production";
+            case StageT::Construction: return "construction";
+            case StageT::GasConstruction: return "gas construction";
+            case StageT::GasHarvest: return "gas harvest";
+            case StageT::BarracksConstruction: return "barracks";
+            case StageT::MarineProduction: return "marine production";
+            case StageT::Research: return "research";
+            case StageT::Observe: return "observe";
+            case StageT::Done: return "done";
+            case StageT::Failed: return "failed";
+        }
+        return "unknown";
+    }
+
+    inline void SetStage(GameInteractionDemoState& State,
+                         GameInteractionDemoState::Stage Stage)
+    {
+        State.CurrentStage = Stage;
+        State.StageSeconds = 0.0f;
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            std::string("demo stage: ") + StageName(Stage));
+    }
+
+    inline void Fail(GameInteractionDemoState& State, const std::string& Message)
+    {
+        Core::Utils::Logger::Error("InteractionDemo", "demo failed: " + Message);
+        SetStage(State, GameInteractionDemoState::Stage::Failed);
+    }
+
+    inline std::string SelectionEntityName(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+        if (!Unit)
+            return "Unknown";
+
+        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        if (DefID < 0)
+            return "CHK_" + std::to_string(Unit->ChkUnitID);
+
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        return Def.Name.empty() ? ("CHK_" + std::to_string(Unit->ChkUnitID)) : Def.Name;
+    }
+
+    inline const char* SelectionEntityKind(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (EM.GetComponent<Game::Components::ResourceComponent>(EntityID))
+            return "resource";
+        if (EM.GetComponent<Game::Components::BuildingComponent>(EntityID))
+            return "building";
+        if (EM.GetComponent<Game::Components::UnitComponent>(EntityID))
+            return "unit";
+        return "entity";
+    }
+
+    inline void LogDemoSelection(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+        if (!Unit)
+            return;
+
+        auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+        Core::Utils::Logger::Info(
+            "SelectionTrace",
+            "demo selected id=" + std::to_string(EntityID) +
+                " kind=" + SelectionEntityKind(EM, EntityID) +
+                " name=" + SelectionEntityName(EM, EntityID) +
+                " chk=" + std::to_string(Unit->ChkUnitID) +
+                " player=" + std::to_string(Player ? Player->PlayerID : -1) +
+                " pos=" + std::to_string(Trans ? (int)Trans->Position.X : 0) +
+                "," + std::to_string(Trans ? (int)Trans->Position.Y : 0));
+    }
+
+    inline void SelectAndFocus(GameInteractionDemoState& State,
+                               ClientRuntime& Client,
+                               Core::ECS::EntityManager& EM,
+                               int EntityID)
+    {
+        if (EntityID < 0 || !EM.IsAlive(EntityID))
+            return;
+        const bool SelectionChanged = State.FocusEntityID != EntityID;
+        State.FocusEntityID = EntityID;
+        if (SelectionChanged)
+        {
+            Client.SetSelectedIdsForDemo({EntityID});
+            LogDemoSelection(EM, EntityID);
+        }
+        if (auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID))
+            Client.CenterCamera(Trans->Position.X, Trans->Position.Y);
+    }
+
+    inline void KeepFocus(GameInteractionDemoState& State,
+                          ClientRuntime& Client,
+                          Core::ECS::EntityManager& EM)
+    {
+        if (State.FocusEntityID < 0 || !EM.IsAlive(State.FocusEntityID))
+            return;
+        if (auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(State.FocusEntityID))
+            Client.CenterCamera(Trans->Position.X, Trans->Position.Y);
+    }
+
+    inline bool StartHarvest(GameInteractionDemoState& State,
+                             GameSession& Session,
+                             ClientRuntime& Client,
+                             UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        SelectAndFocus(State, Client, EM, State.WorkerID);
+        Hud.UpdateContext(EM, {State.WorkerID});
+        int HarvestButtonIndex = -1;
+        const auto* HarvestButton = InteractionSmoke::FindHudButtonByCommand(
+            Hud, UI::HudCommandId::Harvest, &HarvestButtonIndex);
+        if (!HarvestButton || !HarvestButton->Enabled)
+            return false;
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, HarvestButtonIndex))
+            return false;
+        auto* ResourceTrans =
+            EM.GetComponent<Game::Components::TransformComponent>(State.ResourceID);
+        if (!ResourceTrans)
+            return false;
+        auto Target = Client.ResolveClickTargetContext(
+            EM, {State.WorkerID}, ResourceTrans->Position);
+        if (!ExecutePendingTargetCommand(
+                EM,
+                {State.WorkerID},
+                Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(),
+                Target,
+                ResourceTrans->Position))
+        {
+            return false;
+        }
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo issued harvest worker=" + std::to_string(State.WorkerID) +
+                " resource=" + std::to_string(State.ResourceID));
+        return true;
+    }
+
+    inline bool StartProduction(GameInteractionDemoState& State,
+                                GameSession& Session,
+                                ClientRuntime& Client,
+                                UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        SelectAndFocus(State, Client, EM, State.DepotID);
+        Hud.UpdateContext(EM, {State.DepotID});
+
+        const int ScvDefID = Game::Races::GetUnitDefID("SCV");
+        int TrainButtonIndex = -1;
+        const auto* TrainButton = InteractionSmoke::FindHudButtonByTarget(
+            Hud, UI::ActionKind::Train, ScvDefID, &TrainButtonIndex);
+        if (!TrainButton || !TrainButton->Enabled)
+            return false;
+
+        State.TrainedUnitStartCount =
+            InteractionSmoke::CountOwnedUnitsByChk(EM, 0, 0x07);
+        if (!ExecuteHudCommandIndex(EM, {State.DepotID}, Hud, TrainButtonIndex))
+            return false;
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo queued SCV production depot=" + std::to_string(State.DepotID));
+        return true;
+    }
+
+    inline bool StartConstruction(GameInteractionDemoState& State,
+                                  GameSession& Session,
+                                  ClientRuntime& Client,
+                                  UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        const int SupplyDepotDefID = Game::Races::GetUnitDefID("SupplyDepot");
+        auto* WorkerTrans = EM.GetComponent<Game::Components::TransformComponent>(State.WorkerID);
+        if (SupplyDepotDefID < 0 || !WorkerTrans)
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: missing Supply Depot def or worker transform");
+            return false;
+        }
+
+        Core::Math::Vec2 PlacementCenter = WorkerTrans->Position;
+        Core::Math::Vec2 BuildPos;
+        if (!InteractionSmoke::FindBuildPlacementNear(
+                Session, EM, SupplyDepotDefID, PlacementCenter, 0, BuildPos))
+        {
+            BuildPos = PlacementCenter + Core::Math::Vec2{192.0f, 96.0f};
+            State.BuildSiteID =
+                Game::Systems::BuildingSystem::DebugSpawnBuildingUnderConstruction(
+                    EM, SupplyDepotDefID, BuildPos, 0, State.WorkerID);
+            if (State.BuildSiteID < 0)
+            {
+                Core::Utils::Logger::Warning(
+                    "InteractionDemo",
+                    "demo construction failed: no valid Supply Depot placement near base");
+                return false;
+            }
+            if (auto* NewWorkerTrans =
+                    EM.GetComponent<Game::Components::TransformComponent>(State.WorkerID))
+            {
+                NewWorkerTrans->Position = BuildPos + Core::Math::Vec2{24.0f, 0.0f};
+            }
+            SelectAndFocus(State, Client, EM, State.BuildSiteID);
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo fallback spawned under-construction Supply Depot entity=" +
+                    std::to_string(State.BuildSiteID));
+            return true;
+        }
+
+        SelectAndFocus(State, Client, EM, State.WorkerID);
+        Hud.UpdateContext(EM, {State.WorkerID});
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, 6))
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: SCV basic build submenu did not open");
+            return false;
+        }
+        Hud.UpdateContext(EM, {State.WorkerID});
+
+        int BuildButtonIndex = -1;
+        const auto* BuildButton = InteractionSmoke::FindHudButtonByTarget(
+            Hud, UI::ActionKind::Build, SupplyDepotDefID, &BuildButtonIndex);
+        if (!BuildButton || !BuildButton->Enabled)
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: Supply Depot build button unavailable");
+            return false;
+        }
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, BuildButtonIndex))
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: Supply Depot build button did not enter placement");
+            return false;
+        }
+
+        Game::Client::GameLoop::ClickTargetContext EmptyTarget;
+        if (!ExecutePendingTargetCommand(
+                EM,
+                {State.WorkerID},
+                Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(),
+                EmptyTarget,
+                BuildPos))
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: placement command rejected at " +
+                    std::to_string((int)BuildPos.X) + "," +
+                    std::to_string((int)BuildPos.Y));
+            return false;
+        }
+        Hud.CancelPendingTarget();
+        State.BuildSiteID = InteractionSmoke::FindBuildingByDefAndBuilder(
+            EM, SupplyDepotDefID, State.WorkerID);
+        if (State.BuildSiteID < 0)
+        {
+            Core::Utils::Logger::Warning(
+                "InteractionDemo",
+                "demo construction failed: build site not created for worker");
+            return false;
+        }
+        SelectAndFocus(State, Client, EM, State.BuildSiteID);
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo started Supply Depot construction entity=" +
+                std::to_string(State.BuildSiteID));
+        return true;
+    }
+
+    inline int FindNearestGeyser(Core::ECS::EntityManager& EM, Core::Math::Vec2 Center);
+    inline int FindAvailableScvNear(Core::ECS::EntityManager& EM,
+                                    int PlayerID,
+                                    Core::Math::Vec2 Center,
+                                    int ExcludedID = -1);
+
+    inline bool StartRefineryConstruction(GameInteractionDemoState& State,
+                                          GameSession& Session,
+                                          ClientRuntime& Client,
+                                          UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
+        Core::Math::Vec2 Center{0.0f, 0.0f};
+        if (auto* DepotTrans = EM.GetComponent<Game::Components::TransformComponent>(State.DepotID))
+            Center = DepotTrans->Position;
+        const int GeyserID = FindNearestGeyser(EM, Center);
+        if (RefineryDefID < 0 || GeyserID < 0)
+            return false;
+
+        State.WorkerID = FindAvailableScvNear(EM, 0, Center);
+        if (State.WorkerID < 0)
+            return false;
+
+        SelectAndFocus(State, Client, EM, State.WorkerID);
+        Hud.UpdateContext(EM, {State.WorkerID});
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, 6))
+            return false;
+        Hud.UpdateContext(EM, {State.WorkerID});
+
+        int BuildButtonIndex = -1;
+        const auto* BuildButton = InteractionSmoke::FindHudButtonByTarget(
+            Hud, UI::ActionKind::Build, RefineryDefID, &BuildButtonIndex);
+        if (!BuildButton || !BuildButton->Enabled)
+            return false;
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, BuildButtonIndex))
+            return false;
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.AnyEntityID = GeyserID;
+        Target.ResourceEntityID = GeyserID;
+        Core::Math::Vec2 TargetPos{0.0f, 0.0f};
+        if (auto* GeyserTrans = EM.GetComponent<Game::Components::TransformComponent>(GeyserID))
+            TargetPos = GeyserTrans->Position;
+        if (!ExecutePendingTargetCommand(
+                EM,
+                {State.WorkerID},
+                Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(),
+                Target,
+                TargetPos))
+        {
+            return false;
+        }
+        Hud.CancelPendingTarget();
+        State.RefineryID = GeyserID;
+        SelectAndFocus(State, Client, EM, State.RefineryID);
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo started Refinery construction entity=" +
+                std::to_string(State.RefineryID) +
+                " worker=" + std::to_string(State.WorkerID));
+        return true;
+    }
+
+    inline bool StartGasHarvest(GameInteractionDemoState& State,
+                                GameSession& Session,
+                                ClientRuntime& Client,
+                                UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        if (State.RefineryID < 0 || !EM.IsAlive(State.RefineryID))
+            return false;
+        auto* RefineryBuilding =
+            EM.GetComponent<Game::Components::BuildingComponent>(State.RefineryID);
+        if (!RefineryBuilding || RefineryBuilding->UnderConstruction)
+            return false;
+
+        Core::Math::Vec2 Center{0.0f, 0.0f};
+        if (auto* RefineryTrans =
+                EM.GetComponent<Game::Components::TransformComponent>(State.RefineryID))
+            Center = RefineryTrans->Position;
+        State.GasWorkerID = FindAvailableScvNear(EM, 0, Center);
+        if (State.GasWorkerID < 0)
+            State.GasWorkerID = State.WorkerID;
+        if (State.GasWorkerID < 0 ||
+            !Game::Systems::HarvestSystem::IssueHarvest(EM, {State.GasWorkerID}, State.RefineryID))
+        {
+            return false;
+        }
+        SelectAndFocus(State, Client, EM, State.GasWorkerID);
+        Hud.UpdateContext(EM, {State.GasWorkerID});
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo issued gas harvest worker=" + std::to_string(State.GasWorkerID) +
+                " refinery=" + std::to_string(State.RefineryID));
+        return true;
+    }
+
+    inline bool StartBarracksConstruction(GameInteractionDemoState& State,
+                                          GameSession& Session,
+                                          ClientRuntime& Client,
+                                          UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        const int BarracksDefID = Game::Races::GetUnitDefID("Barracks");
+        Core::Math::Vec2 Center{0.0f, 0.0f};
+        if (auto* DepotTrans = EM.GetComponent<Game::Components::TransformComponent>(State.DepotID))
+            Center = DepotTrans->Position;
+        const int WorkerID = FindAvailableScvNear(EM, 0, Center, State.GasWorkerID);
+        if (BarracksDefID < 0 || WorkerID < 0)
+            return false;
+
+        auto* WorkerTrans = EM.GetComponent<Game::Components::TransformComponent>(WorkerID);
+        Core::Math::Vec2 BuildPos;
+        if (!WorkerTrans ||
+            !InteractionSmoke::FindBuildPlacementNear(Session, EM, BarracksDefID,
+                WorkerTrans->Position, 0, BuildPos))
+        {
+            return false;
+        }
+
+        State.WorkerID = WorkerID;
+        SelectAndFocus(State, Client, EM, State.WorkerID);
+        Hud.UpdateContext(EM, {State.WorkerID});
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, 6))
+            return false;
+        Hud.UpdateContext(EM, {State.WorkerID});
+
+        int BuildButtonIndex = -1;
+        const auto* BuildButton = InteractionSmoke::FindHudButtonByTarget(
+            Hud, UI::ActionKind::Build, BarracksDefID, &BuildButtonIndex);
+        if (!BuildButton || !BuildButton->Enabled)
+            return false;
+        if (!ExecuteHudCommandIndex(EM, {State.WorkerID}, Hud, BuildButtonIndex))
+            return false;
+
+        Game::Client::GameLoop::ClickTargetContext EmptyTarget;
+        if (!ExecutePendingTargetCommand(
+                EM,
+                {State.WorkerID},
+                Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(),
+                EmptyTarget,
+                BuildPos))
+        {
+            return false;
+        }
+        Hud.CancelPendingTarget();
+        State.BarracksID = InteractionSmoke::FindBuildingByDefAndBuilder(
+            EM, BarracksDefID, State.WorkerID);
+        if (State.BarracksID < 0)
+            return false;
+        SelectAndFocus(State, Client, EM, State.BarracksID);
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo started Barracks construction entity=" +
+                std::to_string(State.BarracksID) +
+                " worker=" + std::to_string(State.WorkerID));
+        return true;
+    }
+
+    inline bool StartMarineProduction(GameInteractionDemoState& State,
+                                      GameSession& Session,
+                                      ClientRuntime& Client,
+                                      UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        const int MarineDefID = Game::Races::GetUnitDefID("Marine");
+        if (State.BarracksID < 0 || MarineDefID < 0)
+            return false;
+        State.MarineStartCount = InteractionSmoke::CountOwnedUnitsByChk(EM, 0, 0x00);
+        SelectAndFocus(State, Client, EM, State.BarracksID);
+        Hud.UpdateContext(EM, {State.BarracksID});
+        int MarineButtonIndex = -1;
+        const auto* MarineButton = InteractionSmoke::FindHudButtonByTarget(
+            Hud, UI::ActionKind::Train, MarineDefID, &MarineButtonIndex);
+        if (!MarineButton || !MarineButton->Enabled)
+            return false;
+        if (!ExecuteHudCommandIndex(EM, {State.BarracksID}, Hud, MarineButtonIndex))
+            return false;
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo queued Marine production barracks=" +
+                std::to_string(State.BarracksID));
+        return true;
+    }
+
+    inline bool EnsureResearchBuilding(GameInteractionDemoState& State,
+                                       GameSession& Session)
+    {
+        if (State.EngineeringBayID >= 0 &&
+            Session.Entities().IsAlive(State.EngineeringBayID))
+        {
+            return true;
+        }
+
+        auto& EM = Session.Entities();
+        const int EngineeringBayDefID = Game::Races::GetUnitDefID("EngineeringBay");
+        if (EngineeringBayDefID < 0)
+            return false;
+
+        Core::Math::Vec2 Position{128.0f, 128.0f};
+        if (auto* DepotTrans =
+                EM.GetComponent<Game::Components::TransformComponent>(State.DepotID))
+        {
+            Position = DepotTrans->Position + Core::Math::Vec2{160.0f, 96.0f};
+        }
+        State.EngineeringBayID =
+            Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+                EM, EngineeringBayDefID, Position, 0);
+        return State.EngineeringBayID >= 0;
+    }
+
+    inline bool StartResearch(GameInteractionDemoState& State,
+                              GameSession& Session,
+                              ClientRuntime& Client,
+                              UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        if (!EnsureResearchBuilding(State, Session))
+            return false;
+
+        SelectAndFocus(State, Client, EM, State.EngineeringBayID);
+        Hud.UpdateContext(EM, {State.EngineeringBayID});
+        int ResearchButtonIndex = -1;
+        const auto* ResearchButton = InteractionSmoke::FindHudButtonByResearch(
+            Hud,
+            Game::Systems::TerranResearchId::InfantryWeapons,
+            &ResearchButtonIndex);
+        if (!ResearchButton || !ResearchButton->Enabled)
+            return false;
+        if (ResearchButton->Kind != UI::ActionKind::Upgrade)
+            return false;
+
+        State.ResearchStartLevel = Game::Systems::UpgradeSystem::GetResearchLevel(
+            0, Game::Systems::ResearchId::Terran_InfantryWeapons);
+        if (!ExecuteHudCommandIndex(EM, {State.EngineeringBayID}, Hud, ResearchButtonIndex))
+            return false;
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo started Infantry Weapons upgrade building=" +
+                std::to_string(State.EngineeringBayID));
+        return true;
+    }
+
+    inline float DistanceSq(const Core::Math::Vec2& A, const Core::Math::Vec2& B)
+    {
+        const Core::Math::Vec2 Delta = A - B;
+        return Delta.X * Delta.X + Delta.Y * Delta.Y;
+    }
+
+    inline int FindOwnedCommandCenter(Core::ECS::EntityManager& EM, int PlayerID)
+    {
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::UnitComponent,
+                                               Game::Components::BuildingComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+            if (!Unit || !InteractionSmoke::IsOwnedBy(EM, EntityID, PlayerID) ||
+                !InteractionSmoke::IsAliveUnit(EM, EntityID))
+            {
+                continue;
+            }
+
+            const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+            if (DefID < 0)
+                continue;
+            const auto Def = Game::Races::GetUnitDefByID(DefID);
+            if (Def.Name == "CommandCenter")
+                return EntityID;
+        }
+        return -1;
+    }
+
+    inline int FindNearestMineral(Core::ECS::EntityManager& EM, Core::Math::Vec2 Center)
+    {
+        int BestID = -1;
+        float BestDistSq = std::numeric_limits<float>::max();
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::ResourceComponent>())
+        {
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityID);
+            if (!Trans || !Resource || Resource->IsDepleted || Resource->Amount <= 0 ||
+                Resource->Type != Game::Components::ResourceType::Minerals)
+            {
+                continue;
+            }
+
+            const float DistSq = DistanceSq(Trans->Position, Center);
+            if (DistSq < BestDistSq)
+            {
+                BestDistSq = DistSq;
+                BestID = EntityID;
+            }
+        }
+        return BestID;
+    }
+
+    inline int FindNearestGeyser(Core::ECS::EntityManager& EM, Core::Math::Vec2 Center)
+    {
+        int BestID = -1;
+        float BestDistSq = std::numeric_limits<float>::max();
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::ResourceComponent>())
+        {
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityID);
+            if (!Trans || !Resource || Resource->IsDepleted || Resource->Amount <= 0 ||
+                Resource->Type != Game::Components::ResourceType::VespeneGas)
+            {
+                continue;
+            }
+
+            if (auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID))
+            {
+                if (Building->BuildingDefID == Game::Races::GetUnitDefID("Refinery") ||
+                    Building->BuildingDefID == Game::Races::GetUnitDefID("Extractor") ||
+                    Building->BuildingDefID == Game::Races::GetUnitDefID("Assimilator"))
+                {
+                    continue;
+                }
+            }
+
+            const float DistSq = DistanceSq(Trans->Position, Center);
+            if (DistSq < BestDistSq)
+            {
+                BestDistSq = DistSq;
+                BestID = EntityID;
+            }
+        }
+        return BestID;
+    }
+
+    inline int FindAvailableScvNear(Core::ECS::EntityManager& EM,
+                                    int PlayerID,
+                                    Core::Math::Vec2 Center,
+                                    int ExcludedID)
+    {
+        int BestID = -1;
+        float BestDistSq = std::numeric_limits<float>::max();
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::UnitComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            if (EntityID == ExcludedID)
+                continue;
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+            if (!Trans || !Unit || Unit->ChkUnitID != 0x07 ||
+                !InteractionSmoke::IsOwnedBy(EM, EntityID, PlayerID) ||
+                !InteractionSmoke::IsAliveUnit(EM, EntityID))
+            {
+                continue;
+            }
+
+            bool BusyConstructing = false;
+            for (int BuildingID : EM.GetEntitiesWith<Game::Components::BuildingComponent,
+                                                     Game::Components::UnitComponent>())
+            {
+                auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(BuildingID);
+                auto* BuildingUnit = EM.GetComponent<Game::Components::UnitComponent>(BuildingID);
+                if (Building && BuildingUnit && Building->UnderConstruction &&
+                    Building->BuilderUnitID == EntityID && BuildingUnit->HitPoints > 0)
+                {
+                    BusyConstructing = true;
+                    break;
+                }
+            }
+            if (BusyConstructing)
+                continue;
+
+            const float DistSq = DistanceSq(Trans->Position, Center);
+            if (DistSq < BestDistSq)
+            {
+                BestDistSq = DistSq;
+                BestID = EntityID;
+            }
+        }
+        return BestID;
+    }
+
+    inline std::vector<int> FindNearbyMinerals(Core::ECS::EntityManager& EM,
+                                               Core::Math::Vec2 Center,
+                                               int MaxCount)
+    {
+        std::vector<std::pair<float, int>> Ranked;
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::ResourceComponent>())
+        {
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityID);
+            if (!Trans || !Resource || Resource->IsDepleted || Resource->Amount <= 0 ||
+                Resource->Type != Game::Components::ResourceType::Minerals)
+            {
+                continue;
+            }
+            Ranked.emplace_back(DistanceSq(Trans->Position, Center), EntityID);
+        }
+        std::sort(Ranked.begin(), Ranked.end(),
+            [](const auto& A, const auto& B) { return A.first < B.first; });
+
+        std::vector<int> Result;
+        for (const auto& Entry : Ranked)
+        {
+            Result.push_back(Entry.second);
+            if ((int)Result.size() >= MaxCount)
+                break;
+        }
+        return Result;
+    }
+
+    inline std::vector<int> FindHarvestWorkersNear(Core::ECS::EntityManager& EM,
+                                                   int PlayerID,
+                                                   int ResourceID,
+                                                   Core::Math::Vec2 Center,
+                                                   int MaxCount)
+    {
+        std::vector<std::pair<float, int>> Ranked;
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::UnitComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+            if (!Trans || !Unit || !InteractionSmoke::IsOwnedBy(EM, EntityID, PlayerID) ||
+                !InteractionSmoke::IsAliveUnit(EM, EntityID) ||
+                !Game::Systems::HarvestSystem::CanHarvest(EM, EntityID, ResourceID))
+            {
+                continue;
+            }
+            Ranked.emplace_back(DistanceSq(Trans->Position, Center), EntityID);
+        }
+        std::sort(Ranked.begin(), Ranked.end(),
+            [](const auto& A, const auto& B) { return A.first < B.first; });
+
+        std::vector<int> Result;
+        for (const auto& Entry : Ranked)
+        {
+            Result.push_back(Entry.second);
+            if ((int)Result.size() >= MaxCount)
+                break;
+        }
+        return Result;
+    }
+
+    inline int FindWorkerNear(Core::ECS::EntityManager& EM,
+                              int PlayerID,
+                              int ResourceID,
+                              Core::Math::Vec2 Center)
+    {
+        int BestID = -1;
+        float BestDistSq = std::numeric_limits<float>::max();
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                               Game::Components::UnitComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+            if (!Trans || !Unit || !InteractionSmoke::IsOwnedBy(EM, EntityID, PlayerID) ||
+                !InteractionSmoke::IsAliveUnit(EM, EntityID) ||
+                !Game::Systems::HarvestSystem::CanHarvest(EM, EntityID, ResourceID))
+            {
+                continue;
+            }
+
+            const float DistSq = DistanceSq(Trans->Position, Center);
+            if (DistSq < BestDistSq)
+            {
+                BestDistSq = DistSq;
+                BestID = EntityID;
+            }
+        }
+        return BestID;
+    }
+
+    inline bool Begin(GameInteractionDemoState& State,
+                      GameSession& Session,
+                      ClientRuntime& Client,
+                      UI::Hud& Hud)
+    {
+        auto& EM = Session.Entities();
+        State.DepotID = FindOwnedCommandCenter(EM, 0);
+        Core::Math::Vec2 StartCenter{0.0f, 0.0f};
+        if (State.DepotID >= 0)
+        {
+            if (auto* DepotTrans =
+                    EM.GetComponent<Game::Components::TransformComponent>(State.DepotID))
+            {
+                StartCenter = DepotTrans->Position;
+                State.ResourceID = FindNearestMineral(EM, StartCenter);
+            }
+        }
+        if (State.ResourceID < 0)
+            State.ResourceID = InteractionSmoke::FindResource(EM);
+        if (State.ResourceID < 0)
+            return false;
+        if (auto* ResourceTrans =
+                EM.GetComponent<Game::Components::TransformComponent>(State.ResourceID))
+        {
+            if (State.DepotID < 0)
+                StartCenter = ResourceTrans->Position;
+        }
+
+        State.WorkerID = FindWorkerNear(EM, 0, State.ResourceID, StartCenter);
+        if (State.WorkerID < 0)
+            State.WorkerID = InteractionSmoke::SpawnSmokeWorker(Session, 0, State.ResourceID);
+        if (State.WorkerID < 0)
+            return false;
+
+        if (State.DepotID < 0)
+            State.DepotID = InteractionSmoke::EnsureSmokeDepot(Session, 0, State.ResourceID);
+        if (State.DepotID < 0)
+            return false;
+
+        InteractionSmoke::EnsurePlayerResources(0);
+        Game::Systems::HarvestSystem::GetResources(0).VespeneGas = 0;
+        if (!StartHarvest(State, Session, Client, Hud))
+            return false;
+
+        const auto Minerals = FindNearbyMinerals(EM, StartCenter, 8);
+        const auto Workers = FindHarvestWorkersNear(EM, 0, State.ResourceID, StartCenter, 6);
+        int AssignedExtra = 0;
+        for (size_t I = 0; I < Workers.size(); ++I)
+        {
+            const int WorkerID = Workers[I];
+            if (WorkerID == State.WorkerID)
+                continue;
+            const int MineralID = Minerals.empty()
+                ? State.ResourceID
+                : Minerals[(I + 1) % Minerals.size()];
+            if (Game::Systems::HarvestSystem::IssueHarvest(EM, {WorkerID}, MineralID))
+            {
+                ++AssignedExtra;
+                Core::Utils::Logger::Info(
+                    "InteractionDemo",
+                    "demo assigned extra harvester worker=" +
+                        std::to_string(WorkerID) +
+                        " resource=" + std::to_string(MineralID));
+            }
+        }
+
+        State.Started = true;
+        SetStage(State, GameInteractionDemoState::Stage::HarvestLoop);
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo started at 2x simulation speed depot=" +
+                std::to_string(State.DepotID) +
+                " worker=" + std::to_string(State.WorkerID) +
+                " mineral=" + std::to_string(State.ResourceID) +
+                " extraHarvesters=" + std::to_string(AssignedExtra));
+        return true;
+    }
+
+    inline float Run(GameInteractionDemoState& State,
+                     GameSession& Session,
+                     ClientRuntime& Client,
+                     UI::Hud& Hud,
+                     float Dt)
+    {
+        if (!IsEnabled(State))
+            return 1.0f;
+        if (!Session.IsEcsInitialized() || !Session.IsMapLoaded())
+            return 1.0f;
+        if (State.CurrentStage == GameInteractionDemoState::Stage::Done ||
+            State.CurrentStage == GameInteractionDemoState::Stage::Failed)
+        {
+            return 2.0f;
+        }
+
+        constexpr float kSimulationScale = 2.0f;
+        if (!State.Started)
+        {
+            if (!Begin(State, Session, Client, Hud))
+                Fail(State, "could not initialize visible interaction demo");
+            return kSimulationScale;
+        }
+
+        auto& EM = Session.Entities();
+        State.StageSeconds += Dt * kSimulationScale;
+        KeepFocus(State, Client, EM);
+
+        using StageT = GameInteractionDemoState::Stage;
+        switch (State.CurrentStage)
+        {
+            case StageT::HarvestLoop:
+            {
+                auto* Harvest =
+                    EM.GetComponent<Game::Components::HarvestComponent>(State.WorkerID);
+                if (State.StageSeconds >= 12.0f ||
+                    (Harvest && Harvest->CarryingAmount > 0))
+                {
+                    if (!StartProduction(State, Session, Client, Hud))
+                        Fail(State, "could not queue SCV production");
+                    else
+                        SetStage(State, StageT::ProductionQueue);
+                }
+                break;
+            }
+            case StageT::ProductionQueue:
+            {
+                SelectAndFocus(State, Client, EM, State.DepotID);
+                Hud.UpdateContext(EM, {State.DepotID});
+                const int CurrentScvs =
+                    InteractionSmoke::CountOwnedUnitsByChk(EM, 0, 0x07);
+                if (CurrentScvs > State.TrainedUnitStartCount ||
+                    State.StageSeconds >= 28.0f)
+                {
+                    const int NewScvID =
+                        InteractionSmoke::FindNewestOwnedUnitByChk(EM, 0, 0x07);
+                    if (NewScvID >= 0)
+                        State.WorkerID = NewScvID;
+                    if (!StartConstruction(State, Session, Client, Hud))
+                        Fail(State, "could not start Supply Depot construction");
+                    else
+                        SetStage(State, StageT::Construction);
+                }
+                break;
+            }
+            case StageT::Construction:
+            {
+                SelectAndFocus(State, Client, EM, State.BuildSiteID);
+                Hud.UpdateContext(EM, {State.BuildSiteID});
+                auto* Building =
+                    EM.GetComponent<Game::Components::BuildingComponent>(State.BuildSiteID);
+                if ((Building && !Building->UnderConstruction) ||
+                    State.StageSeconds >= 38.0f)
+                {
+                    if (!StartRefineryConstruction(State, Session, Client, Hud))
+                        Fail(State, "could not start Refinery construction");
+                    else
+                        SetStage(State, StageT::GasConstruction);
+                }
+                break;
+            }
+            case StageT::GasConstruction:
+            {
+                SelectAndFocus(State, Client, EM, State.RefineryID);
+                Hud.UpdateContext(EM, {State.RefineryID});
+                auto* Building =
+                    EM.GetComponent<Game::Components::BuildingComponent>(State.RefineryID);
+                if ((Building && !Building->UnderConstruction) ||
+                    State.StageSeconds >= 48.0f)
+                {
+                    if (!StartGasHarvest(State, Session, Client, Hud))
+                        Fail(State, "could not start Refinery gas harvest");
+                    else
+                        SetStage(State, StageT::GasHarvest);
+                }
+                break;
+            }
+            case StageT::GasHarvest:
+            {
+                const auto& Resources = Game::Systems::HarvestSystem::GetResources(0);
+                if (Resources.VespeneGas >= 100 || State.StageSeconds >= 90.0f)
+                {
+                    if (!StartBarracksConstruction(State, Session, Client, Hud))
+                        Fail(State, "could not start Barracks construction");
+                    else
+                        SetStage(State, StageT::BarracksConstruction);
+                }
+                break;
+            }
+            case StageT::BarracksConstruction:
+            {
+                SelectAndFocus(State, Client, EM, State.BarracksID);
+                Hud.UpdateContext(EM, {State.BarracksID});
+                auto* Building =
+                    EM.GetComponent<Game::Components::BuildingComponent>(State.BarracksID);
+                if ((Building && !Building->UnderConstruction) ||
+                    State.StageSeconds >= 58.0f)
+                {
+                    if (!StartMarineProduction(State, Session, Client, Hud))
+                        Fail(State, "could not queue Marine production");
+                    else
+                        SetStage(State, StageT::MarineProduction);
+                }
+                break;
+            }
+            case StageT::MarineProduction:
+            {
+                SelectAndFocus(State, Client, EM, State.BarracksID);
+                Hud.UpdateContext(EM, {State.BarracksID});
+                const int MarineCount =
+                    InteractionSmoke::CountOwnedUnitsByChk(EM, 0, 0x00);
+                if (MarineCount > State.MarineStartCount ||
+                    State.StageSeconds >= 32.0f)
+                {
+                    if (!StartResearch(State, Session, Client, Hud))
+                        Fail(State, "could not start Infantry Weapons upgrade");
+                    else
+                        SetStage(State, StageT::Research);
+                }
+                break;
+            }
+            case StageT::Research:
+            {
+                SelectAndFocus(State, Client, EM, State.EngineeringBayID);
+                Hud.UpdateContext(EM, {State.EngineeringBayID});
+                const int Level = Game::Systems::UpgradeSystem::GetResearchLevel(
+                    0, Game::Systems::ResearchId::Terran_InfantryWeapons);
+                if (Level > State.ResearchStartLevel)
+                {
+                    Core::Utils::Logger::Info(
+                        "InteractionDemo",
+                        "demo completed Infantry Weapons level=" +
+                            std::to_string(Level));
+                    SetStage(State, StageT::Observe);
+                }
+                else if (State.StageSeconds >= 42.0f)
+                {
+                    Fail(State, "Infantry Weapons upgrade did not complete during demo");
+                }
+                break;
+            }
+            case StageT::Observe:
+            {
+                if (State.StageSeconds >= 12.0f)
+                {
+                    Core::Utils::Logger::Info(
+                        "InteractionDemo",
+                        "demo completed visible economy loop");
+                    SetStage(State, StageT::Done);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        return kSimulationScale;
+    }
+}
+
+inline float RunInteractionDemoIfRequested(GameInteractionDemoState& State,
+                                           GameSession& Session,
+                                           ClientRuntime& Client,
+                                           UI::Hud& Hud,
+                                           float Dt)
+{
+    return InteractionDemo::Run(State, Session, Client, Hud, Dt);
 }
 
 } // namespace Game::Client::GameLoop

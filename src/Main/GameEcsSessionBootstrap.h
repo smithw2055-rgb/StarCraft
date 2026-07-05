@@ -4,6 +4,7 @@
 #include <ctime>
 
 #include "Client/ClientRuntime.h"
+#include "Core/Utils/Logger.h"
 #include "Main/GameLoop/HudResourceSync.h"
 #include "Main/CampaignRuntime.h"
 #include "Main/GameCampaignBootstrap.h"
@@ -111,6 +112,7 @@ inline void InitializeLoadedMapGameplayRuntime(
     UI::Hud& Hud,
     CampaignRuntime& Campaign,
     const std::string& MapPath,
+    bool EnableCampaignRuntime,
     bool PreserveManualCamera = false)
 {
     if (!Session.IsMapLoaded())
@@ -118,7 +120,18 @@ inline void InitializeLoadedMapGameplayRuntime(
 
     InitializeEcsMapAndGameplaySystems(Session, Client, Audio);
     InitializeGameplayEntitiesAndRuntimeState(Session, Client, Hud);
-    InitializeCampaignRuntimeForSession(Campaign, Session, Audio, Client, MapPath, PreserveManualCamera);
+    if (EnableCampaignRuntime)
+    {
+        InitializeCampaignRuntimeForSession(
+            Campaign, Session, Audio, Client, MapPath, PreserveManualCamera);
+    }
+    else
+    {
+        Campaign.Deactivate();
+        Core::Utils::Logger::Info(
+            "GameController",
+            "Campaign runtime disabled for custom map: " + MapPath);
+    }
 }
 
 } // namespace Game::Client::GameLoop

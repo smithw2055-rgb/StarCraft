@@ -39,6 +39,7 @@ struct GameRuntimeState
     GameClientRuntimeState Client;
     GameSessionRuntimeState Session;
     GameInteractionSmokeState InteractionSmoke;
+    GameInteractionDemoState InteractionDemo;
 };
 
 } // namespace Game::Client::GameLoop

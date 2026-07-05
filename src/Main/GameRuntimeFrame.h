@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Platform/Platform.h"
+#include "Core/Utils/Logger.h"
 #include "Main/GameLoop/GameSaveState.h"
 #include "Main/GameSaveRuntime.h"
 #include "Main/GameGuiPresentation.h"
@@ -34,6 +35,25 @@ inline void UpdateGameRuntimeFrame(
     Core::Platform::SetDeltaTime(Dt);
     Core::Platform::ProcessInput();
 
+    if (Runtime.InteractionDemo.Enabled && !Runtime.InteractionDemo.FrameProbeLogged)
+    {
+        Runtime.InteractionDemo.FrameProbeLogged = true;
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "frame probe initialized=" +
+                std::to_string(Runtime.App.Runtime.Initialized ? 1 : 0) +
+                " state=" +
+                std::to_string(Runtime.App.Runtime.State == GameState::InGame ? 1 : 0) +
+                " ecs=" +
+                std::to_string(Runtime.Session.Game.IsEcsInitialized() ? 1 : 0) +
+                " map=" +
+                std::to_string(Runtime.Session.Game.IsMapLoaded() ? 1 : 0) +
+                " menuOpen=" +
+                std::to_string(Runtime.App.Menu.IsOpen() ? 1 : 0) +
+                " menuPaused=" +
+                std::to_string(Runtime.App.Menu.IsPaused() ? 1 : 0));
+    }
+
     if (!Runtime.App.Runtime.Initialized)
         return;
 
@@ -58,6 +78,14 @@ inline void UpdateGameRuntimeFrame(
         return;
     }
 
+    const float SimulationScale = RunInteractionDemoIfRequested(
+        Runtime.InteractionDemo,
+        Runtime.Session.Game,
+        Runtime.Client.Runtime,
+        Runtime.Client.Hud,
+        Dt);
+    const float SimulationDt = Dt * SimulationScale;
+
     RunInteractionSmokeIfRequested(
         Runtime.InteractionSmoke,
         Runtime.Session.Game,
@@ -72,7 +100,7 @@ inline void UpdateGameRuntimeFrame(
         Runtime.App.Audio,
         Runtime.Client.Runtime,
         Runtime.Client.Hud,
-        Dt);
+        SimulationDt);
 
     RefreshGui();
 }

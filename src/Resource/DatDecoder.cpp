@@ -34,6 +34,7 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 {
     std::vector<UnitEntry> Entries;
     constexpr size_t Count = 228;
+    constexpr size_t ConstructionImageOffset = 0x534;
     constexpr size_t PlacementOffset = 0x2D94;
     constexpr size_t DimensionOffset = 0x3124;
     if (Data.empty())
@@ -63,6 +64,8 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
             E.Subunit1ID = ReadU16(Data.data(), Subunit1Offset + I * 2);
         if (Subunit2Offset + I * 2 + 2 <= Data.size())
             E.Subunit2ID = ReadU16(Data.data(), Subunit2Offset + I * 2);
+        if (ConstructionImageOffset + I * 4 + 4 <= Data.size())
+            E.ConstructionImageID = ReadU32(Data.data(), ConstructionImageOffset + I * 4);
         if (PlacementOffset + I * 4 + 4 <= Data.size())
         {
             E.PlacementWidth = ReadI16(Data.data(), PlacementOffset + I * 4 + 0);

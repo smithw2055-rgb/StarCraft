@@ -5,6 +5,7 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <queue>
 
 namespace Game::Pathfinding
 {
@@ -13,16 +14,28 @@ AStar::SearchConfig AStar::sConfig;
 
 int AStar::Heuristic(int DX, int DY)
 {
-    return sConfig.HeuristicWeight * (std::abs(DX) + std::abs(DY));
+    const int AbsDX = std::abs(DX);
+    const int AbsDY = std::abs(DY);
+    if (!sConfig.AllowDiagonal)
+        return sConfig.HeuristicWeight * (AbsDX + AbsDY);
+
+    const int Diagonal = std::min(AbsDX, AbsDY);
+    const int Straight = std::max(AbsDX, AbsDY) - Diagonal;
+    const int DiagonalCost = (sConfig.HeuristicWeight * 14) / 10;
+    return DiagonalCost * Diagonal + sConfig.HeuristicWeight * Straight;
 }
 
 static bool IsWalkableWithClearance(const Map::GameMap& Map,
                                     int X,
                                     int Y,
-                                    int ClearanceRadiusPixels)
+                                    int ClearanceRadiusPixels,
+                                    const std::function<bool(int, int)>& ExtraBlockedTile)
 {
-    if (!Map.IsInBounds(X, Y) || !Map.IsWalkable(X, Y))
+    if (!Map.IsInBounds(X, Y) || !Map.IsWalkable(X, Y) ||
+        (ExtraBlockedTile && ExtraBlockedTile(X, Y)))
+    {
         return false;
+    }
     if (ClearanceRadiusPixels <= 0)
         return true;
 
@@ -43,20 +56,28 @@ static bool IsWalkableWithClearance(const Map::GameMap& Map,
         int SX = 0;
         int SY = 0;
         Map.WorldToTile(Sample, SX, SY);
-        if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY))
+        if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY) ||
+            (ExtraBlockedTile && ExtraBlockedTile(SX, SY)))
+        {
             return false;
+        }
     }
     return true;
 }
 
-bool AStar::IsWalkable(const Map::GameMap& Map, int X, int Y, int ClearanceRadiusPixels)
+bool AStar::IsWalkable(const Map::GameMap& Map,
+                       int X,
+                       int Y,
+                       int ClearanceRadiusPixels,
+                       const std::function<bool(int, int)>& ExtraBlockedTile)
 {
-    return IsWalkableWithClearance(Map, X, Y, ClearanceRadiusPixels);
+    return IsWalkableWithClearance(Map, X, Y, ClearanceRadiusPixels, ExtraBlockedTile);
 }
 
 static bool HasLineOfSight(const Map::GameMap& Map,
                            int X0, int Y0, int X1, int Y1,
-                           int ClearanceRadiusPixels)
+                           int ClearanceRadiusPixels,
+                           const std::function<bool(int, int)>& ExtraBlockedTile)
 {
     int DX = std::abs(X1 - X0);
     int DY = std::abs(Y1 - Y0);
@@ -70,10 +91,117 @@ static bool HasLineOfSight(const Map::GameMap& Map,
         if (E2 > -DY) { Err -= DY; CX += SX; }
         if (E2 < DX) { Err += DX; CY += SY; }
         if ((CX != X1 || CY != Y1) &&
-            !IsWalkableWithClearance(Map, CX, CY, ClearanceRadiusPixels))
+            !IsWalkableWithClearance(Map, CX, CY, ClearanceRadiusPixels, ExtraBlockedTile))
+        {
             return false;
+        }
     }
     return true;
+}
+
+static bool CanStepDiagonal(const Map::GameMap& Map,
+                            int FromX,
+                            int FromY,
+                            int StepX,
+                            int StepY,
+                            int ClearanceRadiusPixels,
+                            const std::function<bool(int, int)>& ExtraBlockedTile)
+{
+    if (StepX == 0 || StepY == 0)
+        return true;
+    if (AStar::GetConfig().CutCorners)
+        return true;
+    return IsWalkableWithClearance(Map, FromX + StepX, FromY,
+                                   ClearanceRadiusPixels, ExtraBlockedTile) &&
+           IsWalkableWithClearance(Map, FromX, FromY + StepY,
+                                   ClearanceRadiusPixels, ExtraBlockedTile);
+}
+
+static bool ResolveReachableGoalTile(const Map::GameMap& Map,
+                                     int StartX,
+                                     int StartY,
+                                     int DesiredEndX,
+                                     int DesiredEndY,
+                                     int ClearanceRadiusPixels,
+                                     const std::function<bool(int, int)>& ExtraBlockedTile,
+                                     int& OutEndX,
+                                     int& OutEndY)
+{
+    const int Width = Map.GetWidth();
+    const int Height = Map.GetHeight();
+    if (Width <= 0 || Height <= 0)
+        return false;
+
+    if (!IsWalkableWithClearance(Map, StartX, StartY, ClearanceRadiusPixels, ExtraBlockedTile))
+        return false;
+
+    const int DirX[] = {1, -1, 0, 0, 1, -1, 1, -1};
+    const int DirY[] = {0, 0, 1, -1, 1, -1, -1, 1};
+    const int DirCount = AStar::GetConfig().AllowDiagonal ? 8 : 4;
+
+    std::vector<uint8_t> Visited((size_t)Width * (size_t)Height, 0);
+    std::queue<std::pair<int, int>> Open;
+    Open.push({StartX, StartY});
+    Visited[(size_t)StartY * (size_t)Width + (size_t)StartX] = 1;
+
+    int BestX = StartX;
+    int BestY = StartY;
+    int BestDistSq = std::numeric_limits<int>::max();
+    int BestStartDistSq = 0;
+
+    auto Consider = [&](int X, int Y)
+    {
+        const int ToEndX = X - DesiredEndX;
+        const int ToEndY = Y - DesiredEndY;
+        const int DistSq = ToEndX * ToEndX + ToEndY * ToEndY;
+        const int FromStartX = X - StartX;
+        const int FromStartY = Y - StartY;
+        const int StartDistSq = FromStartX * FromStartX + FromStartY * FromStartY;
+        if (DistSq < BestDistSq ||
+            (DistSq == BestDistSq && StartDistSq < BestStartDistSq))
+        {
+            BestDistSq = DistSq;
+            BestStartDistSq = StartDistSq;
+            BestX = X;
+            BestY = Y;
+        }
+    };
+
+    while (!Open.empty())
+    {
+        auto [CurX, CurY] = Open.front();
+        Open.pop();
+        Consider(CurX, CurY);
+        if (CurX == DesiredEndX && CurY == DesiredEndY)
+        {
+            OutEndX = CurX;
+            OutEndY = CurY;
+            return true;
+        }
+
+        for (int D = 0; D < DirCount; ++D)
+        {
+            const int NX = CurX + DirX[D];
+            const int NY = CurY + DirY[D];
+            if (!Map.IsInBounds(NX, NY))
+                continue;
+            const size_t NI = (size_t)NY * (size_t)Width + (size_t)NX;
+            if (Visited[NI])
+                continue;
+            if (!IsWalkableWithClearance(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile))
+                continue;
+            if (!CanStepDiagonal(Map, CurX, CurY, DirX[D], DirY[D],
+                                 ClearanceRadiusPixels, ExtraBlockedTile))
+                continue;
+
+            Visited[NI] = 1;
+            Open.push({NX, NY});
+        }
+    }
+
+    OutEndX = BestX;
+    OutEndY = BestY;
+    return BestDistSq != std::numeric_limits<int>::max();
 }
 
 PathResult AStar::FindPath(const Map::GameMap& Map,
@@ -81,11 +209,22 @@ PathResult AStar::FindPath(const Map::GameMap& Map,
                            int MaxNodes,
                            int ClearanceRadiusPixels)
 {
+    return FindPath(Map, Start, End, MaxNodes, ClearanceRadiusPixels, {});
+}
+
+PathResult AStar::FindPath(const Map::GameMap& Map,
+                           Core::Math::Vec2 Start, Core::Math::Vec2 End,
+                           int MaxNodes,
+                           int ClearanceRadiusPixels,
+                           const std::function<bool(int, int)>& ExtraBlockedTile)
+{
     int SX, SY, EX, EY;
     Map.WorldToTile(Start, SX, SY);
     Map.WorldToTile(End, EX, EY);
-    const bool ExactEndWalkable = IsWalkable(Map, EX, EY, ClearanceRadiusPixels);
-    PathResult Result = FindPathTile(Map, SX, SY, EX, EY, MaxNodes, ClearanceRadiusPixels);
+    const bool ExactEndWalkable =
+        IsWalkable(Map, EX, EY, ClearanceRadiusPixels, ExtraBlockedTile);
+    PathResult Result = FindPathTile(
+        Map, SX, SY, EX, EY, MaxNodes, ClearanceRadiusPixels, ExtraBlockedTile);
     if (!Result.Waypoints.empty())
     {
         int FirstX = 0;
@@ -94,7 +233,16 @@ PathResult AStar::FindPath(const Map::GameMap& Map,
         if (FirstX == SX && FirstY == SY)
             Result.Waypoints.erase(Result.Waypoints.begin());
     }
-    if (ExactEndWalkable)
+    bool ReachedExactEndTile = SX == EX && SY == EY;
+    if (!Result.Waypoints.empty())
+    {
+        int LastX = 0;
+        int LastY = 0;
+        Map.WorldToTile(Result.Waypoints.back(), LastX, LastY);
+        ReachedExactEndTile = LastX == EX && LastY == EY;
+    }
+
+    if (ExactEndWalkable && ReachedExactEndTile)
     {
         if (!Result.Waypoints.empty())
             Result.Waypoints.back() = End;
@@ -110,39 +258,49 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
                                int MaxNodes,
                                int ClearanceRadiusPixels)
 {
+    return FindPathTile(
+        Map, StartX, StartY, EndX, EndY, MaxNodes, ClearanceRadiusPixels, {});
+}
+
+PathResult AStar::FindPathTile(const Map::GameMap& Map,
+                               int StartX, int StartY,
+                               int EndX, int EndY,
+                               int MaxNodes,
+                               int ClearanceRadiusPixels,
+                               const std::function<bool(int, int)>& ExtraBlockedTile)
+{
     PathResult Result;
 
-    if (!IsWalkable(Map, StartX, StartY, ClearanceRadiusPixels))
+    if (!Map.IsInBounds(StartX, StartY))
         return Result;
-
-    if (!IsWalkable(Map, EndX, EndY, ClearanceRadiusPixels))
-    {
-        int BestDist = std::numeric_limits<int>::max();
-        int BestX = EndX, BestY = EndY;
-        for (int DY = -5; DY <= 5; DY++)
-            for (int DX = -5; DX <= 5; DX++)
-            {
-                int NX = EndX + DX, NY = EndY + DY;
-                if (IsWalkable(Map, NX, NY, ClearanceRadiusPixels))
-                {
-                    int D = DX * DX + DY * DY;
-                    if (D < BestDist) { BestDist = D; BestX = NX; BestY = NY; }
-                }
-            }
-        EndX = BestX; EndY = BestY;
-        if (!IsWalkable(Map, EndX, EndY, ClearanceRadiusPixels)) return Result;
-    }
 
     int Width = Map.GetWidth();
     int Height = Map.GetHeight();
+    if (Width <= 0 || Height <= 0)
+        return Result;
+
+    EndX = std::clamp(EndX, 0, Width - 1);
+    EndY = std::clamp(EndY, 0, Height - 1);
+
+    int ResolvedEndX = EndX;
+    int ResolvedEndY = EndY;
+    if (!ResolveReachableGoalTile(Map, StartX, StartY, EndX, EndY,
+                                  ClearanceRadiusPixels, ExtraBlockedTile,
+                                  ResolvedEndX, ResolvedEndY))
+    {
+        return Result;
+    }
+    EndX = ResolvedEndX;
+    EndY = ResolvedEndY;
 
     std::vector<PathNode> Nodes;
-    Nodes.reserve(MaxNodes);
+    const int NodeBudget = std::max(MaxNodes, Width * Height);
+    Nodes.reserve(std::min(NodeBudget, Width * Height));
     Nodes.push_back({StartX, StartY, 0, Heuristic(StartX - EndX, StartY - EndY), -1});
 
     // Open set: pairs of (F-cost, NodeIndex)
     std::vector<std::pair<int, int>> Open;
-    Open.reserve(MaxNodes);
+    Open.reserve(std::min(NodeBudget, Width * Height));
     Open.push_back({Nodes[0].F(), 0});
 
     std::vector<bool> Closed(Width * Height, false);
@@ -157,9 +315,6 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
         return A.first > B.first;
     };
 
-    int BestGoalIdx = 0;
-    int BestGoalDist = Heuristic(StartX - EndX, StartY - EndY);
-
     while (!Open.empty())
     {
         std::pop_heap(Open.begin(), Open.end(), Cmp);
@@ -172,14 +327,6 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
         if (Closed[CI]) continue;
         Closed[CI] = true;
         Result.NodesSearched++;
-
-        // Track closest node to target for fallback path
-        int CurDist = Heuristic(Cur.X - EndX, Cur.Y - EndY);
-        if (CurDist < BestGoalDist)
-        {
-            BestGoalDist = CurDist;
-            BestGoalIdx = CurIdx;
-        }
 
         if (Cur.X == EndX && Cur.Y == EndY)
         {
@@ -207,8 +354,11 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
                     int PX, PY, NX, NY;
                     Map.WorldToTile(Prev, PX, PY);
                     Map.WorldToTile(Next, NX, NY);
-                    if (!HasLineOfSight(Map, PX, PY, NX, NY, ClearanceRadiusPixels))
+                    if (!HasLineOfSight(Map, PX, PY, NX, NY,
+                            ClearanceRadiusPixels, ExtraBlockedTile))
+                    {
                         Result.Waypoints.push_back(Raw[I - 1]);
+                    }
                 }
                 Result.Waypoints.push_back(Raw.back());
             }
@@ -221,21 +371,19 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
             return Result;
         }
 
-        if ((int)Nodes.size() >= MaxNodes) continue;
+        if ((int)Nodes.size() >= NodeBudget) continue;
 
         for (int D = 0; D < DirCount; D++)
         {
             int NX = Cur.X + DX[D];
             int NY = Cur.Y + DY[D];
 
-            if (!IsWalkable(Map, NX, NY, ClearanceRadiusPixels)) continue;
+            if (!IsWalkable(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile)) continue;
 
-            if (D >= DiagStart)
-            {
-                if (!IsWalkable(Map, Cur.X + DX[D], Cur.Y, ClearanceRadiusPixels) ||
-                    !IsWalkable(Map, Cur.X, Cur.Y + DY[D], ClearanceRadiusPixels))
-                    continue;
-            }
+            if (D >= DiagStart &&
+                !CanStepDiagonal(Map, Cur.X, Cur.Y, DX[D], DY[D],
+                                 ClearanceRadiusPixels, ExtraBlockedTile))
+                continue;
 
             int NI = NY * Width + NX;
             if (Closed[NI]) continue;
@@ -261,55 +409,23 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
         }
     }
 
-    // Fallback: use best partial path (closest reachable node to target)
-    auto BuildPath = [&](int FromIdx) {
-        std::vector<Core::Math::Vec2> Raw;
-        int P = FromIdx;
-        while (P >= 0)
-        {
-            Raw.push_back({
-                Nodes[P].X * 32.0f + 16.0f,
-                Nodes[P].Y * 32.0f + 16.0f
-            });
-            P = Nodes[P].ParentIndex;
-        }
-        std::reverse(Raw.begin(), Raw.end());
-        return Raw;
-    };
-
-    if (BestGoalIdx >= 0)
-    {
-        auto Raw = BuildPath(BestGoalIdx);
-
-        // Smooth
-        if (Raw.size() > 2)
-        {
-            Result.Waypoints.push_back(Raw[0]);
-            for (size_t I = 1; I < Raw.size(); I++)
-            {
-                int PX, PY, NX, NY;
-                Map.WorldToTile(Result.Waypoints.back(), PX, PY);
-                Map.WorldToTile(Raw[I], NX, NY);
-                if (!HasLineOfSight(Map, PX, PY, NX, NY, ClearanceRadiusPixels))
-                    Result.Waypoints.push_back(Raw[I - 1]);
-            }
-            Result.Waypoints.push_back(Raw.back());
-        }
-        else
-        {
-            Result.Waypoints = std::move(Raw);
-        }
-        Result.Found = true;
-    }
-
     return Result;
 }
 
 std::vector<Core::Math::Vec2> AStar::ReconstructPath(const std::vector<PathNode>& Nodes, int GoalIndex)
 {
-    (void)Nodes;
-    (void)GoalIndex;
-    return {};
+    std::vector<Core::Math::Vec2> Path;
+    int Current = GoalIndex;
+    while (Current >= 0 && Current < (int)Nodes.size())
+    {
+        Path.push_back({
+            Nodes[(size_t)Current].X * 32.0f + 16.0f,
+            Nodes[(size_t)Current].Y * 32.0f + 16.0f
+        });
+        Current = Nodes[(size_t)Current].ParentIndex;
+    }
+    std::reverse(Path.begin(), Path.end());
+    return Path;
 }
 
 } // namespace Game::Pathfinding

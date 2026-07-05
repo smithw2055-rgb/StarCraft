@@ -1,11 +1,16 @@
 #include "Game/Systems/BuildingSystem.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <utility>
+#include <vector>
 
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
+#include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
@@ -20,6 +25,7 @@ namespace
 {
     const Game::Map::GameMap* gMap = nullptr;
     BuildingSystem::ImageIDResolver gImageResolver;
+    BuildingSystem::ImageIDResolver gConstructionImageResolver;
     BuildingSystem::CollisionBoundsResolver gCollisionBoundsResolver;
 
     struct BuildingFootprintTiles
@@ -42,9 +48,26 @@ namespace
             *OutReason = Reason;
     }
 
+    bool DebugConstructionEnabled()
+    {
+        static const bool Enabled = std::getenv("STARCRAFT_DEBUG_CONSTRUCTION") != nullptr;
+        return Enabled;
+    }
+
     uint32_t ResolveImageID(int ChkUnitID)
     {
         return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
+    }
+
+    uint32_t ResolveConstructionImageID(int ChkUnitID)
+    {
+        if (gConstructionImageResolver)
+        {
+            const uint32_t ImageID = gConstructionImageResolver(ChkUnitID);
+            if (ImageID != std::numeric_limits<uint32_t>::max())
+                return ImageID;
+        }
+        return ResolveImageID(ChkUnitID);
     }
 
     UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
@@ -136,6 +159,258 @@ namespace
                  A.Bottom < B.Top || A.Top > B.Bottom);
     }
 
+    TileRect BoundsTileRect(const Game::Map::GameMap& Map,
+                            Core::Math::Vec2 Position,
+                            float Left,
+                            float Up,
+                            float Right,
+                            float Down)
+    {
+        int MinX = 0;
+        int MinY = 0;
+        int MaxX = 0;
+        int MaxY = 0;
+        Map.WorldToTile({Position.X - Left, Position.Y - Up}, MinX, MinY);
+        Map.WorldToTile({Position.X + Right, Position.Y + Down}, MaxX, MaxY);
+        return {std::min(MinX, MaxX), std::min(MinY, MaxY),
+                std::max(MinX, MaxX), std::max(MinY, MaxY)};
+    }
+
+    float CollisionRadiusFromBounds(const PathfindingComponent* Path, float Fallback)
+    {
+        if (!Path)
+            return Fallback;
+        if (!Path->HasCollisionBounds)
+            return Path->CollisionRadius > 0 ? (float)Path->CollisionRadius : Fallback;
+
+        const int Width = Path->CollisionLeft + Path->CollisionRight + 1;
+        const int Height = Path->CollisionUp + Path->CollisionDown + 1;
+        return (float)std::max(4, std::max(Width, Height) / 2);
+    }
+
+    bool IsMoveSettled(const PathfindingComponent* Path)
+    {
+        if (!Path)
+            return true;
+        if (Path->Path.empty())
+            return true;
+        return Path->PathIndex >= (int)Path->Path.size();
+    }
+
+    void AddUniqueCandidate(std::vector<Core::Math::Vec2>& Candidates,
+                            const Core::Math::Vec2& Candidate)
+    {
+        for (const auto& Existing : Candidates)
+            if ((Existing - Candidate).LengthSq() < 1.0f)
+                return;
+        Candidates.push_back(Candidate);
+    }
+
+    bool IsRecentFailedMoveTarget(const PathfindingComponent* Path,
+                                  const Core::Math::Vec2& Candidate)
+    {
+        return Path && Path->HasRecentMoveFailure &&
+               (Path->RecentFailedMoveTarget - Candidate).LengthSq() <= 16.0f * 16.0f;
+    }
+
+    void BuildConstructionApproachCandidates(std::vector<Core::Math::Vec2>& Candidates,
+                                             Core::ECS::EntityManager& EM,
+                                             int BuilderID,
+                                             int BuildingID,
+                                             Core::Math::Vec2 BuildPosition,
+                                             int BuildingDefID)
+    {
+        auto* BuilderTrans = EM.GetComponent<TransformComponent>(BuilderID);
+        float Left = 48.0f;
+        float Right = 48.0f;
+        float Up = 32.0f;
+        float Down = 32.0f;
+        if (const auto* BuildingPath = EM.GetComponent<PathfindingComponent>(BuildingID);
+            BuildingPath && BuildingPath->HasCollisionBounds)
+        {
+            Left = (float)BuildingPath->CollisionLeft;
+            Right = (float)BuildingPath->CollisionRight;
+            Up = (float)BuildingPath->CollisionUp;
+            Down = (float)BuildingPath->CollisionDown;
+        }
+        else
+        {
+            const auto Footprint = BuildingFootprintSizeForDef(BuildingDefID);
+            Left = Right = (float)Footprint.W * 16.0f;
+            Up = Down = (float)Footprint.H * 16.0f;
+        }
+
+        const float Padding = std::max(0.0f, CollisionRadiusFromBounds(
+            EM.GetComponent<PathfindingComponent>(BuilderID), 16.0f) - 1.0f);
+        Core::Math::Vec2 Delta = BuilderTrans ? BuilderTrans->Position - BuildPosition
+                                              : Core::Math::Vec2{0.0f, 1.0f};
+        if (Delta.Length() < 0.001f)
+            Delta = {0.0f, 1.0f};
+        const float ClampedX = std::clamp(Delta.X, -Left, Right);
+        const float ClampedY = std::clamp(Delta.Y, -Up, Down);
+
+        auto AddSide = [&](int Side)
+        {
+            Core::Math::Vec2 Candidate = BuildPosition;
+            switch (Side)
+            {
+                case 0:
+                    Candidate.X -= Left + Padding;
+                    Candidate.Y += ClampedY;
+                    break;
+                case 1:
+                    Candidate.X += Right + Padding;
+                    Candidate.Y += ClampedY;
+                    break;
+                case 2:
+                    Candidate.X += ClampedX;
+                    Candidate.Y -= Up + Padding;
+                    break;
+                default:
+                    Candidate.X += ClampedX;
+                    Candidate.Y += Down + Padding;
+                    break;
+            }
+            AddUniqueCandidate(Candidates, Candidate);
+        };
+
+        const float HorizontalScale = Delta.X < 0.0f ? std::max(Left, 1.0f) : std::max(Right, 1.0f);
+        const float VerticalScale = Delta.Y < 0.0f ? std::max(Up, 1.0f) : std::max(Down, 1.0f);
+        const int PrimarySide =
+            std::abs(Delta.X) / HorizontalScale >= std::abs(Delta.Y) / VerticalScale
+                ? (Delta.X < 0.0f ? 0 : 1)
+                : (Delta.Y < 0.0f ? 2 : 3);
+
+        AddSide(PrimarySide);
+        AddSide(0);
+        AddSide(1);
+        AddSide(2);
+        AddSide(3);
+        AddUniqueCandidate(Candidates, {BuildPosition.X - Left - Padding, BuildPosition.Y - Up - Padding});
+        AddUniqueCandidate(Candidates, {BuildPosition.X + Right + Padding, BuildPosition.Y - Up - Padding});
+        AddUniqueCandidate(Candidates, {BuildPosition.X - Left - Padding, BuildPosition.Y + Down + Padding});
+        AddUniqueCandidate(Candidates, {BuildPosition.X + Right + Padding, BuildPosition.Y + Down + Padding});
+    }
+
+    Core::Math::Vec2 ConstructionApproachPosition(Core::ECS::EntityManager& EM,
+                                                  int BuilderID,
+                                                  int BuildingID,
+                                                  Core::Math::Vec2 BuildPosition,
+                                                  int BuildingDefID)
+    {
+        Core::Math::Vec2 Direction{0.0f, 1.0f};
+        if (auto* BuilderTrans = EM.GetComponent<TransformComponent>(BuilderID))
+        {
+            Direction = BuilderTrans->Position - BuildPosition;
+            if (Direction.Length() < 0.001f)
+                Direction = {0.0f, 1.0f};
+        }
+
+        const auto* BuildingPath = EM.GetComponent<PathfindingComponent>(BuildingID);
+        float Left = 48.0f;
+        float Right = 48.0f;
+        float Up = 32.0f;
+        float Down = 32.0f;
+        if (BuildingPath && BuildingPath->HasCollisionBounds)
+        {
+            Left = (float)BuildingPath->CollisionLeft;
+            Right = (float)BuildingPath->CollisionRight;
+            Up = (float)BuildingPath->CollisionUp;
+            Down = (float)BuildingPath->CollisionDown;
+        }
+        else
+        {
+            const auto Footprint = BuildingFootprintSizeForDef(BuildingDefID);
+            Left = Right = (float)Footprint.W * 16.0f;
+            Up = Down = (float)Footprint.H * 16.0f;
+        }
+
+        const float Padding = std::max(0.0f, CollisionRadiusFromBounds(
+            EM.GetComponent<PathfindingComponent>(BuilderID), 16.0f) - 1.0f);
+        Core::Math::Vec2 Offset;
+        if (std::fabs(Direction.X) >= std::fabs(Direction.Y))
+        {
+            Offset.X = Direction.X >= 0.0f ? Right + Padding : -Left - Padding;
+            Offset.Y = std::clamp(Direction.Y, -Up, Down);
+        }
+        else
+        {
+            Offset.X = std::clamp(Direction.X, -Left, Right);
+            Offset.Y = Direction.Y >= 0.0f ? Down + Padding : -Up - Padding;
+        }
+        return BuildPosition + Offset;
+    }
+
+    void IssueConstructionMove(Core::ECS::EntityManager& EM,
+                               int BuilderID,
+                               int BuildingID,
+                               Core::Math::Vec2 BuildPosition,
+                               int BuildingDefID)
+    {
+        std::vector<Core::Math::Vec2> Candidates;
+        BuildConstructionApproachCandidates(
+            Candidates, EM, BuilderID, BuildingID, BuildPosition, BuildingDefID);
+
+        for (const auto& Candidate : Candidates)
+        {
+            if (IsRecentFailedMoveTarget(
+                    EM.GetComponent<PathfindingComponent>(BuilderID), Candidate))
+            {
+                continue;
+            }
+            if (CommandSystem::IssueMoveAndHasPath(EM, BuilderID, Candidate))
+                return;
+        }
+
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(BuilderID))
+            Path->HasRecentMoveFailure = false;
+        for (const auto& Candidate : Candidates)
+        {
+            if (CommandSystem::IssueMoveAndHasPath(EM, BuilderID, Candidate))
+                return;
+        }
+
+        CommandSystem::IssueMove(
+            EM,
+            {BuilderID},
+            ConstructionApproachPosition(EM, BuilderID, BuildingID, BuildPosition, BuildingDefID));
+    }
+
+    float DistanceToConstructionFootprint(Core::ECS::EntityManager& EM,
+                                          Core::Math::Vec2 WorkerPosition,
+                                          int BuildingID,
+                                          Core::Math::Vec2 BuildingPosition,
+                                          int BuildingDefID)
+    {
+        const auto* BuildingPath = EM.GetComponent<PathfindingComponent>(BuildingID);
+        float Left = 48.0f;
+        float Right = 48.0f;
+        float Up = 32.0f;
+        float Down = 32.0f;
+        if (BuildingPath && BuildingPath->HasCollisionBounds)
+        {
+            Left = (float)BuildingPath->CollisionLeft;
+            Right = (float)BuildingPath->CollisionRight;
+            Up = (float)BuildingPath->CollisionUp;
+            Down = (float)BuildingPath->CollisionDown;
+        }
+        else
+        {
+            const auto Footprint = BuildingFootprintSizeForDef(BuildingDefID);
+            Left = Right = (float)Footprint.W * 16.0f;
+            Up = Down = (float)Footprint.H * 16.0f;
+        }
+
+        const Core::Math::Vec2 Delta = WorkerPosition - BuildingPosition;
+        const float NearestX = std::clamp(Delta.X, -Left, Right);
+        const float NearestY = std::clamp(Delta.Y, -Up, Down);
+        const Core::Math::Vec2 Nearest{
+            BuildingPosition.X + NearestX,
+            BuildingPosition.Y + NearestY
+        };
+        return WorkerPosition.DistanceTo(Nearest);
+    }
+
     void ApplyUnitDefinition(UnitComponent& Unit,
                              const Races::UnitDef& Def,
                              bool UnderConstruction)
@@ -201,6 +476,23 @@ namespace
             if (!Building || !Player || Player->PlayerID != PlayerID || Building->UnderConstruction)
                 continue;
             if (ResolveDefID(EM, EntityID) == NormalizedRequiredDefID)
+                return true;
+        }
+        return false;
+    }
+
+    bool IsBuilderAssignedToActiveConstruction(Core::ECS::EntityManager& EM, int BuilderID)
+    {
+        auto Buildings = EM.GetEntitiesWith<BuildingComponent, UnitComponent>();
+        for (int EntityID : Buildings)
+        {
+            auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+            auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+            if (!Building || !Unit)
+                continue;
+            if (!Building->UnderConstruction || Building->BuilderUnitID != BuilderID)
+                continue;
+            if (Unit->HitPoints > 0)
                 return true;
         }
         return false;
@@ -277,24 +569,59 @@ namespace
             }
         }
 
-        auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+        auto Entities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
         for (auto EntityID : Entities)
         {
             if (EntityID == IgnoreEntityID)
                 continue;
 
             auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
+            auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+            if (!Transform || !Unit || Unit->HitPoints <= 0)
+                continue;
+
             auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
-            if (!Transform || !Building || Building->IsLifted)
+            if (Building && Building->IsLifted)
+                continue;
+            if (!Building && Game::Data::IsAirUnitType(Unit->ChkUnitID))
                 continue;
 
+            TileRect ExistingRect{};
+            bool HasExistingRect = false;
             const int ExistingDefID = ResolveDefID(EM, EntityID);
-            if (ExistingDefID < 0)
-                continue;
+            if (Building && ExistingDefID >= 0)
+            {
+                ExistingRect = BuildingTileRect(
+                    *gMap, Transform->Position, BuildingFootprintSizeForDef(ExistingDefID));
+                HasExistingRect = true;
+            }
+            else if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+                     Path && Path->HasCollisionBounds)
+            {
+                ExistingRect = BoundsTileRect(
+                    *gMap,
+                    Transform->Position,
+                    (float)Path->CollisionLeft,
+                    (float)Path->CollisionUp,
+                    (float)Path->CollisionRight + 1.0f,
+                    (float)Path->CollisionDown + 1.0f);
+                HasExistingRect = true;
+            }
+            else if (EM.GetComponent<ResourceComponent>(EntityID))
+            {
+                ExistingRect = BoundsTileRect(*gMap, Transform->Position, 32.0f, 20.0f, 32.0f, 20.0f);
+                HasExistingRect = true;
+            }
+            else
+            {
+                const float Radius = Unit->SizeType == UnitSize::Large
+                    ? 20.0f
+                    : (Unit->SizeType == UnitSize::Small ? 12.0f : 16.0f);
+                ExistingRect = BoundsTileRect(*gMap, Transform->Position, Radius, Radius, Radius, Radius);
+                HasExistingRect = true;
+            }
 
-            const TileRect ExistingRect =
-                BuildingTileRect(*gMap, Transform->Position, BuildingFootprintSizeForDef(ExistingDefID));
-            if (RectsOverlap(CandidateRect, ExistingRect))
+            if (HasExistingRect && RectsOverlap(CandidateRect, ExistingRect))
                 return false;
         }
 
@@ -347,7 +674,9 @@ namespace
         Transform.Position = Position;
 
         auto& Render = EM.AddComponent<RenderComponent>(EntityID);
-        Render.ImageID = ResolveImageID(Def.ChkUnitID);
+        Render.ImageID = UnderConstruction
+            ? ResolveConstructionImageID(Def.ChkUnitID)
+            : ResolveImageID(Def.ChkUnitID);
         Render.FrameIndex = 0;
         Render.TotalFrames = 1;
         Render.Layer = RenderLayer::Buildings;
@@ -407,7 +736,7 @@ namespace
             return -1;
 
         auto Def = Races::GetUnitDefByID(BuildingDefID);
-        Render->ImageID = ResolveImageID(Def.ChkUnitID);
+        Render->ImageID = ResolveConstructionImageID(Def.ChkUnitID);
         Render->FrameIndex = 0;
         Render->TotalFrames = 1;
         Render->Layer = RenderLayer::Buildings;
@@ -462,6 +791,11 @@ void BuildingSystem::SetMap(const Game::Map::GameMap* Map)
 void BuildingSystem::SetImageResolver(ImageIDResolver Resolver)
 {
     gImageResolver = std::move(Resolver);
+}
+
+void BuildingSystem::SetConstructionImageResolver(ImageIDResolver Resolver)
+{
+    gConstructionImageResolver = std::move(Resolver);
 }
 
 void BuildingSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
@@ -560,6 +894,14 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "only SCV can place Terran buildings");
         return false;
     }
+    else if (Def.RaceType == Race::Terran &&
+             !Def.IsAddon &&
+             IsBuilderAssignedToActiveConstruction(
+                 const_cast<Core::ECS::EntityManager&>(EM), BuilderID))
+    {
+        SetReason(OutReason, "SCV is already constructing another building");
+        return false;
+    }
     else if (Def.RaceType == Race::Protoss && BuilderDefID != Races::GetUnitDefID("Probe"))
     {
         SetReason(OutReason, "only Probe can place Protoss buildings");
@@ -616,7 +958,13 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
             SetReason(OutReason, "building requires a map placement");
             return false;
         }
-        if (!IsPlacementValid(const_cast<Core::ECS::EntityManager&>(EM), BuildingDefID, Target.Position, PlayerID))
+        if (Def.RequiresPylon && !HasPylonPowerAtPosition(EM, Target.Position, PlayerID))
+        {
+            SetReason(OutReason, "requires Pylon power");
+            return false;
+        }
+        if (!IsFootprintPlacementValid(
+                const_cast<Core::ECS::EntityManager&>(EM), BuildingDefID, Target.Position, BuilderID))
         {
             SetReason(OutReason, "invalid placement");
             return false;
@@ -659,7 +1007,12 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
     }
 
     if (!Def.IsAddon)
-        CommandSystem::IssueMove(EM, {BuilderID}, BuildPosition);
+    {
+        if (EntityID >= 0)
+            IssueConstructionMove(EM, BuilderID, EntityID, BuildPosition, BuildingDefID);
+        else
+            CommandSystem::IssueMove(EM, {BuilderID}, BuildPosition);
+    }
 
     Core::Utils::Logger::Info(
         "BuildingSystem",
@@ -676,6 +1029,16 @@ int BuildingSystem::DebugSpawnCompletedBuilding(Core::ECS::EntityManager& EM,
                                                 int ParentBuildingID)
 {
     return CreateBuildingEntity(EM, BuildingDefID, Position, PlayerID, false, -1, ParentBuildingID);
+}
+
+int BuildingSystem::DebugSpawnBuildingUnderConstruction(Core::ECS::EntityManager& EM,
+                                                        int BuildingDefID,
+                                                        Core::Math::Vec2 Position,
+                                                        int PlayerID,
+                                                        int BuilderID,
+                                                        int ParentBuildingID)
+{
+    return CreateBuildingEntity(EM, BuildingDefID, Position, PlayerID, true, BuilderID, ParentBuildingID);
 }
 
 void BuildingSystem::Update(float DeltaTime)
@@ -721,8 +1084,66 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
         }
         else if (BuilderTransform && BuilderUnit && BuilderUnit->HitPoints > 0)
         {
-            float Distance = Transform->Position.DistanceTo(BuilderTransform->Position);
-            BuilderNearby = Distance < 48.0f;
+            const float Distance = DistanceToConstructionFootprint(
+                EM,
+                BuilderTransform->Position,
+                EntityID,
+                Transform->Position,
+                Building->BuildingDefID);
+            const float BuilderRadius = CollisionRadiusFromBounds(
+                EM.GetComponent<PathfindingComponent>(Building->BuilderUnitID), 16.0f);
+            BuilderNearby = Distance <= BuilderRadius + 2.0f;
+            if (BuilderNearby)
+            {
+                if (auto* BuilderCommand =
+                        EM.GetComponent<CommandComponent>(Building->BuilderUnitID))
+                {
+                    BuilderCommand->CurrentCommand = CommandType::Build;
+                    BuilderCommand->TargetEntityID = EntityID;
+                }
+            }
+            else
+            {
+                auto* BuilderPath =
+                    EM.GetComponent<PathfindingComponent>(Building->BuilderUnitID);
+                if (IsMoveSettled(BuilderPath))
+                {
+                    IssueConstructionMove(
+                        EM,
+                        Building->BuilderUnitID,
+                        EntityID,
+                        Transform->Position,
+                        Building->BuildingDefID);
+                }
+            }
+            if (DebugConstructionEnabled())
+            {
+                static int DebugConstructionLogs = 120;
+                if (DebugConstructionLogs > 0)
+                {
+                    --DebugConstructionLogs;
+                    auto* BuilderCommand =
+                        EM.GetComponent<CommandComponent>(Building->BuilderUnitID);
+                    auto* BuilderPath =
+                        EM.GetComponent<PathfindingComponent>(Building->BuilderUnitID);
+                    Core::Utils::Logger::Info(
+                        "BuildingSystem",
+                        "construction debug building=" + std::to_string(EntityID) +
+                            " builder=" + std::to_string(Building->BuilderUnitID) +
+                            " nearby=" + std::to_string(BuilderNearby ? 1 : 0) +
+                            " dist=" + std::to_string((int)Distance) +
+                            " progress=" + std::to_string((int)Building->BuildProgress) +
+                            " builderPos=" +
+                            std::to_string((int)BuilderTransform->Position.X) + "," +
+                            std::to_string((int)BuilderTransform->Position.Y) +
+                            " cmd=" +
+                            std::to_string(BuilderCommand ? (int)BuilderCommand->CurrentCommand : -1) +
+                            " pathSize=" +
+                            std::to_string(BuilderPath ? (int)BuilderPath->Path.size() : -1) +
+                            " pathIndex=" +
+                            std::to_string(BuilderPath ? BuilderPath->PathIndex : -1));
+                }
+            }
         }
     }
 
@@ -743,7 +1164,12 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     Unit->EnergyPoints = Unit->MaxEnergyPoints;
 
     if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
+    {
+        Render->ImageID = ResolveImageID(Unit->ChkUnitID);
+        Render->FrameIndex = 0;
+        Render->TotalFrames = 1;
         Render->Tint = Core::Colors::White();
+    }
 
     int PlayerID = 0;
     if (auto* Player = EM.GetComponent<PlayerComponent>(EntityID))

@@ -26,6 +26,13 @@ struct CampaignRuntime
         return Active;
     }
 
+    void Deactivate()
+    {
+        Active = false;
+        ScenarioPaused = false;
+        ClearProgressTarget();
+    }
+
     Game::Campaign::CampaignController& Controller()
     {
         return Campaign;

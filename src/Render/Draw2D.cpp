@@ -392,8 +392,10 @@ void Draw2D::DrawSprite(const GpuTextureHandle& Texture,
                         float U0, float V0, float U1, float V1,
                         Color Tint, bool FlipX)
 {
-    if (Texture.Image.id == 0) return;
-    if (mCurrentTexture.Image.id != Texture.Image.id || mCurrentMaterial != BatchMaterial::Textured)
+    if (!Texture.Valid()) return;
+    if (mCurrentTexture.Image.id != Texture.Image.id ||
+        mCurrentTexture.View.id != Texture.View.id ||
+        mCurrentMaterial != BatchMaterial::Textured)
     {
         Flush();
         mCurrentTexture = Texture;
@@ -415,14 +417,18 @@ void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
                               Color TeamColor,
                               const GpuTextureHandle* TeamColorMask)
 {
-    if (Texture.Image.id == 0) return;
+    if (!Texture.Valid()) return;
     const bool UseTeamColor = TeamColorMask && TeamColorMask->Valid();
-    if (mCurrentTexture.Image.id != Texture.Image.id || mCurrentMaterial != BatchMaterial::SpriteEffect)
+    if (mCurrentTexture.Image.id != Texture.Image.id ||
+        mCurrentTexture.View.id != Texture.View.id ||
+        mCurrentMaterial != BatchMaterial::SpriteEffect)
     {
         Flush();
         mCurrentTexture = Texture;
     }
-    if (UseTeamColor && mCurrentTeamColorMask.Image.id != TeamColorMask->Image.id)
+    if (UseTeamColor &&
+        (mCurrentTeamColorMask.Image.id != TeamColorMask->Image.id ||
+         mCurrentTeamColorMask.View.id != TeamColorMask->View.id))
     {
         Flush();
         mCurrentTeamColorMask = *TeamColorMask;
@@ -474,8 +480,10 @@ void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Th
 
 void Draw2D::DrawText(const std::string& Text, float X, float Y, float Size, Color C)
 {
-    if (mFontTexture.Image.id == 0) return;
-    if (mCurrentTexture.Image.id != mFontTexture.Image.id || mCurrentMaterial != BatchMaterial::Textured)
+    if (!mFontTexture.Valid()) return;
+    if (mCurrentTexture.Image.id != mFontTexture.Image.id ||
+        mCurrentTexture.View.id != mFontTexture.View.id ||
+        mCurrentMaterial != BatchMaterial::Textured)
     {
         Flush();
         mCurrentTexture = mFontTexture;

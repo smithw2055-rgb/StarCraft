@@ -12,14 +12,43 @@ class Camera2D
 public:
     Camera2D() = default;
 
-    void SetViewport(int Width, int Height) { mViewportW = Width; mViewportH = Height; }
+    void SetViewport(int Width, int Height)
+    {
+        mViewportW = Width;
+        mViewportH = Height;
+        ClampTargetToBounds();
+        mX = mTargetX;
+        mY = mTargetY;
+    }
     int GetViewportWidth() const { return mViewportW; }
     int GetViewportHeight() const { return mViewportH; }
 
-    void SetPosition(float X, float Y) { mX = X; mY = Y; mTargetX = X; mTargetY = Y; }
-    void SetTarget(float X, float Y) { mTargetX = X; mTargetY = Y; }
-    void TranslateTarget(float DX, float DY) { mTargetX += DX; mTargetY += DY; }
-    void PanBy(float DX, float DY) { mTargetX += DX; mTargetY += DY; }
+    void SetPosition(float X, float Y)
+    {
+        mTargetX = X;
+        mTargetY = Y;
+        ClampTargetToBounds();
+        mX = mTargetX;
+        mY = mTargetY;
+    }
+    void SetTarget(float X, float Y)
+    {
+        mTargetX = X;
+        mTargetY = Y;
+        ClampTargetToBounds();
+    }
+    void TranslateTarget(float DX, float DY)
+    {
+        mTargetX += DX;
+        mTargetY += DY;
+        ClampTargetToBounds();
+    }
+    void PanBy(float DX, float DY)
+    {
+        mTargetX += DX;
+        mTargetY += DY;
+        ClampTargetToBounds();
+    }
 
     void ZoomAt(float ScreenX, float ScreenY, float Delta)
     {
@@ -43,12 +72,20 @@ public:
     float GetTargetX() const { return mTargetX; }
     float GetTargetY() const { return mTargetY; }
 
-    void SetZoom(float Zoom) { mZoom = Zoom; mTargetZoom = Zoom; }
+    void SetZoom(float Zoom)
+    {
+        mZoom = Zoom;
+        mTargetZoom = Zoom;
+        ClampTargetToBounds();
+        mX = mTargetX;
+        mY = mTargetY;
+    }
     void AdjustZoom(float Delta)
     {
         mTargetZoom += Delta;
         if (mTargetZoom < mMinZoom) mTargetZoom = mMinZoom;
         if (mTargetZoom > mMaxZoom) mTargetZoom = mMaxZoom;
+        ClampTargetToBounds();
     }
     float GetZoom() const { return mZoom; }
 
@@ -63,11 +100,17 @@ public:
         mMapMaxX = static_cast<float>(MapWidthTiles * TileSize);
         mMapMaxY = static_cast<float>(MapHeightTiles * TileSize);
         mHasBounds = true;
+        ClampTargetToBounds();
+        mX = mTargetX;
+        mY = mTargetY;
     }
     void SetMapBoundsPx(float MinX, float MinY, float MaxX, float MaxY)
     {
         mMapMinX = MinX; mMapMinY = MinY; mMapMaxX = MaxX; mMapMaxY = MaxY;
         mHasBounds = true;
+        ClampTargetToBounds();
+        mX = mTargetX;
+        mY = mTargetY;
     }
     void ClearMapBounds() { mHasBounds = false; }
 
@@ -115,8 +158,11 @@ public:
     }
 
 private:
-    void ClampToBounds()
+    void ClampTargetToBounds()
     {
+        if (!mHasBounds)
+            return;
+
         float HalfW = (mViewportW * 0.5f) / mZoom;
         float HalfH = (mViewportH * 0.5f) / mZoom;
         float MinX = mMapMinX + HalfW;
@@ -127,6 +173,11 @@ private:
         else { if (mTargetX < MinX) mTargetX = MinX; if (mTargetX > MaxX) mTargetX = MaxX; }
         if (MaxY < MinY) { mTargetY = (mMapMinY + mMapMaxY) * 0.5f; }
         else { if (mTargetY < MinY) mTargetY = MinY; if (mTargetY > MaxY) mTargetY = MaxY; }
+    }
+
+    void ClampToBounds()
+    {
+        ClampTargetToBounds();
     }
 
     int mViewportW = 1280;

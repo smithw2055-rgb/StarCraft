@@ -45,6 +45,12 @@ void Hud::OnButtonInvoked(int ButtonIndex)
         return;
     }
 
+    if (Button.Kind == ActionKind::Cancel)
+    {
+        mState.ActiveCommand = -1;
+        return;
+    }
+
     if (Button.Kind == ActionKind::Build)
     {
         auto Def = Game::Races::GetUnitDefByID(Button.TargetUnitDefID);

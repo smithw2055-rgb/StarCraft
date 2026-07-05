@@ -34,6 +34,11 @@ uint32_t SpriteAssetCacheView::ResolveImageID(int ChkUnitID) const
     return mCache ? mCache->ResolveImageID(ChkUnitID) : 0;
 }
 
+uint32_t SpriteAssetCacheView::ResolveConstructionImageID(int ChkUnitID) const
+{
+    return mCache ? mCache->ResolveConstructionImageID(ChkUnitID) : UINT32_MAX;
+}
+
 uint32_t SpriteAssetCacheView::ResolveSubunitImageID(int ChkUnitID) const
 {
     return mCache ? mCache->ResolveSubunitImageID(ChkUnitID) : UINT32_MAX;

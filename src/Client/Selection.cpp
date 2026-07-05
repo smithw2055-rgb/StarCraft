@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace Game::Client
 {
@@ -279,6 +280,14 @@ int Selection::Get(int Index) const
     if (Index < 0 || Index >= (int)mSelected.size())
         return -1;
     return mSelected[Index];
+}
+
+void Selection::SetSelectedForDebug(std::vector<int> Selected)
+{
+    if ((int)Selected.size() > kMaxSelection)
+        Selected.resize(kMaxSelection);
+    mSelected = std::move(Selected);
+    mPhase = Phase::Idle;
 }
 
 int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float WorldX, float WorldY) const

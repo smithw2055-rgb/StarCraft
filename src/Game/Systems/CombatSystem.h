@@ -47,6 +47,7 @@ private:
     bool RollMissChance(const Components::CombatComponent& Combat,
                         const Components::TransformComponent& AttackerTrans,
                         const Components::TransformComponent& TargetTrans,
+                        float RangePixels,
                         Core::ECS::EntityManager& EM) const;
     void UpdateStatusEffects(Core::ECS::EntityManager& EM, float DeltaTime);
 

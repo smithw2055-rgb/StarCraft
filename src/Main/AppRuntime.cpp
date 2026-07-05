@@ -1,8 +1,11 @@
 #include "Main/AppRuntime.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <utility>
 
 #include "Client/MapLoader.h"
@@ -41,6 +44,15 @@ namespace
 
         return Path;
     }
+
+    bool IsCampaignMapPath(const std::string& Path)
+    {
+        std::string Normalized = Path;
+        std::replace(Normalized.begin(), Normalized.end(), '\\', '/');
+        std::transform(Normalized.begin(), Normalized.end(), Normalized.begin(),
+            [](unsigned char C) { return (char)std::tolower(C); });
+        return Normalized.find("/campaign/") != std::string::npos;
+    }
 }
 
 bool AppRuntime::DetectGameInstall()
@@ -64,11 +76,18 @@ void AppRuntime::SetMapPathOverride(std::string Path)
     MapPathOverride = std::move(Path);
 }
 
+void AppRuntime::SetCampaignRuntimeEnabled(bool Enabled)
+{
+    CampaignRuntimeEnabled = Enabled;
+}
+
 void AppRuntime::ResolveMapPath()
 {
     if (!MapPathOverride.empty())
     {
         MapPath = ResolveMapSelectionPath(MapPathOverride, InstallPath);
+        if (!IsCampaignMapPath(MapPath))
+            CampaignRuntimeEnabled = false;
         Core::Utils::Logger::Info("GameMain", "Using map override: " + MapPath);
     }
     else if (const char* EnvMap = std::getenv("STARCRAFT_MAP_PATH"))

@@ -44,6 +44,7 @@ public:
     int Count() const;
     int Get(int Index) const;
     const std::vector<int>& GetSelected() const { return mSelected; }
+    void SetSelectedForDebug(std::vector<int> Selected);
 
     // Control groups
     void SaveControlGroup(int GroupIndex, Core::ECS::EntityManager& Entities);

@@ -14,8 +14,10 @@ namespace Game::Client::GameLoop
 
 namespace
 {
-    bool ShouldDevStartInGame(const AppRuntime& App)
+    bool ShouldDevStartInGame(const AppRuntime& App, bool DirectStartEnabled)
     {
+        if (DirectStartEnabled)
+            return true;
         if (!App.MapPathOverride.empty())
             return true;
         const char* DevStart = std::getenv("STARCRAFT_DEV_START_INGAME");
@@ -47,7 +49,8 @@ bool GameController::Initialize(int Width, int Height)
             []() { Core::Platform::RequestQuit(); },
             [this](const std::string& MapPath) { SetMapPathOverride(MapPath); },
             [this]() { StartGame(); });
-    });
+    },
+        !mDirectStartEnabled);
 #if ENABLE_GUI_UI
     if (mInitialGuiHudEnabled && mRuntime.App.Gui.MainGui.IsActive())
         mRuntime.App.Gui.UseGui = true;
@@ -55,8 +58,12 @@ bool GameController::Initialize(int Width, int Height)
 
     mRuntime.App.Runtime.Initialized = true;
     mRuntime.App.Runtime.State = GameState::MainMenu;
-    if (ShouldDevStartInGame(mRuntime.App.Runtime))
+    if (ShouldDevStartInGame(mRuntime.App.Runtime, mDirectStartEnabled))
+    {
+        if (mDirectStartEnabled)
+            std::cout << "StarCraft: direct test map startup entering game" << std::endl;
         StartGame();
+    }
     return true;
 }
 

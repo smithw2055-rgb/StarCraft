@@ -59,6 +59,10 @@ int main()
                 HasOnly({Anim_Init, Anim_Built})) == Anim_Init,
             "building under construction falls back to Init when AlmostBuilt is unavailable");
 
+    Require(AnimationSystem::ResolvePlayableIScriptAnimation(
+                Anim_AlmostBuilt, HasOnly({Anim_Init, Anim_Built})) == Anim_Init,
+            "construction animation availability falls back to Init");
+
     Require(AnimationSystem::SelectIScriptAnimationForState(
                 AnimState::Idle, true, false, true,
                 false, false, false, false,

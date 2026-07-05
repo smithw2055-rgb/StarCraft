@@ -8,6 +8,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Main/GameCommandDispatchRuntime.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "UI/MainGuiSelectionPresentation.h"
@@ -234,6 +235,87 @@ int main()
         "GUI HUD selection presentation receives the queued SCV from classic HUD state");
     Require(GuiSelection.Progress >= 0.0f,
         "GUI HUD queue presentation remains visible before the first production tick");
+    const auto& TrainCancelButton = RequireButton(Hud, 8, "Cancel");
+    Require(TrainCancelButton.Kind == Game::Client::UI::ActionKind::Cancel &&
+            TrainCancelButton.Enabled,
+        "Command Center exposes an enabled cancel button while training is queued");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {CommandCenter}, Hud, 8),
+        "shared HUD command index dispatch cancels active training from the command card");
+    auto* CommandCenterProduction =
+        EM.GetComponent<Game::Components::ProductionComponent>(CommandCenter);
+    Require(CommandCenterProduction != nullptr &&
+            CommandCenterProduction->Queue.empty(),
+        "HUD cancel clears the active training queue");
+    Require(Resources.Minerals == 500 && Resources.SupplyUsed == 0,
+        "HUD cancel refunds queued SCV minerals and reserved supply");
+    Hud.UpdateContext(EM, {CommandCenter});
+    Require(Hud.GetButtonDefs()[8].Label != "Cancel",
+        "training cancel button disappears after the queue is empty");
+
+    const int EngineeringBayDef = Game::Races::GetUnitDefID("EngineeringBay");
+    const int EngineeringBay = CreateTerranUnit(EM, EngineeringBayDef, 0);
+    Hud.UpdateContext(EM, {EngineeringBay});
+    const auto& InfantryWeaponsButton = RequireButton(Hud, 0, "Inf Wpn +1");
+    Require(InfantryWeaponsButton.Kind == Game::Client::UI::ActionKind::Upgrade &&
+            InfantryWeaponsButton.Enabled,
+        "Engineering Bay exposes Infantry Weapons as an upgrade action");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {EngineeringBay}, Hud, 0),
+        "shared HUD command index dispatch starts active upgrades from the command card");
+    auto* EngineeringBayBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(EngineeringBay);
+    Require(EngineeringBayBuilding != nullptr, "Engineering Bay building component exists");
+    EngineeringBayBuilding->BuildTimeRemaining =
+        Game::Systems::UpgradeSystem::GetResearchTimeCost(
+            Game::Systems::ResearchId::Terran_InfantryWeapons,
+            0) * 0.5f;
+    Hud.UpdateContext(EM, {EngineeringBay});
+    const auto& ResearchInfo = Hud.GetState().InfoPanel;
+    const auto GuiResearch =
+        Game::Client::UI::BuildMainGuiSelectionPresentation(ResearchInfo);
+    Require(ResearchInfo.QueueLabel == "Upgrade" &&
+            !ResearchInfo.QueueEntries.empty() &&
+            ResearchInfo.QueueEntries[0] == "Infantry Weapons",
+        "classic HUD info panel exposes active upgrades as the building queue");
+    Require(ResearchInfo.StatusLine == "Upgrading Infantry Weapons" &&
+            ResearchInfo.Progress > 0.49f &&
+            ResearchInfo.Progress < 0.51f,
+        "classic HUD info panel exposes active upgrade progress");
+    Require(GuiResearch.QueueLabel == "Upgrade" &&
+            !GuiResearch.QueueEntries.empty() &&
+            GuiResearch.QueueEntries[0] == "Infantry Weapons" &&
+            GuiResearch.Progress > 0.49f &&
+            GuiResearch.Progress < 0.51f,
+        "GUI HUD selection presentation receives active upgrade progress");
+    const auto& ResearchCancelButton = RequireButton(Hud, 8, "Cancel");
+    Require(ResearchCancelButton.Kind == Game::Client::UI::ActionKind::Cancel &&
+            ResearchCancelButton.Enabled,
+        "Engineering Bay exposes an enabled cancel button while research is active");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {EngineeringBay}, Hud, 8),
+        "shared HUD command index dispatch cancels active research from the command card");
+    Require(!EngineeringBayBuilding->IsResearching &&
+            EngineeringBayBuilding->ResearchingID == -1,
+        "HUD cancel clears active research state");
+    Require(Resources.Minerals == 500 && Resources.VespeneGas == 500,
+        "HUD cancel refunds active research resources");
+    Hud.UpdateContext(EM, {EngineeringBay});
+    const auto& ResearchAfterCancel = Hud.GetState().InfoPanel;
+    Require(ResearchAfterCancel.QueueLabel.empty() &&
+            ResearchAfterCancel.QueueEntries.empty(),
+        "research queue presentation clears after HUD cancel");
+    Require(Hud.GetButtonDefs()[8].Label != "Cancel",
+        "research cancel button disappears after research is cleared");
+
+    const int AcademyDef = Game::Races::GetUnitDefID("Academy");
+    const int Academy = CreateTerranUnit(EM, AcademyDef, 0);
+    Hud.UpdateContext(EM, {Academy});
+    const auto& StimPackButton = RequireButton(Hud, 0, "Stim Pack");
+    Require(StimPackButton.Kind == Game::Client::UI::ActionKind::Research &&
+            StimPackButton.Enabled,
+        "Academy exposes Stim Packs as a research action");
+    const auto& U238Button = RequireButton(Hud, 1, "U-238");
+    Require(U238Button.Kind == Game::Client::UI::ActionKind::Upgrade &&
+            U238Button.Enabled,
+        "Academy exposes U-238 Shells as an upgrade action");
 
     const int ScvEntity = CreateTerranUnit(EM, ScvDef, 0);
     Hud.UpdateContext(EM, {ScvEntity});
@@ -387,10 +469,25 @@ int main()
     const int MedicDef = Game::Races::GetUnitDefID("Medic");
     const int MarineDef = Game::Races::GetUnitDefID("Marine");
     const int MarineEntity = CreateTerranUnit(EM, MarineDef, 0);
+    auto* InitialMarineUnit = EM.GetComponent<Game::Components::UnitComponent>(MarineEntity);
+    Require(InitialMarineUnit != nullptr, "Marine command test unit has unit data");
+    InitialMarineUnit->HitPoints = Game::Races::GetUnitDefByID(MarineDef).HitPoints;
+    InitialMarineUnit->MaxHitPoints = Game::Races::GetUnitDefByID(MarineDef).HitPoints;
     auto& MarineCombat = EM.AddComponent<Game::Components::CombatComponent>(MarineEntity);
     MarineCombat.GroundDamage = 6;
+    MarineCombat.AttackRange = Game::Races::GetUnitDefByID(MarineDef).AttackRange;
     MarineCombat.CanTargetGround = true;
     MarineCombat.CanTargetAir = false;
+
+    auto& PlayerUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(0);
+    PlayerUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Terran_U238Shells)] = 1;
+    Hud.UpdateContext(EM, {MarineEntity});
+    const auto& UpgradedMarineInfo = Hud.GetState().InfoPanel;
+    Require(UpgradedMarineInfo.RangeValue == 5,
+        "HUD info panel displays Marine range after U-238 Shells");
+    Require(UpgradedMarineInfo.CombatLine.find("Range 5") != std::string::npos,
+        "HUD combat line uses upgraded Marine range");
 
     const int EnemyMarineEntity = CreateTerranUnit(EM, MarineDef, 1);
     Game::Client::GameLoop::ClickTargetContext EnemyClickTarget;
@@ -405,6 +502,34 @@ int main()
         "disabled visible command buttons do not report a handled dispatch");
     Require(!Hud.HasPendingTarget() && Hud.GetActiveCommandIndex() < 0,
         "disabled visible command buttons do not alter HUD command state");
+    PlayerUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Terran_StimPacks)] = 1;
+    Hud.UpdateContext(EM, {MarineEntity});
+    const auto& ResearchedStimButton = RequireButton(Hud, 6, "Stim");
+    Require(ResearchedStimButton.Enabled &&
+            ResearchedStimButton.Kind == Game::Client::UI::ActionKind::UseTech &&
+            ResearchedStimButton.ResearchId == Game::Systems::TerranResearchId::StimPacks,
+        "Marine stim button becomes a use-tech action after Stim Packs research");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {MarineEntity}, Hud, 6),
+        "shared HUD command index dispatch accepts researched use-tech buttons");
+    auto* MarineCommand = EM.GetComponent<Game::Components::CommandComponent>(MarineEntity);
+    const auto* StimOrder = MarineCommand ? MarineCommand->GetCurrentOrder() : nullptr;
+    auto* MarineUnit = EM.GetComponent<Game::Components::UnitComponent>(MarineEntity);
+    auto* MarineStatus = EM.GetComponent<Game::Components::StatusEffectComponent>(MarineEntity);
+    Require(MarineCommand &&
+            MarineCommand->CurrentCommand == Game::Components::CommandType::UseAbility &&
+            StimOrder &&
+            StimOrder->Type == Game::Components::OrderType::UseTech &&
+            StimOrder->AbilityID ==
+                static_cast<int>(Game::Systems::ResearchId::Terran_StimPacks),
+        "researched stim click issues a use-tech order with the researched tech id");
+    Require(MarineUnit && MarineUnit->HitPoints == Game::Races::GetUnitDefByID(MarineDef).HitPoints - 10,
+        "stim use-tech click spends the Terran infantry hit point cost");
+    Require(MarineStatus &&
+            MarineStatus->HasEffect(Game::Components::StatusEffect::Stim),
+        "stim use-tech click applies the Stim status effect");
+    Require(!Hud.HasPendingTarget(),
+        "instant researched use-tech buttons do not enter target mode");
 
     const auto& AttackButton = RequireButton(Hud, 1, "Attack");
     Require(AttackButton.CommandId == Game::Client::UI::HudCommandId::AttackMove,

@@ -90,6 +90,26 @@ namespace
         Require(!Path.empty(), "unit main image resolves to a GRP path");
     }
 
+    void RequireUnitConstructionImage(Resource::GameDataLoader& Loader,
+                                      uint32_t ChkUnitID,
+                                      uint32_t ExpectedImageID,
+                                      const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitConstructionImageID(ChkUnitID);
+        Require(ImageID == ExpectedImageID, Name);
+
+        const auto* Relation = Loader.FindImageRelationByID(ImageID);
+        Require(!Relation || !Relation->IsShadow(),
+            "unit construction image must not resolve to a shadow relation");
+
+        const std::string Path = Loader.ResolveImageGrpPath(ImageID);
+        Require(!Path.empty(), "unit construction image resolves to a GRP path");
+
+        auto Sprite = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(Path));
+        Require(Sprite.has_value() && !Sprite->Frames.empty(),
+            "unit construction GRP decodes to visible frames");
+    }
+
     void RequireUnitTeamColorMaskSource(Resource::GameDataLoader& Loader,
                                         uint32_t ChkUnitID,
                                         const char* Name)
@@ -188,6 +208,7 @@ int main()
     RequireUnitMainImage(Loader, 5, "Tank image");
     RequireUnitMainImage(Loader, 12, "Battlecruiser image");
     RequireUnitMainImage(Loader, 124, "Missile Turret image");
+    RequireUnitConstructionImage(Loader, 109, 330, "Supply Depot construction image");
     RequireUnitTeamColorMaskSource(Loader, 0, "Marine team-color source");
     RequireUnitTeamColorMaskSource(Loader, 7, "SCV team-color source");
 

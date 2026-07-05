@@ -122,6 +122,24 @@ static float ActiveStatusSeconds(const StatusEffectComponent& Status,
     return 0.0f;
 }
 
+static float AttackCooldownMultiplier(Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+    if (!Status)
+        return 1.0f;
+
+    int Mod = 0;
+    if (Status->HasEffect(StatusEffect::Stim))
+        ++Mod;
+    if (Status->HasEffect(StatusEffect::Ensnare))
+        --Mod;
+    if (Mod > 0)
+        return 0.5f;
+    if (Mod < 0)
+        return 1.25f;
+    return 1.0f;
+}
+
 static bool CanAttackTarget(const CombatComponent& Combat,
                             Core::ECS::EntityManager& EM,
                             int TargetID)
@@ -133,6 +151,14 @@ static bool CanAttackTarget(const CombatComponent& Combat,
     const bool TargetAir = IsAirTarget(EM, TargetID);
     return TargetAir ? (Combat.CanTargetAir && Combat.AirDamage > 0)
                      : (Combat.CanTargetGround && Combat.GroundDamage > 0);
+}
+
+static float EffectiveAttackRangePixels(const Core::ECS::EntityManager& EM,
+                                        int EntityID,
+                                        const CombatComponent& Combat)
+{
+    return Combat.AttackRange * 32.0f +
+           (float)UpgradeSystem::GetRangeBonusPixels(EM, EntityID);
 }
 
 static void ClearCombatTargetForInvalidTarget(Core::ECS::EntityManager& EM,
@@ -368,6 +394,7 @@ int CombatSystem::PickWeaponDamage(const CombatComponent& Combat,
 bool CombatSystem::RollMissChance(const CombatComponent& Combat,
                                    const TransformComponent& AttackerTrans,
                                    const TransformComponent& TargetTrans,
+                                   float RangePixels,
                                    Core::ECS::EntityManager& EM) const
 {
     (void)EM;
@@ -379,7 +406,7 @@ bool CombatSystem::RollMissChance(const CombatComponent& Combat,
 
     // For simplicity, check position distance-based miss: if target is at range limit, slight chance
     float Dist = AttackerTrans.Position.DistanceTo(TargetTrans.Position);
-    float MaxRng = Combat.AttackRange * 32.0f;
+    float MaxRng = RangePixels;
     if (Dist > MaxRng * 0.85f)
     {
         // 5% miss at max range
@@ -681,7 +708,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     // HoldPosition: don't chase, fire at enemies in range without moving
     if (Cmd && Cmd->CurrentCommand == CommandType::HoldPosition)
     {
-        int Nearby = FindNearestEnemy(EM, EntityID, Combat->AttackRange * 32.0f);
+        const float RangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
+        int Nearby = FindNearestEnemy(EM, EntityID, RangePixels);
         if (Nearby >= 0)
         {
             Combat->TargetEntityID = Nearby;
@@ -689,9 +717,10 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
             if (TTrans)
             {
                 float D = Trans->Position.DistanceTo(TTrans->Position);
-                if (D <= Combat->AttackRange * 32.0f && Combat->CooldownRemaining <= 0.0f)
+                if (D <= RangePixels && Combat->CooldownRemaining <= 0.0f)
                 {
-                    Combat->CooldownRemaining = Combat->AttackCooldown;
+                    Combat->CooldownRemaining =
+                        Combat->AttackCooldown * AttackCooldownMultiplier(EM, EntityID);
 
                     const bool TargetIsAir = IsAirTarget(EM, Nearby);
                     int Damage = PickWeaponDamage(*Combat, EM.GetComponent<UnitComponent>(Nearby), TargetIsAir);
@@ -701,9 +730,9 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
                     int TotalDamage = Damage + UpgradeBonus;
 
                     if (Combat->WeaponBeh != WeaponBehavior::Melee ||
-                        !RollMissChance(*Combat, *Trans, *TTrans, EM))
+                        !RollMissChance(*Combat, *Trans, *TTrans, RangePixels, EM))
                         BeginOrResolveAttack(EM, EntityID, Nearby, *TTrans, TotalDamage,
-                                             Combat->AttackRange * 32.0f);
+                                             RangePixels);
                 }
             }
         }
@@ -737,7 +766,9 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     // Find new target for attack-move
     if (TargetID < 0 && Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
     {
-        TargetID = FindNearestEnemy(EM, EntityID, Combat->AttackRange * 32.0f * 2.0f);
+        const float SearchRangePixels =
+            EffectiveAttackRangePixels(EM, EntityID, *Combat) * 2.0f;
+        TargetID = FindNearestEnemy(EM, EntityID, SearchRangePixels);
         if (TargetID >= 0)
         {
             const Core::Math::Vec2 AttackMoveDestination = Cmd->TargetPosition;
@@ -769,7 +800,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
 
     // Check range
     float Dist = Trans->Position.DistanceTo(TargetTrans->Position);
-    float RangePixels = Combat->AttackRange * 32.0f;
+    float RangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
 
     if (Dist > RangePixels)
     {
@@ -787,7 +818,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
 
     if (Combat->CooldownRemaining <= 0.0f)
     {
-        Combat->CooldownRemaining = Combat->AttackCooldown;
+        Combat->CooldownRemaining =
+            Combat->AttackCooldown * AttackCooldownMultiplier(EM, EntityID);
 
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
 
@@ -799,7 +831,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         int TotalDamage = Damage + UpgradeBonus;
 
         if (Combat->WeaponBeh != WeaponBehavior::Melee ||
-            !RollMissChance(*Combat, *Trans, *TargetTrans, EM))
+            !RollMissChance(*Combat, *Trans, *TargetTrans, RangePixels, EM))
             BeginOrResolveAttack(EM, EntityID, TargetID, *TargetTrans, TotalDamage, RangePixels);
     }
 }

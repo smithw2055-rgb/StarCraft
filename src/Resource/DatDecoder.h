@@ -28,6 +28,7 @@ struct UnitEntry
     uint16_t FlingyID = 0;
     uint16_t Subunit1ID = 228;
     uint16_t Subunit2ID = 228;
+    uint32_t ConstructionImageID = UINT32_MAX;
     int16_t PlacementWidth = 0;
     int16_t PlacementHeight = 0;
     int16_t DimensionLeft = 0;

@@ -8,19 +8,31 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 
 namespace
 {
     Game::Client::GameLoop::GameController gController;
     std::string gMapPathOverride;
+    bool gDirectTestMap = false;
     bool gHasCameraOverride = false;
     float gCameraX = 0.0f;
     float gCameraY = 0.0f;
     bool gEnableGuiHud = false;
     bool gHighDpi = true;
+    bool gInteractionDemo = false;
     int gExitAfterFrame = -1;
     int gFrameCount = 0;
+
+    void SetRuntimeEnvFlag(const char* Name)
+    {
+#if defined(_WIN32)
+        _putenv_s(Name, "1");
+#else
+        setenv(Name, "1", 1);
+#endif
+    }
 }
 
 static void InitCb()
@@ -61,6 +73,11 @@ sapp_desc sokol_main(int argc, char* argv[])
     {
         if (std::strcmp(argv[I], "--map") == 0 && I + 1 < argc)
             gMapPathOverride = argv[++I];
+        else if (std::strcmp(argv[I], "--test-map") == 0 && I + 1 < argc)
+        {
+            gMapPathOverride = argv[++I];
+            gDirectTestMap = true;
+        }
         else if (std::strcmp(argv[I], "--camera") == 0 && I + 2 < argc)
         {
             gHasCameraOverride = true;
@@ -79,6 +96,23 @@ sapp_desc sokol_main(int argc, char* argv[])
         {
             gExitAfterFrame = std::atoi(argv[++I]);
         }
+        else if (std::strcmp(argv[I], "--interaction-demo") == 0)
+        {
+            gInteractionDemo = true;
+            SetRuntimeEnvFlag("STARCRAFT_INTERACTION_DEMO");
+        }
+        else if (std::strcmp(argv[I], "--debug-harvest") == 0)
+        {
+            SetRuntimeEnvFlag("STARCRAFT_DEBUG_HARVEST");
+        }
+        else if (std::strcmp(argv[I], "--debug-construction") == 0)
+        {
+            SetRuntimeEnvFlag("STARCRAFT_DEBUG_CONSTRUCTION");
+        }
+        else if (std::strcmp(argv[I], "--debug-iscript") == 0)
+        {
+            SetRuntimeEnvFlag("STARCRAFT_DEBUG_ISCRIPT");
+        }
         else if (gMapPathOverride.empty())
             gMapPathOverride = argv[I];
     }
@@ -89,11 +123,24 @@ sapp_desc sokol_main(int argc, char* argv[])
     }
 
     if (!gMapPathOverride.empty())
+    {
+        if (gDirectTestMap)
+        {
+            std::cout << "StarCraft: direct test map requested: " << gMapPathOverride << std::endl;
+            gController.SetCampaignRuntimeEnabled(false);
+            gController.SetDirectStartEnabled(true);
+        }
         gController.SetMapPathOverride(gMapPathOverride);
+    }
     if (gHasCameraOverride)
         gController.SetInitialCameraOverride(gCameraX, gCameraY);
     if (gEnableGuiHud)
         gController.SetInitialGuiHudEnabled(true);
+    if (gInteractionDemo)
+    {
+        std::cout << "StarCraft: interaction demo requested" << std::endl;
+        gController.SetInteractionDemoEnabled(true);
+    }
 
     sapp_desc Desc = {};
     Desc.init_cb = InitCb;

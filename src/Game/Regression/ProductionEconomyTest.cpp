@@ -282,7 +282,7 @@ int main()
             DeadResearchResources.VespeneGas == 300,
         "dead research start attempt does not spend resources");
 
-    constexpr int OverlapResearchPlayerID = 8;
+    constexpr int OverlapResearchPlayerID = 6;
     auto& OverlapResearchResources =
         Game::Systems::HarvestSystem::GetResources(OverlapResearchPlayerID);
     OverlapResearchResources.Minerals = 300;
@@ -312,6 +312,18 @@ int main()
             BusyResearchBuilding->ResearchingID ==
                 static_cast<int>(Game::Systems::ResearchId::Terran_InfantryWeapons),
         "blocked overlapping research attempt preserves first upgrade state");
+    Require(Game::Systems::UpgradeSystem::CancelResearch(EM, BusyEngineeringBay),
+        "manual research cancel succeeds");
+    Require(!BusyResearchBuilding->IsResearching &&
+            BusyResearchBuilding->ResearchingID == -1,
+        "manual research cancel clears active research state");
+    Require(OverlapResearchResources.Minerals == 300 &&
+            OverlapResearchResources.VespeneGas == 300,
+        "manual research cancel refunds reserved research resources");
+    Require(Game::Systems::UpgradeSystem::GetResearchLevel(
+                OverlapResearchPlayerID,
+                Game::Systems::ResearchId::Terran_InfantryWeapons) == 0,
+        "manual research cancel does not grant the canceled upgrade");
 
     const int DoomedEngineeringBay =
         CreateCompletedBuilding(EM, "EngineeringBay", DeadResearchPlayerID, {256.0f, 160.0f});
@@ -340,6 +352,38 @@ int main()
     Require(DeadResearchResources.Minerals == 200 &&
             DeadResearchResources.VespeneGas == 200,
         "research building death does not refund already-spent research resources");
+
+    constexpr int HighSlotResearchPlayerID = 8;
+    auto& HighSlotResearchResources =
+        Game::Systems::HarvestSystem::GetResources(HighSlotResearchPlayerID);
+    HighSlotResearchResources.Minerals = 300;
+    HighSlotResearchResources.VespeneGas = 300;
+    HighSlotResearchResources.SupplyUsed = 0;
+    HighSlotResearchResources.SupplyMax = 10;
+    Require(Game::Systems::UpgradeSystem::GetResearchLevel(
+                7,
+                Game::Systems::ResearchId::Terran_InfantryArmor) == 0,
+        "high-slot research coverage starts with player 7 infantry armor unresearched");
+    Require(Game::Systems::UpgradeSystem::GetResearchLevel(
+                HighSlotResearchPlayerID,
+                Game::Systems::ResearchId::Terran_InfantryArmor) == 0,
+        "high-slot research coverage starts with player 8 infantry armor unresearched");
+    const int HighSlotEngineeringBay =
+        CreateCompletedBuilding(EM, "EngineeringBay", HighSlotResearchPlayerID, {288.0f, 160.0f});
+    Require(Game::Systems::UpgradeSystem::StartResearch(
+                EM,
+                HighSlotEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryArmor),
+        "player 8 can start research in its own upgrade slot");
+    Upgrade.Update(1000.0f);
+    Require(Game::Systems::UpgradeSystem::GetResearchLevel(
+                HighSlotResearchPlayerID,
+                Game::Systems::ResearchId::Terran_InfantryArmor) == 1,
+        "player 8 completed research is stored in player 8 upgrade slot");
+    Require(Game::Systems::UpgradeSystem::GetResearchLevel(
+                7,
+                Game::Systems::ResearchId::Terran_InfantryArmor) == 0,
+        "player 8 completed research does not alias player 7 upgrade slot");
 
     constexpr int BrokenStartPlayerID = 4;
     auto& BrokenStartResources = Game::Systems::HarvestSystem::GetResources(BrokenStartPlayerID);

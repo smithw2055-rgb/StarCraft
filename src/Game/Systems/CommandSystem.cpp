@@ -6,9 +6,13 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BuildingSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/DataEnums.h"
+#include "Game/Races/RaceDef.h"
 
 #include <algorithm>
+#include <functional>
+#include <vector>
 
 namespace Game::Systems
 {
@@ -92,6 +96,46 @@ static bool CanReceiveMovementOrder(Core::ECS::EntityManager& EM, Core::ECS::Ent
     return Unit->Speed > 0.0f;
 }
 
+static bool IsStimTarget(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit || Unit->HitPoints <= 10)
+        return false;
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+    if (DefID < 0)
+        return false;
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    return Def.Name == "Marine" || Def.Name == "Firebat";
+}
+
+static bool TryApplyUseTechOrder(Core::ECS::EntityManager& EM,
+                                 Core::ECS::EntityID EntityID,
+                                 const Order& InOrder)
+{
+    const auto ResearchID = static_cast<ResearchId>(InOrder.AbilityID);
+    if (ResearchID != ResearchId::Terran_StimPacks)
+        return false;
+
+    auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    if (!UpgradeSystem::HasResearch(PlayerID, ResearchID) ||
+        !IsStimTarget(EM, EntityID))
+    {
+        return false;
+    }
+
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit)
+        return false;
+
+    Unit->HitPoints = std::max(1, Unit->HitPoints - 10);
+    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+    if (!Status)
+        Status = &EM.AddComponent<StatusEffectComponent>(EntityID);
+    Status->AddEffect(StatusEffect::Stim, 15.0f, EntityID);
+    return true;
+}
+
 static void ClearMovementPath(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
 {
     if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
@@ -100,6 +144,8 @@ static void ClearMovementPath(Core::ECS::EntityManager& EM, Core::ECS::EntityID 
         Path->PathIndex = 0;
         Path->CurrentSpeed = 0.0f;
         Path->CurrentVelocity = {0.0f, 0.0f};
+        Path->StallTimer = 0.0f;
+        Path->HasLastWaypointDistance = false;
     }
 }
 
@@ -149,6 +195,128 @@ static bool ShouldMoveAsAir(Core::ECS::EntityManager& EM, Core::ECS::EntityID En
     return Unit && Game::Data::IsAirUnitType(Unit->ChkUnitID);
 }
 
+struct StaticBlockerRect
+{
+    float Left = 16.0f;
+    float Top = 16.0f;
+    float Right = 16.0f;
+    float Bottom = 16.0f;
+    Core::Math::Vec2 Position;
+};
+
+static bool IsStaticGroundBlocker(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
+{
+    if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
+        return !Building->IsLifted;
+    return EM.GetComponent<ResourceComponent>(EntityID) != nullptr;
+}
+
+static StaticBlockerRect StaticBlockerRectForEntity(Core::ECS::EntityManager& EM,
+                                                    Core::ECS::EntityID EntityID)
+{
+    StaticBlockerRect Rect;
+    if (auto* Trans = EM.GetComponent<TransformComponent>(EntityID))
+        Rect.Position = Trans->Position;
+
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        Path && Path->HasCollisionBounds)
+    {
+        Rect.Left = (float)Path->CollisionLeft;
+        Rect.Top = (float)Path->CollisionUp;
+        Rect.Right = (float)Path->CollisionRight + 1.0f;
+        Rect.Bottom = (float)Path->CollisionDown + 1.0f;
+        return Rect;
+    }
+
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+    auto* Resource = EM.GetComponent<ResourceComponent>(EntityID);
+    Core::Math::Vec2 Half{16.0f, 16.0f};
+    if (Resource)
+    {
+        Half = {32.0f, 20.0f};
+    }
+    else if (Building && Unit)
+    {
+        switch (Unit->ChkUnitID)
+        {
+            case 106: // Terran Command Center
+                Half = {64.0f, 48.0f};
+                break;
+            case 111: // Terran Barracks
+            case 113: // Terran Factory
+            case 114: // Terran Starport
+            case 116: // Terran Science Facility
+                Half = {56.0f, 40.0f};
+                break;
+            case 107: // Terran Comsat Station
+            case 108: // Terran Nuclear Silo
+            case 109: // Terran Supply Depot
+            case 115: // Terran Control Tower
+            case 120: // Terran Machine Shop
+            case 124: // Terran Missile Turret
+            case 125: // Terran Bunker
+                Half = {32.0f, 24.0f};
+                break;
+            default:
+                Half = Building->IsAddon ? Core::Math::Vec2{32.0f, 24.0f}
+                                         : Core::Math::Vec2{48.0f, 32.0f};
+                break;
+        }
+    }
+
+    Rect.Left = Half.X;
+    Rect.Top = Half.Y;
+    Rect.Right = Half.X;
+    Rect.Bottom = Half.Y;
+    return Rect;
+}
+
+static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
+    Core::ECS::EntityManager& EM,
+    Core::ECS::EntityID MovingID,
+    const Game::Map::GameMap& Map,
+    int StartTileX,
+    int StartTileY,
+    float MovingRadius)
+{
+    std::vector<StaticBlockerRect> Blockers;
+    for (auto EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    {
+        if (EntityID == MovingID || !IsStaticGroundBlocker(EM, EntityID))
+            continue;
+        auto Rect = StaticBlockerRectForEntity(EM, EntityID);
+        Rect.Left += MovingRadius;
+        Rect.Top += MovingRadius;
+        Rect.Right += MovingRadius;
+        Rect.Bottom += MovingRadius;
+        Blockers.push_back(Rect);
+    }
+
+    const Game::Map::GameMap* MapPtr = &Map;
+    return [Blockers = std::move(Blockers), MapPtr, StartTileX, StartTileY](int TileX, int TileY)
+    {
+        if (TileX == StartTileX && TileY == StartTileY)
+            return false;
+
+        if (!MapPtr)
+            return false;
+
+        const Core::Math::Vec2 Center = MapPtr->TileToWorld(TileX, TileY);
+        for (const auto& Rect : Blockers)
+        {
+            if (Center.X >= Rect.Position.X - Rect.Left &&
+                Center.X <= Rect.Position.X + Rect.Right &&
+                Center.Y >= Rect.Position.Y - Rect.Top &&
+                Center.Y <= Rect.Position.Y + Rect.Bottom)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+}
+
 static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
                                           Core::ECS::EntityID EntityID,
                                           const Order& InOrder)
@@ -161,9 +329,24 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         Path = &EM.AddComponent<PathfindingComponent>(EntityID);
     Path->Path.clear();
     Path->PathIndex = 0;
+    Path->StallTimer = 0.0f;
+    Path->HasLastWaypointDistance = false;
+    if (!Path->HasRecentMoveFailure ||
+        (Path->RecentFailedMoveTarget - InOrder.TargetPosition).LengthSq() > 16.0f * 16.0f)
+    {
+        Path->HasRecentMoveFailure = false;
+    }
     Path->NodeTolerance = 8.0f;
     RefreshCollisionRadius(EM, EntityID, *Path);
     Path->IsAir = ShouldMoveAsAir(EM, EntityID);
+    if (Path->HasRecentMoveFailure &&
+        (Path->RecentFailedMoveTarget - InOrder.TargetPosition).LengthSq() <= 16.0f * 16.0f)
+    {
+        Path->CurrentSpeed = 0.0f;
+        Path->TargetSpeed = 0.0f;
+        Path->CurrentVelocity = {0.0f, 0.0f};
+        return;
+    }
 
     if (Path->IsAir)
     {
@@ -174,9 +357,19 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
         if (Trans)
         {
+            int StartTileX = 0;
+            int StartTileY = 0;
+            gCmdMap->WorldToTile(Trans->Position, StartTileX, StartTileY);
+            const auto ExtraBlockedTile = BuildStaticBlockerTilePredicate(
+                EM,
+                EntityID,
+                *gCmdMap,
+                StartTileX,
+                StartTileY,
+                (float)std::max(4, Path->CollisionRadius));
             auto Result = Game::Pathfinding::AStar::FindPath(*gCmdMap,
                 Trans->Position, InOrder.TargetPosition,
-                1000, TerrainClearanceForPath(*Path));
+                1000, TerrainClearanceForPath(*Path), ExtraBlockedTile);
             if (Result.Found && !Result.Waypoints.empty())
                 Path->Path = std::move(Result.Waypoints);
         }
@@ -337,6 +530,9 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     Cmd->CurrentOrderIndex = -1;
     Cmd->QueueOrder(InOrder);
 
+    if (InOrder.Type == OrderType::UseTech)
+        TryApplyUseTechOrder(EM, EntityID, InOrder);
+
     ConfigureMovementPathForOrder(EM, EntityID, InOrder);
 }
 
@@ -366,7 +562,13 @@ bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
     IssueMove(EM, {EntityID}, Target);
 
     if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
-        return !Path->Path.empty();
+    {
+        if (Path->Path.empty())
+            return false;
+        const float FinalTolerance =
+            std::max(Path->NodeTolerance, (float)std::max(4, Path->CollisionRadius));
+        return Path->Path.back().DistanceTo(Target) <= FinalTolerance + 2.0f;
+    }
 
     return false;
 }
@@ -429,7 +631,14 @@ void CommandSystem::AdvanceQueue(Core::ECS::EntityManager& EM,
     if (!Cmd) return;
     Cmd->AdvanceQueue();
     if (const Order* CurrentOrder = Cmd->GetCurrentOrder())
+    {
         ConfigureMovementPathForOrder(EM, EntityID, *CurrentOrder);
+    }
+    else
+    {
+        Cmd->CurrentCommand = CommandType::Stop;
+        Cmd->TargetEntityID = -1;
+    }
 }
 
 } // namespace Game::Systems

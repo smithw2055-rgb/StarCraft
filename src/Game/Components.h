@@ -88,6 +88,7 @@ enum class StatusEffect : uint8_t
     DarkSwarm       = 13,  // ground units inside immune to ranged
     Storm           = 14,  // psionic storm DoT (special, not on unit but area)
     Hallucination   = 15,  // blue-white visual duplicate
+    Stim            = 16,  // terran infantry combat stimulant
 };
 
 enum class Elevation : uint8_t
@@ -473,6 +474,14 @@ struct PathfindingComponent
     int CollisionUp = 16;
     int CollisionRight = 16;
     int CollisionDown = 16;
+
+    // OpenBW-style retry hook: movement marks a final target as failed when it
+    // stops making progress, and higher-level orders can try another edge.
+    bool HasRecentMoveFailure = false;
+    Core::Math::Vec2 RecentFailedMoveTarget;
+    float StallTimer = 0.0f;
+    float LastWaypointDistance = 0.0f;
+    bool HasLastWaypointDistance = false;
 };
 
 struct UnitCollisionBounds
@@ -550,6 +559,17 @@ struct StatusEffectComponent
 
     void AddEffect(StatusEffect Effect, float Duration, int SourceID = -1)
     {
+        for (int i = 0; i < kMaxEffects; ++i)
+        {
+            if (ActiveEffects[i] == Effect)
+            {
+                EffectTimers[i] = std::max(EffectTimers[i], Duration);
+                TotalDurations[i] = std::max(TotalDurations[i], Duration);
+                EffectSources[i] = SourceID;
+                return;
+            }
+        }
+
         for (int i = 0; i < kMaxEffects; ++i)
             if (ActiveEffects[i] == StatusEffect::None)
             {

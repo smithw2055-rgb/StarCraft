@@ -9,6 +9,9 @@
 #include "Client/WorldEffects.h"
 #include "Core/ECS/EntityManager.h"
 #include "Core/Platform/Platform.h"
+#include "Core/Utils/Logger.h"
+#include "Game/Components.h"
+#include "Game/Races/RaceDef.h"
 #include "Main/GameLoop/CursorManager.h"
 #include "Resource/ResourceCache.h"
 #include "Render/Camera2D.h"
@@ -17,8 +20,74 @@
 #include "third_party/sokol/sokol_app.h"
 #include "UI/Hud.h"
 
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace Game::Client
 {
+namespace
+{
+    std::string SelectionEntityName(Core::ECS::EntityManager& Entities, int EntityID)
+    {
+        auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityID);
+        if (!Unit)
+            return "Unknown";
+
+        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        if (DefID < 0)
+            return "CHK_" + std::to_string(Unit->ChkUnitID);
+
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        return Def.Name.empty() ? ("CHK_" + std::to_string(Unit->ChkUnitID)) : Def.Name;
+    }
+
+    const char* SelectionEntityKind(Core::ECS::EntityManager& Entities, int EntityID)
+    {
+        if (Entities.GetComponent<Game::Components::ResourceComponent>(EntityID))
+            return "resource";
+        if (Entities.GetComponent<Game::Components::BuildingComponent>(EntityID))
+            return "building";
+        if (Entities.GetComponent<Game::Components::UnitComponent>(EntityID))
+            return "unit";
+        return "entity";
+    }
+
+    void LogSelectionTrace(const char* Source,
+                           Core::ECS::EntityManager& Entities,
+                           const std::vector<int>& SelectedIds)
+    {
+        if (SelectedIds.empty())
+        {
+            Core::Utils::Logger::Info(
+                "SelectionTrace",
+                std::string(Source) + " selected none");
+            return;
+        }
+
+        for (int EntityID : SelectedIds)
+        {
+            if (!Entities.IsAlive(EntityID))
+                continue;
+
+            auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityID);
+            if (!Unit)
+                continue;
+
+            auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityID);
+            auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityID);
+            Core::Utils::Logger::Info(
+                "SelectionTrace",
+                std::string(Source) + " selected id=" + std::to_string(EntityID) +
+                    " kind=" + SelectionEntityKind(Entities, EntityID) +
+                    " name=" + SelectionEntityName(Entities, EntityID) +
+                    " chk=" + std::to_string(Unit->ChkUnitID) +
+                    " player=" + std::to_string(Player ? Player->PlayerID : -1) +
+                    " pos=" + std::to_string(Trans ? (int)Trans->Position.X : 0) +
+                    "," + std::to_string(Trans ? (int)Trans->Position.Y : 0));
+        }
+    }
+}
 
 ClientRuntime::ClientRuntime()
     : Cache(std::make_unique<Resource::Graphics::ResourceCache>())
@@ -91,9 +160,9 @@ void ClientRuntime::InitializeWorldView(const GameMap& MapData,
     Camera->SetViewport(ViewportWidth, ViewportHeight);
     Camera->SetZoomBounds(0.75f, 2.25f);
     Camera->SetZoom(1.20f);
-    Camera->SetPosition(CameraX, CameraY);
     CameraCtrl->Attach(*Camera);
     CameraCtrl->SetBounds(MapData.Width, MapData.Height);
+    Camera->SetPosition(CameraX, CameraY);
     Tilemap->SetCamera(*Camera);
 }
 
@@ -157,9 +226,18 @@ GameLoop::ClickTargetContext ClientRuntime::ResolveClickTargetContext(
 void ClientRuntime::UpdateSelection(Core::ECS::EntityManager& Entities, bool BlockSelection)
 {
     if (BlockSelection)
+    {
         Selector->CancelPointerGesture();
+        return;
+    }
     else
+    {
+        const std::vector<int> Before = Selector->GetSelected();
         Selector->Update(Entities, *Camera);
+        const std::vector<int>& After = Selector->GetSelected();
+        if (Before != After)
+            LogSelectionTrace("manual", Entities, After);
+    }
 }
 
 void ClientRuntime::CancelPointerGesture()
@@ -223,6 +301,11 @@ const std::vector<CampaignPing>& ClientRuntime::GetCampaignPings() const
 const std::vector<int>& ClientRuntime::GetSelectedIds() const
 {
     return Selector->GetSelected();
+}
+
+void ClientRuntime::SetSelectedIdsForDemo(std::vector<int> SelectedIds)
+{
+    Selector->SetSelectedForDebug(std::move(SelectedIds));
 }
 
 bool ClientRuntime::IsSelectionDragging() const

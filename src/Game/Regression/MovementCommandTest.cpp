@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 namespace Game::Systems
@@ -133,6 +134,89 @@ int main()
     Require(!LargeCorridorPath.Found,
         "A* rejects one-tile corridors for large units that need terrain clearance");
 
+    Game::Map::GameMap BlockedGoalMap;
+    BlockedGoalMap.Generate(24, 7);
+    for (int Y = 0; Y < BlockedGoalMap.GetHeight(); ++Y)
+    {
+        for (int X = 12; X <= 22; ++X)
+        {
+            auto Tile = BlockedGoalMap.GetTile(X, Y);
+            Tile.Walkable = false;
+            Tile.Buildable = false;
+            BlockedGoalMap.SetTile(X, Y, Tile);
+        }
+    }
+    auto BlockedGoalPath = Game::Pathfinding::AStar::FindPath(
+        BlockedGoalMap, BlockedGoalMap.TileToWorld(2, 3), BlockedGoalMap.TileToWorld(17, 3));
+    Require(BlockedGoalPath.Found,
+        "A* resolves a blocked target to the nearest reachable walkable tile");
+    Require(!BlockedGoalPath.Waypoints.empty(),
+        "blocked-target A* result still returns a movement waypoint");
+    int BlockedGoalEndX = -1;
+    int BlockedGoalEndY = -1;
+    BlockedGoalMap.WorldToTile(BlockedGoalPath.Waypoints.back(), BlockedGoalEndX, BlockedGoalEndY);
+    Require(BlockedGoalEndX == 11 && BlockedGoalEndY == 3,
+        "blocked-target A* walks to the closest reachable edge outside the obstacle");
+
+    Game::Map::GameMap LongCorridorMap;
+    LongCorridorMap.Generate(48, 3);
+    for (int Y = 0; Y < LongCorridorMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < LongCorridorMap.GetWidth(); ++X)
+        {
+            auto Tile = LongCorridorMap.GetTile(X, Y);
+            Tile.Walkable = (Y == 1);
+            LongCorridorMap.SetTile(X, Y, Tile);
+        }
+    }
+    auto LongCorridorPath = Game::Pathfinding::AStar::FindPath(
+        LongCorridorMap,
+        LongCorridorMap.TileToWorld(1, 1),
+        LongCorridorMap.TileToWorld(46, 1),
+        3);
+    Require(LongCorridorPath.Found,
+        "A* searches the reachable grid even when the caller passes a tiny node budget");
+
+    auto SavedConfig = Game::Pathfinding::AStar::GetConfig();
+    Game::Pathfinding::AStar::SearchConfig NoCornerCutConfig = SavedConfig;
+    NoCornerCutConfig.AllowDiagonal = true;
+    NoCornerCutConfig.CutCorners = false;
+    Game::Pathfinding::AStar::SetConfig(NoCornerCutConfig);
+
+    Game::Map::GameMap SealedCornerMap;
+    SealedCornerMap.Generate(2, 2);
+    for (const auto& BlockedTile : std::vector<std::pair<int, int>>{{1, 0}, {0, 1}})
+    {
+        auto Tile = SealedCornerMap.GetTile(BlockedTile.first, BlockedTile.second);
+        Tile.Walkable = false;
+        SealedCornerMap.SetTile(BlockedTile.first, BlockedTile.second, Tile);
+    }
+    auto SealedCornerPath = Game::Pathfinding::AStar::FindPath(
+        SealedCornerMap,
+        SealedCornerMap.TileToWorld(0, 0),
+        SealedCornerMap.TileToWorld(1, 1));
+    if (!SealedCornerPath.Waypoints.empty())
+    {
+        int SealedEndX = -1;
+        int SealedEndY = -1;
+        SealedCornerMap.WorldToTile(SealedCornerPath.Waypoints.back(), SealedEndX, SealedEndY);
+        Require(SealedEndX != 1 || SealedEndY != 1,
+            "A* does not cut through a blocked diagonal corner");
+    }
+
+    Game::Map::GameMap CornerDetourMap;
+    CornerDetourMap.Generate(4, 3);
+    auto CornerBlock = CornerDetourMap.GetTile(1, 0);
+    CornerBlock.Walkable = false;
+    CornerDetourMap.SetTile(1, 0, CornerBlock);
+    auto CornerDetourPath = Game::Pathfinding::AStar::FindPath(
+        CornerDetourMap,
+        CornerDetourMap.TileToWorld(0, 0),
+        CornerDetourMap.TileToWorld(3, 0));
+    Require(CornerDetourPath.Found,
+        "A* finds a legal detour when diagonal corner cutting is blocked");
+    Game::Pathfinding::AStar::SetConfig(SavedConfig);
+
     Core::ECS::SystemManager SysMgr;
     auto& EM = SysMgr.GetEntityManager();
     Game::Systems::MovementSystem Movement(SysMgr);
@@ -178,6 +262,15 @@ int main()
     EnsnareMovement.Update(0.1f);
     Require(EnsnarePath->CurrentSpeed == 64.0f,
         "movement speed returns to normal after Ensnare is removed");
+    EnsnareStatus.AddEffect(Game::Components::StatusEffect::Stim, 8.0f, -1);
+    EnsnarePath->Acceleration = 1024.0f;
+    EnsnareMovement.Update(0.1f);
+    Require(EnsnarePath->CurrentSpeed == 96.0f,
+        "Stim raises movement target speed while the status is active");
+    EnsnareStatus.AddEffect(Game::Components::StatusEffect::Ensnare, 8.0f, -1);
+    EnsnareMovement.Update(0.1f);
+    Require(EnsnarePath->CurrentSpeed == 64.0f,
+        "Stim and Ensnare movement modifiers neutralize each other");
 
     Core::ECS::SystemManager StasisSysMgr;
     auto& StasisEM = StasisSysMgr.GetEntityManager();

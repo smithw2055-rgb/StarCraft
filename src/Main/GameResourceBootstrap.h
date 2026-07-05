@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 
 #include "Client/ClientRuntime.h"
@@ -20,7 +21,14 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
     }
 
     ConfigureBuildAndProductionImageResolvers(
-        [&Client](int ChkUnitID) { return Client.GetSpriteAssets().ResolveImageID(ChkUnitID); });
+        [&Client](int ChkUnitID) { return Client.GetSpriteAssets().ResolveImageID(ChkUnitID); },
+        [&Client](int ChkUnitID) {
+            auto DataAssets = Client.GetDataAssets();
+            const auto* DataLoader = DataAssets.GetDataLoader();
+            if (!DataLoader || ChkUnitID < 0)
+                return std::numeric_limits<uint32_t>::max();
+            return DataLoader->ResolveUnitConstructionImageID((uint32_t)ChkUnitID);
+        });
     ConfigureGameplayCollisionBoundsResolvers(
         [&Client](int ChkUnitID) {
             Game::Components::UnitCollisionBounds Bounds;

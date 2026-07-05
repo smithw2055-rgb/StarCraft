@@ -50,6 +50,8 @@ public:
 
     static void RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
+    static int ResolvePlayableIScriptAnimation(int AnimID,
+                                               const std::function<bool(int)>& HasAnim);
     static int SelectIScriptAnimationForState(AnimState DesiredState,
                                               bool IsBuilding,
                                               bool UnderConstruction,
@@ -156,6 +158,23 @@ private:
                                 const Components::ProductionComponent* Prod);
 };
 
+inline int AnimationSystem::ResolvePlayableIScriptAnimation(
+    int AnimID,
+    const std::function<bool(int)>& HasAnim)
+{
+    if (HasAnim(AnimID))
+        return AnimID;
+
+    if ((AnimID == Game::IScriptAnims::Anim_AlmostBuilt ||
+         AnimID == Game::IScriptAnims::Anim_Built) &&
+        HasAnim(Game::IScriptAnims::Anim_Init))
+    {
+        return Game::IScriptAnims::Anim_Init;
+    }
+
+    return -1;
+}
+
 inline int AnimationSystem::SelectIScriptAnimationForState(
     AnimState DesiredState,
     bool IsBuilding,
@@ -188,15 +207,20 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
 
     if (UnderConstruction)
     {
-        if (HasAnim(Game::IScriptAnims::Anim_AlmostBuilt))
-            return Game::IScriptAnims::Anim_AlmostBuilt;
-        if (HasAnim(Game::IScriptAnims::Anim_Init))
-            return Game::IScriptAnims::Anim_Init;
+        const int ConstructionAnim =
+            ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_AlmostBuilt, HasAnim);
+        if (ConstructionAnim >= 0)
+            return ConstructionAnim;
         return -1;
     }
 
-    if (WasUnderConstruction && HasAnim(Game::IScriptAnims::Anim_Built))
-        return Game::IScriptAnims::Anim_Built;
+    if (WasUnderConstruction)
+    {
+        const int BuiltAnim =
+            ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_Built, HasAnim);
+        if (BuiltAnim >= 0)
+            return BuiltAnim;
+    }
     if (IsWorking && HasAnim(Game::IScriptAnims::Anim_IsWorking))
         return Game::IScriptAnims::Anim_IsWorking;
     if (WasWorking && HasAnim(Game::IScriptAnims::Anim_WorkingToIdle))

@@ -20,6 +20,9 @@ public:
     void Shutdown();
     void StartGame();
     void SetMapPathOverride(std::string MapPath);
+    void SetCampaignRuntimeEnabled(bool Enabled);
+    void SetDirectStartEnabled(bool Enabled);
+    void SetInteractionDemoEnabled(bool Enabled);
     void SetInitialCameraOverride(float WorldX, float WorldY);
     void SetInitialGuiHudEnabled(bool Enabled);
 
@@ -52,6 +55,7 @@ private:
     float mInitialCameraX = 0.0f;
     float mInitialCameraY = 0.0f;
     bool mInitialGuiHudEnabled = false;
+    bool mDirectStartEnabled = false;
 
     // Glue menu
 };

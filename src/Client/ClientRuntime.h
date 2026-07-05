@@ -79,6 +79,7 @@ struct ClientRuntime
     void AddCampaignPing(Core::Math::Vec2 Position);
     const std::vector<CampaignPing>& GetCampaignPings() const;
     const std::vector<int>& GetSelectedIds() const;
+    void SetSelectedIdsForDemo(std::vector<int> SelectedIds);
     bool IsSelectionDragging() const;
     void GetSelectionDragRectScreen(float& X, float& Y, float& W, float& H) const;
     void BeginWorldFrame();

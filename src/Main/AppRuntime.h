@@ -15,6 +15,7 @@ struct AppRuntime
 {
     bool DetectGameInstall();
     void SetMapPathOverride(std::string MapPath);
+    void SetCampaignRuntimeEnabled(bool Enabled);
     void ResolveMapPath();
     void UpdateFrameStats();
 
@@ -27,6 +28,7 @@ struct AppRuntime
     std::string MapPath;
     std::string MapPathOverride;
     std::string AssetRoot;
+    bool CampaignRuntimeEnabled = true;
     GameState State = GameState::MainMenu;
 };
 

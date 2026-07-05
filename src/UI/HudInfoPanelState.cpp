@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "Game/MovementTuning.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "UI/HudText.h"
 
 namespace Game::Client::UI
@@ -95,7 +96,11 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
     {
         mState.InfoPanel.GroundDamage = Combat->GroundDamage;
         mState.InfoPanel.AirDamage = Combat->AirDamage;
-        mState.InfoPanel.RangeValue = (int)std::lround(Combat->AttackRange);
+        const int RangeBonusPixels =
+            Game::Systems::UpgradeSystem::GetRangeBonusPixels(MutableEM, SelectedEntityId);
+        const float EffectiveRange =
+            Combat->AttackRange + (float)RangeBonusPixels / 32.0f;
+        mState.InfoPanel.RangeValue = (int)std::lround(EffectiveRange);
         std::string DamageLine = "Ground " + std::to_string(Combat->GroundDamage);
         if (Combat->AirDamage > 0)
             DamageLine += "  Air " + std::to_string(Combat->AirDamage);
@@ -154,6 +159,40 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
             {
                 mState.InfoPanel.CargoLine = "Addon " + DisplayLabelForDef(AddonDefId);
             }
+        }
+
+        if (Building->IsResearching && Building->ResearchingID >= 0)
+        {
+            const auto ResearchId =
+                static_cast<Game::Systems::ResearchId>(Building->ResearchingID);
+            const int ResearchPlayer = Building->ResearchPlayer >= 0
+                ? Building->ResearchPlayer
+                : (Player ? Player->PlayerID : 0);
+            const int TotalTime =
+                Game::Systems::UpgradeSystem::GetResearchTimeCost(ResearchId, ResearchPlayer);
+            float Progress = 0.0f;
+            if (TotalTime > 0)
+            {
+                Progress = 1.0f -
+                    std::clamp(Building->BuildTimeRemaining / static_cast<float>(TotalTime),
+                               0.0f,
+                               1.0f);
+            }
+            const std::string ResearchName =
+                std::string(Game::Systems::UpgradeSystem::GetResearchDisplayName(ResearchId));
+            const bool IsUpgrade =
+                Game::Systems::UpgradeSystem::IsUpgradeType(ResearchId);
+            const char* QueueLabel = IsUpgrade ? "Upgrade" : "Research";
+            const char* Verb = IsUpgrade ? "Upgrading " : "Researching ";
+            const char* DetailPrefix = IsUpgrade ? "Upgrade " : "Research ";
+            mState.InfoPanel.Progress = std::clamp(Progress, 0.0f, 1.0f);
+            mState.InfoPanel.QueueLabel = QueueLabel;
+            mState.InfoPanel.QueueEntries = {ResearchName};
+            mState.InfoPanel.StatusLine = std::string(Verb) + ResearchName;
+            mState.InfoPanel.DetailLine =
+                std::string(DetailPrefix) +
+                std::to_string((int)std::lround(mState.InfoPanel.Progress * 100.0f)) +
+                "%";
         }
     }
     if (auto* Harvest = MutableEM.GetComponent<Game::Components::HarvestComponent>(SelectedEntityId))

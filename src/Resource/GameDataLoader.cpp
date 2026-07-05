@@ -484,6 +484,21 @@ uint32_t GameDataLoader::ResolveUnitImageID(uint32_t ChkUnitID) const
     return ImageID;
 }
 
+uint32_t GameDataLoader::ResolveUnitConstructionImageID(uint32_t ChkUnitID) const
+{
+    if (ChkUnitID >= mUnits.size())
+        return UINT32_MAX;
+
+    const uint32_t ImageID = mUnits[(size_t)ChkUnitID].ConstructionImageID;
+    if (ImageID == UINT32_MAX || ImageID >= mImages.size())
+        return UINT32_MAX;
+
+    if (ResolveImageGrpPath(ImageID).empty())
+        return UINT32_MAX;
+
+    return ImageID;
+}
+
 uint32_t GameDataLoader::ResolveUnitSubunitImageID(uint32_t ChkUnitID) const
 {
     if (ChkUnitID >= mUnits.size())

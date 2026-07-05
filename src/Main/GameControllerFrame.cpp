@@ -5,6 +5,7 @@
 namespace Game::Client::GameLoop
 {
 
+// Thin wrapper between sokol callbacks and the runtime frame helpers.
 void GameController::Update(float Dt, int Width, int Height)
 {
     (void)Width;
@@ -22,7 +23,8 @@ void GameController::Update(float Dt, int Width, int Height)
 
 void GameController::Render(int Width, int Height)
 {
-    (void)Width; (void)Height;
+    (void)Width;
+    (void)Height;
     RenderGameRuntimeFrame(mRuntime);
 }
 

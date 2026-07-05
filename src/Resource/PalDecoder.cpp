@@ -46,7 +46,10 @@ std::optional<RawPalette> PalDecoder::DecodeWpe(const std::vector<uint8_t>& Data
         Out.Colors[I].R = Data[I * 4 + 0];
         Out.Colors[I].G = Data[I * 4 + 1];
         Out.Colors[I].B = Data[I * 4 + 2];
-        Out.Colors[I].A = Data[I * 4 + 3];
+        // StarCraft/OpenBW WPE files include a fourth byte, but extracted
+        // palettes commonly store it as 0 for every entry. Treat WPE palette
+        // entries as opaque; sprite transparency is handled by indexed pixels.
+        Out.Colors[I].A = 255;
     }
     return Out;
 }

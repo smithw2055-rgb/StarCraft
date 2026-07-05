@@ -57,16 +57,6 @@ bool AnimationSystem::HasIScriptAnimationForImage(int, int)
     return false;
 }
 
-int UpgradeSystem::GetWeaponBonus(const Core::ECS::EntityManager&, int)
-{
-    return 0;
-}
-
-int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager&, int)
-{
-    return 0;
-}
-
 } // namespace Game::Systems
 
 namespace
@@ -144,6 +134,64 @@ namespace
         Combat.CanTargetGround = true;
         Combat.CanTargetAir = false;
         Combat.WeaponBeh = Game::Components::WeaponBehavior::Melee;
+    }
+
+    int ResolveMarineHitPointsAfterOneAttack(int WeaponLevel, int ArmorLevel)
+    {
+        constexpr int WeaponPlayerID = 5;
+        constexpr int ArmorPlayerID = 6;
+
+        auto& WeaponUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(WeaponPlayerID);
+        auto& ArmorUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(ArmorPlayerID);
+        WeaponUpgrades.Levels[static_cast<size_t>(
+            Game::Systems::ResearchId::Terran_InfantryWeapons)] =
+            static_cast<uint8_t>(WeaponLevel);
+        ArmorUpgrades.Levels[static_cast<size_t>(
+            Game::Systems::ResearchId::Terran_InfantryArmor)] =
+            static_cast<uint8_t>(ArmorLevel);
+
+        Core::ECS::SystemManager SysMgr;
+        auto& EM = SysMgr.GetEntityManager();
+        Game::Systems::BulletSystem Bullet(SysMgr);
+        Game::Systems::CombatSystem Combat(SysMgr, Bullet);
+
+        int Attacker = SpawnDefUnit(EM, "Marine", {0.0f, 0.0f}, WeaponPlayerID);
+        AddGroundOnlyWeapon(EM, Attacker);
+        int Target = SpawnDefUnit(EM, "Marine", {32.0f, 0.0f}, ArmorPlayerID);
+
+        Game::Systems::CombatSystem::IssueAttack(EM, {Attacker}, Target);
+        Combat.Update(0.2f);
+
+        auto* TargetUnit = EM.GetComponent<Game::Components::UnitComponent>(Target);
+        Require(TargetUnit != nullptr, "upgrade damage test target remains available");
+        return TargetUnit->HitPoints;
+    }
+
+    int ResolveMarineHitPointsAtExtendedRange(bool HasU238Shells)
+    {
+        constexpr int MarinePlayerID = 5;
+        auto& Upgrades = Game::Systems::UpgradeSystem::GetUpgrades(MarinePlayerID);
+        Upgrades.Levels[static_cast<size_t>(
+            Game::Systems::ResearchId::Terran_InfantryWeapons)] = 0;
+        Upgrades.Levels[static_cast<size_t>(
+            Game::Systems::ResearchId::Terran_U238Shells)] =
+            HasU238Shells ? 1 : 0;
+
+        Core::ECS::SystemManager SysMgr;
+        auto& EM = SysMgr.GetEntityManager();
+        Game::Systems::BulletSystem Bullet(SysMgr);
+        Game::Systems::CombatSystem Combat(SysMgr, Bullet);
+
+        int Attacker = SpawnDefUnit(EM, "Marine", {0.0f, 0.0f}, MarinePlayerID);
+        AddGroundOnlyWeapon(EM, Attacker);
+        int Target = SpawnDefUnit(EM, "Marine", {144.0f, 0.0f}, 1);
+
+        Game::Systems::CombatSystem::IssueAttack(EM, {Attacker}, Target);
+        Combat.Update(0.2f);
+
+        auto* TargetUnit = EM.GetComponent<Game::Components::UnitComponent>(Target);
+        Require(TargetUnit != nullptr, "U-238 range test target remains available");
+        return TargetUnit->HitPoints;
     }
 }
 
@@ -655,6 +703,38 @@ int main()
         DarkSwarmEM, SwarmedAir, RangedCombat, DarkSwarmAttacker, 20);
     Require(SwarmedAirUnit && SwarmedAirUnit->HitPoints == 20,
         "Dark Swarm does not prevent ranged damage against air units");
+
+    Require(ResolveMarineHitPointsAfterOneAttack(0, 0) == 34,
+        "unupgraded Marine attack deals base damage through CombatSystem");
+    Require(ResolveMarineHitPointsAfterOneAttack(1, 0) == 33,
+        "Terran infantry weapon upgrade increases Marine combat damage");
+    Require(ResolveMarineHitPointsAfterOneAttack(1, 1) == 34,
+        "Terran infantry armor upgrade reduces incoming Marine damage");
+    Require(ResolveMarineHitPointsAtExtendedRange(false) == 40,
+        "unupgraded Marine cannot attack beyond its base range");
+    Require(ResolveMarineHitPointsAtExtendedRange(true) == 34,
+        "U-238 Shells extends Marine attack range by one tile");
+
+    Core::ECS::SystemManager StimCooldownSysMgr;
+    auto& StimCooldownEM = StimCooldownSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem StimCooldownBullet(StimCooldownSysMgr);
+    Game::Systems::CombatSystem StimCooldownCombat(StimCooldownSysMgr, StimCooldownBullet);
+    int StimAttacker =
+        SpawnDefUnit(StimCooldownEM, "Marine", {0.0f, 0.0f}, 8);
+    AddGroundOnlyWeapon(StimCooldownEM, StimAttacker);
+    auto* StimAttackerCombat =
+        StimCooldownEM.GetComponent<Game::Components::CombatComponent>(StimAttacker);
+    Require(StimAttackerCombat != nullptr,
+        "stim cooldown attacker has combat component");
+    StimAttackerCombat->AttackCooldown = 1.0f;
+    StimCooldownEM.AddComponent<Game::Components::StatusEffectComponent>(StimAttacker)
+        .AddEffect(Game::Components::StatusEffect::Stim, 15.0f, StimAttacker);
+    int StimTarget =
+        SpawnDefUnit(StimCooldownEM, "Marine", {32.0f, 0.0f}, 9);
+    Game::Systems::CombatSystem::IssueAttack(StimCooldownEM, {StimAttacker}, StimTarget);
+    StimCooldownCombat.Update(0.2f);
+    Require(StimAttackerCombat->CooldownRemaining == 0.5f,
+        "Stim halves the next attack cooldown while active");
 
     Core::ECS::SystemManager SupplyDeathSysMgr;
     auto& SupplyDeathEM = SupplyDeathSysMgr.GetEntityManager();

@@ -17,6 +17,14 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
     Game::Systems::BuildingSystem::SetImageResolver(std::move(Resolver));
 }
 
+inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int)> Resolver,
+                                                      std::function<uint32_t(int)> ConstructionResolver)
+{
+    Game::Systems::ProductionSystem::SetImageResolver(Resolver);
+    Game::Systems::BuildingSystem::SetImageResolver(Resolver);
+    Game::Systems::BuildingSystem::SetConstructionImageResolver(std::move(ConstructionResolver));
+}
+
 inline void ConfigureGameplayCollisionBoundsResolvers(
     std::function<Game::Components::UnitCollisionBounds(int)> Resolver)
 {

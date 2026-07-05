@@ -71,6 +71,7 @@ public:
     // Returns UINT32_MAX when the data chain is unavailable or invalid.
     uint32_t ResolveUnitSpriteID(uint32_t ChkUnitID) const;
     uint32_t ResolveUnitImageID(uint32_t ChkUnitID) const;
+    uint32_t ResolveUnitConstructionImageID(uint32_t ChkUnitID) const;
     uint32_t ResolveUnitSubunitImageID(uint32_t ChkUnitID) const;
 
     // Kept for compatibility with existing init flow.

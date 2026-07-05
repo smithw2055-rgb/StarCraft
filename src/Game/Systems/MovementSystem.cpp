@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <cmath>
 #include <algorithm>
+#include <functional>
+#include <vector>
 
 namespace Game::Systems
 {
@@ -64,6 +66,7 @@ namespace
         float Top = 16.0f;
         float Right = 16.0f;
         float Bottom = 16.0f;
+        Core::Math::Vec2 Position;
     };
 
     static int CollisionRadiusFromBounds(const PathfindingComponent& Path)
@@ -134,11 +137,63 @@ namespace
         Path.PathIndex = 0;
         Path.CurrentSpeed = 0.0f;
         Path.CurrentVelocity = {0.0f, 0.0f};
+        Path.StallTimer = 0.0f;
+        Path.HasLastWaypointDistance = false;
+    }
+
+    static void MarkMoveTargetFailed(PathfindingComponent& Path)
+    {
+        if (!Path.Path.empty())
+        {
+            Path.HasRecentMoveFailure = true;
+            Path.RecentFailedMoveTarget = Path.Path.back();
+        }
+        ClearMotion(Path);
+    }
+
+    static bool TrackMovementProgress(PathfindingComponent& Path,
+                                      float OldDistance,
+                                      float NewDistance,
+                                      float AppliedDistance,
+                                      float DeltaTime)
+    {
+        const bool MadeProgress = AppliedDistance > 0.05f &&
+                                  NewDistance < OldDistance - 0.25f;
+        if (MadeProgress)
+        {
+            Path.StallTimer = 0.0f;
+            Path.LastWaypointDistance = NewDistance;
+            Path.HasLastWaypointDistance = true;
+            return true;
+        }
+
+        if (Path.HasLastWaypointDistance &&
+            NewDistance < Path.LastWaypointDistance - 0.25f)
+        {
+            Path.StallTimer = 0.0f;
+            Path.LastWaypointDistance = NewDistance;
+            return true;
+        }
+
+        Path.StallTimer += DeltaTime;
+        Path.LastWaypointDistance = NewDistance;
+        Path.HasLastWaypointDistance = true;
+        return Path.StallTimer < 0.45f;
     }
 
     static float MovementSpeedMultiplier(const StatusEffectComponent* Status)
     {
-        if (Status && Status->HasEffect(StatusEffect::Ensnare))
+        if (!Status)
+            return 1.0f;
+
+        int Mod = 0;
+        if (Status->HasEffect(StatusEffect::Stim))
+            ++Mod;
+        if (Status->HasEffect(StatusEffect::Ensnare))
+            --Mod;
+        if (Mod > 0)
+            return 1.5f;
+        if (Mod < 0)
             return 0.5f;
         return 1.0f;
     }
@@ -194,6 +249,20 @@ namespace
         if (IsWalkableWorldPosition(*Map, SlideY, MovingRadius))
             return SlideY;
 
+        return Current;
+    }
+
+    static Core::Math::Vec2 PreventBackwardStep(Core::Math::Vec2 Current,
+                                                Core::Math::Vec2 Proposed,
+                                                Core::Math::Vec2 MoveDir)
+    {
+        const Core::Math::Vec2 Applied = Proposed - Current;
+        if (Applied.Dot(MoveDir) >= -0.001f)
+            return Proposed;
+
+        const Core::Math::Vec2 Lateral = Applied - MoveDir * Applied.Dot(MoveDir);
+        if (Lateral.LengthSq() > 0.001f)
+            return Current + Lateral;
         return Current;
     }
 
@@ -279,12 +348,61 @@ namespace
             return;
         }
 
+        int StartTileX = 0;
+        int StartTileY = 0;
+        Map->WorldToTile(Trans->Position, StartTileX, StartTileY);
+        std::vector<StaticBlockerRect> Blockers;
+        for (auto BlockerID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+        {
+            if (BlockerID == EntityID || !IsStaticGroundBlocker(EM, BlockerID))
+                continue;
+
+            auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
+            auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
+            auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
+            auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
+            auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+            if (!BlockerTrans || !BlockerUnit)
+                continue;
+
+            auto Rect = StaticBlockerRectForEntity(
+                BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
+            const float MovingRadius = (float)std::max(4, Path->CollisionRadius);
+            Rect.Left += MovingRadius;
+            Rect.Top += MovingRadius;
+            Rect.Right += MovingRadius;
+            Rect.Bottom += MovingRadius;
+            Rect.Position = BlockerTrans->Position;
+            Blockers.push_back(Rect);
+        }
+
+        const std::function<bool(int, int)> ExtraBlockedTile =
+            [Blockers = std::move(Blockers), Map, StartTileX, StartTileY](int TileX, int TileY)
+        {
+            if (TileX == StartTileX && TileY == StartTileY)
+                return false;
+
+            const Core::Math::Vec2 Center = Map->TileToWorld(TileX, TileY);
+            for (const auto& Rect : Blockers)
+            {
+                if (Center.X >= Rect.Position.X - Rect.Left &&
+                    Center.X <= Rect.Position.X + Rect.Right &&
+                    Center.Y >= Rect.Position.Y - Rect.Top &&
+                    Center.Y <= Rect.Position.Y + Rect.Bottom)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
         auto Result = Game::Pathfinding::AStar::FindPath(
             *Map,
             Trans->Position,
             Target,
             1000,
-            TerrainClearanceForPath(*Path));
+            TerrainClearanceForPath(*Path),
+            ExtraBlockedTile);
         if (Result.Found && !Result.Waypoints.empty())
             Path->Path = std::move(Result.Waypoints);
     }
@@ -516,6 +634,8 @@ void MovementSystem::Update(float DeltaTime)
             if (Dist < ArrivalTolerance)
             {
                 PathComp->PathIndex++;
+                PathComp->StallTimer = 0.0f;
+                PathComp->HasLastWaypointDistance = false;
                 continue;
             }
 
@@ -562,36 +682,53 @@ void MovementSystem::Update(float DeltaTime)
             float MoveAmount = CurSpd * Dt;
             if (MoveAmount > Dist)
             {
+                const float OldDistance = Dist;
                 Core::Math::Vec2 Proposed = ResolveStaticBlockers(
                     EM, ID, Waypoint, MoveDir,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
+                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;
-                if (AppliedMove.Length() <= 0.001f && !PathComp->IsAir)
+                const float AppliedDistance = AppliedMove.Length();
+                const float NewDistance = (Waypoint - Trans->Position).Length();
+                if (!PathComp->IsAir &&
+                    !TrackMovementProgress(*PathComp, OldDistance, NewDistance,
+                                           AppliedDistance, Dt))
                 {
-                    ClearMotion(*PathComp);
+                    MarkMoveTargetFailed(*PathComp);
                     break;
                 }
-                PathComp->PathIndex++;
+                if (NewDistance <= ArrivalTolerance)
+                {
+                    PathComp->PathIndex++;
+                    PathComp->StallTimer = 0.0f;
+                    PathComp->HasLastWaypointDistance = false;
+                }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
                     AppliedMove.Normalized() * TargetSpd :
                     MoveDir * TargetSpd;
             }
             else
             {
+                const float OldDistance = Dist;
                 Core::Math::Vec2 Proposed = Trans->Position + ActualMove * MoveAmount;
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, ActualMove,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
+                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;
-                if (AppliedMove.Length() <= 0.001f && !PathComp->IsAir)
+                const float AppliedDistance = AppliedMove.Length();
+                const float NewDistance = (Waypoint - Trans->Position).Length();
+                if (!PathComp->IsAir &&
+                    !TrackMovementProgress(*PathComp, OldDistance, NewDistance,
+                                           AppliedDistance, Dt))
                 {
-                    ClearMotion(*PathComp);
+                    MarkMoveTargetFailed(*PathComp);
                     break;
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?

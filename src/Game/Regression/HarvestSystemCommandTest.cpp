@@ -7,6 +7,8 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/CombatSystem.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -86,6 +88,49 @@ namespace
         }
     }
 
+    void SetCollisionBounds(Game::Components::PathfindingComponent& Path,
+                            int Left,
+                            int Up,
+                            int Right,
+                            int Down)
+    {
+        Path.HasCollisionBounds = true;
+        Path.CollisionLeft = Left;
+        Path.CollisionUp = Up;
+        Path.CollisionRight = Right;
+        Path.CollisionDown = Down;
+        Path.CollisionRadius =
+            std::max(4, std::max(Left + Right + 1, Up + Down + 1) / 2);
+    }
+
+    float EntityEdgeDistance(Core::ECS::EntityManager& EM,
+                             Core::Math::Vec2 From,
+                             int TargetEntityID)
+    {
+        auto* TargetTrans =
+            EM.GetComponent<Game::Components::TransformComponent>(TargetEntityID);
+        auto* TargetPath =
+            EM.GetComponent<Game::Components::PathfindingComponent>(TargetEntityID);
+        if (!TargetTrans)
+            return 1000000.0f;
+        if (!TargetPath || !TargetPath->HasCollisionBounds)
+            return From.DistanceTo(TargetTrans->Position);
+
+        const Core::Math::Vec2 Delta = From - TargetTrans->Position;
+        const float NearestX = std::clamp(
+            Delta.X,
+            -(float)TargetPath->CollisionLeft,
+            (float)TargetPath->CollisionRight);
+        const float NearestY = std::clamp(
+            Delta.Y,
+            -(float)TargetPath->CollisionUp,
+            (float)TargetPath->CollisionDown);
+        return From.DistanceTo({
+            TargetTrans->Position.X + NearestX,
+            TargetTrans->Position.Y + NearestY
+        });
+    }
+
     int CreateCompletedDepot(Core::ECS::EntityManager& EM,
                              Core::Math::Vec2 Position,
                              int PlayerID)
@@ -104,6 +149,8 @@ namespace
         Building.UnderConstruction = false;
         Building.BuildingDefID = DefID;
         EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
+        auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+        SetCollisionBounds(Path, 64, 48, 63, 47);
         return EntityID;
     }
 
@@ -130,6 +177,8 @@ namespace
         Resource.Type = Game::Components::ResourceType::VespeneGas;
         Resource.Amount = GasAmount;
         Resource.MaxAmount = GasAmount;
+        auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+        SetCollisionBounds(Path, 64, 40, 63, 39);
         return EntityID;
     }
 }
@@ -155,7 +204,9 @@ int main()
     Resource.Type = Game::Components::ResourceType::Minerals;
     Resource.Amount = 1500;
     Resource.MaxAmount = 1500;
-    const int Depot = CreateCompletedDepot(EM, {200.0f, 100.0f}, 0);
+    auto& MineralPath = EM.AddComponent<Game::Components::PathfindingComponent>(Mineral);
+    SetCollisionBounds(MineralPath, 32, 20, 31, 19);
+    const int Depot = CreateCompletedDepot(EM, {300.0f, 100.0f}, 0);
 
     Require(Game::Systems::HarvestSystem::IssueHarvest(EM, {Scv}, Mineral),
         "SCV can receive a harvest order on mineral fields");
@@ -201,10 +252,42 @@ int main()
         "worker selects the nearest owned resource depot");
     Require(Path && !Path->Path.empty(),
         "returning worker receives a depot approach waypoint");
-    const float DistToDepot = Path->Path.front().DistanceTo({200.0f, 100.0f});
-    const float DistToMineral = Path->Path.front().DistanceTo({124.0f, 100.0f});
-    Require(DistToDepot < DistToMineral,
-        "return path approaches the depot instead of returning to the mineral edge");
+    Require(EntityEdgeDistance(EM, Path->Path.front(), Depot) <= 17.0f,
+        "return path targets the command center collision edge");
+    Require(Path->Path.front().X < 300.0f - 64.0f,
+        "return path stays outside the command center footprint instead of its center");
+
+    auto& Resources = Game::Systems::HarvestSystem::GetResources(0);
+    Resources.Minerals = 50;
+    Resources.VespeneGas = 0;
+    Resources.SupplyUsed = 0;
+    Resources.SupplyMax = 10;
+    auto* ScvTrans = EM.GetComponent<Game::Components::TransformComponent>(Scv);
+    Require(ScvTrans != nullptr, "SCV transform is available for depot return regression");
+    ScvTrans->Position = {180.0f, 100.0f};
+    Path->PathIndex = (int)Path->Path.size();
+    Path->CurrentSpeed = 0.0f;
+    Path->CurrentVelocity = {0.0f, 0.0f};
+    HarvestSystem.Update(0.1f);
+    Require(Resources.Minerals == 50,
+        "worker does not deposit minerals while still far from the depot collision edge");
+    Require(Harvest->CarryingAmount == 8 &&
+            Harvest->State == Game::Components::HarvestState::MovingToDepot,
+        "worker keeps carried minerals until reaching the depot collision edge");
+
+    ScvTrans->Position = {225.0f, 100.0f};
+    Path->PathIndex = (int)Path->Path.size();
+    Path->CurrentSpeed = 0.0f;
+    Path->CurrentVelocity = {0.0f, 0.0f};
+    HarvestSystem.Update(0.1f);
+    Require(Resources.Minerals == 58,
+        "worker deposits minerals after reaching the command center collision edge");
+    Require(Harvest->CarryingAmount == 0 &&
+            Harvest->State == Game::Components::HarvestState::MovingToResource,
+        "mineral worker resumes the harvest loop after depositing at the depot");
+    Require(Cmd->CurrentCommand == Game::Components::CommandType::Harvest &&
+            Cmd->TargetEntityID == Mineral,
+        "mineral worker keeps harvest command and mineral target after deposit");
 
     Core::ECS::SystemManager GasSysMgr;
     auto& GasEM = GasSysMgr.GetEntityManager();
@@ -223,7 +306,7 @@ int main()
     GasEM.AddComponent<Game::Components::PlayerComponent>(GasScv).PlayerID = 0;
 
     int Refinery = CreateCompletedRefinery(GasEM, {124.0f, 100.0f}, 0, 5000);
-    CreateCompletedDepot(GasEM, {200.0f, 100.0f}, 0);
+    const int GasDepot = CreateCompletedDepot(GasEM, {300.0f, 100.0f}, 0);
 
     Require(Game::Systems::HarvestSystem::IssueHarvest(GasEM, {GasScv}, Refinery),
         "SCV can receive a harvest order on a completed owned refinery");
@@ -248,10 +331,12 @@ int main()
     Require(GasHarvest->CarryingType == Game::Components::ResourceType::VespeneGas,
         "worker records carried gas before returning");
 
-    GasScvTrans.Position = {200.0f, 100.0f};
+    GasScvTrans.Position = {225.0f, 100.0f};
     GasPath->Path.clear();
     GasPath->PathIndex = 0;
     GasHarvestSystem.Update(0.1f);
+    Require(EntityEdgeDistance(GasEM, GasScvTrans.Position, GasDepot) <= 17.0f,
+        "gas return test places the worker inside the depot collision boundary contact");
     Require(GasResources.VespeneGas == 8,
         "returning gas worker deposits vespene into player resources");
     Require(GasResources.Minerals == 50,

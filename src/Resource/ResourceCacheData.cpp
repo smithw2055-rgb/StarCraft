@@ -37,6 +37,19 @@ uint32_t ResourceCache::ResolveImageID(int ChkUnitID)
     return (uint32_t)ChkUnitID;
 }
 
+uint32_t ResourceCache::ResolveConstructionImageID(int ChkUnitID)
+{
+    if (ChkUnitID < 0)
+        return std::numeric_limits<uint32_t>::max();
+
+    const uint32_t ImageID =
+        mData.Loader.ResolveUnitConstructionImageID((uint32_t)ChkUnitID);
+    if (ImageID != std::numeric_limits<uint32_t>::max())
+        return ImageID;
+
+    return std::numeric_limits<uint32_t>::max();
+}
+
 uint32_t ResourceCache::ResolveSubunitImageID(int ChkUnitID)
 {
     if (ChkUnitID < 0)

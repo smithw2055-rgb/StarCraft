@@ -33,7 +33,7 @@ namespace
         int TimeStep = 10;       // extra time per additional level
     };
 
-    PlayerUpgrades gUpgrades[8];
+    PlayerUpgrades gUpgrades[kPlayerResourceSlots];
 
     constexpr ResearchDef kResearchDefs[] =
     {
@@ -199,7 +199,7 @@ UpgradeSystem::UpgradeSystem(Core::ECS::SystemManager& SysMgr)
 PlayerUpgrades& UpgradeSystem::GetUpgrades(int PlayerID)
 {
     if (PlayerID < 0) PlayerID = 0;
-    if (PlayerID >= 8) PlayerID = 7;
+    if (PlayerID >= kPlayerResourceSlots) PlayerID = kPlayerResourceSlots - 1;
     return gUpgrades[PlayerID];
 }
 
@@ -358,6 +358,20 @@ bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM, int BuildingID)
     auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
     if (!Bldg || !Bldg->IsResearching) return false;
 
+    const auto ResearchId = static_cast<Game::Systems::ResearchId>(Bldg->ResearchingID);
+    auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
+    const int PlayerID = Bldg->ResearchPlayer >= 0
+        ? Bldg->ResearchPlayer
+        : (Player ? Player->PlayerID : 0);
+    int MineralCost = 0;
+    int GasCost = 0;
+    if (GetResearchCost(ResearchId, PlayerID, MineralCost, GasCost))
+    {
+        auto& Resources = HarvestSystem::GetResources(PlayerID);
+        Resources.Minerals += MineralCost;
+        Resources.VespeneGas += GasCost;
+    }
+
     Bldg->BuildTimeRemaining = 0.0f;
     Bldg->IsResearching = false;
     Bldg->ResearchingID = -1;
@@ -377,11 +391,65 @@ bool UpgradeSystem::HasResearch(int PlayerID, ResearchId ResearchId)
     return GetResearchLevel(PlayerID, ResearchId) > 0;
 }
 
+bool UpgradeSystem::IsUpgradeType(ResearchId ResearchId)
+{
+    switch (ResearchId)
+    {
+        case ResearchId::Terran_InfantryWeapons:
+        case ResearchId::Terran_InfantryArmor:
+        case ResearchId::Terran_VehicleWeapons:
+        case ResearchId::Terran_VehicleArmor:
+        case ResearchId::Terran_ShipWeapons:
+        case ResearchId::Terran_ShipArmor:
+        case ResearchId::Terran_U238Shells:
+        case ResearchId::Terran_IonThrusters:
+        case ResearchId::Terran_MoebiusReactor:
+        case ResearchId::Terran_ColossusReactor:
+        case ResearchId::Zerg_MeleeAttacks:
+        case ResearchId::Zerg_MissileAttacks:
+        case ResearchId::Zerg_Carapace:
+        case ResearchId::Zerg_FlyerAttacks:
+        case ResearchId::Zerg_FlyerCarapace:
+        case ResearchId::Zerg_AdrenalGlands:
+        case ResearchId::Zerg_MetabolicBoost:
+        case ResearchId::Zerg_VentralSacs:
+        case ResearchId::Zerg_Antennae:
+        case ResearchId::Zerg_PneumatizedCarapace:
+        case ResearchId::Zerg_QueenEnergy:
+        case ResearchId::Zerg_DefilerEnergy:
+        case ResearchId::Protoss_GroundWeapons:
+        case ResearchId::Protoss_GroundArmor:
+        case ResearchId::Protoss_PlasmaShields:
+        case ResearchId::Protoss_AirWeapons:
+        case ResearchId::Protoss_AirArmor:
+        case ResearchId::Protoss_SingularityCharge:
+        case ResearchId::Protoss_GraviticDrive:
+        case ResearchId::Protoss_ScarabDamage:
+        case ResearchId::Protoss_ZealotSpeed:
+        case ResearchId::Protoss_KhaydarinAmulet:
+        case ResearchId::Protoss_ReaverCapacity:
+        case ResearchId::Protoss_CarrierCapacity:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::string_view UpgradeSystem::GetResearchDisplayName(ResearchId ResearchId)
 {
     if (const ResearchDef* Research = FindResearchDef(ResearchId))
         return Research->Name;
     return "Unknown Research";
+}
+
+int UpgradeSystem::GetResearchTimeCost(ResearchId ResearchId, int PlayerID)
+{
+    const ResearchDef* Research = FindResearchDef(ResearchId);
+    if (!Research)
+        return 0;
+
+    const int CurrentLevel = GetResearchLevel(PlayerID, ResearchId);
+    return Research->TimeCost + CurrentLevel * Research->TimeStep;
 }
 
 bool UpgradeSystem::GetResearchCost(ResearchId ResearchId,
@@ -473,6 +541,30 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
         if (IsProtossAir(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Protoss_AirArmor);
     }
+    return 0;
+}
+
+int UpgradeSystem::GetRangeBonusPixels(const Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    const int DefID = ResolveDefID(EM, EntityID);
+    if (DefID < 0)
+        return 0;
+
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if ((Def.Name == "Marine" || Def.Name == "JimRaynorMarine") &&
+        HasResearch(PlayerID, ResearchId::Terran_U238Shells))
+    {
+        return 32;
+    }
+    if (Def.Name == "Dragoon" &&
+        HasResearch(PlayerID, ResearchId::Protoss_SingularityCharge))
+    {
+        return 64;
+    }
+
     return 0;
 }
 

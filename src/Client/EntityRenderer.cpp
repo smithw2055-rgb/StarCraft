@@ -8,6 +8,7 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <unordered_map>
 
@@ -17,6 +18,18 @@ namespace Game::Client
 namespace
 {
     constexpr float kTwoPi = 6.28318530718f;
+
+    bool DebugEntityRenderEnabled()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_ENTITY_RENDER");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    bool DebugEntityMarkersEnabled()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_ENTITY_MARKERS");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
 
     struct FootprintVisual
     {
@@ -490,6 +503,7 @@ namespace
                         0.0f, 0.0f, 1.0f, 1.0f,
                         Tint, Flipped);
     }
+
 }
 
 void EntityRenderer::ResolveFrames(EntityManager& Entities)
@@ -999,6 +1013,19 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     });
 
     auto& Draw = Render::g_Draw2D;
+    static int DebugEntityFrames = 8;
+    int DebugSpriteCount = 0;
+    int DebugFallbackCount = 0;
+    int DebugLoggedEntities = 0;
+    if (DebugEntityRenderEnabled() && DebugEntityFrames > 0)
+    {
+        Core::Utils::Logger::Info(
+            "EntityRenderer",
+            "visible entity candidates=" + std::to_string(Order.size()) +
+                " cam=" + std::to_string((int)mCameraX) + "," +
+                std::to_string((int)mCameraY) +
+                " zoom=" + std::to_string(mZoom));
+    }
     std::unordered_map<int, SelectionVisual> SelectionVisualCache;
     SelectionVisualCache.reserve(SelectedIds.size());
     auto GetSelectionVisual =
@@ -1059,6 +1086,23 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                 RenderComp->TotalFrames = (int)Frames->size();
             const int FrameIndex = std::clamp(RenderComp->FrameIndex, 0, (int)Frames->size() - 1);
             const auto& Img = (*Frames)[FrameIndex];
+            if (DebugEntityRenderEnabled() && DebugEntityFrames > 0 && DebugLoggedEntities < 6)
+            {
+                Core::Utils::Logger::Info(
+                    "EntityRenderer",
+                    "entity id=" + std::to_string(EntityId) +
+                        " chk=" + std::to_string(Unit->ChkUnitID) +
+                        " image=" + std::to_string(RenderComp->ImageID) +
+                        " frame=" + std::to_string(FrameIndex) +
+                        " frames=" + std::to_string(Frames->size()) +
+                        " valid=" + std::to_string(Img.Valid() ? 1 : 0) +
+                        " visible=" + std::to_string(Img.HasVisiblePixels ? 1 : 0) +
+                        " size=" + std::to_string(Img.Width) + "x" +
+                        std::to_string(Img.Height) +
+                        " pos=" + std::to_string((int)Trans->Position.X) +
+                        "," + std::to_string((int)Trans->Position.Y));
+                ++DebugLoggedEntities;
+            }
             if (Img.Valid())
             {
                 const float HW = Img.Width * 0.5f;
@@ -1074,6 +1118,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                                      VisualEffect,
                                      Player);
                 DrewSprite = true;
+                ++DebugSpriteCount;
 
                 if (RenderComp->SubunitImageID != UINT32_MAX)
                 {
@@ -1124,6 +1169,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
 
         if (!DrewSprite)
         {
+            ++DebugFallbackCount;
             static std::unordered_map<int, bool> MissingSpriteLogged;
             if (!MissingSpriteLogged[Unit->ChkUnitID])
             {
@@ -1162,6 +1208,35 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                                         Unit->EnergyPoints, Unit->MaxEnergyPoints);
             }
         }
+
+        if (DebugEntityMarkersEnabled())
+        {
+            Render::Color Marker(255, 0, 255, 255);
+            if (IsResource)
+                Marker = Render::Color(0, 255, 255, 255);
+            else if (IsBuilding)
+                Marker = Render::Color(255, 230, 0, 255);
+            Draw.DrawRect(Trans->Position.X - 6.0f,
+                          Trans->Position.Y - 6.0f,
+                          12.0f,
+                          12.0f,
+                          Marker);
+            Draw.DrawRectLines(Trans->Position.X - 9.0f,
+                               Trans->Position.Y - 9.0f,
+                               18.0f,
+                               18.0f,
+                               Render::Color(0, 0, 0, 255),
+                               2.0f);
+        }
+    }
+
+    if (DebugEntityRenderEnabled() && DebugEntityFrames > 0)
+    {
+        --DebugEntityFrames;
+        Core::Utils::Logger::Info(
+            "EntityRenderer",
+            "draw summary sprites=" + std::to_string(DebugSpriteCount) +
+                " fallback=" + std::to_string(DebugFallbackCount));
     }
 }
 

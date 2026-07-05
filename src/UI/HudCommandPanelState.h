@@ -45,6 +45,9 @@ enum class ActionKind : uint8_t
     Build,
     Train,
     Research,
+    Upgrade,
+    UseTech,
+    Cancel,
     OpenSubmenu,
     Back
 };

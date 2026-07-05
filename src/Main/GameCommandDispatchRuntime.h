@@ -52,9 +52,25 @@ inline void ExecuteHudCommandSlot(
             EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
         break;
     case UI::ActionKind::Research:
+    case UI::ActionKind::Upgrade:
         Game::Systems::UpgradeSystem::StartResearch(
             EntityManager, EntityIDs[0], Game::Systems::ToResearchId(CommandDef.ResearchId));
         break;
+    case UI::ActionKind::Cancel:
+    {
+        if (!Game::Systems::ProductionSystem::CancelTrain(EntityManager, EntityIDs[0]))
+            Game::Systems::UpgradeSystem::CancelResearch(EntityManager, EntityIDs[0]);
+        break;
+    }
+    case UI::ActionKind::UseTech:
+    {
+        Game::Components::Order Order;
+        Order.Type = Game::Components::OrderType::UseTech;
+        Order.AbilityID = static_cast<int>(
+            Game::Systems::ToResearchId(CommandDef.ResearchId));
+        Game::Systems::CommandSystem::IssueOrder(EntityManager, EntityIDs, Order, false);
+        break;
+    }
     case UI::ActionKind::Command:
         if (CommandDef.CommandId == UI::HudCommandId::Stop)
             SetAllCommand(EntityManager, EntityIDs, Game::Components::CommandType::Stop);

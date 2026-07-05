@@ -36,11 +36,24 @@ public:
                                int MaxNodes = 1000,
                                int ClearanceRadiusPixels = 0);
 
+    static PathResult FindPath(const Map::GameMap& Map,
+                               Core::Math::Vec2 Start, Core::Math::Vec2 End,
+                               int MaxNodes,
+                               int ClearanceRadiusPixels,
+                               const std::function<bool(int, int)>& ExtraBlockedTile);
+
     static PathResult FindPathTile(const Map::GameMap& Map,
                                    int StartX, int StartY,
                                    int EndX, int EndY,
                                    int MaxNodes = 1000,
                                    int ClearanceRadiusPixels = 0);
+
+    static PathResult FindPathTile(const Map::GameMap& Map,
+                                   int StartX, int StartY,
+                                   int EndX, int EndY,
+                                   int MaxNodes,
+                                   int ClearanceRadiusPixels,
+                                   const std::function<bool(int, int)>& ExtraBlockedTile);
 
     struct SearchConfig
     {
@@ -50,10 +63,15 @@ public:
     };
 
     static void SetConfig(const SearchConfig& Config) { sConfig = Config; }
+    static const SearchConfig& GetConfig() { return sConfig; }
 
 private:
     static int Heuristic(int DX, int DY);
-    static bool IsWalkable(const Map::GameMap& Map, int X, int Y, int ClearanceRadiusPixels = 0);
+    static bool IsWalkable(const Map::GameMap& Map,
+                           int X,
+                           int Y,
+                           int ClearanceRadiusPixels = 0,
+                           const std::function<bool(int, int)>& ExtraBlockedTile = {});
     static std::vector<Core::Math::Vec2> ReconstructPath(const std::vector<PathNode>& Nodes, int GoalIndex);
 
     static SearchConfig sConfig;

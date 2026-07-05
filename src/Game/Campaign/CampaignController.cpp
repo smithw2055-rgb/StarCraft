@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 
 namespace Game::Campaign
 {
@@ -78,6 +79,30 @@ namespace
     {
         return std::find(Lines.begin(), Lines.end(), Description) != Lines.end();
     }
+
+    bool HasEnabledActionType(const Trigger::SCRTriggerData& Data, uint8_t ActionType)
+    {
+        for (const auto& Trigger : Data.Triggers)
+        {
+            for (const auto& Action : Trigger.Actions)
+            {
+                if (!Action.Disabled() && Action.ActionType == ActionType)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    bool HasMissionMessageAction(const Trigger::SCRTriggerData& Data)
+    {
+        constexpr uint8_t MessageActionTypes[] = {7, 8, 9, 29, 41, 47};
+        for (uint8_t ActionType : MessageActionTypes)
+        {
+            if (HasEnabledActionType(Data, ActionType))
+                return true;
+        }
+        return false;
+    }
 }
 
 CampaignController::CampaignController()
@@ -116,6 +141,19 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
     {
         Logger::Warning("CampaignController", "CHK TRIG data had no runnable triggers; campaign scripting inactive");
         return false;
+    }
+
+    if (!HasEnabledActionType(*ScriptData, 12))
+        mObjectives.push_back({ "Eliminate all enemy forces.", false });
+
+    if (!HasMissionMessageAction(*ScriptData))
+    {
+        CampaignMessage Message;
+        Message.Text = mMissionName.empty() ? "Mission started" : mMissionName;
+        Message.ActionID = 0;
+        Message.PlayerID = 0;
+        Message.TimeRemaining = 3600.0f;
+        mMessages.push_back(std::move(Message));
     }
 
     SyncObjectivesFromTriggerVM();

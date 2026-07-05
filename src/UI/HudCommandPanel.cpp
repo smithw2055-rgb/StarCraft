@@ -212,13 +212,21 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                   TerranResearchId::None, IconForDef(IconDefId), false);
     };
 
-    auto DisabledAbilityButtonForResearch = [&](int Slot,
-                                                TerranResearchId ResearchId,
-                                                const std::string& Label,
-                                                int FallbackDefId)
+    auto TechAbilityButton = [&](int Slot,
+                                 TerranResearchId ResearchId,
+                                 const std::string& Label,
+                                 int FallbackDefId)
     {
-        SetButton(Slot, Label, ActionKind::None, FallbackDefId, HudCommandId::None,
-                  ResearchId, IconForDef(FallbackDefId), false);
+        const bool Enabled = UpgradeSystem::HasResearch(
+            PlayerIdForSelection(), ToResearchId(ResearchId));
+        SetButton(Slot,
+                  Label,
+                  Enabled ? ActionKind::UseTech : ActionKind::None,
+                  FallbackDefId,
+                  HudCommandId::None,
+                  ResearchId,
+                  IconForDef(FallbackDefId),
+                  Enabled);
     };
 
     auto BuildButtonForDef = [&](int Slot, int DefId)
@@ -239,6 +247,32 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                   Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
+    auto HasCancelableWork = [&]() -> bool
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return false;
+        if (auto* Prod =
+                EcsEntities->GetComponent<Game::Components::ProductionComponent>(SelectedEntityId))
+        {
+            if (!Prod->Queue.empty())
+                return true;
+        }
+        if (auto* Building =
+                EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
+        {
+            if (Building->IsResearching)
+                return true;
+        }
+        return false;
+    };
+
+    auto CancelButtonIfBusy = [&]()
+    {
+        if (HasCancelableWork())
+            SetButton(8, "Cancel", ActionKind::Cancel, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true);
+    };
+
     auto ResearchButton = [&](int Slot,
                               TerranResearchId ResearchId,
                               const std::string& BaseLabel,
@@ -249,10 +283,13 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                      UpgradeSystem::CanStartResearch(*EcsEntities, SelectedEntityId, ToResearchId(ResearchId));
         int MineralCost = 0;
         int GasCost = 0;
-        UpgradeSystem::GetResearchCost(ToResearchId(ResearchId), PlayerID, MineralCost, GasCost);
+        const auto SystemResearchId = ToResearchId(ResearchId);
+        UpgradeSystem::GetResearchCost(SystemResearchId, PlayerID, MineralCost, GasCost);
         SetButton(Slot,
                   ResearchLabel(PlayerID, ResearchId, BaseLabel),
-                  ActionKind::Research,
+                  UpgradeSystem::IsUpgradeType(SystemResearchId)
+                      ? ActionKind::Upgrade
+                      : ActionKind::Research,
                   -1,
                   HudCommandId::None,
                   ResearchId,
@@ -352,7 +389,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::StimPacks, "Stim", Marine);
+            TechAbilityButton(6, TerranResearchId::StimPacks, "Stim", Marine);
             break;
 
         case PageTerranFirebat:
@@ -361,7 +398,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::StimPacks, "Stim", Firebat);
+            TechAbilityButton(6, TerranResearchId::StimPacks, "Stim", Firebat);
             break;
 
         case PageTerranMedic:
@@ -379,7 +416,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::Lockdown, "Lockdown", Ghost);
+            TechAbilityButton(6, TerranResearchId::Lockdown, "Lockdown", Ghost);
             DisabledAbilityButtonForDef(7, "Cloak", Ghost);
             DisabledAbilityButtonForDef(8, "Nuke", NuclearSilo);
             break;
@@ -390,7 +427,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::SpiderMines, "Mines", Vulture);
+            TechAbilityButton(6, TerranResearchId::SpiderMines, "Mines", Vulture);
             break;
 
         case PageTerranGoliath:
@@ -408,7 +445,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::SiegeMode, "Siege", SiegeTank);
+            TechAbilityButton(6, TerranResearchId::SiegeMode, "Siege", SiegeTank);
             break;
 
         case PageTerranWraith:
@@ -417,7 +454,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::CloakingField, "Cloak", Wraith);
+            TechAbilityButton(6, TerranResearchId::CloakingField, "Cloak", Wraith);
             break;
 
         case PageTerranDropship:
@@ -445,7 +482,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
-            DisabledAbilityButtonForResearch(6, TerranResearchId::YamatoGun, "Yamato", Battlecruiser);
+            TechAbilityButton(6, TerranResearchId::YamatoGun, "Yamato", Battlecruiser);
             break;
 
         case PageTerranValkyrie:
@@ -477,6 +514,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             BuildButtonForDef(1, ComsatStation);
             BuildButtonForDef(2, NuclearSilo);
             DisabledAbilityButtonForDef(8, "Lift Off", CommandCenter);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranBarracks:
@@ -485,6 +523,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(2, Medic);
             TrainButtonForDef(3, Ghost);
             DisabledAbilityButtonForDef(8, "Lift Off", Barracks);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranFactory:
@@ -493,6 +532,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(2, Goliath);
             BuildButtonForDef(3, MachineShop);
             DisabledAbilityButtonForDef(8, "Lift Off", Factory);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranStarport:
@@ -503,11 +543,13 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(4, Valkyrie);
             BuildButtonForDef(5, ControlTower);
             DisabledAbilityButtonForDef(8, "Lift Off", Starport);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranEngineeringBay:
             ResearchButton(0, TerranResearchId::InfantryWeapons, "Inf Wpn", IconWeapons);
             ResearchButton(1, TerranResearchId::InfantryArmor, "Inf Arm", IconArmor);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranArmory:
@@ -515,11 +557,13 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             ResearchButton(1, TerranResearchId::VehicleArmor, "Veh Arm", IconArmor);
             ResearchButton(2, TerranResearchId::ShipWeapons, "Ship Wpn", IconWeapons);
             ResearchButton(3, TerranResearchId::ShipArmor, "Ship Arm", IconArmor);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranAcademy:
             ResearchButton(0, TerranResearchId::StimPacks, "Stim Pack", IconWeapons);
             ResearchButton(1, TerranResearchId::U238Shells, "U-238", IconWeapons);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranScienceFacility:
@@ -531,21 +575,25 @@ void Hud::BuildTerranPage(int SelectedEntityId,
         case PageTerranMachineShop:
             ResearchButton(0, TerranResearchId::SiegeMode, "Siege Mode", IconWeapons);
             ResearchButton(1, TerranResearchId::SpiderMines, "Mines", IconWeapons);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranControlTower:
             ResearchButton(0, TerranResearchId::CloakingField, "Cloak", IconWeapons);
             ResearchButton(1, TerranResearchId::IonThrusters, "Boosters", IconWeapons);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranCovertOps:
             ResearchButton(0, TerranResearchId::Lockdown, "Lockdown", IconWeapons);
             ResearchButton(1, TerranResearchId::MoebiusReactor, "Moebius", IconWeapons);
+            CancelButtonIfBusy();
             break;
 
         case PageTerranPhysicsLab:
             ResearchButton(0, TerranResearchId::YamatoGun, "Yamato", IconWeapons);
             ResearchButton(1, TerranResearchId::ColossusReactor, "Colossus", IconWeapons);
+            CancelButtonIfBusy();
             break;
 
         default:

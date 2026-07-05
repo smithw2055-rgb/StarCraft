@@ -49,7 +49,8 @@ void InitializeGuiRuntime(
     std::string& AssetRoot,
     int Width,
     int Height,
-    std::function<void(const std::string& Action)> GlueActionCallback)
+    std::function<void(const std::string& Action)> GlueActionCallback,
+    bool EnableGlueMenu)
 {
     Gui.UseGui = false;
 
@@ -82,16 +83,25 @@ void InitializeGuiRuntime(
             "Gui HUD unavailable; Native Terran HUD is active in-game");
     }
 
-    Gui.GlueGuiInitialized = Gui.GlueGui.Initialize(AssetRoot, Width, Height);
-    if (Gui.GlueGuiInitialized)
+    Gui.GlueGuiInitialized = false;
+    if (EnableGlueMenu)
     {
-        Gui.GlueGui.SetActionCallback(std::move(GlueActionCallback));
+        Gui.GlueGuiInitialized = Gui.GlueGui.Initialize(AssetRoot, Width, Height);
+        if (Gui.GlueGuiInitialized)
+        {
+            Gui.GlueGui.SetActionCallback(std::move(GlueActionCallback));
+        }
+    }
+    else
+    {
+        Core::Utils::Logger::Info("GameMain", "Glue menu skipped for direct test map startup");
     }
 #else
     (void)AssetRoot;
     (void)Width;
     (void)Height;
     (void)GlueActionCallback;
+    (void)EnableGlueMenu;
 #endif
 }
 
