@@ -427,6 +427,7 @@ namespace
         Unit.Armor = Def.Armor;
         Unit.SightRange = Def.SightRange;
         Unit.SupplyCost = Def.SupplyCost;
+        Unit.IsDetector = Races::IsDetectorChkUnitID(Unit.ChkUnitID);
     }
 
     int ResolveDefID(const Core::ECS::EntityManager& EM, int EntityID)
@@ -704,6 +705,13 @@ namespace
 
         auto& Path = EM.AddComponent<PathfindingComponent>(EntityID);
         ApplyCollisionBounds(Path, ResolveCollisionBounds(Def.ChkUnitID));
+
+        if (!UnderConstruction && (Def.GroundDamage > 0 || Def.AirDamage > 0))
+        {
+            auto& Combat = EM.AddComponent<CombatComponent>(EntityID);
+            Races::ApplyCombatDefinition(
+                Combat, Def, Game::Data::IsAirUnitType(Unit.ChkUnitID));
+        }
 
         if (UnderConstruction)
         {

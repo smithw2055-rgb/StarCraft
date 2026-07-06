@@ -15,6 +15,114 @@ namespace Game::Systems
 
 using namespace Game::Components;
 
+static bool CanAttackTarget(const CombatComponent& Combat,
+                            Core::ECS::EntityManager& EM,
+                            int TargetID);
+
+namespace
+{
+    constexpr float kAutoTargetLockSeconds = 2.5f;
+    constexpr float kInvalidDirectAttackAutoAcquireDelay = 0.35f;
+
+    float CollisionRadiusFromPath(const PathfindingComponent* Path, float Fallback)
+    {
+        if (!Path)
+            return Fallback;
+        if (!Path->HasCollisionBounds)
+            return Path->CollisionRadius > 0 ? (float)Path->CollisionRadius : Fallback;
+
+        const int Width = Path->CollisionLeft + Path->CollisionRight + 1;
+        const int Height = Path->CollisionUp + Path->CollisionDown + 1;
+        return (float)std::max(4, std::max(Width, Height) / 2);
+    }
+
+    float CollisionRadiusFromUnit(const UnitComponent* Unit, float Fallback)
+    {
+        if (!Unit)
+            return Fallback;
+        switch (Unit->SizeType)
+        {
+            case UnitSize::Small: return 12.0f;
+            case UnitSize::Medium: return 16.0f;
+            case UnitSize::Large: return 20.0f;
+        }
+        return Fallback;
+    }
+
+    float CombatCollisionRadius(Core::ECS::EntityManager& EM, int EntityID, float Fallback = 16.0f)
+    {
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+            return CollisionRadiusFromPath(Path, Fallback);
+        return CollisionRadiusFromUnit(EM.GetComponent<UnitComponent>(EntityID), Fallback);
+    }
+
+    float CombatEdgeDistance(Core::ECS::EntityManager& EM, int A, int B)
+    {
+        auto* TA = EM.GetComponent<TransformComponent>(A);
+        auto* TB = EM.GetComponent<TransformComponent>(B);
+        if (!TA || !TB)
+            return std::numeric_limits<float>::max();
+
+        const float CenterDistance = TA->Position.DistanceTo(TB->Position);
+        const float RadiusA = CombatCollisionRadius(EM, A);
+        const float RadiusB = CombatCollisionRadius(EM, B);
+        return std::max(0.0f, CenterDistance - RadiusA - RadiusB);
+    }
+
+    bool IsWorkerUnit(const UnitComponent* Unit)
+    {
+        if (!Unit)
+            return false;
+        return Unit->ChkUnitID == 0x07 || Unit->ChkUnitID == 0x29 || Unit->ChkUnitID == 0x2D;
+    }
+
+    bool IsPersistentNonCombatCommand(CommandType Command)
+    {
+        return Command == CommandType::Harvest ||
+               Command == CommandType::Build ||
+               Command == CommandType::Train ||
+               Command == CommandType::Upgrade ||
+               Command == CommandType::UseAbility;
+    }
+
+    bool CanChaseTargetTemporarily(const CommandComponent* Cmd,
+                                   const BuildingComponent* Building)
+    {
+        if (Building && !Building->IsLifted)
+            return false;
+        if (!Cmd)
+            return true;
+        return !IsPersistentNonCombatCommand(Cmd->CurrentCommand) &&
+               Cmd->CurrentCommand != CommandType::HoldPosition;
+    }
+
+    bool IsActiveTargetValid(Core::ECS::EntityManager& EM,
+                             const CombatComponent& Combat,
+                             int TargetID)
+    {
+        auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+        auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
+        return TargetID >= 0 &&
+               TargetUnit &&
+               TargetUnit->HitPoints > 0 &&
+               TargetTrans &&
+               CanAttackTarget(Combat, EM, TargetID);
+    }
+
+    void SetAutoTarget(CombatComponent& Combat, int TargetID, float LockSeconds)
+    {
+        Combat.AutoTargetEntityID = TargetID;
+        Combat.AutoTargetLockSeconds = std::max(Combat.AutoTargetLockSeconds, LockSeconds);
+    }
+
+    bool AreEnemyPlayers(Core::ECS::EntityManager& EM, int A, int B)
+    {
+        auto* PA = EM.GetComponent<PlayerComponent>(A);
+        auto* PB = EM.GetComponent<PlayerComponent>(B);
+        return PA && PB && PA->PlayerID != PB->PlayerID;
+    }
+}
+
 static float GetSizeDamageModifier(DamageType DmgType, UnitSize TargetSize)
 {
     switch (DmgType)
@@ -47,13 +155,30 @@ static void IssueMovePreservingCommand(Core::ECS::EntityManager& EM,
                                        const Core::Math::Vec2& MoveTarget,
                                        CommandType Command,
                                        const Core::Math::Vec2& CommandTarget,
-                                       int TargetEntityID)
+                                       int TargetEntityID,
+                                       int IgnoreBlockerEntityID = -1)
 {
-    CommandSystem::IssueMove(EM, {EntityID}, MoveTarget);
+    std::vector<Order> SavedOrders;
+    int SavedCurrentOrderIndex = -1;
+    Core::Math::Vec2 SavedRallyPoint;
+    bool SavedHasRallyPoint = false;
+    if (auto* ExistingCmd = EM.GetComponent<CommandComponent>(EntityID))
+    {
+        SavedOrders = ExistingCmd->Orders;
+        SavedCurrentOrderIndex = ExistingCmd->CurrentOrderIndex;
+        SavedRallyPoint = ExistingCmd->RallyPoint;
+        SavedHasRallyPoint = ExistingCmd->HasRallyPoint;
+    }
+
+    CommandSystem::IssueMove(EM, {EntityID}, MoveTarget, IgnoreBlockerEntityID);
 
     auto* Cmd = EM.GetComponent<CommandComponent>(EntityID);
     if (!Cmd)
         Cmd = &EM.AddComponent<CommandComponent>(EntityID);
+    Cmd->Orders = std::move(SavedOrders);
+    Cmd->CurrentOrderIndex = SavedCurrentOrderIndex;
+    Cmd->RallyPoint = SavedRallyPoint;
+    Cmd->HasRallyPoint = SavedHasRallyPoint;
     Cmd->CurrentCommand = Command;
     Cmd->TargetPosition = CommandTarget;
     Cmd->TargetEntityID = TargetEntityID;
@@ -125,13 +250,13 @@ static float ActiveStatusSeconds(const StatusEffectComponent& Status,
 static float AttackCooldownMultiplier(Core::ECS::EntityManager& EM, int EntityID)
 {
     auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
-    if (!Status)
-        return 1.0f;
 
     int Mod = 0;
-    if (Status->HasEffect(StatusEffect::Stim))
+    if (Status && Status->HasEffect(StatusEffect::Stim))
         ++Mod;
-    if (Status->HasEffect(StatusEffect::Ensnare))
+    if (UpgradeSystem::GetAttackCooldownMultiplier(EM, EntityID) < 1.0f)
+        ++Mod;
+    if (Status && Status->HasEffect(StatusEffect::Ensnare))
         --Mod;
     if (Mod > 0)
         return 0.5f;
@@ -155,10 +280,12 @@ static bool CanAttackTarget(const CombatComponent& Combat,
 
 static float EffectiveAttackRangePixels(const Core::ECS::EntityManager& EM,
                                         int EntityID,
-                                        const CombatComponent& Combat)
+                                        const CombatComponent& Combat,
+                                        int TargetID = -1)
 {
+    const bool TargetIsAir = TargetID >= 0 && IsAirTarget(const_cast<Core::ECS::EntityManager&>(EM), TargetID);
     return Combat.AttackRange * 32.0f +
-           (float)UpgradeSystem::GetRangeBonusPixels(EM, EntityID);
+           (float)UpgradeSystem::GetRangeBonusPixelsForTarget(EM, EntityID, TargetIsAir);
 }
 
 static void ClearCombatTargetForInvalidTarget(Core::ECS::EntityManager& EM,
@@ -180,12 +307,17 @@ static void ClearCombatTargetForInvalidTarget(Core::ECS::EntityManager& EM,
     {
         if (Combat->TargetEntityID == TargetID)
             Combat->TargetEntityID = -1;
+        if (Combat->AutoTargetEntityID == TargetID)
+            Combat->AutoTargetEntityID = -1;
+        if (Combat->LastDamagerEntityID == TargetID)
+            Combat->LastDamagerEntityID = -1;
         if (Combat->PendingAttackTargetEntityID == TargetID)
             Combat->PendingAttackTargetEntityID = -1;
         Combat->PendingAttackFrame = false;
         Combat->PendingAttackDamage = 0;
         Combat->PendingAttackUpgradeBonus = 0;
         Combat->PendingAttackElapsed = 0.0f;
+        Combat->AutoTargetLockSeconds = 0.0f;
     }
 
     if (auto* Cmd = EM.GetComponent<CommandComponent>(AttackerID))
@@ -205,6 +337,9 @@ static void ClearCombatStateForInactiveAttacker(Core::ECS::EntityManager& EM, in
     if (auto* Combat = EM.GetComponent<CombatComponent>(AttackerID))
     {
         Combat->TargetEntityID = -1;
+        Combat->AutoTargetEntityID = -1;
+        Combat->LastDamagerEntityID = -1;
+        Combat->AutoTargetLockSeconds = 0.0f;
         Combat->PendingAttackFrame = false;
         Combat->PendingAttackTargetEntityID = -1;
         Combat->PendingAttackDamage = 0;
@@ -241,11 +376,15 @@ static void ClearDirectAttackOrderForInvalidTarget(Core::ECS::EntityManager& EM,
         if (auto* Combat = EM.GetComponent<CombatComponent>(ID))
         {
             Combat->TargetEntityID = -1;
+            Combat->AutoTargetEntityID = -1;
+            Combat->LastDamagerEntityID = -1;
+            Combat->AutoTargetLockSeconds = 0.0f;
             Combat->PendingAttackFrame = false;
             Combat->PendingAttackTargetEntityID = -1;
             Combat->PendingAttackDamage = 0;
             Combat->PendingAttackUpgradeBonus = 0;
             Combat->PendingAttackElapsed = 0.0f;
+            Combat->AutoTargetLockSeconds = kInvalidDirectAttackAutoAcquireDelay;
         }
 
         if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
@@ -305,7 +444,8 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
         Cmd->TargetEntityID = TargetEntityID;
 
         IssueMovePreservingCommand(EM, ID, TargetTrans->Position,
-                                   CommandType::Attack, TargetTrans->Position, TargetEntityID);
+                                   CommandType::Attack, TargetTrans->Position, TargetEntityID,
+                                   TargetEntityID);
     }
 }
 
@@ -358,7 +498,7 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
             if (!IsDetector) continue;
         }
 
-        float Dist = MyTrans->Position.DistanceTo(TargetTrans->Position);
+        float Dist = CombatEdgeDistance(EM, EntityID, ID);
         if (Dist < BestDist)
         {
             BestDist = Dist;
@@ -423,6 +563,8 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
 {
     auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
     if (!EM.IsAlive(TargetID) || !TargetUnit || TargetUnit->HitPoints <= 0) return;
+    if (BaseDamage <= 0)
+        return;
     if (EM.GetComponent<ResourceComponent>(TargetID))
         return;
     if (IsInvulnerableByStatus(EM, TargetID))
@@ -432,27 +574,57 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
 
     const bool TargetIsAir = IsAirTarget(EM, TargetID);
     const DamageType DamageKind = TargetIsAir ? Attacker.AirDmgType : Attacker.GroundDmgType;
-    float SizeMod = GetSizeDamageModifier(DamageKind, TargetUnit->SizeType);
-    int UpgradedArmor = TargetUnit->Armor + UpgradeSystem::GetArmorBonus(EM, TargetID);
-    int ModifiedDamage = std::max(1, (int)((float)BaseDamage * SizeMod));
-    int EffectiveDamage = std::max(1, ModifiedDamage - UpgradedArmor);
+    int RemainingDamage = std::max(0, BaseDamage);
 
-    // Apply to shields first
     if (TargetUnit->ShieldPoints > 0)
     {
-        if (EffectiveDamage <= TargetUnit->ShieldPoints)
+        int ShieldArmor = 0;
+        if (auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetID))
         {
-            TargetUnit->ShieldPoints -= EffectiveDamage;
-            EffectiveDamage = 0;
+            ShieldArmor = UpgradeSystem::GetResearchLevel(
+                TargetPlayer->PlayerID, ResearchId::Protoss_PlasmaShields);
         }
-        else
-        {
-            EffectiveDamage -= TargetUnit->ShieldPoints;
-            TargetUnit->ShieldPoints = 0;
-        }
+
+        int ShieldDamage = std::max(1, RemainingDamage - ShieldArmor);
+        const int Absorbed = std::min(TargetUnit->ShieldPoints, ShieldDamage);
+        TargetUnit->ShieldPoints -= Absorbed;
+        RemainingDamage = ShieldDamage - Absorbed;
     }
 
-    TargetUnit->HitPoints -= EffectiveDamage;
+    int EffectiveDamage = 0;
+    if (RemainingDamage > 0)
+    {
+        const int UpgradedArmor = TargetUnit->Armor + UpgradeSystem::GetArmorBonus(EM, TargetID);
+        int ArmorAdjusted = std::max(1, RemainingDamage - UpgradedArmor);
+        const float SizeMod = GetSizeDamageModifier(DamageKind, TargetUnit->SizeType);
+        EffectiveDamage = std::max(1, (int)((float)ArmorAdjusted * SizeMod));
+    }
+
+    if (EffectiveDamage > 0)
+    {
+        TargetUnit->HitPoints -= EffectiveDamage;
+    }
+
+    if (TargetUnit->HitPoints > 0)
+    {
+        if (auto* TargetCombat = EM.GetComponent<CombatComponent>(TargetID))
+        {
+            TargetCombat->LastDamagerEntityID = AttackerID;
+            auto* TargetBuilding = EM.GetComponent<BuildingComponent>(TargetID);
+            if (AreEnemyPlayers(EM, TargetID, AttackerID) &&
+                !IsWorkerUnit(TargetUnit) &&
+                CanAttackTarget(*TargetCombat, EM, AttackerID))
+            {
+                SetAutoTarget(*TargetCombat, AttackerID, kAutoTargetLockSeconds);
+            }
+            else if (TargetBuilding &&
+                     AreEnemyPlayers(EM, TargetID, AttackerID) &&
+                     CanAttackTarget(*TargetCombat, EM, AttackerID))
+            {
+                SetAutoTarget(*TargetCombat, AttackerID, kAutoTargetLockSeconds);
+            }
+        }
+    }
     if (TargetUnit->HitPoints <= 0)
     {
         TargetUnit->HitPoints = 0;
@@ -696,6 +868,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     // Reduce cooldown
     if (Combat->CooldownRemaining > 0.0f)
         Combat->CooldownRemaining -= DeltaTime;
+    Combat->AutoTargetLockSeconds = std::max(0.0f, Combat->AutoTargetLockSeconds - DeltaTime);
 
     if (Combat->PendingAttackFrame)
     {
@@ -705,69 +878,40 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         return;
     }
 
-    // HoldPosition: don't chase, fire at enemies in range without moving
-    if (Cmd && Cmd->CurrentCommand == CommandType::HoldPosition)
-    {
-        const float RangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
-        int Nearby = FindNearestEnemy(EM, EntityID, RangePixels);
-        if (Nearby >= 0)
-        {
-            Combat->TargetEntityID = Nearby;
-            auto* TTrans = EM.GetComponent<TransformComponent>(Nearby);
-            if (TTrans)
-            {
-                float D = Trans->Position.DistanceTo(TTrans->Position);
-                if (D <= RangePixels && Combat->CooldownRemaining <= 0.0f)
-                {
-                    Combat->CooldownRemaining =
-                        Combat->AttackCooldown * AttackCooldownMultiplier(EM, EntityID);
+    const float BaseRangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
+    const bool HoldPosition = Cmd && Cmd->CurrentCommand == CommandType::HoldPosition;
+    const bool ExplicitAttackOrder =
+        Cmd && (Cmd->CurrentCommand == CommandType::Attack ||
+                Cmd->CurrentCommand == CommandType::AttackMove);
 
-                    const bool TargetIsAir = IsAirTarget(EM, Nearby);
-                    int Damage = PickWeaponDamage(*Combat, EM.GetComponent<UnitComponent>(Nearby), TargetIsAir);
-                    if (Damage <= 0) return;
-
-                    int UpgradeBonus = UpgradeSystem::GetWeaponBonus(EM, EntityID);
-                    int TotalDamage = Damage + UpgradeBonus;
-
-                    if (Combat->WeaponBeh != WeaponBehavior::Melee ||
-                        !RollMissChance(*Combat, *Trans, *TTrans, RangePixels, EM))
-                        BeginOrResolveAttack(EM, EntityID, Nearby, *TTrans, TotalDamage,
-                                             RangePixels);
-                }
-            }
-        }
-        return;
-    }
-
-    int TargetID = -1;
-    if (Cmd && (Cmd->CurrentCommand == CommandType::Attack ||
-                Cmd->CurrentCommand == CommandType::AttackMove))
-    {
-        TargetID = Cmd->TargetEntityID;
-    }
-    if (TargetID < 0 && Combat->TargetEntityID >= 0)
-    {
-        TargetID = Combat->TargetEntityID;
-    }
+    int TargetID = ExplicitAttackOrder ? Cmd->TargetEntityID : -1;
 
     // Validate target
     if (TargetID >= 0)
     {
-        auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
-        auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
-        if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans ||
-            !CanAttackTarget(*Combat, EM, TargetID))
+        if (!IsActiveTargetValid(EM, *Combat, TargetID))
         {
             ClearCombatTargetForInvalidTarget(EM, EntityID, TargetID);
             TargetID = -1;
         }
     }
 
+    if (Combat->AutoTargetEntityID >= 0 &&
+        !IsActiveTargetValid(EM, *Combat, Combat->AutoTargetEntityID))
+    {
+        Combat->AutoTargetEntityID = -1;
+        Combat->AutoTargetLockSeconds = 0.0f;
+    }
+
+    if (TargetID < 0 && Combat->AutoTargetEntityID >= 0)
+    {
+        TargetID = Combat->AutoTargetEntityID;
+    }
+
     // Find new target for attack-move
     if (TargetID < 0 && Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
     {
-        const float SearchRangePixels =
-            EffectiveAttackRangePixels(EM, EntityID, *Combat) * 2.0f;
+        const float SearchRangePixels = BaseRangePixels * 2.0f;
         TargetID = FindNearestEnemy(EM, EntityID, SearchRangePixels);
         if (TargetID >= 0)
         {
@@ -776,12 +920,32 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
             Cmd->TargetEntityID = TargetID;
             if (auto* TTrans = EM.GetComponent<TransformComponent>(TargetID))
                 IssueMovePreservingCommand(EM, EntityID, TTrans->Position,
-                                           CommandType::AttackMove, AttackMoveDestination, TargetID);
+                                           CommandType::AttackMove, AttackMoveDestination, TargetID,
+                                           TargetID);
         }
     }
 
     if (TargetID < 0)
     {
+        const bool PassiveAutoAcquire =
+            (HoldPosition && !IsWorkerUnit(Unit)) ||
+            (!Cmd && !IsWorkerUnit(Unit)) ||
+            (EM.GetComponent<BuildingComponent>(EntityID) != nullptr) ||
+            ((Cmd->CurrentCommand == CommandType::Stop ||
+              Cmd->CurrentCommand == CommandType::Follow ||
+              Cmd->CurrentCommand == CommandType::Patrol) &&
+             !IsWorkerUnit(Unit));
+        if (PassiveAutoAcquire && Combat->AutoTargetLockSeconds <= 0.0f)
+        {
+            TargetID = FindNearestEnemy(EM, EntityID, BaseRangePixels);
+            if (TargetID >= 0)
+                SetAutoTarget(*Combat, TargetID, 0.35f);
+        }
+    }
+
+    if (TargetID < 0)
+    {
+        Combat->TargetEntityID = -1;
         if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
         {
             auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
@@ -794,21 +958,25 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         }
         return;
     }
+    Combat->TargetEntityID = TargetID;
 
     auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
     if (!TargetTrans) return;
 
     // Check range
-    float Dist = Trans->Position.DistanceTo(TargetTrans->Position);
-    float RangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
+    const float RangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat, TargetID);
+    float Dist = CombatEdgeDistance(EM, EntityID, TargetID);
 
     if (Dist > RangePixels)
     {
+        if (HoldPosition || !CanChaseTargetTemporarily(Cmd, EM.GetComponent<BuildingComponent>(EntityID)))
+            return;
+
         const CommandType PreserveCommand = Cmd ? Cmd->CurrentCommand : CommandType::Attack;
         const Core::Math::Vec2 PreserveTarget = Cmd ? Cmd->TargetPosition : TargetTrans->Position;
         const int PreserveTargetEntity = Cmd ? Cmd->TargetEntityID : TargetID;
         IssueMovePreservingCommand(EM, EntityID, TargetTrans->Position,
-                                   PreserveCommand, PreserveTarget, PreserveTargetEntity);
+                                   PreserveCommand, PreserveTarget, PreserveTargetEntity, TargetID);
         return;
     }
 

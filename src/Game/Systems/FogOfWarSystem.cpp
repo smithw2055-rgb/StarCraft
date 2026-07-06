@@ -1,4 +1,5 @@
 #include "Game/Systems/FogOfWarSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/Map/Map.h"
 #include "Game/Components.h"
 #include "Core/Utils/Logger.h"
@@ -215,7 +216,8 @@ void FogOfWarSystem::Update(float DeltaTime)
         size_t SliceBase = (size_t)PlayerID * mMapWidth * mMapHeight;
 
         // Check status effects that reduce sight
-        int EffectiveRange = Unit->SightRange;
+        int EffectiveRange =
+            Unit->SightRange + UpgradeSystem::GetSightRangeBonusTiles(EM, ID);
         auto* Status = EM.GetComponent<Components::StatusEffectComponent>(ID);
         if (Status && Status->HasEffect(Components::StatusEffect::Blind))
             EffectiveRange = 1; // Blind reduces vision to almost nothing

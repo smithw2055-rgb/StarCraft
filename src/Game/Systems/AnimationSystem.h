@@ -55,6 +55,7 @@ public:
     static int SelectIScriptAnimationForState(AnimState DesiredState,
                                               bool IsBuilding,
                                               bool UnderConstruction,
+                                              float ConstructionProgress,
                                               bool WasUnderConstruction,
                                               bool IsWorking,
                                               bool WasWorking,
@@ -132,7 +133,8 @@ private:
                                 Core::Math::Vec2 NodeOffset,
                                 float NodeLifetime,
                                 const Components::TransformComponent& Trans,
-                                const Components::PlayerComponent* Player);
+                                const Components::PlayerComponent* Player,
+                                Components::CombatComponent* Combat);
     void SpawnIScriptOverlay(int ParentEntityID,
                              const Components::TransformComponent& ParentTrans,
                              int ImageID,
@@ -179,6 +181,7 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
     AnimState DesiredState,
     bool IsBuilding,
     bool UnderConstruction,
+    float ConstructionProgress,
     bool WasUnderConstruction,
     bool IsWorking,
     bool WasWorking,
@@ -207,10 +210,21 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
 
     if (UnderConstruction)
     {
-        const int ConstructionAnim =
-            ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_AlmostBuilt, HasAnim);
-        if (ConstructionAnim >= 0)
-            return ConstructionAnim;
+        if (!WasUnderConstruction && HasAnim(Game::IScriptAnims::Anim_SpecialState1))
+            return Game::IScriptAnims::Anim_SpecialState1;
+        if (ConstructionProgress >= 0.85f)
+        {
+            const int AlmostBuilt =
+                ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_AlmostBuilt, HasAnim);
+            if (AlmostBuilt >= 0)
+                return AlmostBuilt;
+        }
+        if (HasAnim(Game::IScriptAnims::Anim_SpecialState1))
+            return Game::IScriptAnims::Anim_SpecialState1;
+        if (HasAnim(Game::IScriptAnims::Anim_SpecialState2))
+            return Game::IScriptAnims::Anim_SpecialState2;
+        if (HasAnim(Game::IScriptAnims::Anim_Init))
+            return Game::IScriptAnims::Anim_Init;
         return -1;
     }
 
@@ -237,12 +251,15 @@ inline bool AnimationSystem::ShouldClearImageTreeForAnimRestart(
     int TargetAnim,
     bool UnderConstruction)
 {
-    if (ImageOrScriptChanged || UnderConstruction)
+    if (ImageOrScriptChanged)
         return true;
 
     if (TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
         TargetAnim == Game::IScriptAnims::Anim_AirAttkInit)
         return true;
+
+    if (UnderConstruction)
+        return PreviousAnim != TargetAnim;
 
     return !IsBuilding && PreviousAnim != TargetAnim;
 }

@@ -1,4 +1,5 @@
 #include "Resource/GameDataLoader.h"
+#include "Resource/DatDecoder.h"
 #include "Resource/GrpDecoder.h"
 
 #include "Game/DataEnums.h"
@@ -146,6 +147,8 @@ int main()
     Resource::GameDataLoader Loader;
     Require(Loader.LoadUnitDataRaw(ReadAll("assets/arr/units.dat")),
         "load units.dat");
+    Require(Loader.LoadWeaponDataRaw(ReadAll("assets/arr/weapons.dat")),
+        "load weapons.dat");
     Require(Loader.LoadFlingyDataRaw(ReadAll("assets/arr/flingy.dat")),
         "load flingy.dat");
     Require(Loader.LoadSpriteDataRaw(ReadAll("assets/arr/sprites.dat")),
@@ -159,6 +162,14 @@ int main()
 
     const auto* Marine = Loader.FindUnitByID(0);
     Require(Marine, "Marine units.dat entry");
+    Require(Marine->HitPoints == 40 &&
+            Marine->ShieldAmount == 0 &&
+            Marine->GroundWeapon == 0 &&
+            Marine->AirWeapon == 0 &&
+            Marine->SightRange == 7 &&
+            Marine->MineralCost == 50 &&
+            Marine->SupplyCost == 2,
+        "Marine balance fields decode from column-major units.dat");
     Require(Marine->DimensionLeft == 8 && Marine->DimensionUp == 9 &&
             Marine->DimensionRight == 8 && Marine->DimensionDown == 10,
         "Marine dimensions decode to 17x20");
@@ -167,11 +178,20 @@ int main()
 
     const auto* SCV = Loader.FindUnitByID(7);
     Require(SCV, "SCV units.dat entry");
+    Require(SCV->HitPoints == 60 &&
+            SCV->GroundWeapon == 13 &&
+            SCV->AirWeapon == 130 &&
+            SCV->SightRange == 7,
+        "SCV balance fields decode from column-major units.dat");
     Require(SCV->DimensionWidth() == 23 && SCV->DimensionHeight() == 23,
         "SCV dimensions decode to 23x23");
 
     const auto* CommandCenter = Loader.FindUnitByID(106);
     Require(CommandCenter, "Command Center units.dat entry");
+    Require(CommandCenter->HitPoints == 1500 &&
+            CommandCenter->Armor == 1 &&
+            CommandCenter->SightRange == 10,
+        "Command Center balance fields decode from column-major units.dat");
     Require(CommandCenter->PlacementWidth == 160 &&
             CommandCenter->PlacementHeight == 160,
         "Command Center placement size decodes");
@@ -195,6 +215,37 @@ int main()
             CommandCenterSprite->SelectionCircle == 8 &&
             CommandCenterSprite->SelectionCircleVerticalOffset == 6,
         "Command Center sprite selection metadata decode");
+
+    const auto* GaussRifle = Loader.FindWeaponByID(0);
+    Require(GaussRifle, "Gauss Rifle weapons.dat entry");
+    Require(GaussRifle->DamageAmount == 6 &&
+            GaussRifle->DamageBonus == 1 &&
+            GaussRifle->Cooldown == 15 &&
+            GaussRifle->Range == 128 &&
+            GaussRifle->DamageUpgrade == 7 &&
+            GaussRifle->DamageType == 3 &&
+            GaussRifle->WeaponBehavior == 2 &&
+            GaussRifle->SplashType == 1 &&
+            GaussRifle->BulletCount == 1,
+        "Gauss Rifle decodes from column-major weapons.dat");
+
+    const auto Upgrades = Resource::DatDecoder::DecodeUpgrades(ReadAll("assets/arr/upgrades.dat"));
+    Require(Upgrades.size() > 0, "upgrades.dat decodes");
+    Require(Upgrades[0].MineralCostBase == 100 &&
+            Upgrades[0].MineralCostFactor == 75 &&
+            Upgrades[0].GasCostBase == 100 &&
+            Upgrades[0].GasCostFactor == 75 &&
+            Upgrades[0].TimeCostBase == 4000 &&
+            Upgrades[0].TimeCostFactor == 480,
+        "upgrade costs decode from column-major upgrades.dat");
+
+    const auto Tech = Resource::DatDecoder::DecodeTech(ReadAll("assets/arr/techdata.dat"));
+    Require(Tech.size() > 0, "techdata.dat decodes");
+    Require(Tech[0].MineralCost == 100 &&
+            Tech[0].GasCost == 100 &&
+            Tech[0].TimeCost == 1200 &&
+            Tech[0].RequiredUnit == 0xffffffffu,
+        "tech costs decode from column-major techdata.dat");
 
     constexpr std::array<int, 10> SelectionCirclePixels =
         {22, 32, 48, 62, 72, 94, 110, 122, 146, 224};

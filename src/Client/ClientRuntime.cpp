@@ -9,6 +9,7 @@
 #include "Client/WorldEffects.h"
 #include "Core/ECS/EntityManager.h"
 #include "Core/Platform/Platform.h"
+#include "Core/Utils/InputDebug.h"
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
@@ -21,6 +22,7 @@
 #include "UI/Hud.h"
 
 #include <string>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -99,6 +101,10 @@ ClientRuntime::ClientRuntime()
     , Camera(std::make_unique<Render::Camera2D>())
     , Effects(std::make_unique<WorldEffects>())
 {
+    Core::Utils::Logger::Info(
+        "ClientRuntime",
+        "Constructed this=" + std::to_string((uintptr_t)this) +
+            " cache=" + std::to_string((uintptr_t)Cache.get()));
 }
 
 ClientRuntime::~ClientRuntime() = default;
@@ -130,6 +136,10 @@ Resource::Graphics::ArchiveAssetSourceView ClientRuntime::GetArchiveSource()
 }
 bool ClientRuntime::InitializeResources(const std::string& InstallPath)
 {
+    Core::Utils::Logger::Info(
+        "ClientRuntime",
+        "InitializeResources this=" + std::to_string((uintptr_t)this) +
+            " cache=" + std::to_string((uintptr_t)Cache.get()));
     return Cache->Initialize(InstallPath);
 }
 
@@ -204,7 +214,25 @@ Core::Math::Vec2 ClientRuntime::ScreenToWorld(float ScreenX, float ScreenY) cons
     float WorldX = 0.0f;
     float WorldY = 0.0f;
     Camera->ScreenToWorld(ScreenX, ScreenY, WorldX, WorldY);
+    if (Core::Utils::InputDebugEnabled())
+    {
+        std::ostringstream Stream;
+        Stream << "screen=" << ScreenX << "," << ScreenY
+               << " viewport=" << Camera->GetViewportWidth() << "x" << Camera->GetViewportHeight()
+               << " camera=" << Camera->GetX() << "," << Camera->GetY()
+               << " zoom=" << Camera->GetZoom()
+               << " world=" << WorldX << "," << WorldY;
+        Core::Utils::InputDebugLog("InputScreenToWorld", Stream.str());
+    }
     return { WorldX, WorldY };
+}
+
+Core::Math::Vec2 ClientRuntime::WorldToScreen(float WorldX, float WorldY) const
+{
+    float ScreenX = 0.0f;
+    float ScreenY = 0.0f;
+    Camera->WorldToScreen(WorldX, WorldY, ScreenX, ScreenY);
+    return { ScreenX, ScreenY };
 }
 
 void ClientRuntime::GetVisibleWorldRect(float& X, float& Y, float& W, float& H) const

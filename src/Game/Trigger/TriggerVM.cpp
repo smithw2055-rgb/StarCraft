@@ -7,6 +7,7 @@
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -52,14 +53,7 @@ namespace
 
     Race RaceFromChkUnit(int ChkUnitID)
     {
-        int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
-        if (DefID >= 0)
-            return Game::Races::GetUnitDefByID(DefID).RaceType;
-        if ((ChkUnitID >= 37 && ChkUnitID <= 62) || (ChkUnitID >= 131 && ChkUnitID <= 151))
-            return Race::Zerg;
-        if ((ChkUnitID >= 64 && ChkUnitID <= 84) || (ChkUnitID >= 154 && ChkUnitID <= 172))
-            return Race::Protoss;
-        return Race::Terran;
+        return Game::Races::GetRaceByChkUnitID(ChkUnitID, Race::Terran);
     }
 
     int NormalizeTriggerPlayerID(uint32_t PlayerID)
@@ -921,7 +915,15 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                     if (Type == 49) Unit->HitPoints = std::max(1, Unit->MaxHitPoints * Percent / 100);
                     else if (Type == 50) Unit->EnergyPoints = Unit->MaxEnergyPoints * Percent / 100;
                     else if (Type == 51) Unit->ShieldPoints = Unit->MaxShieldPoints * Percent / 100;
-                    else if (Type == 53) Unit->HangarCount = std::max(0, (int)Action.Secondary);
+                    else if (Type == 53)
+                    {
+                        const int MaxHangar =
+                            Game::Systems::UpgradeSystem::GetMaxHangarCount(EM, ID);
+                        const int RequestedHangar = std::max(0, (int)Action.Secondary);
+                        Unit->HangarCount = MaxHangar > 0
+                            ? std::min(RequestedHangar, MaxHangar)
+                            : RequestedHangar;
+                    }
                 }
                 ++Done;
             }
@@ -1006,6 +1008,8 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         Unit.Speed = Def.Speed;
         Unit.SightRange = Def.SightRange;
         Unit.SupplyCost = Def.SupplyCost;
+        Unit.IsDetector = Game::Races::IsDetectorChkUnitID(Unit.ChkUnitID);
+        Game::Systems::UpgradeSystem::RefreshUnitEnergyCap(EM, Eid);
         if (Def.IsBuilding)
         {
             auto& Building = EM.AddComponent<BuildingComponent>(Eid);
@@ -1027,18 +1031,8 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         if (Def.GroundDamage > 0 || Def.AirDamage > 0)
         {
             auto& Combat = EM.AddComponent<CombatComponent>(Eid);
-            Combat.GroundDamage = Def.GroundDamage;
-            Combat.AirDamage = Def.AirDamage;
-            Combat.GroundDmgType = Def.GroundDmgType;
-            Combat.AirDmgType = Def.AirDmgType;
-            Combat.AttackRange = Def.AttackRange;
-            Combat.AttackCooldown = Def.AttackCooldown;
-            Combat.CanTargetGround = Def.GroundDamage > 0;
-            Combat.CanTargetAir = Def.AirDamage > 0;
-            Combat.MyElevation = Game::Data::IsAirUnitType(ChkUnitID) ?
-                Elevation::Air :
-                Elevation::Ground;
-            Combat.IsRanged = Def.AttackRange > 1.5f;
+            Races::ApplyCombatDefinition(
+                Combat, Def, Game::Data::IsAirUnitType(ChkUnitID));
         }
     }
     else if (IsBuildingUnitID(ChkUnitID))

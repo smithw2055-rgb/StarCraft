@@ -52,8 +52,13 @@ namespace
         {ResearchId::Terran_IonThrusters,    "Ion Thrusters",    "ControlTower",   100, 100, 0,  0,  1, 30, 0},
         {ResearchId::Terran_Lockdown,        "Lockdown",         "CovertOps",      200, 200, 0,  0,  1, 40, 0},
         {ResearchId::Terran_MoebiusReactor,  "Moebius Reactor",  "CovertOps",      100, 100, 0,  0,  1, 30, 0},
+        {ResearchId::Terran_OcularImplants,  "Ocular Implants",  "CovertOps",      100, 100, 0,  0,  1, 30, 0},
+        {ResearchId::Terran_ApolloReactor,   "Apollo Reactor",   "ControlTower",   200, 200, 0,  0,  1, 40, 0},
+        {ResearchId::Terran_TitanReactor,    "Titan Reactor",    "ScienceFacility",150, 150, 0,  0,  1, 40, 0},
+        {ResearchId::Terran_CaduceusReactor, "Caduceus Reactor", "Academy",        150, 150, 0,  0,  1, 40, 0},
         {ResearchId::Terran_YamatoGun,       "Yamato Gun",       "PhysicsLab",     100, 100, 0,  0,  1, 40, 0},
         {ResearchId::Terran_ColossusReactor, "Colossus Reactor", "PhysicsLab",     150, 150, 0,  0,  1, 40, 0},
+        {ResearchId::Terran_CharonBoosters,  "Charon Boosters",  "MachineShop",    100, 100, 0,  0,  1, 40, 0},
 
         // Zerg
         {ResearchId::Zerg_MeleeAttacks,      "Melee Attacks",      "EvolutionChamber", 100, 100, 75, 75, 3, 30, 10},
@@ -63,6 +68,10 @@ namespace
         {ResearchId::Zerg_FlyerCarapace,     "Flyer Carapace",     "Spire",            150, 150, 75, 75, 3, 30, 10},
         {ResearchId::Zerg_AdrenalGlands,     "Adrenal Glands",     "SpawningPool",     200, 200, 0,  0,  1, 40, 0},
         {ResearchId::Zerg_MetabolicBoost,    "Metabolic Boost",    "SpawningPool",     100, 100, 0,  0,  1, 30, 0},
+        {ResearchId::Zerg_AnabolicSynthesis, "Anabolic Synthesis", "Ultralisk Cavern", 200, 200, 0,  0,  1, 40, 0},
+        {ResearchId::Zerg_ChitinousPlating,  "Chitinous Plating",  "Ultralisk Cavern", 150, 150, 0,  0,  1, 40, 0},
+        {ResearchId::Zerg_MuscularAugments,  "Muscular Augments",  "HydraliskDen",     150, 150, 0,  0,  1, 30, 0},
+        {ResearchId::Zerg_GroovedSpines,     "Grooved Spines",     "HydraliskDen",     150, 150, 0,  0,  1, 30, 0},
         {ResearchId::Zerg_VentralSacs,       "Ventral Sacs",       "Lair",             200, 200, 0,  0,  1, 40, 0},
         {ResearchId::Zerg_Antennae,          "Antennae",           "Lair",             150, 150, 0,  0,  1, 30, 0},
         {ResearchId::Zerg_PneumatizedCarapace,"Pneumatized Carapace","Lair",           150, 150, 0,  0,  1, 30, 0},
@@ -85,7 +94,12 @@ namespace
         {ResearchId::Protoss_GraviticDrive,   "Gravitic Drive",    "RoboticsSupportBay",100,100, 0,  0,  1, 30, 0},
         {ResearchId::Protoss_ScarabDamage,    "Scarab Damage",     "RoboticsSupportBay",200,200, 0,  0,  1, 40, 0},
         {ResearchId::Protoss_ZealotSpeed,     "Leg Enhancement",   "CitadelOfAdun",    150, 150, 0,  0,  1, 30, 0},
+        {ResearchId::Protoss_SensorArray,     "Sensor Array",      "Observatory",      150, 150, 0,  0,  1, 30, 0},
+        {ResearchId::Protoss_ApialSensors,    "Apial Sensors",     "FleetBeacon",      100, 100, 0,  0,  1, 30, 0},
         {ResearchId::Protoss_KhaydarinAmulet, "Khaydarin Amulet",  "TemplarArchives",  150, 150, 0,  0,  1, 30, 0},
+        {ResearchId::Protoss_ArgusJewel,      "Argus Jewel",       "FleetBeacon",      150, 150, 0,  0,  1, 40, 0},
+        {ResearchId::Protoss_ArgusTalisman,   "Argus Talisman",    "TemplarArchives",  150, 150, 0,  0,  1, 40, 0},
+        {ResearchId::Protoss_KhaydarinCore,   "Khaydarin Core",    "ArbiterTribunal",  150, 150, 0,  0,  1, 40, 0},
         {ResearchId::Protoss_PsionicStorm,    "Psionic Storm",     "TemplarArchives",  200, 200, 0,  0,  1, 40, 0},
         {ResearchId::Protoss_Hallucination,   "Hallucination",     "TemplarArchives",  200, 200, 0,  0,  1, 40, 0},
         {ResearchId::Protoss_Recall,          "Recall",            "ArbiterTribunal",  150, 150, 0,  0,  1, 40, 0},
@@ -188,6 +202,54 @@ namespace
         return D.Name == "Scout" || D.Name == "Corsair" || D.Name == "Carrier" ||
                D.Name == "Arbiter" || D.Name == "Shuttle";
     }
+
+    ResearchId GetEnergyUpgradeForDef(const Game::Races::UnitDef& Def)
+    {
+        if (Def.Name == "Ghost")
+            return ResearchId::Terran_MoebiusReactor;
+        if (Def.Name == "Wraith")
+            return ResearchId::Terran_ApolloReactor;
+        if (Def.Name == "ScienceVessel")
+            return ResearchId::Terran_TitanReactor;
+        if (Def.Name == "Battlecruiser")
+            return ResearchId::Terran_ColossusReactor;
+        if (Def.Name == "Medic")
+            return ResearchId::Terran_CaduceusReactor;
+        if (Def.Name == "Queen")
+            return ResearchId::Zerg_QueenEnergy;
+        if (Def.Name == "Defiler")
+            return ResearchId::Zerg_DefilerEnergy;
+        if (Def.Name == "Corsair")
+            return ResearchId::Protoss_ArgusJewel;
+        if (Def.Name == "Dark Archon")
+            return ResearchId::Protoss_ArgusTalisman;
+        if (Def.Name == "High Templar")
+            return ResearchId::Protoss_KhaydarinAmulet;
+        if (Def.Name == "Arbiter")
+            return ResearchId::Protoss_KhaydarinCore;
+        return ResearchId::None;
+    }
+
+    bool IsEnergyCapUpgrade(ResearchId ResearchId)
+    {
+        switch (ResearchId)
+        {
+            case ResearchId::Terran_MoebiusReactor:
+            case ResearchId::Terran_ApolloReactor:
+            case ResearchId::Terran_TitanReactor:
+            case ResearchId::Terran_ColossusReactor:
+            case ResearchId::Terran_CaduceusReactor:
+            case ResearchId::Zerg_QueenEnergy:
+            case ResearchId::Zerg_DefilerEnergy:
+            case ResearchId::Protoss_ArgusJewel:
+            case ResearchId::Protoss_ArgusTalisman:
+            case ResearchId::Protoss_KhaydarinAmulet:
+            case ResearchId::Protoss_KhaydarinCore:
+                return true;
+            default:
+                return false;
+        }
+    }
 }
 
 UpgradeSystem::UpgradeSystem(Core::ECS::SystemManager& SysMgr)
@@ -236,6 +298,17 @@ void UpgradeSystem::Update(float DeltaTime)
                     "Player " + std::to_string(PlayerID) + " completed " +
                     (Research ? std::string(Research->Name) : "research") + " level " +
                     std::to_string(CurrentLevel + 1));
+
+                if (IsEnergyCapUpgrade(static_cast<ResearchId>(Rid)))
+                {
+                    auto Units = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+                    for (int UnitID : Units)
+                    {
+                        auto* UnitPlayer = EM.GetComponent<PlayerComponent>(UnitID);
+                        if (UnitPlayer && UnitPlayer->PlayerID == PlayerID)
+                            RefreshUnitEnergyCap(EM, UnitID);
+                    }
+                }
             }
 
             Bldg->IsResearching = false;
@@ -404,7 +477,12 @@ bool UpgradeSystem::IsUpgradeType(ResearchId ResearchId)
         case ResearchId::Terran_U238Shells:
         case ResearchId::Terran_IonThrusters:
         case ResearchId::Terran_MoebiusReactor:
+        case ResearchId::Terran_OcularImplants:
+        case ResearchId::Terran_ApolloReactor:
+        case ResearchId::Terran_TitanReactor:
+        case ResearchId::Terran_CaduceusReactor:
         case ResearchId::Terran_ColossusReactor:
+        case ResearchId::Terran_CharonBoosters:
         case ResearchId::Zerg_MeleeAttacks:
         case ResearchId::Zerg_MissileAttacks:
         case ResearchId::Zerg_Carapace:
@@ -412,6 +490,10 @@ bool UpgradeSystem::IsUpgradeType(ResearchId ResearchId)
         case ResearchId::Zerg_FlyerCarapace:
         case ResearchId::Zerg_AdrenalGlands:
         case ResearchId::Zerg_MetabolicBoost:
+        case ResearchId::Zerg_AnabolicSynthesis:
+        case ResearchId::Zerg_ChitinousPlating:
+        case ResearchId::Zerg_MuscularAugments:
+        case ResearchId::Zerg_GroovedSpines:
         case ResearchId::Zerg_VentralSacs:
         case ResearchId::Zerg_Antennae:
         case ResearchId::Zerg_PneumatizedCarapace:
@@ -426,7 +508,12 @@ bool UpgradeSystem::IsUpgradeType(ResearchId ResearchId)
         case ResearchId::Protoss_GraviticDrive:
         case ResearchId::Protoss_ScarabDamage:
         case ResearchId::Protoss_ZealotSpeed:
+        case ResearchId::Protoss_SensorArray:
+        case ResearchId::Protoss_ApialSensors:
         case ResearchId::Protoss_KhaydarinAmulet:
+        case ResearchId::Protoss_ArgusJewel:
+        case ResearchId::Protoss_ArgusTalisman:
+        case ResearchId::Protoss_KhaydarinCore:
         case ResearchId::Protoss_ReaverCapacity:
         case ResearchId::Protoss_CarrierCapacity:
             return true;
@@ -532,7 +619,15 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
     {
         if (IsZergFlyer(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Zerg_FlyerCarapace);
-        return GetResearchLevel(PlayerID, ResearchId::Zerg_Carapace);
+
+        int Bonus = GetResearchLevel(PlayerID, ResearchId::Zerg_Carapace);
+        const auto& Def = Game::Races::GetUnitDefByID(DefID);
+        if (Def.Name == "Ultralisk" &&
+            HasResearch(PlayerID, ResearchId::Zerg_ChitinousPlating))
+        {
+            Bonus += 2;
+        }
+        return Bonus;
     }
     else if (RaceVal == 2) // Protoss
     {
@@ -545,6 +640,13 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
 }
 
 int UpgradeSystem::GetRangeBonusPixels(const Core::ECS::EntityManager& EM, int EntityID)
+{
+    return GetRangeBonusPixelsForTarget(EM, EntityID, false);
+}
+
+int UpgradeSystem::GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& EM,
+                                                int EntityID,
+                                                bool TargetIsAir)
 {
     auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
     auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
@@ -564,7 +666,172 @@ int UpgradeSystem::GetRangeBonusPixels(const Core::ECS::EntityManager& EM, int E
     {
         return 64;
     }
+    if (Def.Name == "Hydralisk" &&
+        HasResearch(PlayerID, ResearchId::Zerg_GroovedSpines))
+    {
+        return 32;
+    }
+    if (TargetIsAir &&
+        Def.Name == "Goliath" &&
+        HasResearch(PlayerID, ResearchId::Terran_CharonBoosters))
+    {
+        return 96;
+    }
 
+    return 0;
+}
+
+int UpgradeSystem::GetSightRangeBonusTiles(const Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    const int DefID = ResolveDefID(EM, EntityID);
+    if (DefID < 0)
+        return 0;
+
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.Name == "Ghost" &&
+        HasResearch(PlayerID, ResearchId::Terran_OcularImplants))
+    {
+        return std::max(0, 11 - Def.SightRange);
+    }
+    if (Def.Name == "Overlord" &&
+        HasResearch(PlayerID, ResearchId::Zerg_Antennae))
+    {
+        return std::max(0, 11 - Def.SightRange);
+    }
+    if (Def.Name == "Observer" &&
+        HasResearch(PlayerID, ResearchId::Protoss_SensorArray))
+    {
+        return std::max(0, 11 - Def.SightRange);
+    }
+    if (Def.Name == "Scout" &&
+        HasResearch(PlayerID, ResearchId::Protoss_ApialSensors))
+    {
+        return std::max(0, 11 - Def.SightRange);
+    }
+
+    return 0;
+}
+
+float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& EM,
+                                                int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    const int DefID = ResolveDefID(EM, EntityID);
+    if (DefID < 0)
+        return 1.0f;
+
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.Name == "Vulture" &&
+        HasResearch(PlayerID, ResearchId::Terran_IonThrusters))
+    {
+        return 1.5f;
+    }
+    if (Def.Name == "Zergling" &&
+        HasResearch(PlayerID, ResearchId::Zerg_MetabolicBoost))
+    {
+        return 1.5f;
+    }
+    if (Def.Name == "Hydralisk" &&
+        HasResearch(PlayerID, ResearchId::Zerg_MuscularAugments))
+    {
+        return 1.5f;
+    }
+    if (Def.Name == "Ultralisk" &&
+        HasResearch(PlayerID, ResearchId::Zerg_AnabolicSynthesis))
+    {
+        return 1.5f;
+    }
+    if (Def.Name == "Zealot" &&
+        HasResearch(PlayerID, ResearchId::Protoss_ZealotSpeed))
+    {
+        return 1.5f;
+    }
+
+    return 1.0f;
+}
+
+float UpgradeSystem::GetAttackCooldownMultiplier(const Core::ECS::EntityManager& EM,
+                                                 int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    const int DefID = ResolveDefID(EM, EntityID);
+    if (DefID < 0)
+        return 1.0f;
+
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.Name == "Zergling" &&
+        HasResearch(PlayerID, ResearchId::Zerg_AdrenalGlands))
+    {
+        return 0.5f;
+    }
+
+    return 1.0f;
+}
+
+int UpgradeSystem::GetEffectiveMaxEnergyPoints(const Core::ECS::EntityManager& EM,
+                                               int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    if (!Unit)
+        return 0;
+
+    const int DefID = ResolveDefID(EM, EntityID);
+    int BaseCap = std::max(0, Unit->MaxEnergyPoints);
+    if (DefID >= 0)
+    {
+        const auto& Def = Game::Races::GetUnitDefByID(DefID);
+        const ResearchId EnergyUpgrade = GetEnergyUpgradeForDef(Def);
+        if (EnergyUpgrade != ResearchId::None)
+        {
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, EnergyUpgrade) ? 250 : 200;
+        }
+        BaseCap = std::max(BaseCap, Def.EnergyPoints);
+    }
+    return BaseCap;
+}
+
+void UpgradeSystem::RefreshUnitEnergyCap(Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit)
+        return;
+
+    const int EffectiveMax = GetEffectiveMaxEnergyPoints(EM, EntityID);
+    if (EffectiveMax <= 0)
+        return;
+
+    Unit->MaxEnergyPoints = EffectiveMax;
+    Unit->EnergyPoints = std::min(Unit->EnergyPoints, EffectiveMax);
+}
+
+int UpgradeSystem::GetMaxHangarCount(const Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    const int DefID = ResolveDefID(EM, EntityID);
+    if (DefID < 0)
+        return 0;
+
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.Name == "Carrier")
+    {
+        return HasResearch(PlayerID, ResearchId::Protoss_CarrierCapacity) ? 8 : 4;
+    }
+    if (Def.Name == "Reaver")
+    {
+        return HasResearch(PlayerID, ResearchId::Protoss_ReaverCapacity) ? 10 : 5;
+    }
     return 0;
 }
 

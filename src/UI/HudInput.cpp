@@ -1,7 +1,9 @@
 #include "UI/Hud.h"
 
 #include <cstddef>
+#include <sstream>
 
+#include "Core/Utils/InputDebug.h"
 #include "UI/HudLayout.h"
 #include "UI/HudMinimapGeometry.h"
 
@@ -14,7 +16,21 @@ bool Hud::CheckMinimapClick(int SX, int SY,
                             float& OutWX, float& OutWY) const
 {
     const auto Layout = ResolveHudLayout(VW, VH);
-    return MinimapScreenToWorld(Layout.MinimapRect, MW, MH, SX, SY, OutWX, OutWY);
+    const bool Hit = MinimapScreenToWorld(Layout.MinimapRect, MW, MH, SX, SY, OutWX, OutWY);
+    if (Core::Utils::InputDebugEnabled())
+    {
+        std::ostringstream Stream;
+        Stream << "screen=" << SX << "," << SY
+               << " viewport=" << VW << "x" << VH
+               << " map=" << MW << "x" << MH
+               << " rect=" << Layout.MinimapRect.X << "," << Layout.MinimapRect.Y
+               << "," << Layout.MinimapRect.W << "," << Layout.MinimapRect.H
+               << " hit=" << (Hit ? 1 : 0);
+        if (Hit)
+            Stream << " world=" << OutWX << "," << OutWY;
+        Core::Utils::InputDebugLog("InputHudMinimap", Stream.str());
+    }
+    return Hit;
 }
 
 int Hud::CheckCommandPanelClick(int SX, int SY, int VW, int VH) const

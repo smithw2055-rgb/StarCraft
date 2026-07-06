@@ -115,6 +115,7 @@ void AppRuntime::UpdateFrameStats()
             {
                 std::cout << "fps=" << FpsValue
                           << " win=" << Core::Platform::GetWindowWidth() << "x" << Core::Platform::GetWindowHeight()
+                          << " client=" << Core::Platform::GetClientWidth() << "x" << Core::Platform::GetClientHeight()
                           << " frame=" << FrameCount
                           << " mouse=" << Core::Platform::GetMouseX() << "," << Core::Platform::GetMouseY()
                           << std::endl;

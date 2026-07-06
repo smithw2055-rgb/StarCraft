@@ -15,9 +15,41 @@
 namespace Game::Client::GameLoop
 {
 
+namespace
+{
+void EnsureGuiPresentationSize(GuiRuntime& Gui, GameState State)
+{
+#if ENABLE_GUI_UI
+    const int Width = Core::Platform::GetWindowWidth();
+    const int Height = Core::Platform::GetWindowHeight();
+    if (Width <= 0 || Height <= 0)
+        return;
+
+    if (Gui.AppliedWidth == Width && Gui.AppliedHeight == Height)
+        return;
+
+    Gui.AppliedWidth = Width;
+    Gui.AppliedHeight = Height;
+    if (State == GameState::MainMenu)
+    {
+        if (Gui.GlueGuiInitialized)
+            Gui.GlueGui.Resize(Width, Height);
+    }
+    else if (Gui.MainGui.IsActive())
+    {
+        Gui.MainGui.Resize(Width, Height);
+    }
+#else
+    (void)Gui;
+    (void)State;
+#endif
+}
+}
+
 void UpdateGlueMenuPresentationLayer(GuiRuntime& Gui)
 {
 #if ENABLE_GUI_UI
+    EnsureGuiPresentationSize(Gui, GameState::MainMenu);
     if (Gui.GlueGuiInitialized)
         Gui.GlueGui.Update(Core::Platform::GetAbsoluteTime());
 #else
@@ -80,22 +112,7 @@ bool HandleGlueMenuPresentationEvent(GuiRuntime& Gui, const void* Event)
 
 void ResizeGuiPresentationForState(GuiRuntime& Gui, GameState State)
 {
-#if ENABLE_GUI_UI
-    const int Width = Core::Platform::GetWindowWidth();
-    const int Height = Core::Platform::GetWindowHeight();
-    if (State == GameState::MainMenu)
-    {
-        if (Gui.GlueGuiInitialized)
-            Gui.GlueGui.Resize(Width, Height);
-    }
-    else if (Gui.MainGui.IsActive())
-    {
-        Gui.MainGui.Resize(Width, Height);
-    }
-#else
-    (void)Gui;
-    (void)State;
-#endif
+    EnsureGuiPresentationSize(Gui, State);
 }
 
 void HandleGuiPresentationEventForState(GuiRuntime& Gui, GameState State, const void* Event)
@@ -120,6 +137,7 @@ void UpdateGuiPresentationLayer(
     ClientRuntime& Client)
 {
 #if ENABLE_GUI_UI
+    EnsureGuiPresentationSize(Gui, GameState::InGame);
     if (Gui.UseGui && Gui.MainGui.IsActive())
     {
         SyncCampaignPingsToHud(Hud, Client, Session.GetMapData().Width, Session.GetMapData().Height);
@@ -165,7 +183,7 @@ void HandleGuiHudPresentationEvent(GuiRuntime& Gui, const void* Event)
             E->type == SAPP_EVENTTYPE_MOUSE_UP ||
             E->type == SAPP_EVENTTYPE_MOUSE_SCROLL)
         {
-            if (HandledByGui || Gui.MainGui.IsPointInHud(E->mouse_x, E->mouse_y))
+            if (HandledByGui || Gui.MainGui.IsPointInHudEvent(E))
                 sapp_consume_event();
         }
     }

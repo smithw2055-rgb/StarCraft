@@ -23,9 +23,15 @@ public:
                           const std::vector<Core::ECS::EntityID>& Entities,
                           const Core::Math::Vec2& Target);
 
+    static void IssueMove(Core::ECS::EntityManager& EM,
+                          const std::vector<Core::ECS::EntityID>& Entities,
+                          const Core::Math::Vec2& Target,
+                          int PathingIgnoreEntityID);
+
     static bool IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                     Core::ECS::EntityID EntityID,
-                                    const Core::Math::Vec2& Target);
+                                    const Core::Math::Vec2& Target,
+                                    int PathingIgnoreEntityID = -1);
 
     static void IssueAttackMove(Core::ECS::EntityManager& EM,
                                  const std::vector<int>& Units,

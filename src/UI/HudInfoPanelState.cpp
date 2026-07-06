@@ -83,13 +83,18 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
         mState.InfoPanel.EnergyValue = Unit->EnergyPoints;
         mState.InfoPanel.EnergyMax = Unit->MaxEnergyPoints;
         mState.InfoPanel.Armor = Unit->Armor;
-        mState.InfoPanel.SightValue = Unit->SightRange;
-        mState.InfoPanel.SpeedValue = (int)std::lround(Game::Tuning::ToWorldMoveSpeed(Unit->Speed));
+        const int SightBonus =
+            Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(MutableEM, SelectedEntityId);
+        const float SpeedMultiplier =
+            Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(MutableEM, SelectedEntityId);
+        mState.InfoPanel.SightValue = Unit->SightRange + SightBonus;
+        mState.InfoPanel.SpeedValue =
+            (int)std::lround(Game::Tuning::ToWorldMoveSpeed(Unit->Speed * SpeedMultiplier));
         mState.InfoPanel.TypeLine = RaceLabel(Unit->UnitRace) +
                               std::string(mState.InfoPanel.IsBuilding ? " Structure" : " Unit");
         mState.InfoPanel.StatLine =
             "Armor " + std::to_string(Unit->Armor) +
-            "  Sight " + std::to_string(Unit->SightRange) +
+            "  Sight " + std::to_string(mState.InfoPanel.SightValue) +
             "  Speed " + std::to_string(mState.InfoPanel.SpeedValue);
     }
     if (Combat)

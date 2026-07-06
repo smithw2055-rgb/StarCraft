@@ -64,6 +64,7 @@ struct ClientRuntime
     int GetViewportHeight() const;
     Core::Math::Vec2 GetCameraPosition() const;
     Core::Math::Vec2 ScreenToWorld(float ScreenX, float ScreenY) const;
+    Core::Math::Vec2 WorldToScreen(float WorldX, float WorldY) const;
     void GetVisibleWorldRect(float& X, float& Y, float& W, float& H) const;
     GameLoop::ClickTargetContext ResolveClickTargetContext(Core::ECS::EntityManager& Entities,
                                                            const std::vector<Core::ECS::EntityID>& SelectedIds,

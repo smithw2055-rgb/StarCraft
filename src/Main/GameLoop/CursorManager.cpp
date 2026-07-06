@@ -54,7 +54,7 @@ GameCursorKind CursorManager::ResolveScrollCursorKind(int MouseX, int MouseY,
         Core::Platform::IsMouseButtonDown(2);
 
     if (!Core::Platform::IsWindowFocused() ||
-        !Core::Platform::IsMouseInClientArea() ||
+        !Core::Platform::IsMouseInGameContentArea() ||
         AnyMouseButtonDown ||
         MouseX < 0 || MouseX >= ViewportWidth ||
         MouseY < TopBlocked || MouseY >= ActiveBottom)
@@ -151,7 +151,7 @@ CursorRenderState CursorManager::ResolveCursorState(int MouseX, int MouseY,
     const int ViewportHeight = Camera.GetViewportHeight();
     State.UseGameCursor =
         Core::Platform::IsWindowFocused() &&
-        Core::Platform::IsMouseInClientArea() &&
+        Core::Platform::IsMouseInGameContentArea() &&
         MouseX >= 0 && MouseX < ViewportWidth &&
         MouseY >= 0 && MouseY < ViewportHeight;
 

@@ -16,6 +16,8 @@ struct GuiRuntime
     bool UseGui = false;
     bool GuiInitialized = false;
     bool GlueGuiInitialized = false;
+    int AppliedWidth = 0;
+    int AppliedHeight = 0;
 #endif
 };
 

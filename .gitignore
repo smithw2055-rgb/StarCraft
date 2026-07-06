@@ -1,0 +1,28 @@
+# IDE
+.vs/
+
+# Assets and external resources
+assets*
+Resources*
+openbw-ref/
+vcpkg*
+third_party/
+
+# Build outputs
+build*
+out*
+
+# Docs and tests not intended for this tracked slice
+docs/
+tests/
+
+# Root project/config files to exclude
+*.json
+*.md
+
+# Resource extraction helpers
+*.bat
+*.py
+
+# Temporary preview/debug artifacts
+tmp_*

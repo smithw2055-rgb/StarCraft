@@ -65,7 +65,7 @@ void CameraController::Update(float Dt)
         Core::Platform::IsMouseButtonDown(2);
 
     if (Core::Platform::IsWindowFocused() &&
-        Core::Platform::IsMouseInClientArea() &&
+        Core::Platform::IsMouseInGameContentArea() &&
         !AnyMouseButtonDown &&
         MX >= 0 && MY >= ActiveTop && MX < VW && MY < ActiveBottom)
     {

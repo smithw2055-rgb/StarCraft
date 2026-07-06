@@ -37,6 +37,15 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
     }
 }
 
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                              const std::vector<Core::ECS::EntityID>& Entities,
+                              const Core::Math::Vec2& Target,
+                              int PathingIgnoreEntityID)
+{
+    (void)PathingIgnoreEntityID;
+    IssueMove(EM, Entities, Target);
+}
+
 void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
                                     const std::vector<int>& Units,
                                     Core::Math::Vec2 Target)
@@ -184,7 +193,7 @@ namespace
 
         int Attacker = SpawnDefUnit(EM, "Marine", {0.0f, 0.0f}, MarinePlayerID);
         AddGroundOnlyWeapon(EM, Attacker);
-        int Target = SpawnDefUnit(EM, "Marine", {144.0f, 0.0f}, 1);
+        int Target = SpawnDefUnit(EM, "Marine", {176.0f, 0.0f}, 1);
 
         Game::Systems::CombatSystem::IssueAttack(EM, {Attacker}, Target);
         Combat.Update(0.2f);
@@ -514,6 +523,21 @@ int main()
     Require(LargeAirUnit->HitPoints == 90,
         "damage against air targets uses AirDmgType size modifiers");
 
+    int ShieldedLargeTarget = SpawnUnit(DamageTypeEM, {64.0f, 0.0f}, 1, false);
+    auto* ShieldedLargeUnit =
+        DamageTypeEM.GetComponent<Game::Components::UnitComponent>(ShieldedLargeTarget);
+    ShieldedLargeUnit->SizeType = Game::Components::UnitSize::Large;
+    ShieldedLargeUnit->HitPoints = 100;
+    ShieldedLargeUnit->MaxHitPoints = 100;
+    ShieldedLargeUnit->ShieldPoints = 20;
+    ShieldedLargeUnit->MaxShieldPoints = 20;
+    AntiAirCombat.GroundDmgType = Game::Components::DamageType::Concussive;
+    Game::Systems::CombatSystem::ApplyDamage(
+        DamageTypeEM, ShieldedLargeTarget, AntiAirCombat, AntiAirUnit, 40);
+    Require(ShieldedLargeUnit->ShieldPoints == 0 &&
+            ShieldedLargeUnit->HitPoints == 95,
+        "shields absorb raw weapon damage before HP size modifiers are applied");
+
     Core::ECS::SystemManager ShieldSysMgr;
     auto& ShieldEM = ShieldSysMgr.GetEntityManager();
     Game::Systems::BulletSystem ShieldBullet(ShieldSysMgr);
@@ -660,6 +684,76 @@ int main()
     Require(InvincibleTargetUnit && InvincibleTargetUnit->HitPoints == 40,
         "invincible unit state prevents real bullet impact damage");
 
+    Core::ECS::SystemManager SplashSysMgr;
+    auto& SplashEM = SplashSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem SplashBullet(SplashSysMgr);
+    int SplashSource = SpawnUnit(SplashEM, {0.0f, 0.0f}, 0, false);
+    int SplashTarget = SpawnUnit(SplashEM, {32.0f, 0.0f}, 1, false);
+    int SplashMediumTarget = SpawnUnit(SplashEM, {64.0f, 0.0f}, 1, false);
+    int SplashOuterTarget = SpawnUnit(SplashEM, {92.0f, 0.0f}, 1, false);
+    auto* SplashSourceTrans =
+        SplashEM.GetComponent<Game::Components::TransformComponent>(SplashSource);
+    auto* SplashSourcePlayer =
+        SplashEM.GetComponent<Game::Components::PlayerComponent>(SplashSource);
+    auto* SplashTargetTrans =
+        SplashEM.GetComponent<Game::Components::TransformComponent>(SplashTarget);
+    auto* SplashTargetUnit =
+        SplashEM.GetComponent<Game::Components::UnitComponent>(SplashTarget);
+    auto* SplashMediumUnit =
+        SplashEM.GetComponent<Game::Components::UnitComponent>(SplashMediumTarget);
+    auto* SplashOuterUnit =
+        SplashEM.GetComponent<Game::Components::UnitComponent>(SplashOuterTarget);
+    auto& SplashCombat =
+        SplashEM.AddComponent<Game::Components::CombatComponent>(SplashSource);
+    SplashCombat.GroundDamage = 20;
+    SplashCombat.GroundDmgType = Game::Components::DamageType::Normal;
+    SplashCombat.WeaponBeh = Game::Components::WeaponBehavior::AppearOnTarget;
+    SplashCombat.Splash = Game::Components::SplashType::Radial;
+    SplashCombat.SplashRadius = 2.0f;
+    SplashCombat.IsRanged = true;
+    int SplashBulletID = SplashBullet.SpawnBullet(
+        SplashEM, SplashCombat, *SplashSourceTrans, *SplashSourcePlayer,
+        SplashSource, 20, 0, 96.0f, SplashTarget, SplashTargetTrans->Position);
+    Require(SplashBulletID >= 0, "splash bullet test spawns a projectile");
+    SplashBullet.Update(0.1f);
+    Require(SplashTargetUnit && SplashTargetUnit->HitPoints == 20,
+        "splash direct target takes full damage without an extra impact hit");
+    Require(SplashMediumUnit && SplashMediumUnit->HitPoints == 30,
+        "splash medium radius takes half damage");
+    Require(SplashOuterUnit && SplashOuterUnit->HitPoints == 35,
+        "splash outer radius takes quarter damage");
+
+    Core::ECS::SystemManager PersistSplashSysMgr;
+    auto& PersistSplashEM = PersistSplashSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem PersistSplashBullet(PersistSplashSysMgr);
+    int PersistSource = SpawnUnit(PersistSplashEM, {0.0f, 0.0f}, 0, false);
+    int PersistTargetA = SpawnUnit(PersistSplashEM, {0.0f, 0.0f}, 1, false);
+    int PersistTargetB = SpawnUnit(PersistSplashEM, {16.0f, 0.0f}, 1, false);
+    auto* PersistSourceTrans =
+        PersistSplashEM.GetComponent<Game::Components::TransformComponent>(PersistSource);
+    auto* PersistSourcePlayer =
+        PersistSplashEM.GetComponent<Game::Components::PlayerComponent>(PersistSource);
+    auto* PersistTargetAUnit =
+        PersistSplashEM.GetComponent<Game::Components::UnitComponent>(PersistTargetA);
+    auto* PersistTargetBUnit =
+        PersistSplashEM.GetComponent<Game::Components::UnitComponent>(PersistTargetB);
+    auto& PersistCombat =
+        PersistSplashEM.AddComponent<Game::Components::CombatComponent>(PersistSource);
+    PersistCombat.GroundDamage = 8;
+    PersistCombat.GroundDmgType = Game::Components::DamageType::Normal;
+    PersistCombat.WeaponBeh = Game::Components::WeaponBehavior::Persist;
+    PersistCombat.Splash = Game::Components::SplashType::Radial;
+    PersistCombat.SplashRadius = 2.0f;
+    PersistCombat.IsRanged = true;
+    int PersistBulletID = PersistSplashBullet.SpawnBullet(
+        PersistSplashEM, PersistCombat, *PersistSourceTrans, *PersistSourcePlayer,
+        PersistSource, 8, 0, 64.0f, -1, PersistSourceTrans->Position);
+    Require(PersistBulletID >= 0, "persist splash test spawns a projectile");
+    PersistSplashBullet.Update(0.1f);
+    Require(PersistTargetAUnit && PersistTargetAUnit->HitPoints == 32 &&
+            PersistTargetBUnit && PersistTargetBUnit->HitPoints == 32,
+        "persist splash applies once per tick, not once per nearby target");
+
     InvincibleTargetUnit->IsInvincible = false;
     Game::Systems::CombatSystem::ApplyDamage(
         StasisEM, InvincibleTarget, StasisRangedCombat, StasisAttacker, 20);
@@ -735,6 +829,137 @@ int main()
     StimCooldownCombat.Update(0.2f);
     Require(StimAttackerCombat->CooldownRemaining == 0.5f,
         "Stim halves the next attack cooldown while active");
+
+    Core::ECS::SystemManager UpgradeEffectSysMgr;
+    auto& UpgradeEffectEM = UpgradeEffectSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem UpgradeEffectBullet(UpgradeEffectSysMgr);
+    Game::Systems::CombatSystem UpgradeEffectCombat(UpgradeEffectSysMgr, UpgradeEffectBullet);
+
+    constexpr int ZerglingUpgradePlayerID = 0;
+    auto& ZerglingUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(ZerglingUpgradePlayerID);
+    ZerglingUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_AdrenalGlands)] = 1;
+    ZerglingUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_MetabolicBoost)] = 1;
+    int UpgradedZergling =
+        SpawnDefUnit(UpgradeEffectEM, "Zergling", {0.0f, 0.0f}, ZerglingUpgradePlayerID);
+    AddGroundOnlyWeapon(UpgradeEffectEM, UpgradedZergling);
+    auto* ZerglingCombat =
+        UpgradeEffectEM.GetComponent<Game::Components::CombatComponent>(UpgradedZergling);
+    Require(ZerglingCombat != nullptr, "upgraded zergling has combat component");
+    ZerglingCombat->AttackCooldown = 1.0f;
+    int ZerglingTarget =
+        SpawnDefUnit(UpgradeEffectEM, "Marine", {32.0f, 0.0f}, 1);
+    Game::Systems::CombatSystem::IssueAttack(
+        UpgradeEffectEM, {UpgradedZergling}, ZerglingTarget);
+    UpgradeEffectCombat.Update(0.2f);
+    Require(ZerglingCombat->CooldownRemaining == 0.5f,
+        "Adrenal Glands halves Zergling attack cooldown like openbw cooldown upgrade");
+    Require(Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(
+                UpgradeEffectEM, UpgradedZergling) == 1.5f,
+        "Metabolic Boost increases Zergling movement speed multiplier");
+
+    constexpr int HydraliskUpgradePlayerID = 5;
+    auto& HydraliskUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(HydraliskUpgradePlayerID);
+    HydraliskUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_GroovedSpines)] = 1;
+    HydraliskUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_MuscularAugments)] = 1;
+    int UpgradedHydralisk =
+        SpawnDefUnit(UpgradeEffectEM, "Hydralisk", {48.0f, 0.0f}, HydraliskUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetRangeBonusPixels(
+                UpgradeEffectEM, UpgradedHydralisk) == 32,
+        "Grooved Spines increases Hydralisk range by one tile");
+    Require(Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(
+                UpgradeEffectEM, UpgradedHydralisk) == 1.5f,
+        "Muscular Augments increases Hydralisk movement speed multiplier");
+
+    constexpr int UltraliskUpgradePlayerID = 10;
+    auto& UltraliskUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(UltraliskUpgradePlayerID);
+    UltraliskUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_AnabolicSynthesis)] = 1;
+    UltraliskUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_ChitinousPlating)] = 1;
+    int UpgradedUltralisk =
+        SpawnDefUnit(UpgradeEffectEM, "Ultralisk", {56.0f, 0.0f}, UltraliskUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(
+                UpgradeEffectEM, UpgradedUltralisk) == 1.5f,
+        "Anabolic Synthesis increases Ultralisk movement speed multiplier");
+    Require(Game::Systems::UpgradeSystem::GetArmorBonus(
+                UpgradeEffectEM, UpgradedUltralisk) == 2,
+        "Chitinous Plating gives Ultralisk two extra armor like openbw");
+
+    constexpr int VultureUpgradePlayerID = 2;
+    Game::Systems::UpgradeSystem::GetUpgrades(VultureUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Terran_IonThrusters)] = 1;
+    int UpgradedVulture =
+        SpawnDefUnit(UpgradeEffectEM, "Vulture", {64.0f, 0.0f}, VultureUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(
+                UpgradeEffectEM, UpgradedVulture) == 1.5f,
+        "Ion Thrusters increases Vulture movement speed multiplier");
+
+    constexpr int GoliathUpgradePlayerID = 11;
+    Game::Systems::UpgradeSystem::GetUpgrades(GoliathUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Terran_CharonBoosters)] = 1;
+    int UpgradedGoliath =
+        SpawnDefUnit(UpgradeEffectEM, "Goliath", {80.0f, 0.0f}, GoliathUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetRangeBonusPixels(
+                UpgradeEffectEM, UpgradedGoliath) == 0,
+        "Charon Boosters does not increase Goliath ground range");
+    Require(Game::Systems::UpgradeSystem::GetRangeBonusPixelsForTarget(
+                UpgradeEffectEM, UpgradedGoliath, false) == 0,
+        "Charon Boosters has no bonus against ground targets");
+    Require(Game::Systems::UpgradeSystem::GetRangeBonusPixelsForTarget(
+                UpgradeEffectEM, UpgradedGoliath, true) == 96,
+        "Charon Boosters increases Goliath air range by three tiles");
+
+    constexpr int ZealotUpgradePlayerID = 3;
+    Game::Systems::UpgradeSystem::GetUpgrades(ZealotUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Protoss_ZealotSpeed)] = 1;
+    int UpgradedZealot =
+        SpawnDefUnit(UpgradeEffectEM, "Zealot", {96.0f, 0.0f}, ZealotUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetMovementSpeedMultiplier(
+                UpgradeEffectEM, UpgradedZealot) == 1.5f,
+        "Leg Enhancements increases Zealot movement speed multiplier");
+
+    constexpr int OverlordUpgradePlayerID = 4;
+    Game::Systems::UpgradeSystem::GetUpgrades(OverlordUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Zerg_Antennae)] = 1;
+    int UpgradedOverlord =
+        SpawnDefUnit(UpgradeEffectEM, "Overlord", {128.0f, 0.0f}, OverlordUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(
+                UpgradeEffectEM, UpgradedOverlord) == 2,
+        "Antennae increases Overlord sight to eleven tiles");
+
+    constexpr int GhostUpgradePlayerID = 6;
+    Game::Systems::UpgradeSystem::GetUpgrades(GhostUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Terran_OcularImplants)] = 1;
+    int UpgradedGhost =
+        SpawnDefUnit(UpgradeEffectEM, "Ghost", {160.0f, 0.0f}, GhostUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(
+                UpgradeEffectEM, UpgradedGhost) == 2,
+        "Ocular Implants increases Ghost sight to eleven tiles");
+
+    constexpr int ObserverUpgradePlayerID = 7;
+    Game::Systems::UpgradeSystem::GetUpgrades(ObserverUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Protoss_SensorArray)] = 1;
+    int UpgradedObserver =
+        SpawnDefUnit(UpgradeEffectEM, "Observer", {192.0f, 0.0f}, ObserverUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(
+                UpgradeEffectEM, UpgradedObserver) == 2,
+        "Sensor Array increases Observer sight to eleven tiles");
+
+    constexpr int ScoutUpgradePlayerID = 8;
+    Game::Systems::UpgradeSystem::GetUpgrades(ScoutUpgradePlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Protoss_ApialSensors)] = 1;
+    int UpgradedScout =
+        SpawnDefUnit(UpgradeEffectEM, "Scout", {224.0f, 0.0f}, ScoutUpgradePlayerID);
+    Require(Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(
+                UpgradeEffectEM, UpgradedScout) == 3,
+        "Apial Sensors increases Scout sight to eleven tiles");
 
     Core::ECS::SystemManager SupplyDeathSysMgr;
     auto& SupplyDeathEM = SupplyDeathSysMgr.GetEntityManager();

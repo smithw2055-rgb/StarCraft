@@ -2,6 +2,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/DeathEvents.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
@@ -574,15 +575,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                         BUnit.SizeType = BroodlingDef.SizeType;
                         BPlayer = *CasterPlayer;
 
-                        BCombat.GroundDamage = BroodlingDef.GroundDamage;
-                        BCombat.AirDamage = BroodlingDef.AirDamage;
-                        BCombat.GroundDmgType = BroodlingDef.GroundDmgType;
-                        BCombat.AirDmgType = BroodlingDef.AirDmgType;
-                        BCombat.AttackRange = BroodlingDef.AttackRange;
-                        BCombat.AttackCooldown = BroodlingDef.AttackCooldown;
-                        BCombat.WeaponBeh = WeaponBehavior::Melee;
-                        BCombat.CanTargetGround = BroodlingDef.GroundDamage > 0;
-                        BCombat.CanTargetAir = BroodlingDef.AirDamage > 0;
+                        Races::ApplyCombatDefinition(BCombat, BroodlingDef, false);
 
                         BCommand.CurrentCommand = CommandType::Stop;
                         BPath.NodeTolerance = 8.0f;
@@ -610,8 +603,13 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     TargetUnit->HitPoints = 0;
                     RecordUnitDeath(EM, TargetEntityID, CasterID, true);
                     EM.DestroyEntity(TargetEntityID);
+                    UpgradeSystem::RefreshUnitEnergyCap(EM, CasterID);
+                    const int MaxEnergy = std::max(
+                        CasterUnit->MaxEnergyPoints,
+                        UpgradeSystem::GetEffectiveMaxEnergyPoints(EM, CasterID));
+                    CasterUnit->MaxEnergyPoints = MaxEnergy;
                     CasterUnit->EnergyPoints =
-                        std::min(CasterUnit->MaxEnergyPoints, CasterUnit->EnergyPoints + 50);
+                        std::min(MaxEnergy, CasterUnit->EnergyPoints + 50);
                 }
             }
             Logger::Info("SpellSystem", "Consume cast");

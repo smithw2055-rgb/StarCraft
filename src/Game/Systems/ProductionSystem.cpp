@@ -8,6 +8,7 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 
 namespace Game::Systems
 {
@@ -377,24 +378,17 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
     Unit.Speed = Def.Speed;
     Unit.SightRange = Def.SightRange;
     Unit.SupplyCost = Def.SupplyCost;
+    Unit.IsDetector = Races::IsDetectorChkUnitID(Unit.ChkUnitID);
 
     auto& Player = EM.AddComponent<PlayerComponent>(EntityID);
     Player.PlayerID = PlayerID;
+    UpgradeSystem::RefreshUnitEnergyCap(EM, EntityID);
 
     if (Def.GroundDamage > 0 || Def.AirDamage > 0)
     {
         auto& Combat = EM.AddComponent<CombatComponent>(EntityID);
-        Combat.GroundDamage = Def.GroundDamage;
-        Combat.AirDamage = Def.AirDamage;
-        Combat.GroundDmgType = Def.GroundDmgType;
-        Combat.AirDmgType = Def.AirDmgType;
-        Combat.AttackRange = Def.AttackRange;
-        Combat.AttackCooldown = Def.AttackCooldown;
-        Combat.CanTargetGround = Def.GroundDamage > 0;
-        Combat.CanTargetAir = Def.AirDamage > 0;
-        Combat.MyElevation = Game::Data::IsAirUnitType(Unit.ChkUnitID) ?
-            Elevation::Air :
-            Elevation::Ground;
+        Races::ApplyCombatDefinition(
+            Combat, Def, Game::Data::IsAirUnitType(Unit.ChkUnitID));
     }
 
     auto& Command = EM.AddComponent<CommandComponent>(EntityID);

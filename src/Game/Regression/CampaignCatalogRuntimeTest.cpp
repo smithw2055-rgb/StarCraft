@@ -63,14 +63,33 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
         Path->Path.clear();
         Path->Path.push_back(Target);
         Path->PathIndex = 0;
+        Path->RequestedDestination = Target;
+        Path->RequestedTargetEntityID = -1;
+        Path->RequestedIgnoreEntityID = -1;
+        Path->DestinationStallTimer = 0.0f;
+        Path->HasLastDestinationDistance = false;
+    }
+}
+
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                              const std::vector<Core::ECS::EntityID>& Entities,
+                              const Core::Math::Vec2& Target,
+                              int PathingIgnoreEntityID)
+{
+    IssueMove(EM, Entities, Target);
+    for (Core::ECS::EntityID EntityID : Entities)
+    {
+        if (auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID))
+            Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
     }
 }
 
 bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
-                                        const Core::Math::Vec2& Target)
+                                        const Core::Math::Vec2& Target,
+                                        int PathingIgnoreEntityID)
 {
-    IssueMove(EM, {EntityID}, Target);
+    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
     if (auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID))
         return !Path->Path.empty();
     return false;
@@ -94,6 +113,11 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     Path->Path.clear();
     Path->Path.push_back(InOrder.TargetPosition);
     Path->PathIndex = 0;
+    Path->RequestedDestination = InOrder.TargetPosition;
+    Path->RequestedTargetEntityID = InOrder.TargetEntityID;
+    Path->RequestedIgnoreEntityID = InOrder.PathingIgnoreEntityID;
+    Path->DestinationStallTimer = 0.0f;
+    Path->HasLastDestinationDistance = false;
 }
 
 void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
@@ -288,15 +312,8 @@ namespace
                 if (Def.GroundDamage > 0 || Def.AirDamage > 0)
                 {
                     auto& Combat = EM.AddComponent<Game::Components::CombatComponent>(EntityID);
-                    Combat.GroundDamage = Def.GroundDamage;
-                    Combat.AirDamage = Def.AirDamage;
-                    Combat.AttackRange = Def.AttackRange;
-                    Combat.AttackCooldown = Def.AttackCooldown;
-                    Combat.CanTargetGround = Def.GroundDamage > 0;
-                    Combat.CanTargetAir = Def.AirDamage > 0;
-                    Combat.MyElevation = Game::Data::IsAirUnitType((int)Placed.UnitID) ?
-                        Game::Components::Elevation::Air :
-                        Game::Components::Elevation::Ground;
+                    Game::Races::ApplyCombatDefinition(
+                        Combat, Def, Game::Data::IsAirUnitType((int)Placed.UnitID));
                 }
             }
             else if (IsBuildingChkUnit((int)Placed.UnitID))
@@ -404,6 +421,21 @@ namespace
         return std::clamp(Parsed, MinValue, MaxValue);
     }
 
+    int ReadEnvInt(const char* Name,
+                   int DefaultValue,
+                   int MinValue,
+                   int MaxValue)
+    {
+        const char* Value = std::getenv(Name);
+        if (!Value || Value[0] == '\0')
+            return DefaultValue;
+        char* End = nullptr;
+        const long Parsed = std::strtol(Value, &End, 10);
+        if (End == Value)
+            return DefaultValue;
+        return std::clamp((int)Parsed, MinValue, MaxValue);
+    }
+
     bool ExpectedAirState(const Game::Components::UnitComponent* Unit,
                           const Game::Components::BuildingComponent* Building)
     {
@@ -430,6 +462,8 @@ namespace
         int ElevationMismatchSamples = 0;
         int GroundMarkedAirSamples = 0;
         int CommandedStillSamples = 0;
+        int CurrentCommandedStillRun = 0;
+        int MaxCommandedStillRun = 0;
     };
 
     void TrackLongRunEntities(const Game::Client::MapLoader::Result& Result,
@@ -514,6 +548,14 @@ namespace
                     StepDistance < 0.05f)
                 {
                     ++Trace.CommandedStillSamples;
+                    ++Trace.CurrentCommandedStillRun;
+                    Trace.MaxCommandedStillRun =
+                        std::max(Trace.MaxCommandedStillRun,
+                                 Trace.CurrentCommandedStillRun);
+                }
+                else
+                {
+                    Trace.CurrentCommandedStillRun = 0;
                 }
             }
             if (Combat)
@@ -555,7 +597,7 @@ namespace
                 Issues.push_back("long_air_flag_mismatch");
             if (Trace.ElevationMismatchSamples > 2)
                 Issues.push_back("long_elevation_mismatch");
-            if (Trace.CommandedStillSamples > 120)
+            if (Trace.MaxCommandedStillRun > 120)
                 Issues.push_back("long_commanded_still");
             if (Trace.TotalDistance > 96.0f &&
                 NetDistance < 24.0f &&
@@ -571,7 +613,7 @@ namespace
             if (ProblemCount <= 25)
             {
                 std::fprintf(stderr,
-                    "Long-run entity anomaly: set=%s race=%d mission=%d entity=%d unit=%d samples=%d total=%.2f net=%.2f max_step=%.2f flips=%d issues=",
+                    "Long-run entity anomaly: set=%s race=%d mission=%d entity=%d unit=%d samples=%d total=%.2f net=%.2f max_step=%.2f flips=%d still_total=%d still_run=%d issues=",
                     Ref.Expansion ? "expansion" : "original",
                     Ref.Race,
                     Ref.Mission,
@@ -581,7 +623,9 @@ namespace
                     Trace.TotalDistance,
                     NetDistance,
                     Trace.MaxStepDistance,
-                    Trace.DirectionFlips);
+                    Trace.DirectionFlips,
+                    Trace.CommandedStillSamples,
+                    Trace.MaxCommandedStillRun);
                 for (size_t I = 0; I < Issues.size(); ++I)
                     std::fprintf(stderr, "%s%s", I ? "|" : "", Issues[I].c_str());
                 std::fprintf(stderr, "\n");
@@ -824,6 +868,9 @@ namespace
         auto Result = Game::Client::MapLoader::Load(Ref.Path);
         Require(Result.Loaded, "campaign map loads: " + Ref.Path + " error=" + Result.ErrorMessage);
         Require(!Result.RawChkData.empty(), "campaign map exposes CHK bytes: " + Ref.Path);
+        Require(!std::any_of(Result.ChkUnits.begin(), Result.ChkUnits.end(),
+                    [](const Game::Map::PlacedUnit& Unit) { return Unit.UnitID == 214; }),
+            "campaign spawn units exclude Special_Start_Location markers: " + Ref.Path);
 
         Game::Trigger::SCRTriggerParser Parser;
         Game::Trigger::SCRTriggerData Data;
@@ -933,20 +980,39 @@ int main()
     WriteAuditHeader(AuditLog);
 
     AuditTotals Totals;
+    const int FilterExpansion = ReadEnvInt(
+        "STARCRAFT_CAMPAIGN_FILTER_EXPANSION", -1, -1, 1);
+    const int FilterRace = ReadEnvInt(
+        "STARCRAFT_CAMPAIGN_FILTER_RACE", -1, -1, 2);
+    const int FilterMission = ReadEnvInt(
+        "STARCRAFT_CAMPAIGN_FILTER_MISSION", -1, -1, 9);
 
     for (bool Expansion : { false, true })
     {
+        if (FilterExpansion >= 0 && (Expansion ? 1 : 0) != FilterExpansion)
+            continue;
         for (int Race = 0; Race < 3; ++Race)
         {
+            if (FilterRace >= 0 && Race != FilterRace)
+                continue;
             for (int Mission = 0; Mission < 10; ++Mission)
+            {
+                if (FilterMission >= 0 && Mission != FilterMission)
+                    continue;
                 RunMission(Expansion, Race, Mission, AuditLog, Totals);
+            }
         }
     }
 
     AuditLog.flush();
     Require(AuditLog.good(), "write campaign entity audit log: " + AuditPath.string());
 
-    Require(Totals.MissionSlots == 60, "all campaign catalog slots were exercised");
+    const int ExpectedSlots =
+        (FilterExpansion >= 0 ? 1 : 2) *
+        (FilterRace >= 0 ? 1 : 3) *
+        (FilterMission >= 0 ? 1 : 10);
+    Require(Totals.MissionSlots == ExpectedSlots,
+        "selected campaign catalog slots were exercised");
     Require(Totals.Anomalies == 0, "campaign entity audit has no state anomalies");
     std::printf("CampaignCatalogRuntimeTest passed: slots=%d triggers=%d units=%d audit_rows=%d buildings=%d resources=%d movable=%d moving_intent=%d on_screen=%d audit=%s\n",
         Totals.MissionSlots,

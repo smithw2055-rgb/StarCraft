@@ -180,6 +180,39 @@ int main()
     const auto ScvDef = Game::Races::GetUnitDefByID(ScvDefID);
     Production.Update((float)ScvDef.BuildTime * 0.5f);
 
+    constexpr int EnergyCapSpawnPlayerID = 11;
+    Game::Systems::UpgradeSystem::GetUpgrades(EnergyCapSpawnPlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Terran_ApolloReactor)] = 1;
+    const int UpgradedWraith = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Wraith"),
+        {128.0f, 128.0f},
+        EnergyCapSpawnPlayerID);
+    auto* UpgradedWraithUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(UpgradedWraith);
+    Require(UpgradedWraithUnit && UpgradedWraithUnit->MaxEnergyPoints == 250,
+        "newly spawned energy units apply completed reactor max energy upgrades");
+    const int BaselineCarrier = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Carrier"),
+        {160.0f, 128.0f},
+        EnergyCapSpawnPlayerID);
+    Require(Game::Systems::UpgradeSystem::GetMaxHangarCount(EM, BaselineCarrier) == 4,
+        "Carrier starts with four interceptor capacity before capacity upgrade");
+    Game::Systems::UpgradeSystem::GetUpgrades(EnergyCapSpawnPlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Protoss_CarrierCapacity)] = 1;
+    Require(Game::Systems::UpgradeSystem::GetMaxHangarCount(EM, BaselineCarrier) == 8,
+        "Carrier Capacity raises interceptor capacity to eight");
+    Game::Systems::UpgradeSystem::GetUpgrades(EnergyCapSpawnPlayerID)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Protoss_ReaverCapacity)] = 1;
+    const int UpgradedReaver = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Reaver"),
+        {192.0f, 128.0f},
+        EnergyCapSpawnPlayerID);
+    Require(Game::Systems::UpgradeSystem::GetMaxHangarCount(EM, UpgradedReaver) == 10,
+        "Reaver Capacity raises scarab capacity to ten");
+
     auto* Prod = EM.GetComponent<Game::Components::ProductionComponent>(CommandCenter);
     Require(Prod != nullptr, "command center has production component");
     Require(Prod->Queue.size() == 2, "duplicate SCV queue has two entries");
@@ -473,6 +506,9 @@ int main()
     Require(GoliathCombat->GroundDamage == GoliathDef.GroundDamage &&
             GoliathCombat->AirDamage == GoliathDef.AirDamage,
         "produced combat units use their definition weapon damage");
+    Require(GoliathCombat->IsRanged &&
+            GoliathCombat->WeaponBeh != Game::Components::WeaponBehavior::Melee,
+        "produced ranged combat units keep projectile weapon metadata");
     auto* GoliathCommand = EM.GetComponent<Game::Components::CommandComponent>(SpawnedGoliath);
     auto* GoliathPath = EM.GetComponent<Game::Components::PathfindingComponent>(SpawnedGoliath);
     Require(GoliathCommand &&
@@ -624,6 +660,12 @@ int main()
     ZergMorphSystem.Update((float)OverlordDef.BuildTime + 0.1f);
     Require(CountUnitsByDef(EM, "Overlord", ZergLarvaEconomyPlayerID) >= 1,
         "Zerg Overlord morph completes into an Overlord unit");
+    const int MorphedOverlord =
+        FindUnitByDef(EM, "Overlord", ZergLarvaEconomyPlayerID);
+    auto* MorphedOverlordUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(MorphedOverlord);
+    Require(MorphedOverlordUnit && MorphedOverlordUnit->IsDetector,
+        "Zerg Overlord morph preserves detector metadata");
     Require(ZergLarvaEconomyResources.SupplyMax ==
             SupplyMaxBeforeOverlord + Game::Races::GetSupplyProvidedByDefID(OverlordDefID),
         "completed Zerg Overlord increases supply cap");

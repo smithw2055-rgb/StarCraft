@@ -70,6 +70,8 @@ void InitializeGuiRuntime(
 
     const bool GuiHudReady = Gui.MainGui.Init(AssetRoot, Width, Height, "ui/Hud.xaml");
     Gui.UseGui = false;
+    Gui.AppliedWidth = Width;
+    Gui.AppliedHeight = Height;
     if (GuiHudReady)
     {
         Core::Utils::Logger::Info(

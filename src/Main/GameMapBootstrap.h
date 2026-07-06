@@ -35,6 +35,11 @@ bool ResolveAndLoadStartupMap(AppRuntime& App,
 
 inline void InitializeClientWorldViewFromSession(ClientRuntime& Client, GameSession& Session)
 {
+    Core::Utils::Logger::Info(
+        "GameBootstrap",
+        "InitializeClientWorldViewFromSession viewport=" +
+            std::to_string(Core::Platform::GetWindowWidth()) + "x" +
+            std::to_string(Core::Platform::GetWindowHeight()));
     const auto Camera = Session.GetInitialCameraPosition();
     const std::string TilesetName = Session.GetTilesetNameOrDefault();
     Client.InitializeWorldView(
@@ -49,6 +54,7 @@ inline void InitializeClientWorldViewFromSession(ClientRuntime& Client, GameSess
 
 inline bool LoadRealMapIntoSession(AppRuntime& App, GameSession& Session, ClientRuntime& Client)
 {
+    Core::Utils::Logger::Info("GameBootstrap", "LoadRealMapIntoSession path=" + App.MapPath);
     Game::Client::MapLoader::Result Result = Game::Client::MapLoader::Load(App.MapPath);
     if (!Result.Loaded)
     {

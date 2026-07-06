@@ -146,6 +146,7 @@ static void ClearMovementPath(Core::ECS::EntityManager& EM, Core::ECS::EntityID 
         Path->CurrentVelocity = {0.0f, 0.0f};
         Path->StallTimer = 0.0f;
         Path->HasLastWaypointDistance = false;
+        Path->BlockedByEntityID = -1;
     }
 }
 
@@ -278,11 +279,14 @@ static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
     const Game::Map::GameMap& Map,
     int StartTileX,
     int StartTileY,
-    float MovingRadius)
+    float MovingRadius,
+    int IgnoreEntityID = -1)
 {
     std::vector<StaticBlockerRect> Blockers;
     for (auto EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
     {
+        if (EntityID == IgnoreEntityID)
+            continue;
         if (EntityID == MovingID || !IsStaticGroundBlocker(EM, EntityID))
             continue;
         auto Rect = StaticBlockerRectForEntity(EM, EntityID);
@@ -331,6 +335,12 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     Path->PathIndex = 0;
     Path->StallTimer = 0.0f;
     Path->HasLastWaypointDistance = false;
+    Path->RequestedDestination = InOrder.TargetPosition;
+    Path->RequestedTargetEntityID = InOrder.TargetEntityID;
+    Path->RequestedIgnoreEntityID = InOrder.PathingIgnoreEntityID;
+    Path->LastRepathTime = 0.0f;
+    Path->RepathFailCount = 0;
+    Path->BlockedByEntityID = -1;
     if (!Path->HasRecentMoveFailure ||
         (Path->RecentFailedMoveTarget - InOrder.TargetPosition).LengthSq() > 16.0f * 16.0f)
     {
@@ -359,17 +369,44 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         {
             int StartTileX = 0;
             int StartTileY = 0;
+            int EndTileX = 0;
+            int EndTileY = 0;
             gCmdMap->WorldToTile(Trans->Position, StartTileX, StartTileY);
+            gCmdMap->WorldToTile(InOrder.TargetPosition, EndTileX, EndTileY);
             const auto ExtraBlockedTile = BuildStaticBlockerTilePredicate(
                 EM,
                 EntityID,
                 *gCmdMap,
                 StartTileX,
                 StartTileY,
-                (float)std::max(4, Path->CollisionRadius));
+                (float)std::max(4, Path->CollisionRadius),
+                InOrder.PathingIgnoreEntityID);
+            Core::Math::Vec2 StageTarget = InOrder.TargetPosition;
+            const auto RegionPath = sRegionPathfinder.FindRegionPath(
+                StartTileX, StartTileY, EndTileX, EndTileY);
+            if (RegionPath.Found && RegionPath.RegionSequence.size() > 1)
+            {
+                const int NextRegionID = RegionPath.RegionSequence[1];
+                if (const auto* NextRegion = sRegionPathfinder.GetRegion(NextRegionID))
+                {
+                    StageTarget = gCmdMap->TileToWorld(
+                        NextRegion->CenterX, NextRegion->CenterY);
+                }
+            }
             auto Result = Game::Pathfinding::AStar::FindPath(*gCmdMap,
-                Trans->Position, InOrder.TargetPosition,
+                Trans->Position, StageTarget,
                 1000, TerrainClearanceForPath(*Path), ExtraBlockedTile);
+            if ((!Result.Found || Result.Waypoints.empty()) &&
+                (StageTarget - InOrder.TargetPosition).LengthSq() > 1.0f)
+            {
+                Result = Game::Pathfinding::AStar::FindPath(
+                    *gCmdMap,
+                    Trans->Position,
+                    InOrder.TargetPosition,
+                    1000,
+                    TerrainClearanceForPath(*Path),
+                    ExtraBlockedTile);
+            }
             if (Result.Found && !Result.Waypoints.empty())
                 Path->Path = std::move(Result.Waypoints);
         }
@@ -549,26 +586,30 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
                                const std::vector<Core::ECS::EntityID>& Entities,
                                const Core::Math::Vec2& Target)
 {
+    IssueMove(EM, Entities, Target, -1);
+}
+
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                               const std::vector<Core::ECS::EntityID>& Entities,
+                               const Core::Math::Vec2& Target,
+                               int PathingIgnoreEntityID)
+{
     Order MoveOrder;
     MoveOrder.Type = OrderType::Move;
     MoveOrder.TargetPosition = Target;
+    MoveOrder.PathingIgnoreEntityID = PathingIgnoreEntityID;
     IssueOrder(EM, Entities, MoveOrder, false);
 }
 
 bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
-                                        const Core::Math::Vec2& Target)
+                                        const Core::Math::Vec2& Target,
+                                        int PathingIgnoreEntityID)
 {
-    IssueMove(EM, {EntityID}, Target);
+    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
 
     if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
-    {
-        if (Path->Path.empty())
-            return false;
-        const float FinalTolerance =
-            std::max(Path->NodeTolerance, (float)std::max(4, Path->CollisionRadius));
-        return Path->Path.back().DistanceTo(Target) <= FinalTolerance + 2.0f;
-    }
+        return !Path->Path.empty();
 
     return false;
 }

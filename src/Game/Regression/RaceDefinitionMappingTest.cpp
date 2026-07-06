@@ -43,13 +43,31 @@ int main()
     namespace Bootstrap = Game::Client::GameLoop::GameSessionBootstrap;
 
     RequireUnit(7, "SCV", Race::Terran, false);
+    RequireUnit(8, "Wraith", Race::Terran, false);
+    RequireUnit(9, "ScienceVessel", Race::Terran, false);
+    RequireUnit(11, "Dropship", Race::Terran, false);
+    RequireUnit(12, "Battlecruiser", Race::Terran, false);
+    RequireUnit(20, "JimRaynorMarine", Race::Terran, false);
+    RequireUnit(25, "EdmundDukeSiege", Race::Terran, false);
+    RequireUnit(32, "Firebat", Race::Terran, false);
+    RequireUnit(34, "Medic", Race::Terran, false);
+    RequireUnit(58, "Valkyrie", Race::Terran, false);
     RequireUnit(106, "CommandCenter", Race::Terran, true);
+    RequireUnit(120, "MachineShop", Race::Terran, true);
+    RequireUnit(122, "EngineeringBay", Race::Terran, true);
+    RequireUnit(124, "MissileTurret", Race::Terran, true);
+    RequireUnit(125, "Bunker", Race::Terran, true);
     RequireUnit(41, "Drone", Race::Zerg, false);
     RequireUnit(42, "Overlord", Race::Zerg, false);
     RequireUnit(43, "Mutalisk", Race::Zerg, false);
+    RequireUnit(48, "Torrasque", Race::Zerg, false);
+    RequireUnit(53, "HunterKiller", Race::Zerg, false);
     RequireUnit(131, "Hatchery", Race::Zerg, true);
     RequireUnit(64, "Probe", Race::Protoss, false);
     RequireUnit(66, "Dragoon", Race::Protoss, false);
+    RequireUnit(75, "Zeratul", Race::Protoss, false);
+    RequireUnit(78, "FenixDragoon", Race::Protoss, false);
+    RequireUnit(82, "Gantrithor", Race::Protoss, false);
     RequireUnit(84, "Observer", Race::Protoss, false);
     RequireUnit(154, "Nexus", Race::Protoss, true);
 
@@ -61,6 +79,20 @@ int main()
     Require(!Game::Data::IsAirUnitType(41), "Drone raw CHK id is treated as ground");
     Require(!Game::Data::IsAirUnitType(64), "Probe raw CHK id is treated as ground");
     Require(!Game::Data::IsAirUnitType(78), "Hero Fenix Dragoon raw CHK id is treated as ground");
+    Require(Game::Races::IsDetectorChkUnitID(9),
+        "Science Vessel raw CHK id provides detector metadata");
+    Require(!Game::Races::IsDetectorChkUnitID(58),
+        "Valkyrie raw CHK id is not treated as a detector");
+    Require(Game::Races::IsDetectorChkUnitID(124),
+        "Missile Turret raw CHK id provides detector metadata");
+    Require(Game::Races::GetRaceByChkUnitID(88, Race::Terran) == Race::Protoss,
+        "Protoss hero Artanis raw CHK id is classified without a UnitDef");
+    Require(Game::Races::GetRaceByChkUnitID(104, Race::Terran) == Race::Zerg,
+        "Infested Duran raw CHK id is classified as Zerg without a UnitDef");
+    Require(Game::Races::GetRaceByChkUnitID(99, Race::Zerg) == Race::Terran,
+        "Samir Duran raw CHK id is classified as Terran without a UnitDef");
+    Require(Game::Races::GetRaceByChkUnitID(130, Race::Terran) == Race::Zerg,
+        "Infested Command Center raw CHK id is classified as Zerg building data");
 
     const int OverlordDefID = Game::Races::GetUnitDefID("Overlord");
     const auto OverlordDef = Game::Races::GetUnitDefByID(OverlordDefID);
@@ -96,6 +128,12 @@ int main()
     Require(Bootstrap::Detail::RaceFromChkUnitID(7,
             Bootstrap::Detail::StartRace::Zerg) == Bootstrap::Detail::StartRace::Terran,
         "Terran CHK units infer Terran playable fallback race");
+    Require(Bootstrap::Detail::RaceFromChkUnitID(88,
+            Bootstrap::Detail::StartRace::Terran) == Bootstrap::Detail::StartRace::Protoss,
+        "unmodeled Protoss hero CHK units infer Protoss playable fallback race");
+    Require(Bootstrap::Detail::RaceFromChkUnitID(104,
+            Bootstrap::Detail::StartRace::Terran) == Bootstrap::Detail::StartRace::Zerg,
+        "unmodeled Zerg hero CHK units infer Zerg playable fallback race");
 
     Require(Bootstrap::Detail::RaceFromScriptRace(0) ==
             Bootstrap::Detail::StartRace::Zerg,

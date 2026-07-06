@@ -41,6 +41,9 @@ struct UnitDef
 
     Components::DamageType GroundDmgType = Components::DamageType::Normal;
     Components::DamageType AirDmgType = Components::DamageType::Normal;
+    Components::WeaponBehavior WeaponBeh = Components::WeaponBehavior::Melee;
+    Components::SplashType Splash = Components::SplashType::None;
+    float SplashRadius = 0.0f;
 
     std::vector<int> RequiredBuildings;  // building UnitDef IDs required
     int ProducedBy = -1;                  // building UnitDef ID that produces this
@@ -62,6 +65,29 @@ UnitDef GetUnitDefByID(int ID);
 int GetUnitDefID(const std::string& Name);
 int GetUnitDefIDByChkUnitID(int ChkUnitID);
 int GetTerranDefIDByChkUnitID(int ChkUnitID);
+Race GetRaceByChkUnitID(int ChkUnitID, Race Fallback = Race::Terran);
 int GetSupplyProvidedByDefID(int ID);
+bool IsDetectorChkUnitID(int ChkUnitID);
+
+inline void ApplyCombatDefinition(Components::CombatComponent& Combat,
+                                  const UnitDef& Def,
+                                  bool IsAirUnit)
+{
+    Combat.GroundDamage = Def.GroundDamage;
+    Combat.AirDamage = Def.AirDamage;
+    Combat.GroundDmgType = Def.GroundDmgType;
+    Combat.AirDmgType = Def.AirDmgType;
+    Combat.AttackRange = Def.AttackRange;
+    Combat.AttackCooldown = Def.AttackCooldown;
+    Combat.WeaponBeh = Def.WeaponBeh;
+    Combat.Splash = Def.Splash;
+    Combat.SplashRadius = Def.SplashRadius;
+    Combat.CanTargetGround = Def.GroundDamage > 0;
+    Combat.CanTargetAir = Def.AirDamage > 0;
+    Combat.MyElevation = IsAirUnit ? Components::Elevation::Air
+                                   : Components::Elevation::Ground;
+    Combat.IsRanged = Def.AttackRange > 1.5f ||
+                      Def.WeaponBeh != Components::WeaponBehavior::Melee;
+}
 
 } // namespace Game::Races

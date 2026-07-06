@@ -270,6 +270,7 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
                                const std::function<bool(int, int)>& ExtraBlockedTile)
 {
     PathResult Result;
+    (void)MaxNodes;
 
     if (!Map.IsInBounds(StartX, StartY))
         return Result;
@@ -294,13 +295,14 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
     EndY = ResolvedEndY;
 
     std::vector<PathNode> Nodes;
-    const int NodeBudget = std::max(MaxNodes, Width * Height);
-    Nodes.reserve(std::min(NodeBudget, Width * Height));
+    const int MapNodeCount = Width * Height;
+    const int NodeBudget = MapNodeCount;
+    Nodes.reserve(NodeBudget);
     Nodes.push_back({StartX, StartY, 0, Heuristic(StartX - EndX, StartY - EndY), -1});
 
     // Open set: pairs of (F-cost, NodeIndex)
     std::vector<std::pair<int, int>> Open;
-    Open.reserve(std::min(NodeBudget, Width * Height));
+    Open.reserve(NodeBudget);
     Open.push_back({Nodes[0].F(), 0});
 
     std::vector<bool> Closed(Width * Height, false);

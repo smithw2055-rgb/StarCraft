@@ -7,17 +7,38 @@
 #include "UI/MainGuiSelectionPresentation.h"
 #include "UI/HudPortrait.h"
 #include "UI/HudText.h"
+#include "Core/Platform/Platform.h"
+#include "Core/Utils/InputDebug.h"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <cmath>
+#include <sstream>
 
 #include "third_party/sokol/sokol_app.h"
 
 namespace Game::Client::UI
 {
+namespace
+{
+    float EventMouseToLogical(float Coord, int WindowExtent, int FramebufferExtent, bool Horizontal)
+    {
+        if (WindowExtent <= 0 && FramebufferExtent <= 0)
+            return Coord;
+
+        int LogicalExtent = Horizontal ? Core::Platform::GetWindowWidth() : Core::Platform::GetWindowHeight();
+        int PhysicalExtent = Horizontal ? Core::Platform::GetClientWidth() : Core::Platform::GetClientHeight();
+        if (LogicalExtent <= 0)
+            LogicalExtent = WindowExtent;
+        if (PhysicalExtent <= 0)
+            PhysicalExtent = FramebufferExtent > 0 ? FramebufferExtent : WindowExtent;
+        if (LogicalExtent <= 0 || PhysicalExtent <= 0)
+            return Coord;
+        return Coord * (float)LogicalExtent / (float)PhysicalExtent;
+    }
+}
 
 bool MainGui::Init(const std::string& AssetRoot, int ScreenW, int ScreenH,
                          const std::string& XamlPath)
@@ -72,8 +93,8 @@ bool MainGui::HandleEvent(const void* Event)
         return false;
 
     const sapp_event* E = static_cast<const sapp_event*>(Event);
-    const float X = E->mouse_x;
-    const float Y = E->mouse_y;
+    const float X = EventMouseToLogical(E->mouse_x, E->window_width, E->framebuffer_width, true);
+    const float Y = EventMouseToLogical(E->mouse_y, E->window_height, E->framebuffer_height, false);
     LastMouseX_ = X;
     LastMouseY_ = Y;
     bool Handled = Host_.HandleEvent(Event);
@@ -114,7 +135,45 @@ bool MainGui::HandleEvent(const void* Event)
         break;
     }
 
+    const bool IsMouseEvent =
+        E->type == SAPP_EVENTTYPE_MOUSE_DOWN ||
+        E->type == SAPP_EVENTTYPE_MOUSE_UP ||
+        E->type == SAPP_EVENTTYPE_MOUSE_MOVE;
+    if (IsMouseEvent &&
+        (!Core::Utils::InputDebugEnabled() ? false :
+         (E->type != SAPP_EVENTTYPE_MOUSE_MOVE || Core::Utils::InputDebugShouldLogMove())))
+    {
+        std::ostringstream Stream;
+        Stream << "type=";
+        switch (E->type)
+        {
+            case SAPP_EVENTTYPE_MOUSE_DOWN: Stream << "mouse_down"; break;
+            case SAPP_EVENTTYPE_MOUSE_UP: Stream << "mouse_up"; break;
+            case SAPP_EVENTTYPE_MOUSE_MOVE: Stream << "mouse_move"; break;
+            default: Stream << "other"; break;
+        }
+        Stream << " raw=" << E->mouse_x << "," << E->mouse_y
+               << " logical=" << X << "," << Y
+               << " fb=" << E->framebuffer_width << "x" << E->framebuffer_height
+               << " window=" << E->window_width << "x" << E->window_height
+               << " handled=" << (Handled ? 1 : 0)
+               << " cmdHover=" << HoveredCommandIndex_
+               << " cmdPressed=" << PressedCommandIndex_;
+        Core::Utils::InputDebugLog("InputMainGui", Stream.str());
+    }
+
     return Handled;
+}
+
+bool MainGui::IsPointInHudEvent(const void* Event) const
+{
+    if (!Event)
+        return false;
+
+    const sapp_event* E = static_cast<const sapp_event*>(Event);
+    return IsPointInHud(
+        EventMouseToLogical(E->mouse_x, E->window_width, E->framebuffer_width, true),
+        EventMouseToLogical(E->mouse_y, E->window_height, E->framebuffer_height, false));
 }
 
 int MainGui::HitCommandButton(float X, float Y) const

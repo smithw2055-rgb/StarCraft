@@ -31,6 +31,10 @@ struct ID3D11DeviceContext;
 #include "UI/GlueAnimatedImage.h"
 #include "UI/GlueComponentRegistration.h"
 #include "UI/HudMinimapGeometry.h"
+#include "Core/Platform/Platform.h"
+#include "Core/Utils/InputDebug.h"
+
+#include <sstream>
 
 namespace Game::Client::UI
 {
@@ -47,6 +51,22 @@ float GetGameUiScale(int LogicalWidth, int LogicalHeight)
     const float ScaleY = static_cast<float>(FbH) / static_cast<float>(LogH);
     const float Scale = std::min(ScaleX, ScaleY);
     return Scale > 1.0f ? Scale : 1.0f;
+}
+
+float EventMouseToLogical(float Coord, int WindowExtent, int FramebufferExtent, bool Horizontal)
+{
+    if (WindowExtent <= 0 && FramebufferExtent <= 0)
+        return Coord;
+
+    int LogicalExtent = Horizontal ? Core::Platform::GetWindowWidth() : Core::Platform::GetWindowHeight();
+    int PhysicalExtent = Horizontal ? Core::Platform::GetClientWidth() : Core::Platform::GetClientHeight();
+    if (LogicalExtent <= 0)
+        LogicalExtent = WindowExtent;
+    if (PhysicalExtent <= 0)
+        PhysicalExtent = FramebufferExtent > 0 ? FramebufferExtent : WindowExtent;
+    if (LogicalExtent <= 0 || PhysicalExtent <= 0)
+        return Coord;
+    return Coord * (float)LogicalExtent / (float)PhysicalExtent;
 }
 
 template<typename T>
@@ -286,8 +306,17 @@ bool GuiHudHost::HandleEvent(const void* EventPtr)
     if (!Initialized_ || !View_ || !EventPtr) return false;
 
     const sapp_event* E = static_cast<const sapp_event*>(EventPtr);
-    float X = E->mouse_x * DpiScale_;
-    float Y = E->mouse_y * DpiScale_;
+    const float LogicalX = EventMouseToLogical(E->mouse_x, E->window_width, E->framebuffer_width, true);
+    const float LogicalY = EventMouseToLogical(E->mouse_y, E->window_height, E->framebuffer_height, false);
+    float X = LogicalX * DpiScale_;
+    float Y = LogicalY * DpiScale_;
+    const int ViewX = static_cast<int>(std::lround(X));
+    const int ViewY = static_cast<int>(std::lround(Y));
+    const bool ShouldLog =
+        E->type == SAPP_EVENTTYPE_MOUSE_DOWN ||
+        E->type == SAPP_EVENTTYPE_MOUSE_UP ||
+        (E->type == SAPP_EVENTTYPE_MOUSE_MOVE && Core::Utils::InputDebugShouldLogMove());
+    bool Handled = false;
 
     switch (E->type)
     {
@@ -298,7 +327,8 @@ bool GuiHudHost::HandleEvent(const void* EventPtr)
             Btn = Aero::MouseButton_Right;
         else if (E->mouse_button == SAPP_MOUSEBUTTON_MIDDLE)
             Btn = Aero::MouseButton_Middle;
-        return View_->MouseButtonDown(X, Y, Btn);
+        Handled = View_->MouseButtonDown(ViewX, ViewY, Btn);
+        break;
     }
     case SAPP_EVENTTYPE_MOUSE_UP:
     {
@@ -307,12 +337,14 @@ bool GuiHudHost::HandleEvent(const void* EventPtr)
             Btn = Aero::MouseButton_Right;
         else if (E->mouse_button == SAPP_MOUSEBUTTON_MIDDLE)
             Btn = Aero::MouseButton_Middle;
-        return View_->MouseButtonUp(X, Y, Btn);
+        Handled = View_->MouseButtonUp(ViewX, ViewY, Btn);
+        break;
     }
     case SAPP_EVENTTYPE_MOUSE_MOVE:
-        return View_->MouseMove(X, Y);
+        Handled = View_->MouseMove(ViewX, ViewY);
+        break;
     case SAPP_EVENTTYPE_MOUSE_SCROLL:
-        return View_->MouseWheel(X, Y, static_cast<int>(std::lround(E->scroll_y)));
+        return View_->MouseWheel(ViewX, ViewY, static_cast<int>(std::lround(E->scroll_y)));
     case SAPP_EVENTTYPE_KEY_DOWN:
         return View_->KeyDown(static_cast<Aero::Key>(E->key_code));
     case SAPP_EVENTTYPE_KEY_UP:
@@ -322,7 +354,25 @@ bool GuiHudHost::HandleEvent(const void* EventPtr)
     default:
         break;
     }
-    return false;
+    if (ShouldLog && Core::Utils::InputDebugEnabled())
+    {
+        std::ostringstream Stream;
+        Stream << "type=";
+        switch (E->type)
+        {
+            case SAPP_EVENTTYPE_MOUSE_DOWN: Stream << "mouse_down"; break;
+            case SAPP_EVENTTYPE_MOUSE_UP: Stream << "mouse_up"; break;
+            case SAPP_EVENTTYPE_MOUSE_MOVE: Stream << "mouse_move"; break;
+            default: Stream << "other"; break;
+        }
+        Stream << " raw=" << E->mouse_x << "," << E->mouse_y
+               << " logical=" << LogicalX << "," << LogicalY
+               << " view=" << ViewX << "," << ViewY
+               << " dpi=" << DpiScale_
+               << " handled=" << (Handled ? 1 : 0);
+        Core::Utils::InputDebugLog("InputGuiHudHost", Stream.str());
+    }
+    return Handled;
 }
 
 void GuiHudHost::SetResources(int Minerals, int Gas, int SupplyUsed, int SupplyMax,

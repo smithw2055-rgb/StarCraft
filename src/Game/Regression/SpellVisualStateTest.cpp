@@ -5,6 +5,7 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -306,6 +307,31 @@ int main()
                 ConsumeCooldown->SpellType == (uint8_t)Game::Systems::SpellType::Consume &&
                 ConsumeCooldown->CooldownRemaining > 0.0f,
             "consume applies a spell cooldown after a successful cast");
+
+    Core::ECS::SystemManager EnergyUpgradeSysMgr;
+    auto& EnergyUpgradeEM = EnergyUpgradeSysMgr.GetEntityManager();
+    constexpr int EnergyUpgradePlayerID = 11;
+    auto& EnergyUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(EnergyUpgradePlayerID);
+    EnergyUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_QueenEnergy)] = 1;
+    const int UpgradedConsumeCaster =
+        CreateCaster(EnergyUpgradeEM, EnergyUpgradePlayerID, {448.0f, 96.0f}, 210);
+    auto* UpgradedConsumeCasterUnit =
+        EnergyUpgradeEM.GetComponent<Game::Components::UnitComponent>(UpgradedConsumeCaster);
+    Require(Game::Systems::UpgradeSystem::GetEffectiveMaxEnergyPoints(
+                EnergyUpgradeEM, UpgradedConsumeCaster) == 250,
+            "Gamete Meiosis raises Queen effective max energy to 250");
+    const int UpgradedConsumeTarget =
+        CreateUnit(EnergyUpgradeEM, "Hydralisk", EnergyUpgradePlayerID, {480.0f, 96.0f});
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EnergyUpgradeEM, UpgradedConsumeCaster, Game::Systems::SpellType::Consume,
+                UpgradedConsumeTarget),
+            "consume can use upgraded caster energy cap");
+    Require(UpgradedConsumeCasterUnit &&
+                UpgradedConsumeCasterUnit->MaxEnergyPoints == 250 &&
+                UpgradedConsumeCasterUnit->EnergyPoints == 250,
+            "consume restores energy up to upgraded max energy cap");
 
     constexpr int EnsnarePlayerID = 9;
     constexpr int EnsnareEnemyPlayerID = 10;

@@ -1,0 +1,882 @@
+<UserControl
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:b="http://schemas.microsoft.com/xaml/behaviors"
+  xmlns:aero="clr-namespace:AeroGUIExtensions;assembly=Aero.GUI.Extensions"
+  xmlns:local="clr-namespace:Game.SokolDemo.UI.Glue"
+  xmlns:glue="clr-namespace:UI.Glue"
+  x:Name="GlueMenuRoot"
+  x:Class="UI.Glue.GlueMenuController"
+  Background="Black">
+
+  <UserControl.Resources>
+    <SolidColorBrush x:Key="ScText" Color="#FFE7ECF5"/>
+    <SolidColorBrush x:Key="ScDim" Color="#FF8792A2"/>
+    <SolidColorBrush x:Key="ScGold" Color="#FFE2BD71"/>
+    <SolidColorBrush x:Key="ScGoldHot" Color="#FFFFE3A4"/>
+    <SolidColorBrush x:Key="ScMenuGreen" Color="#FF60F04E"/>
+    <SolidColorBrush x:Key="ScPanel" Color="#B0070B13"/>
+    <SolidColorBrush x:Key="ScLine" Color="#995B6878"/>
+    <FontFamily x:Key="ScFont">Eurostile, Arial, Microsoft YaHei</FontFamily>
+
+    <Storyboard x:Key="CampaignOriginalHoverTerran">
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalTerranMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalZergMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalProtossMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignOriginalHoverZerg">
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalTerranMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalZergMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalProtossMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignOriginalHoverProtoss">
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalTerranMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalZergMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalProtossMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignExpansionHoverTerran">
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionTerranMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionProtossMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionZergMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignExpansionHoverProtoss">
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionTerranMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionProtossMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionZergMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignExpansionHoverZerg">
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionTerranMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionProtossMask" Storyboard.TargetProperty="Opacity" To="0.58" Duration="0:0:0.18"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionZergMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignOriginalClearMasks">
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalTerranMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalZergMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignOriginalProtossMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+    </Storyboard>
+    <Storyboard x:Key="CampaignExpansionClearMasks">
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionTerranMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionProtossMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+      <DoubleAnimation Storyboard.TargetName="CampaignExpansionZergMask" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12"/>
+    </Storyboard>
+
+    <Style x:Key="ScTextBlock" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource ScFont}"/>
+      <Setter Property="Foreground" Value="{StaticResource ScText}"/>
+    </Style>
+
+    <Style x:Key="HitButtonStyle" TargetType="Button">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="aero:StyleInteraction.Triggers">
+        <Setter.Value>
+          <aero:StyleTriggerCollection>
+            <b:EventTrigger EventName="MouseEnter">
+              <b:PlaySoundAction Source="sound/glue/mouseover.wav" Volume="0.35"/>
+            </b:EventTrigger>
+            <b:EventTrigger EventName="Click">
+              <b:PlaySoundAction Source="sound/glue/mousedown2.wav" Volume="0.6"/>
+            </b:EventTrigger>
+          </aero:StyleTriggerCollection>
+        </Setter.Value>
+      </Setter>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}">
+              <ContentPresenter/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="ScButtonStyle" TargetType="Button">
+      <Setter Property="FontFamily" Value="{StaticResource ScFont}"/>
+      <Setter Property="FontSize" Value="24"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{StaticResource ScGold}"/>
+      <Setter Property="Background" Value="#74101822"/>
+      <Setter Property="BorderBrush" Value="#AA586575"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="aero:StyleInteraction.Triggers">
+        <Setter.Value>
+          <aero:StyleTriggerCollection>
+            <b:EventTrigger EventName="MouseEnter">
+              <b:PlaySoundAction Source="sound/glue/mouseover.wav" Volume="0.35"/>
+            </b:EventTrigger>
+            <b:EventTrigger EventName="Click">
+              <b:PlaySoundAction Source="sound/glue/mousedown2.wav" Volume="0.6"/>
+            </b:EventTrigger>
+          </aero:StyleTriggerCollection>
+        </Setter.Value>
+      </Setter>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Frame"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}">
+              <Grid ClipToBounds="True">
+                <Rectangle Fill="#1FFFFFFF" Height="1" VerticalAlignment="Top"/>
+                <Rectangle x:Name="Hover" Fill="#334C8EDB" Opacity="0"/>
+                <Rectangle x:Name="Press" Fill="#66000000" Opacity="0"/>
+                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  Margin="16,0"/>
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Frame" Property="BorderBrush" Value="#FFC8AF6D"/>
+                <Setter TargetName="Hover" Property="Opacity" Value="1"/>
+                <Setter Property="Foreground" Value="{StaticResource ScGoldHot}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Press" Property="Opacity" Value="1"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Frame" Property="Opacity" Value="0.38"/>
+                <Setter Property="Foreground" Value="{StaticResource ScDim}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="SmallButtonStyle" TargetType="Button" BasedOn="{StaticResource ScButtonStyle}">
+      <Setter Property="Width" Value="210"/>
+      <Setter Property="Height" Value="42"/>
+      <Setter Property="FontSize" Value="18"/>
+    </Style>
+
+    <Style x:Key="ListButtonStyle" TargetType="Button" BasedOn="{StaticResource ScButtonStyle}">
+      <Setter Property="Height" Value="38"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    </Style>
+  </UserControl.Resources>
+
+  <Grid Background="Black" ClipToBounds="True">
+    <Viewbox Stretch="UniformToFill" ClipToBounds="True">
+      <Grid Width="1920" Height="1080" ClipToBounds="True">
+
+        <!-- PAGE: Main menu. Coordinates mirror assets/locales/*/Assets/rez/gluMain.ui.json (640x480). -->
+        <Border x:Name="MainMenuPage" Visibility="Visible">
+          <Grid>
+            <Image Source="generated/palmm__backgnd.png"
+                   Width="1920"
+                   Height="1080"
+                   Stretch="UniformToFill"/>
+            <Viewbox Width="1920"
+                     Height="1080"
+                     Stretch="Fill"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center">
+              <Canvas Width="640" Height="480" ClipToBounds="True">
+                <glue:GlueAnimatedImage x:Name="MainSingleVideo"
+                                         Tag="webm:glue/mainmenu/single.webm|12"
+                                         Canvas.Left="0"
+                                         Canvas.Top="0"
+                                         Width="425"
+                                         Height="175"
+                                         Opacity="0.96"
+                                         IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="MainSingleHoverVideo"
+                                         Tag="webm:glue/mainmenu/singleon.webm|12"
+                                         Canvas.Left="30"
+                                         Canvas.Top="6"
+                                         Width="360"
+                                         Height="170"
+                                         Opacity="0"
+                                         IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="MainMultiVideo"
+                                         Tag="webm:glue/mainmenu/multi.webm|12"
+                                         Canvas.Left="78"
+                                         Canvas.Top="190"
+                                         Width="282"
+                                         Height="270"
+                                         Opacity="0.96"
+                                         IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="MainMultiHoverVideo"
+                                         Tag="webm:glue/mainmenu/multion.webm|12"
+                                         Canvas.Left="78"
+                                         Canvas.Top="190"
+                                         Width="282"
+                                         Height="207"
+                                         Opacity="0"
+                                         IsHitTestVisible="False"/>
+                <Image Source="generated/mainmenu__etail.png"
+                       Canvas.Left="224"
+                       Canvas.Top="346"
+                       Width="90"
+                       Height="114"
+                       Opacity="0.9"
+                       IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="MainExitVideo"
+                                         Tag="webm:glue/mainmenu/exit.webm|12"
+                                         Canvas.Left="395"
+                                         Canvas.Top="328"
+                                         Width="204"
+                                         Height="182"
+                                         Opacity="0.96"
+                                         IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="MainExitHoverVideo"
+                                         Tag="webm:glue/mainmenu/exiton.webm|12"
+                                         Canvas.Left="422"
+                                         Canvas.Top="328"
+                                         Width="148"
+                                         Height="148"
+                                         Opacity="0"
+                                         IsHitTestVisible="False"/>
+                <Image Source="generated/mainmenu__titleframe_bg.png"
+                       Canvas.Left="413"
+                       Canvas.Top="66"
+                       Width="205"
+                       Height="205"
+                       IsHitTestVisible="False"/>
+                <Image Source="generated/mainmenu__titleframe_overlay.png"
+                       Canvas.Left="374"
+                       Canvas.Top="14"
+                       Width="266"
+                       Height="264"
+                       IsHitTestVisible="False"/>
+                <Image Source="generated/mainmenu__pintro.png"
+                       Canvas.Left="20"
+                       Canvas.Top="410"
+                       Width="184"
+                       Height="48"
+                       Opacity="0.8"
+                       Visibility="Collapsed"
+                       IsHitTestVisible="False"/>
+                <Image Source="generated/mainmenu__pcredit.png"
+                       Canvas.Left="10"
+                       Canvas.Top="440"
+                       Width="184"
+                       Height="40"
+                       Opacity="0.78"
+                       Visibility="Collapsed"
+                       IsHitTestVisible="False"/>
+
+                <TextBlock x:Name="MainSingleLabelEn" Text="Single Player [S]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="150" Canvas.Top="111" Width="220"
+                           FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainSingleLabelZh" Text="&#x5355;&#x4EBA;&#x6E38;&#x620F;[S]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="150" Canvas.Top="111" Width="220"
+                           FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainMultiplayerLabelEn" Text="Multiplayer [M]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="78" Canvas.Top="190" Width="180" TextAlignment="Center"
+                           FontSize="13" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainMultiplayerLabelZh" Text="&#x591A;&#x4EBA;&#x6E38;&#x620F;[M]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="78" Canvas.Top="190" Width="180" TextAlignment="Center"
+                           FontSize="13" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainOptionsLabelEn" Text="Options [O]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="345" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainOptionsLabelZh" Text="&#x9009;&#x9879;[O]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="345" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainFavoritesLabelEn" Text="Favorites [C]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="370" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainFavoritesLabelZh" Text="&#x6536;&#x85CF;[C]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="370" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainHotkeysLabelEn" Text="Hotkeys [H]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="395" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainHotkeysLabelZh" Text="&#x70ED;&#x952E;[H]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="395" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainCreditsLabelEn" Text="Editor [R]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="420" Width="160" TextAlignment="Center"
+                           FontSize="13" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainCreditsLabelZh" Text="&#x5236;&#x4F5C;[R]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="420" Width="160" TextAlignment="Center"
+                           FontSize="13" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainIntroLabelEn" Text="Cinematics [I]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="445" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainIntroLabelZh" Text="&#x52A8;&#x753B;[I]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="0" Canvas.Top="445" Width="160" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainExitLabelEn" Text="Exit [X]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="432" Canvas.Top="332" Width="120" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" IsHitTestVisible="False"/>
+                <TextBlock x:Name="MainExitLabelZh" Text="&#x9000;&#x51FA;[X]"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="432" Canvas.Top="332" Width="120" TextAlignment="Center"
+                           FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource ScMenuGreen}" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock x:Name="LanguageLabelEn" Text="&#x4E2D;&#x6587;"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="520" Canvas.Top="4" Width="104" TextAlignment="Right"
+                           FontSize="9" Foreground="#FFBFD7FF" IsHitTestVisible="False"/>
+                <TextBlock x:Name="LanguageLabelZh" Text="EN"
+                           Style="{StaticResource ScTextBlock}" Canvas.Left="520" Canvas.Top="4" Width="104" TextAlignment="Right"
+                           FontSize="9" Foreground="#FFBFD7FF" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <TextBlock Text="v0.1.0"
+                           Style="{StaticResource ScTextBlock}"
+                           Canvas.Left="486"
+                           Canvas.Top="0"
+                           Width="150"
+                           TextAlignment="Right"
+                           FontSize="9"
+                           Foreground="#FF6F7C8A"
+                           IsHitTestVisible="False"/>
+
+                <Button x:Name="SinglePlayerButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="0"
+                        Canvas.Top="30"
+                        Width="320"
+                        Height="150">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:PlaySoundAction Source="sound/glue/mouseover.wav" Volume="0.35"/>
+                      <b:ChangePropertyAction TargetName="MainSingleHoverVideo" PropertyName="Opacity" Value="0.96"/>
+                      <b:ChangePropertyAction TargetName="MainSingleHoverVideo" PropertyName="PlaybackActive" Value="True"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="MainSingleHoverVideo" PropertyName="Opacity" Value="0"/>
+                      <b:ChangePropertyAction TargetName="MainSingleHoverVideo" PropertyName="PlaybackActive" Value="False"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="MultiplayerButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="78"
+                        Canvas.Top="190"
+                        Width="240"
+                        Height="160">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:PlaySoundAction Source="sound/glue/mouseover.wav" Volume="0.35"/>
+                      <b:ChangePropertyAction TargetName="MainMultiHoverVideo" PropertyName="Opacity" Value="0.96"/>
+                      <b:ChangePropertyAction TargetName="MainMultiHoverVideo" PropertyName="PlaybackActive" Value="True"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="MainMultiHoverVideo" PropertyName="Opacity" Value="0"/>
+                      <b:ChangePropertyAction TargetName="MainMultiHoverVideo" PropertyName="PlaybackActive" Value="False"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="CampaignButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="0"
+                        Canvas.Top="345"
+                        Width="160"
+                        Height="20"
+                        IsEnabled="False"/>
+                <Button x:Name="CustomGameButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="0"
+                        Canvas.Top="370"
+                        Width="160"
+                        Height="20"
+                        IsEnabled="False"/>
+                <Button x:Name="EditorButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="0"
+                        Canvas.Top="420"
+                        Width="160"
+                        Height="20"
+                        IsEnabled="False"/>
+                <Button x:Name="IntroButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="0"
+                        Canvas.Top="445"
+                        Width="160"
+                        Height="26"/>
+                <Button x:Name="ExitButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="395"
+                        Canvas.Top="320"
+                        Width="231"
+                        Height="136">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:PlaySoundAction Source="sound/glue/mouseover.wav" Volume="0.35"/>
+                      <b:ChangePropertyAction TargetName="MainExitHoverVideo" PropertyName="Opacity" Value="0.96"/>
+                      <b:ChangePropertyAction TargetName="MainExitHoverVideo" PropertyName="PlaybackActive" Value="True"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="MainExitHoverVideo" PropertyName="Opacity" Value="0"/>
+                      <b:ChangePropertyAction TargetName="MainExitHoverVideo" PropertyName="PlaybackActive" Value="False"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="LanguageButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        Canvas.Left="519"
+                        Canvas.Top="0"
+                        Width="117"
+                        Height="18"/>
+              </Canvas>
+            </Viewbox>
+          </Grid>
+        </Border>
+
+        <!-- PAGE: Cinematics. Plays local SD/Smk WebM through the in-project decoder path. -->
+        <Border x:Name="CinematicsPage" Visibility="Collapsed" Background="Black">
+          <Grid>
+            <Viewbox Width="1920" Height="1080" Stretch="Uniform">
+              <Grid Width="640" Height="480" ClipToBounds="True" Background="Black">
+                <glue:GlueAnimatedImage Tag="webm:locales/deDE/Assets/SD/Smk/blizzard.webm|15"
+                                         Width="640"
+                                         Height="480"
+                                         Stretch="Uniform"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"/>
+                <Rectangle Height="42"
+                           VerticalAlignment="Bottom"
+                           Fill="#A8000000"
+                           IsHitTestVisible="False"/>
+                <TextBlock Text="Blizzard Cinematic"
+                           Style="{StaticResource ScTextBlock}"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Bottom"
+                           Margin="16,0,0,13"
+                           FontSize="12"
+                           Foreground="{StaticResource ScGoldHot}"
+                           IsHitTestVisible="False"/>
+                <TextBlock Text="Back [Esc]"
+                           Style="{StaticResource ScTextBlock}"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Bottom"
+                           Margin="0,0,18,13"
+                           FontSize="12"
+                           Foreground="{StaticResource ScMenuGreen}"
+                           IsHitTestVisible="False"/>
+                <Button x:Name="CinematicsBackButton"
+                        Style="{StaticResource HitButtonStyle}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom"
+                        Width="130"
+                        Height="42"/>
+              </Grid>
+            </Viewbox>
+          </Grid>
+        </Border>
+
+        <!-- PAGE: Single player / product selection. Uses the palmm retail/expansion popup resource. -->
+        <Border x:Name="SinglePlayerPage" Visibility="Collapsed">
+          <Grid>
+            <Rectangle Fill="#33000000"/>
+
+            <Grid Width="1920" Height="1080">
+              <Image Source="generated/palmm__retail_ex.png"
+                     Width="840"
+                     Height="467"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     Opacity="0.96"
+                     IsHitTestVisible="False"/>
+
+              <TextBlock x:Name="SingleSelectTitleEn" Text="Select Game Type"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="28"
+                         Foreground="#FFDCE7FF"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="0,-372,0,0"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="SingleSelectTitleZh" Text="&#x9009;&#x62E9;&#x6E38;&#x620F;&#x7C7B;&#x578B;"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="28"
+                         Foreground="#FFDCE7FF"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="0,-372,0,0"
+                         Visibility="Collapsed"
+                         IsHitTestVisible="False"/>
+
+              <TextBlock x:Name="OriginalLabelEn" Text="Original [O]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="-430,-128,0,0"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="OriginalLabelZh" Text="&#x539F;&#x7248;[O]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="-430,-128,0,0"
+                         Visibility="Collapsed"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="ExpansionLabelEn" Text="Expansion [E]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="286,132,0,0"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="ExpansionLabelZh" Text="&#x8D44;&#x6599;&#x7247;[E]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="286,132,0,0"
+                         Visibility="Collapsed"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="CancelLabelEn" Text="Cancel [C]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="-518,204,0,0"
+                         IsHitTestVisible="False"/>
+              <TextBlock x:Name="CancelLabelZh" Text="&#x53D6;&#x6D88;[C]"
+                         Style="{StaticResource ScTextBlock}"
+                         FontSize="21"
+                         Foreground="{StaticResource ScMenuGreen}"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="-518,204,0,0"
+                         Visibility="Collapsed"
+                         IsHitTestVisible="False"/>
+
+              <Button x:Name="OriginalButton"
+                      Style="{StaticResource HitButtonStyle}"
+                      Width="520"
+                      Height="150"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Margin="-430,-220,0,0"/>
+              <Button x:Name="ExpansionButton"
+                      Style="{StaticResource HitButtonStyle}"
+                      Width="560"
+                      Height="150"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Margin="286,54,0,0"/>
+              <Button x:Name="SinglePlayerBackBtn"
+                      Style="{StaticResource HitButtonStyle}"
+                      Width="180"
+                      Height="54"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Margin="-528,204,0,0"/>
+              <Button x:Name="ProtossButton"
+                      Style="{StaticResource HitButtonStyle}"
+                      IsEnabled="False"
+                      Visibility="Collapsed"/>
+            </Grid>
+          </Grid>
+        </Border>
+
+        <!-- PAGE: Campaign selection. -->
+        <Border x:Name="CampaignPage" Visibility="Collapsed">
+          <Viewbox Width="1920" Height="1080" Stretch="Fill">
+            <Canvas Width="640" Height="480" Background="Black" ClipToBounds="True">
+              <Image Source="generated/palcs__backgndl.png" Canvas.Left="0" Canvas.Top="0" Width="320" Height="480" Stretch="Fill" Opacity="0.92"/>
+              <Image Source="generated/palcs__backgndr.png" Canvas.Left="320" Canvas.Top="0" Width="320" Height="480" Stretch="Fill" Opacity="0.92"/>
+              <Image Source="generated/campaign__pbotl.png" Canvas.Left="0" Canvas.Top="352" Width="436" Height="118" Stretch="Fill"/>
+              <Image Source="generated/campaign__pbotr.png" Canvas.Left="217" Canvas.Top="370" Width="423" Height="70" Stretch="Fill"/>
+
+              <Canvas x:Name="CampaignOriginalVisuals" Width="640" Height="480">
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalZergDiskVideo" Tag="webm:glue/campaign/diskzerg.webm|12" Canvas.Left="58" Canvas.Top="300" Width="148" Height="60" Opacity="0.95"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalTerranDiskVideo" Tag="webm:glue/campaign/diskterr.webm|12" Canvas.Left="246" Canvas.Top="222" Width="148" Height="60" Opacity="0.95"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalProtossDiskVideo" Tag="webm:glue/campaign/diskprot.webm|12" Canvas.Left="435" Canvas.Top="300" Width="148" Height="60" Opacity="0.95"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalZergVideo" Tag="webm:glue/campaign/zerg.webm|12" Canvas.Left="50" Canvas.Top="126" Width="196" Height="220" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignOriginalZergMask" Canvas.Left="35" Canvas.Top="70" Width="220" Height="320" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalTerranVideo" Tag="webm:glue/campaign/terr.webm|12" Canvas.Left="204" Canvas.Top="70" Width="232" Height="208" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignOriginalTerranMask" Canvas.Left="176" Canvas.Top="24" Width="286" Height="286" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalProtossVideo" Tag="webm:glue/campaign/prot.webm|12" Canvas.Left="414" Canvas.Top="130" Width="208" Height="212" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignOriginalProtossMask" Canvas.Left="402" Canvas.Top="66" Width="230" Height="324" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalZergSelected" Tag="webm:glue/campaign/zergon.webm|12" Canvas.Left="50" Canvas.Top="36" Width="196" Height="220" Visibility="Collapsed"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalTerranSelected" Tag="webm:glue/campaign/terron.webm|12" Canvas.Left="206" Canvas.Top="34" Width="232" Height="208"/>
+                <glue:GlueAnimatedImage x:Name="CampaignOriginalProtossSelected" Tag="webm:glue/campaign/proton.webm|12" Canvas.Left="390" Canvas.Top="34" Width="180" Height="212" Visibility="Collapsed"/>
+                <Button x:Name="ZergTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="35" Canvas.Top="70" Width="220" Height="320">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="1"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalHoverZerg}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="TerranTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="176" Canvas.Top="24" Width="286" Height="286">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="0"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalHoverTerran}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="ProtossTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="402" Canvas.Top="66" Width="230" Height="324">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="2"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalHoverProtoss}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignOriginalProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignOriginalClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+              </Canvas>
+
+              <Canvas x:Name="CampaignExpansionVisuals" Width="640" Height="480" Visibility="Collapsed">
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionTerranDiskVideo" Tag="webm:glue/Expcampaign/DiskXTerr.webm|12" Canvas.Left="58" Canvas.Top="300" Width="148" Height="60"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionProtossDiskVideo" Tag="webm:glue/Expcampaign/DiskXProt.webm|12" Canvas.Left="246" Canvas.Top="236" Width="148" Height="60"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionZergDiskVideo" Tag="webm:glue/Expcampaign/DiskXZerg.webm|12" Canvas.Left="435" Canvas.Top="300" Width="148" Height="60"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionTerranVideo" Tag="webm:glue/Expcampaign/XTerr.webm|12" Canvas.Left="54" Canvas.Top="126" Width="180" Height="252" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignExpansionTerranMask" Canvas.Left="35" Canvas.Top="70" Width="220" Height="320" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionProtossVideo" Tag="webm:glue/Expcampaign/XProt.webm|12" Canvas.Left="230" Canvas.Top="68" Width="180" Height="240" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignExpansionProtossMask" Canvas.Left="176" Canvas.Top="24" Width="286" Height="286" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionZergVideo" Tag="webm:glue/Expcampaign/XZerg.webm|12" Canvas.Left="410" Canvas.Top="98" Width="204" Height="280" Opacity="0.9"/>
+                <Rectangle x:Name="CampaignExpansionZergMask" Canvas.Left="402" Canvas.Top="66" Width="230" Height="324" Fill="#B0000000" Opacity="0" IsHitTestVisible="False"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionTerranSelected" Tag="webm:glue/Expcampaign/XTerrOn.webm|12" Canvas.Left="65" Canvas.Top="125" Width="180" Height="252" Visibility="Collapsed"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionProtossSelected" Tag="webm:glue/Expcampaign/XProtOn.webm|12" Canvas.Left="262" Canvas.Top="68" Width="180" Height="240" Visibility="Collapsed"/>
+                <glue:GlueAnimatedImage x:Name="CampaignExpansionZergSelected" Tag="webm:glue/Expcampaign/XZergOn.webm|12" Canvas.Left="396" Canvas.Top="88" Width="240" Height="280" Visibility="Collapsed"/>
+                <Button x:Name="ExpansionTerranTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="35" Canvas.Top="70" Width="220" Height="320">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="0"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionHoverTerran}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="ExpansionProtossTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="176" Canvas.Top="24" Width="286" Height="286">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="2"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionHoverProtoss}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+                <Button x:Name="ExpansionZergTabButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="402" Canvas.Top="66" Width="230" Height="324">
+                  <b:Interaction.Triggers>
+                    <b:EventTrigger EventName="MouseEnter">
+                      <b:ChangePropertyAction TargetName="GlueMenuRoot" PropertyName="CampaignRace" Value="1"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergDiskVideo" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergSelected" PropertyName="PlaybackActive" Value="True"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionTerranSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionProtossSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionHoverZerg}"/>
+                    </b:EventTrigger>
+                    <b:EventTrigger EventName="MouseLeave">
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergDiskVideo" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ChangePropertyAction TargetName="CampaignExpansionZergSelected" PropertyName="PlaybackActive" Value="False"/>
+                      <b:ControlStoryboardAction Storyboard="{StaticResource CampaignExpansionClearMasks}"/>
+                    </b:EventTrigger>
+                  </b:Interaction.Triggers>
+                </Button>
+              </Canvas>
+
+              <TextBlock x:Name="CampaignTitleText" Text="Select Terran" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="226" Canvas.Top="332" Width="206" Height="20" FontSize="11"
+                         TextAlignment="Center" Foreground="{StaticResource ScGoldHot}"/>
+              <TextBlock x:Name="CampaignSetText" Text="Original Episode" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="238" Canvas.Top="348" Width="194" Height="15" FontSize="8"
+                         TextAlignment="Center" Foreground="#FFC6D4FF"/>
+              <TextBlock x:Name="CampaignProgressText" Text="1 / 10 missions available" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="222" Canvas.Top="390" Width="218" Height="13" FontSize="8"
+                         TextAlignment="Center" Foreground="{StaticResource ScGold}"/>
+              <TextBlock x:Name="CampaignBriefingTitleText" Text="Boot Camp" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="12" Canvas.Top="206" Width="185" Height="18" FontSize="10"
+                         TextAlignment="Center" Foreground="{StaticResource ScGoldHot}"/>
+              <TextBlock x:Name="CampaignBriefingText" Text="" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="10" Canvas.Top="224" Width="188" Height="46" FontSize="7"
+                         TextWrapping="Wrap" TextAlignment="Center" Foreground="#FFDCE7FF"/>
+              <TextBlock x:Name="CampaignBriefingStatusText" Text="Next mission ready" Style="{StaticResource ScTextBlock}"
+                         Canvas.Left="440" Canvas.Top="206" Width="190" Height="40" FontSize="9"
+                         TextWrapping="Wrap" TextAlignment="Center" Foreground="{StaticResource ScMenuGreen}"/>
+
+              <Button x:Name="CampaignLoadButton" Style="{StaticResource SmallButtonStyle}" Canvas.Left="243" Canvas.Top="368" Width="189" Height="20" FontSize="10" Content="OK"/>
+              <Button x:Name="CampaignPlayCustomButton" Style="{StaticResource SmallButtonStyle}" Canvas.Left="226" Canvas.Top="404" Width="206" Height="20" FontSize="10" Content="Load Saved"/>
+              <Button x:Name="CampaignBackBtn" Style="{StaticResource SmallButtonStyle}" Canvas.Left="470" Canvas.Top="404" Width="158" Height="20" FontSize="10" Content="Cancel"/>
+
+              <Button x:Name="CampaignMission0" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="250" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission1" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="264" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission2" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="278" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission3" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="292" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission4" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="306" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission5" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="320" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission6" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="334" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission7" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="348" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission8" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="362" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+              <Button x:Name="CampaignMission9" Style="{StaticResource SmallButtonStyle}" Canvas.Left="432" Canvas.Top="376" Width="196" Height="14" FontSize="6" Visibility="Collapsed"/>
+            </Canvas>
+          </Viewbox>
+        </Border>
+
+        <!-- PAGE: Load saved game. Modal overlay based on gluLoad.ui.json. -->
+        <Border x:Name="LoadGamePage" Visibility="Collapsed">
+          <Grid>
+            <Rectangle Fill="#66000000"/>
+            <Viewbox Width="1920" Height="1080" Stretch="Fill">
+              <Canvas Width="640" Height="480" ClipToBounds="True">
+                <Border Canvas.Left="145" Canvas.Top="90" Width="350" Height="174" Background="#E0040507" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="Select saved game:" Style="{StaticResource ScTextBlock}" Canvas.Left="165" Canvas.Top="106" Width="180" FontSize="9" Foreground="#FFC6D4FF"/>
+                <Border Canvas.Left="170" Canvas.Top="126" Width="296" Height="84" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="6. Bitter End&#10;7. The Trump Card&#10;8. The Big Push&#10;9. New Gettysburg&#10;10. The Hammer Falls" Style="{StaticResource ScTextBlock}" Canvas.Left="176" Canvas.Top="132" Width="270" FontSize="9" Foreground="{StaticResource ScMenuGreen}"/>
+                <Border Canvas.Left="200" Canvas.Top="224" Width="110" Height="22" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <Border Canvas.Left="330" Canvas.Top="224" Width="110" Height="22" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="OK [O]" Style="{StaticResource ScTextBlock}" Canvas.Left="200" Canvas.Top="229" Width="110" TextAlignment="Center" FontSize="10" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Cancel [C]" Style="{StaticResource ScTextBlock}" Canvas.Left="330" Canvas.Top="229" Width="110" TextAlignment="Center" FontSize="10" Foreground="{StaticResource ScMenuGreen}"/>
+                <Button x:Name="LoadGameOkButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="200" Canvas.Top="224" Width="110" Height="22"/>
+                <Button x:Name="LoadGameBackButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="330" Canvas.Top="224" Width="110" Height="22"/>
+              </Canvas>
+            </Viewbox>
+          </Grid>
+        </Border>
+
+        <!-- PAGE: Custom game / create lobby. Coordinates mirror assets/locales/*/Assets/rez/gluCreat.ui.json (640x480). -->
+        <Border x:Name="CustomGamePage" Visibility="Collapsed">
+          <Viewbox Width="1920" Height="1080" Stretch="Fill">
+            <Canvas Width="640" Height="480" ClipToBounds="True">
+              <Image Source="generated/palnl__backgnd.png" Canvas.Left="0" Canvas.Top="0" Width="640" Height="480"/>
+              <Image Source="generated/create__plistmap.png" Canvas.Left="0" Canvas.Top="0" Width="362" Height="356" Opacity="0.92"/>
+              <Image Source="generated/create__pinfo.png" Canvas.Left="400" Canvas.Top="0" Width="240" Height="333" Opacity="0.92"/>
+              <Image Source="generated/palnl__pcancel.png" Canvas.Left="472" Canvas.Top="356" Width="168" Height="91"/>
+              <Image Source="generated/palnl__pok.png" Canvas.Left="436" Canvas.Top="336" Width="204" Height="71"/>
+              <Image Source="generated/create__pslots.png" Canvas.Left="0" Canvas.Top="333" Width="372" Height="147" Opacity="0.92"/>
+
+              <TextBlock Text="Maps" Style="{StaticResource ScTextBlock}" Canvas.Left="40" Canvas.Top="68" Width="136" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+              <TextBlock Text="Lost Temple&#10;Fighting Spirit&#10;Heartbreak Ridge&#10;Circuit Breaker&#10;Bottleneck" Style="{StaticResource ScTextBlock}" Canvas.Left="60" Canvas.Top="130" Width="288" Height="118" FontSize="11" Foreground="{StaticResource ScMenuGreen}"/>
+              <TextBlock Text="Game name&#10;macbox&#10;&#10;Map name&#10;Bottleneck&#10;&#10;Game type&#10;Melee" Style="{StaticResource ScTextBlock}" Canvas.Left="430" Canvas.Top="80" Width="170" FontSize="12" Foreground="#FFC6D4FF" TextAlignment="Center"/>
+              <TextBlock Text="Game Type" Style="{StaticResource ScTextBlock}" Canvas.Left="58" Canvas.Top="262" Width="112" FontSize="10" Foreground="{StaticResource ScMenuGreen}"/>
+              <TextBlock Text="Speed" Style="{StaticResource ScTextBlock}" Canvas.Left="58" Canvas.Top="284" Width="112" FontSize="10" Foreground="{StaticResource ScMenuGreen}"/>
+              <TextBlock Text="Melee" Style="{StaticResource ScTextBlock}" Canvas.Left="180" Canvas.Top="261" Width="172" FontSize="10" Foreground="#FFC6D4FF"/>
+              <TextBlock Text="Fastest" Style="{StaticResource ScTextBlock}" Canvas.Left="180" Canvas.Top="283" Width="172" FontSize="10" Foreground="#FFC6D4FF"/>
+              <TextBlock Text="OK [O]" Style="{StaticResource ScTextBlock}" Canvas.Left="441" Canvas.Top="383" Width="152" Height="22" TextAlignment="Center" FontSize="15" Foreground="{StaticResource ScMenuGreen}"/>
+              <TextBlock Text="Cancel [C]" Style="{StaticResource ScTextBlock}" Canvas.Left="477" Canvas.Top="419" Width="132" Height="22" TextAlignment="Center" FontSize="15" Foreground="{StaticResource ScMenuGreen}"/>
+
+              <Button x:Name="CustomMap0" Style="{StaticResource HitButtonStyle}" Canvas.Left="60" Canvas.Top="130" Width="288" Height="24"/>
+              <Button x:Name="CustomMap1" Style="{StaticResource HitButtonStyle}" Visibility="Collapsed"/>
+              <Button x:Name="CustomMap2" Style="{StaticResource HitButtonStyle}" Visibility="Collapsed"/>
+              <Button x:Name="CustomMap3" Style="{StaticResource HitButtonStyle}" Visibility="Collapsed"/>
+              <Button x:Name="CustomMap4" Style="{StaticResource HitButtonStyle}" Visibility="Collapsed"/>
+              <Button x:Name="StartGameButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="441" Canvas.Top="383" Width="152" Height="22"/>
+              <Button x:Name="CustomGameBackBtn" Style="{StaticResource HitButtonStyle}" Canvas.Left="477" Canvas.Top="419" Width="132" Height="22"/>
+            </Canvas>
+          </Viewbox>
+        </Border>
+
+        <!-- PAGE: Options popup. Base definition is gluOptionsPopup.ui.json; content mirrors the web panel at a native XAML level. -->
+        <Border x:Name="OptionsPage" Visibility="Collapsed">
+          <Grid>
+            <Rectangle Fill="#99000000"/>
+            <Viewbox Width="1920" Height="1080" Stretch="Fill">
+              <Canvas Width="640" Height="480" ClipToBounds="True">
+                <Border Canvas.Left="128" Canvas.Top="64" Width="384" Height="344" Background="#E0050709" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="Options" Style="{StaticResource ScTextBlock}" Canvas.Left="160" Canvas.Top="92" Width="120" FontSize="15" Foreground="#FFFFFFFF"/>
+                <Border Canvas.Left="128" Canvas.Top="128" Width="112" Height="32" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <Border Canvas.Left="128" Canvas.Top="168" Width="112" Height="32" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <Border Canvas.Left="128" Canvas.Top="208" Width="112" Height="32" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <Border Canvas.Left="128" Canvas.Top="248" Width="112" Height="32" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <Border Canvas.Left="128" Canvas.Top="288" Width="112" Height="32" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="Speed [S]" Style="{StaticResource ScTextBlock}" Canvas.Left="128" Canvas.Top="137" Width="112" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Sound [S]" Style="{StaticResource ScTextBlock}" Canvas.Left="128" Canvas.Top="177" Width="112" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Video [V]" Style="{StaticResource ScTextBlock}" Canvas.Left="128" Canvas.Top="217" Width="112" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Game [G]" Style="{StaticResource ScTextBlock}" Canvas.Left="128" Canvas.Top="257" Width="112" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Network [N]" Style="{StaticResource ScTextBlock}" Canvas.Left="128" Canvas.Top="297" Width="112" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Game Settings" Style="{StaticResource ScTextBlock}" Canvas.Left="268" Canvas.Top="128" Width="140" FontSize="12" Foreground="#FFFFFFFF"/>
+                <TextBlock Text="Game Timer&#10;Enable Color Cycling&#10;Language Filter&#10;Console: Default&#10;Portrait: Animated&#10;Minimap: Bottom Left" Style="{StaticResource ScTextBlock}" Canvas.Left="268" Canvas.Top="154" Width="208" FontSize="10" Foreground="#FFC6D4FF"/>
+                <TextBlock Text="Language" Style="{StaticResource ScTextBlock}" Canvas.Left="432" Canvas.Top="128" Width="80" FontSize="12" Foreground="#FFFFFFFF"/>
+                <Border Canvas.Left="432" Canvas.Top="164" Width="136" Height="18" Background="#B0000000" BorderBrush="#FF781515" BorderThickness="1"/>
+                <TextBlock Text="English / Chinese" Style="{StaticResource ScTextBlock}" Canvas.Left="436" Canvas.Top="166" Width="128" FontSize="9" Foreground="{StaticResource ScMenuGreen}"/>
+                <Image Source="generated/palnl__pok.png" Canvas.Left="440" Canvas.Top="372" Width="160" Height="32"/>
+                <Image Source="generated/palnl__pcancel.png" Canvas.Left="136" Canvas.Top="372" Width="120" Height="32"/>
+                <TextBlock Text="OK [O]" Style="{StaticResource ScTextBlock}" Canvas.Left="440" Canvas.Top="382" Width="160" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <TextBlock Text="Restore [R]" Style="{StaticResource ScTextBlock}" Canvas.Left="136" Canvas.Top="382" Width="120" TextAlignment="Center" FontSize="12" Foreground="{StaticResource ScMenuGreen}"/>
+                <Button x:Name="OptionsOkButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="440" Canvas.Top="372" Width="160" Height="32"/>
+                <Button x:Name="OptionsRestoreButton" Style="{StaticResource HitButtonStyle}" Canvas.Left="136" Canvas.Top="372" Width="120" Height="32"/>
+              </Canvas>
+            </Viewbox>
+          </Grid>
+        </Border>
+
+      </Grid>
+    </Viewbox>
+  </Grid>
+</UserControl>

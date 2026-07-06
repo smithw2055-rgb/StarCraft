@@ -376,7 +376,11 @@ namespace
 
         auto TryMove = [&](const Core::Math::Vec2& Candidate)
         {
-            const bool HasPath = CommandSystem::IssueMoveAndHasPath(EM, HarvesterID, Candidate);
+            const bool HasPath = CommandSystem::IssueMoveAndHasPath(
+                EM,
+                HarvesterID,
+                Candidate,
+                ApproachID);
             RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
             return HasPath;
         };
@@ -411,9 +415,191 @@ namespace
         }
 
         if (!HasIssuedReachableMove)
-            CommandSystem::IssueMove(EM, {HarvesterID}, MoveTarget);
+            CommandSystem::IssueMove(EM, {HarvesterID}, MoveTarget, ApproachID);
 
         RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
+    }
+
+    void RemoveQueuedGatherer(ResourceComponent& Resource, int HarvesterID)
+    {
+        Resource.QueuedGatherers.erase(
+            std::remove(Resource.QueuedGatherers.begin(),
+                        Resource.QueuedGatherers.end(),
+                        HarvesterID),
+            Resource.QueuedGatherers.end());
+    }
+
+    void QueueGathererForResource(Core::ECS::EntityManager& EM,
+                                  int ResourceID,
+                                  int HarvesterID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource)
+            return;
+        if (Resource->ActiveGathererEntityID == HarvesterID)
+            return;
+        if (std::find(Resource->QueuedGatherers.begin(),
+                      Resource->QueuedGatherers.end(),
+                      HarvesterID) == Resource->QueuedGatherers.end())
+        {
+            Resource->QueuedGatherers.push_back(HarvesterID);
+        }
+    }
+
+    void PruneQueuedGatherers(Core::ECS::EntityManager& EM,
+                              int ResourceID,
+                              ResourceComponent& Resource)
+    {
+        Resource.QueuedGatherers.erase(
+            std::remove_if(
+                Resource.QueuedGatherers.begin(),
+                Resource.QueuedGatherers.end(),
+                [&](int GathererID)
+                {
+                    if (!EM.IsAlive(GathererID))
+                        return true;
+                    auto* Harvest = EM.GetComponent<HarvestComponent>(GathererID);
+                    return !Harvest || Harvest->TargetResourceID != ResourceID;
+                }),
+            Resource.QueuedGatherers.end());
+    }
+
+    void ReleaseResourceAssignment(Core::ECS::EntityManager& EM,
+                                   int ResourceID,
+                                   int HarvesterID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource)
+            return;
+        if (Resource->ActiveGathererEntityID == HarvesterID)
+            Resource->ActiveGathererEntityID = -1;
+        RemoveQueuedGatherer(*Resource, HarvesterID);
+    }
+
+    bool CanClaimResource(Core::ECS::EntityManager& EM,
+                          int ResourceID,
+                          int HarvesterID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource || Resource->IsDepleted || Resource->Amount <= 0)
+            return false;
+        PruneQueuedGatherers(EM, ResourceID, *Resource);
+        if (Resource->ActiveGathererEntityID >= 0 &&
+            Resource->ActiveGathererEntityID != HarvesterID &&
+            EM.IsAlive(Resource->ActiveGathererEntityID))
+        {
+            return false;
+        }
+        return Resource->QueuedGatherers.empty() ||
+               Resource->QueuedGatherers.front() == HarvesterID;
+    }
+
+    void ClaimResource(Core::ECS::EntityManager& EM,
+                       int ResourceID,
+                       int HarvesterID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource)
+            return;
+        RemoveQueuedGatherer(*Resource, HarvesterID);
+        Resource->ActiveGathererEntityID = HarvesterID;
+    }
+
+    bool IsOwnedGasTarget(Core::ECS::EntityManager& EM, int ResourceID, int PlayerID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource || Resource->Type != ResourceType::VespeneGas)
+            return false;
+        auto* Building = EM.GetComponent<BuildingComponent>(ResourceID);
+        auto* Owner = EM.GetComponent<PlayerComponent>(ResourceID);
+        auto* Unit = EM.GetComponent<UnitComponent>(ResourceID);
+        return Building && Unit && Unit->HitPoints > 0 &&
+               !Building->UnderConstruction &&
+               Owner && Owner->PlayerID == PlayerID;
+    }
+
+    int FindReplacementResource(Core::ECS::EntityManager& EM,
+                                int HarvesterID,
+                                ResourceType Type,
+                                int PreferredResourceID,
+                                int PlayerID)
+    {
+        auto* HarvesterTrans = EM.GetComponent<TransformComponent>(HarvesterID);
+        if (!HarvesterTrans)
+            return -1;
+
+        if (PreferredResourceID >= 0)
+        {
+            auto* Preferred = EM.GetComponent<ResourceComponent>(PreferredResourceID);
+            if (Preferred &&
+                !Preferred->IsDepleted &&
+                Preferred->Amount > 0 &&
+                Preferred->Type == Type &&
+                (Type != ResourceType::VespeneGas ||
+                 IsOwnedGasTarget(EM, PreferredResourceID, PlayerID)))
+            {
+                return PreferredResourceID;
+            }
+        }
+
+        int BestID = -1;
+        float BestDistance = std::numeric_limits<float>::max();
+        for (int CandidateID : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        {
+            auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
+            auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
+            if (!Resource || !CandidateTrans || Resource->IsDepleted || Resource->Amount <= 0)
+                continue;
+            if (Resource->Type != Type)
+                continue;
+            if (Type == ResourceType::VespeneGas &&
+                !IsOwnedGasTarget(EM, CandidateID, PlayerID))
+            {
+                continue;
+            }
+
+            const float Distance =
+                HarvesterTrans->Position.DistanceTo(CandidateTrans->Position);
+            if (Distance < BestDistance)
+            {
+                BestDistance = Distance;
+                BestID = CandidateID;
+            }
+        }
+        return BestID;
+    }
+
+    bool RetargetHarvestResource(Core::ECS::EntityManager& EM,
+                                 int HarvesterID,
+                                 HarvestComponent& Harvest,
+                                 ResourceType Type,
+                                 int PlayerID)
+    {
+        const int Replacement = FindReplacementResource(
+            EM,
+            HarvesterID,
+            Type,
+            Harvest.DesiredResourceID,
+            PlayerID);
+        if (Replacement < 0)
+            return false;
+
+        Harvest.TargetResourceID = Replacement;
+        Harvest.DesiredResourceID = Replacement;
+        Harvest.State = HarvestState::MovingToResource;
+        Harvest.QueuedAtResource = false;
+        if (auto* ResourceTrans = EM.GetComponent<TransformComponent>(Replacement))
+        {
+            QueueGathererForResource(EM, Replacement, HarvesterID);
+            IssueHarvestMove(
+                EM,
+                HarvesterID,
+                Replacement,
+                ResourceTrans->Position,
+                Replacement,
+                -1.0f);
+        }
+        return true;
     }
 }
 
@@ -495,10 +681,14 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         if (!Harvest)
             Harvest = &EM.AddComponent<HarvestComponent>(ID);
 
+        ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
         Harvest->State = HarvestState::MovingToResource;
         Harvest->TargetResourceID = TargetResourceID;
+        Harvest->DesiredResourceID = TargetResourceID;
         Harvest->CarryingAmount = 0;
+        Harvest->CarryingType = ResourceType::None;
         Harvest->ReturnBuildingID = -1;
+        Harvest->QueuedAtResource = false;
 
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
         if (!Cmd)
@@ -507,7 +697,10 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         Cmd->TargetEntityID = TargetResourceID;
 
         if (ResTarget)
+        {
+            QueueGathererForResource(EM, TargetResourceID, ID);
             IssueHarvestMove(EM, ID, TargetResourceID, ResTarget->Position);
+        }
 
         IssuedAny = true;
     }
@@ -567,68 +760,75 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
         return;
     if (!Unit || Unit->HitPoints <= 0)
     {
+        ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
         Harvest->State = HarvestState::Idle;
         StopHarvestCommand(EM, ID);
         return;
     }
 
     const int WorkerPlayerID = WorkerOwner ? WorkerOwner->PlayerID : 0;
+    const auto StopHarvesting = [&]()
+    {
+        ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
+        Harvest->State = HarvestState::Idle;
+        Harvest->QueuedAtResource = false;
+        StopHarvestCommand(EM, ID);
+    };
 
     switch (Harvest->State)
     {
         case HarvestState::Idle:
             break;
 
+        case HarvestState::QueuedAtResource:
         case HarvestState::MovingToResource:
         {
             if (!CanHarvest(EM, ID, Harvest->TargetResourceID))
             {
-                Harvest->State = HarvestState::Idle;
-                if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
-                    Cmd->CurrentCommand = CommandType::Stop;
+                auto* OldResource = EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
+                const ResourceType DesiredType =
+                    OldResource ? OldResource->Type : ResourceType::Minerals;
+                ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
+                if (!RetargetHarvestResource(EM, ID, *Harvest, DesiredType, WorkerPlayerID))
+                    StopHarvesting();
                 break;
             }
 
             auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID);
-            if (ResTarget && IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID))
+            auto* ResComp = EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
+            if (!ResTarget || !ResComp)
             {
-                Harvest->State = HarvestState::Mining;
-                Harvest->MineTimer = 0.0f;
-                if (auto* PathComp = EM.GetComponent<PathfindingComponent>(ID))
-                {
-                    PathComp->Path.clear();
-                    PathComp->PathIndex = 0;
-                    PathComp->CurrentSpeed = 0.0f;
-                    PathComp->CurrentVelocity = {0.0f, 0.0f};
-                    PathComp->StallTimer = 0.0f;
-                    PathComp->HasLastWaypointDistance = false;
-                }
+                StopHarvesting();
                 break;
             }
 
             auto* Path = EM.GetComponent<PathfindingComponent>(ID);
-            if (IsMoveSettled(Path))
+            QueueGathererForResource(EM, Harvest->TargetResourceID, ID);
+            if (IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID))
             {
-                if (ResTarget)
+                if (CanClaimResource(EM, Harvest->TargetResourceID, ID))
                 {
-                    const float Dist = Trans->Position.DistanceTo(ResTarget->Position);
-                    const bool CloseEnough =
-                        IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID) ||
-                        Dist <= HarvestInteractionRange(EM, Harvest->TargetResourceID) + 8.0f;
-                    if (CloseEnough)
-                    {
-                        Harvest->State = HarvestState::Mining;
-                        Harvest->MineTimer = 0.0f;
-                        break;
-                    }
-                    IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
+                    ClaimResource(EM, Harvest->TargetResourceID, ID);
+                    Harvest->State = HarvestState::Mining;
+                    Harvest->QueuedAtResource = false;
+                    Harvest->MineTimer = 0.0f;
+                    ClearMotion(EM, ID);
                 }
                 else
                 {
-                    Harvest->State = HarvestState::Idle;
-                    if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
-                        Cmd->CurrentCommand = CommandType::Stop;
+                    Harvest->State = HarvestState::QueuedAtResource;
+                    Harvest->QueuedAtResource = true;
+                    ClearMotion(EM, ID);
                 }
+                break;
+            }
+
+            if (IsMoveSettled(Path))
+            {
+                Harvest->State = HarvestState::MovingToResource;
+                Harvest->QueuedAtResource = ResComp->ActiveGathererEntityID >= 0 &&
+                    ResComp->ActiveGathererEntityID != ID;
+                IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
                 return;
             }
             break;
@@ -639,9 +839,22 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
             auto* ResComp = EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
             if (!ResComp || ResComp->IsDepleted || !CanHarvest(EM, ID, Harvest->TargetResourceID))
             {
-                Harvest->State = HarvestState::Idle;
-                if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
-                    Cmd->CurrentCommand = CommandType::Stop;
+                ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
+                if (Harvest->CarryingAmount > 0)
+                {
+                    Harvest->State = HarvestState::MovingToDepot;
+                    Harvest->CarryingType =
+                        ResComp ? ResComp->Type : ResourceType::Minerals;
+                    Harvest->ReturnBuildingID =
+                        FindNearestDepot(EM, ID, Harvest->CarryingType);
+                }
+                else
+                {
+                    const ResourceType RetryType =
+                        ResComp ? ResComp->Type : ResourceType::Minerals;
+                    if (!RetargetHarvestResource(EM, ID, *Harvest, RetryType, WorkerPlayerID))
+                        StopHarvesting();
+                }
                 break;
             }
 
@@ -664,9 +877,11 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
 
                 if (Harvest->CarryingAmount >= Harvest->CarryCapacity || ResComp->IsDepleted)
                 {
+                    ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
                     Harvest->State = HarvestState::MovingToDepot;
                     Harvest->CarryingType = ResComp->Type;
                     Harvest->ReturnBuildingID = FindNearestDepot(EM, ID, ResComp->Type);
+                    Harvest->QueuedAtResource = false;
                     DebugHarvestLog(
                         "full worker=" + std::to_string(ID) +
                         " resource=" + std::to_string(Harvest->TargetResourceID) +
@@ -712,8 +927,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 Harvest->ReturnBuildingID = FindNearestDepot(EM, ID, Harvest->CarryingType);
                 if (Harvest->ReturnBuildingID == -1)
                 {
-                    Harvest->State = HarvestState::Idle;
-                    StopHarvestCommand(EM, ID);
+                    StopHarvesting();
                     break;
                 }
                 if (auto* DepotTrans =
@@ -749,6 +963,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 std::to_string(Path ? Path->PathIndex : -1));
             if (Dist <= DepositRange)
             {
+                const ResourceType ReturnType = Harvest->CarryingType;
                 auto& Resources = GetResources(WorkerPlayerID);
                 if (Harvest->CarryingType == ResourceType::Minerals)
                     Resources.Minerals += Harvest->CarryingAmount;
@@ -765,23 +980,15 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
 
                 Harvest->CarryingAmount = 0;
                 Harvest->CarryingType = ResourceType::None;
-                Harvest->State = HarvestState::Idle;
-
-                auto* ResComp = EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
-                if (ResComp && !ResComp->IsDepleted && CanHarvest(EM, ID, Harvest->TargetResourceID))
+                Harvest->ReturnBuildingID = -1;
+                if (!RetargetHarvestResource(
+                        EM,
+                        ID,
+                        *Harvest,
+                        ReturnType,
+                        WorkerPlayerID))
                 {
-                    if (auto* ResTarget = EM.GetComponent<TransformComponent>(Harvest->TargetResourceID))
-                    {
-                        Harvest->State = HarvestState::MovingToResource;
-                        IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
-                        RestoreHarvestCommand(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
-                    }
-                }
-
-                if (Harvest->State == HarvestState::Idle)
-                {
-                    if (auto* Cmd = EM.GetComponent<CommandComponent>(ID))
-                        Cmd->CurrentCommand = CommandType::Stop;
+                    StopHarvesting();
                 }
             }
             else if (IsMoveSettled(Path))

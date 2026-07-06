@@ -383,7 +383,7 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
     const int MY = (int)Core::Platform::GetMouseY();
     const bool PointerActive =
         Core::Platform::IsWindowFocused() &&
-        Core::Platform::IsMouseInClientArea();
+        Core::Platform::IsMouseInGameContentArea();
     if (!PointerActive)
     {
         CancelPointerGesture();

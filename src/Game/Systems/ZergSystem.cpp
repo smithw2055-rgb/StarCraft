@@ -1,6 +1,7 @@
 #include "Game/Systems/ZergSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
@@ -734,7 +735,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             Unit->SupplyCost = TargetDef.SupplyCost;
             Unit->SightRange = TargetDef.SightRange;
             Unit->Speed = TargetDef.Speed;
-            Unit->IsDetector = false;
+            Unit->IsDetector = Game::Races::IsDetectorChkUnitID(Unit->ChkUnitID);
         }
         if (Bldg)
         {
@@ -794,6 +795,8 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         NUnit.Speed = TargetDef.Speed;
         NUnit.SightRange = TargetDef.SightRange;
         NUnit.SizeType = TargetDef.SizeType;
+        NUnit.IsDetector = Game::Races::IsDetectorChkUnitID(NUnit.ChkUnitID);
+        UpgradeSystem::RefreshUnitEnergyCap(EM, NewUnitID);
 
         HarvestSystem::GetResources(PlayerID).SupplyMax +=
             Game::Races::GetSupplyProvidedByDefID(TargetDefID);
@@ -807,18 +810,8 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         if (TargetDef.GroundDamage > 0 || TargetDef.AirDamage > 0)
         {
             auto& NCombat = EM.AddComponent<CombatComponent>(NewUnitID);
-            NCombat.GroundDamage = TargetDef.GroundDamage;
-            NCombat.AirDamage = TargetDef.AirDamage;
-            NCombat.AttackRange = TargetDef.AttackRange;
-            NCombat.AttackCooldown = TargetDef.AttackCooldown;
-            NCombat.GroundDmgType = TargetDef.GroundDmgType;
-            NCombat.AirDmgType = TargetDef.AirDmgType;
-            NCombat.MyElevation = Game::Data::IsAirUnitType(TargetDef.ChkUnitID)
-                ? Elevation::Air
-                : Elevation::Ground;
-            NCombat.CanTargetGround = TargetDef.GroundDamage > 0;
-            NCombat.CanTargetAir = TargetDef.AirDamage > 0;
-            NCombat.IsRanged = TargetDef.AttackRange > 1.5f;
+            Races::ApplyCombatDefinition(
+                NCombat, TargetDef, Game::Data::IsAirUnitType(TargetDef.ChkUnitID));
         }
 
         // Add burrow component for units that can burrow

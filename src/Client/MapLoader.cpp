@@ -335,11 +335,15 @@ MapLoader::Result MapLoader::Load(const std::string& ScmPath)
     // Translate ChkParser's start locations to GameMap start locations.
     ChkStartToTile({}, Out.Map.StartLocations); // noop - we'll set from ChkParser below
 
-    // Parse start locations (unit ID 214) and the placed-units array
-    Out.ChkUnits.assign(Parser.GetUnits(), Parser.GetUnits() + Parser.GetUnitCount());
+    // Parse start locations (unit ID 214) separately from spawnable units.
+    // CHK UNIT records use raw StarCraft ids; 214 is an editor marker, not an entity.
+    Out.ChkUnits.clear();
+    Out.ChkUnits.reserve(Parser.GetUnitCount());
     Out.ChkStartLocations.clear();
-    for (const auto& U : Out.ChkUnits)
+    const auto* Units = Parser.GetUnits();
+    for (size_t I = 0; I < Parser.GetUnitCount(); ++I)
     {
+        const auto& U = Units[I];
         if (U.UnitID == 214)
         {
             StartLocation S;
@@ -348,7 +352,9 @@ MapLoader::Result MapLoader::Load(const std::string& ScmPath)
             S.PlayerId = U.Owner;
             Out.ChkStartLocations.push_back(S);
             Out.Map.StartLocations.push_back(S);
+            continue;
         }
+        Out.ChkUnits.push_back(U);
     }
 
     Out.Loaded = true;

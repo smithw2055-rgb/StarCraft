@@ -30,13 +30,97 @@ static inline int32_t ReadI32(const uint8_t* Data, size_t Offset)
     return (int32_t)ReadU32(Data, Offset);
 }
 
+static inline uint8_t ReadU8Column(const std::vector<uint8_t>& Data,
+                                   size_t Offset,
+                                   size_t Index)
+{
+    return (Offset + Index < Data.size()) ? Data[Offset + Index] : 0;
+}
+
+static inline uint16_t ReadU16Column(const std::vector<uint8_t>& Data,
+                                     size_t Offset,
+                                     size_t Index)
+{
+    const size_t Pos = Offset + Index * 2;
+    return (Pos + 2 <= Data.size()) ? ReadU16(Data.data(), Pos) : 0;
+}
+
+static inline uint32_t ReadU32Column(const std::vector<uint8_t>& Data,
+                                     size_t Offset,
+                                     size_t Index)
+{
+    const size_t Pos = Offset + Index * 4;
+    return (Pos + 4 <= Data.size()) ? ReadU32(Data.data(), Pos) : 0;
+}
+
+static inline int32_t ReadI32Column(const std::vector<uint8_t>& Data,
+                                    size_t Offset,
+                                    size_t Index)
+{
+    return static_cast<int32_t>(ReadU32Column(Data, Offset, Index));
+}
+
 std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 {
     std::vector<UnitEntry> Entries;
     constexpr size_t Count = 228;
-    constexpr size_t ConstructionImageOffset = 0x534;
+    constexpr size_t UnitsCount = 106;
+    constexpr size_t BuildingsCount = 96;
+
+    size_t Offset = 0;
+    const size_t FlingyOffset = Offset; Offset += Count;
+    const size_t Subunit1Offset = Offset; Offset += Count * 2;
+    const size_t Subunit2Offset = Offset; Offset += Count * 2;
+    Offset += BuildingsCount * 2; // infestation unit, indexed from UnitsCount
+    const size_t ConstructionImageOffset = Offset; Offset += Count * 4;
+    Offset += Count; // unit direction
+    const size_t HasShieldOffset = Offset; Offset += Count;
+    const size_t ShieldPointsOffset = Offset; Offset += Count * 2;
+    const size_t HitPointsOffset = Offset; Offset += Count * 4;
+    Offset += Count; // elevation level
+    Offset += Count; // unknown1
+    Offset += Count; // sublabel
+    Offset += Count; // computer idle order
+    Offset += Count; // human idle order
+    Offset += Count; // return to idle order
+    Offset += Count; // attack unit order
+    Offset += Count; // attack move order
+    const size_t GroundWeaponOffset = Offset; Offset += Count;
+    Offset += Count; // max ground hits
+    const size_t AirWeaponOffset = Offset; Offset += Count;
+    Offset += Count; // max air hits
+    Offset += Count; // AI internal
+    Offset += Count * 4; // flags
+    Offset += Count; // target acquisition range
+    const size_t SightRangeOffset = Offset; Offset += Count;
+    const size_t ArmorUpgradeOffset = Offset; Offset += Count;
+    const size_t UnitSizeOffset = Offset; Offset += Count;
+    const size_t ArmorOffset = Offset; Offset += Count;
+    Offset += Count; // right click action
+    Offset += UnitsCount * 2; // ready sound
+    Offset += Count * 2; // first what sound
+    Offset += Count * 2; // last what sound
+    Offset += UnitsCount * 2; // first pissed sound
+    Offset += UnitsCount * 2; // last pissed sound
+    Offset += UnitsCount * 2; // first yes sound
+    Offset += UnitsCount * 2; // last yes sound
+    Offset += Count * 4; // placement size
+    Offset += BuildingsCount * 4; // addon position, indexed from UnitsCount
+    Offset += Count * 8; // dimensions
+    // These offsets are validated against real Brood War assets below and in
+    // SpriteImageDataTest. Keep them explicit because several preceding sound
+    // table columns have version-specific lengths in extracted assets.
     constexpr size_t PlacementOffset = 0x2D94;
     constexpr size_t DimensionOffset = 0x3124;
+    Offset = DimensionOffset + Count * 8;
+    const size_t PortraitOffset = Offset; Offset += Count * 2;
+    const size_t MineralCostOffset = Offset; Offset += Count * 2;
+    const size_t GasCostOffset = Offset; Offset += Count * 2;
+    const size_t BuildTimeOffset = Offset; Offset += Count * 2;
+    Offset += Count * 2; // unknown2
+    Offset += Count; // group flags
+    Offset += Count; // supply provided
+    const size_t SupplyRequiredOffset = Offset; Offset += Count;
     if (Data.empty())
     {
         Core::Utils::Logger::Warning("DatDecoder", "units.dat is empty");
@@ -47,25 +131,32 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 
     for (size_t I = 0; I < Count; ++I)
     {
-        if (I >= Data.size())
-            break;
-
         UnitEntry E;
         E.Id = (uint32_t)I;
 
         // Brood War units.dat is column-major. The first column is the
         // flingy.dat graphics id, which starts the unit->flingy->sprite->image
         // chain used for both rendering and iscript selection.
-        E.FlingyID = Data[I];
+        E.FlingyID = ReadU8Column(Data, FlingyOffset, I);
         E.SpriteID = E.FlingyID;
-        const size_t Subunit1Offset = Count;
-        const size_t Subunit2Offset = Count + Count * 2;
-        if (Subunit1Offset + I * 2 + 2 <= Data.size())
-            E.Subunit1ID = ReadU16(Data.data(), Subunit1Offset + I * 2);
-        if (Subunit2Offset + I * 2 + 2 <= Data.size())
-            E.Subunit2ID = ReadU16(Data.data(), Subunit2Offset + I * 2);
-        if (ConstructionImageOffset + I * 4 + 4 <= Data.size())
-            E.ConstructionImageID = ReadU32(Data.data(), ConstructionImageOffset + I * 4);
+        E.Subunit1ID = ReadU16Column(Data, Subunit1Offset, I);
+        E.Subunit2ID = ReadU16Column(Data, Subunit2Offset, I);
+        E.ConstructionImageID = ReadU32Column(Data, ConstructionImageOffset, I);
+        E.ShieldAmount = ReadU8Column(Data, HasShieldOffset, I) != 0
+            ? ReadU16Column(Data, ShieldPointsOffset, I)
+            : 0;
+        E.HitPoints = (uint32_t)std::max(0, ReadI32Column(Data, HitPointsOffset, I) / 256);
+        E.GroundWeapon = ReadU8Column(Data, GroundWeaponOffset, I);
+        E.AirWeapon = ReadU8Column(Data, AirWeaponOffset, I);
+        E.SightRange = ReadU8Column(Data, SightRangeOffset, I);
+        E.ArmorUpgrade = ReadU8Column(Data, ArmorUpgradeOffset, I);
+        E.UnitSize = ReadU8Column(Data, UnitSizeOffset, I);
+        E.Armor = ReadU8Column(Data, ArmorOffset, I);
+        E.PortraitID = ReadU16Column(Data, PortraitOffset, I);
+        E.MineralCost = ReadU16Column(Data, MineralCostOffset, I);
+        E.GasCost = ReadU16Column(Data, GasCostOffset, I);
+        E.BuildTime = ReadU16Column(Data, BuildTimeOffset, I);
+        E.SupplyCost = ReadU8Column(Data, SupplyRequiredOffset, I);
         if (PlacementOffset + I * 4 + 4 <= Data.size())
         {
             E.PlacementWidth = ReadI16(Data.data(), PlacementOffset + I * 4 + 0);
@@ -90,34 +181,59 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
 std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& Data)
 {
     std::vector<WeaponEntry> Entries;
-    const size_t EntrySize = 42;
+    constexpr size_t Count = 130;
+    if (Data.empty())
+        return Entries;
 
-    size_t Count = Data.size() / EntrySize;
     Entries.reserve(Count);
+
+    size_t Offset = 0;
+    const size_t LabelOffset = Offset; Offset += Count * 2;
+    const size_t FlingyOffset = Offset; Offset += Count * 4;
+    Offset += Count; // unused
+    const size_t TargetFlagsOffset = Offset; Offset += Count * 2;
+    const size_t MinRangeOffset = Offset; Offset += Count * 4;
+    const size_t MaxRangeOffset = Offset; Offset += Count * 4;
+    const size_t DamageUpgradeOffset = Offset; Offset += Count;
+    const size_t DamageTypeOffset = Offset; Offset += Count;
+    const size_t BulletTypeOffset = Offset; Offset += Count;
+    Offset += Count; // lifetime
+    const size_t HitTypeOffset = Offset; Offset += Count;
+    const size_t InnerSplashOffset = Offset; Offset += Count * 2;
+    const size_t MediumSplashOffset = Offset; Offset += Count * 2;
+    const size_t OuterSplashOffset = Offset; Offset += Count * 2;
+    const size_t DamageAmountOffset = Offset; Offset += Count * 2;
+    const size_t DamageBonusOffset = Offset; Offset += Count * 2;
+    const size_t CooldownOffset = Offset; Offset += Count;
+    const size_t BulletCountOffset = Offset; Offset += Count;
+    Offset += Count; // attack angle
+    Offset += Count; // bullet heading offset
+    Offset += Count; // forward offset
+    Offset += Count; // upward offset
+    Offset += Count * 2; // target error message
+    const size_t IconOffset = Offset; Offset += Count * 2;
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
-            break;
-
         WeaponEntry E;
         E.Id = (uint32_t)I;
-
-        // 0-1: DamageAmount
-        E.DamageAmount = ReadU16(Data.data(), Off + 0);
-        // 2-3: DamageBonus
-        E.DamageBonus = ReadU16(Data.data(), Off + 2);
-        // 4-5: Cooldown
-        E.Cooldown = ReadU16(Data.data(), Off + 4);
-        // 6-7: DamageFactor
-        E.DamageFactor = ReadU16(Data.data(), Off + 6);
-        // 8: WeaponBehavior
-        E.WeaponBehavior = Data[Off + 8];
-        // 14-15: Range (in pixels)
-        E.Range = ReadU16(Data.data(), Off + 14);
-        // 26-27: SplashType
-        E.SplashType = ReadU16(Data.data(), Off + 26);
+        E.Label = ReadU16Column(Data, LabelOffset, I);
+        E.FlingyID = ReadU32Column(Data, FlingyOffset, I);
+        E.TargetFlags = ReadU16Column(Data, TargetFlagsOffset, I);
+        E.MinRange = ReadU32Column(Data, MinRangeOffset, I);
+        E.Range = (uint16_t)ReadU32Column(Data, MaxRangeOffset, I);
+        E.DamageUpgrade = ReadU8Column(Data, DamageUpgradeOffset, I);
+        E.DamageType = ReadU8Column(Data, DamageTypeOffset, I);
+        E.WeaponBehavior = ReadU8Column(Data, BulletTypeOffset, I);
+        E.SplashType = ReadU8Column(Data, HitTypeOffset, I);
+        E.InnerSplashRadius = ReadU16Column(Data, InnerSplashOffset, I);
+        E.MediumSplashRadius = ReadU16Column(Data, MediumSplashOffset, I);
+        E.OuterSplashRadius = ReadU16Column(Data, OuterSplashOffset, I);
+        E.DamageAmount = ReadU16Column(Data, DamageAmountOffset, I);
+        E.DamageBonus = ReadU16Column(Data, DamageBonusOffset, I);
+        E.Cooldown = ReadU8Column(Data, CooldownOffset, I);
+        E.BulletCount = ReadU8Column(Data, BulletCountOffset, I);
+        E.Icon = ReadU16Column(Data, IconOffset, I);
 
         Entries.push_back(E);
     }
@@ -298,25 +414,30 @@ std::vector<ImageTblEntry> DatDecoder::DecodeImageTbl(const std::vector<uint8_t>
 std::vector<UpgradeEntry> DatDecoder::DecodeUpgrades(const std::vector<uint8_t>& Data)
 {
     std::vector<UpgradeEntry> Entries;
-    const size_t EntrySize = 18;
+    constexpr size_t Count = 61;
+    if (Data.empty())
+        return Entries;
 
-    size_t Count = Data.size() / EntrySize;
     Entries.reserve(Count);
+
+    size_t Offset = 0;
+    const size_t MineralBaseOffset = Offset; Offset += Count * 2;
+    const size_t MineralFactorOffset = Offset; Offset += Count * 2;
+    const size_t GasBaseOffset = Offset; Offset += Count * 2;
+    const size_t GasFactorOffset = Offset; Offset += Count * 2;
+    const size_t TimeBaseOffset = Offset; Offset += Count * 2;
+    const size_t TimeFactorOffset = Offset; Offset += Count * 2;
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
-            break;
-
         UpgradeEntry E;
         E.Id = (uint32_t)I;
-        E.MineralCostBase = ReadU16(Data.data(), Off + 0);
-        E.MineralCostFactor = ReadU16(Data.data(), Off + 2);
-        E.GasCostBase = ReadU16(Data.data(), Off + 4);
-        E.GasCostFactor = ReadU16(Data.data(), Off + 6);
-        E.TimeCostBase = ReadU16(Data.data(), Off + 8);
-        E.TimeCostFactor = ReadU16(Data.data(), Off + 10);
+        E.MineralCostBase = ReadU16Column(Data, MineralBaseOffset, I);
+        E.MineralCostFactor = ReadU16Column(Data, MineralFactorOffset, I);
+        E.GasCostBase = ReadU16Column(Data, GasBaseOffset, I);
+        E.GasCostFactor = ReadU16Column(Data, GasFactorOffset, I);
+        E.TimeCostBase = ReadU16Column(Data, TimeBaseOffset, I);
+        E.TimeCostFactor = ReadU16Column(Data, TimeFactorOffset, I);
 
         Entries.push_back(E);
     }
@@ -327,23 +448,27 @@ std::vector<UpgradeEntry> DatDecoder::DecodeUpgrades(const std::vector<uint8_t>&
 std::vector<TechEntry> DatDecoder::DecodeTech(const std::vector<uint8_t>& Data)
 {
     std::vector<TechEntry> Entries;
-    const size_t EntrySize = 16;
+    constexpr size_t Count = 44;
+    if (Data.empty())
+        return Entries;
 
-    size_t Count = Data.size() / EntrySize;
     Entries.reserve(Count);
+
+    size_t Offset = 0;
+    const size_t MineralOffset = Offset; Offset += Count * 2;
+    const size_t GasOffset = Offset; Offset += Count * 2;
+    const size_t TimeOffset = Offset; Offset += Count * 2;
+    Offset += Count * 2; // energy cost
+    const size_t RequiredUnitOffset = Offset; Offset += Count * 4;
 
     for (size_t I = 0; I < Count; ++I)
     {
-        size_t Off = I * EntrySize;
-        if (Off + EntrySize > Data.size())
-            break;
-
         TechEntry E;
         E.Id = (uint32_t)I;
-        E.MineralCost = ReadU16(Data.data(), Off + 0);
-        E.GasCost = ReadU16(Data.data(), Off + 2);
-        E.TimeCost = ReadU16(Data.data(), Off + 4);
-        E.RequiredUnit = ReadU32(Data.data(), Off + 8);
+        E.MineralCost = ReadU16Column(Data, MineralOffset, I);
+        E.GasCost = ReadU16Column(Data, GasOffset, I);
+        E.TimeCost = ReadU16Column(Data, TimeOffset, I);
+        E.RequiredUnit = ReadU32Column(Data, RequiredUnitOffset, I);
 
         Entries.push_back(E);
     }

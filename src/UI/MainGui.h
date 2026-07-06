@@ -30,6 +30,7 @@ public:
     void Render();
     void Resize(int Width, int Height);
     bool HandleEvent(const void* Event);
+    bool IsPointInHudEvent(const void* Event) const;
 
     bool IsActive() const { return Host_.IsActive(); }
 

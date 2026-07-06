@@ -48,13 +48,13 @@ int main()
     using Game::Systems::AnimationSystem;
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Constructing, true, true, false,
+                AnimState::Constructing, true, true, 0.95f, false,
                 false, false, false, false,
                 HasOnly({Anim_Init, Anim_AlmostBuilt, Anim_Built})) == Anim_AlmostBuilt,
             "building under construction uses AlmostBuilt iscript when available");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Constructing, true, true, false,
+                AnimState::Constructing, true, true, 0.25f, false,
                 false, false, false, false,
                 HasOnly({Anim_Init, Anim_Built})) == Anim_Init,
             "building under construction falls back to Init when AlmostBuilt is unavailable");
@@ -64,43 +64,43 @@ int main()
             "construction animation availability falls back to Init");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Idle, true, false, true,
+                AnimState::Idle, true, false, 1.0f, true,
                 false, false, false, false,
                 HasOnly({Anim_Init, Anim_Built, Anim_IsWorking})) == Anim_Built,
             "completed building plays Built iscript before returning to idle or working");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Idle, true, false, false,
+                AnimState::Idle, true, false, 1.0f, false,
                 true, false, false, false,
                 HasOnly({Anim_Init, Anim_IsWorking, Anim_WorkingToIdle})) == Anim_IsWorking,
             "working building uses IsWorking iscript");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Idle, true, false, false,
+                AnimState::Idle, true, false, 1.0f, false,
                 false, true, false, false,
                 HasOnly({Anim_Init, Anim_WorkingToIdle})) == Anim_WorkingToIdle,
             "building transitions from working to idle");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Walking, false, false, false,
+                AnimState::Walking, false, false, 0.0f, false,
                 false, false, false, false,
                 HasOnly({Anim_Init, Anim_Walking})) == Anim_Walking,
             "mobile unit uses Walking iscript while moving");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Idle, false, false, false,
+                AnimState::Idle, false, false, 0.0f, false,
                 false, false, true, false,
                 HasOnly({Anim_Init, Anim_WalkingToIdle})) == Anim_WalkingToIdle,
             "mobile unit uses WalkingToIdle after movement stops");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Attacking, false, false, false,
+                AnimState::Attacking, false, false, 0.0f, false,
                 false, false, false, true,
                 HasOnly({Anim_Init, Anim_GndAttkInit, Anim_AirAttkInit})) == Anim_GndAttkInit,
             "pending attack prefers ground attack init when available");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
-                AnimState::Dying, false, false, false,
+                AnimState::Dying, false, false, 0.0f, false,
                 false, false, true, true,
                 HasOnly({Anim_Init, Anim_Death, Anim_Walking, Anim_GndAttkInit})) == Anim_Death,
             "dying unit animation uses Death iscript before walking or attack states");

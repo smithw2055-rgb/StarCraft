@@ -1,7 +1,5 @@
 #include "Game/Systems/BulletSystem.h"
-#include "Game/Systems/UpgradeSystem.h"
-#include "Game/Systems/DeathEvents.h"
-#include "Core/Utils/Logger.h"
+#include "Game/Systems/CombatSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,44 +8,17 @@ namespace Game::Systems
 {
 
 using namespace Game::Components;
-using Core::Utils::Logger;
 
 namespace
 {
-    static float GetSizeDamageModifier(DamageType DmgType, UnitSize TargetSize)
-    {
-        switch (DmgType)
-        {
-            case DamageType::Concussive:
-                switch (TargetSize)
-                {
-                    case UnitSize::Small:  return 1.0f;
-                    case UnitSize::Medium: return 0.5f;
-                    case UnitSize::Large:  return 0.25f;
-                }
-                break;
-            case DamageType::Explosive:
-                switch (TargetSize)
-                {
-                    case UnitSize::Small:  return 0.5f;
-                    case UnitSize::Medium: return 0.75f;
-                    case UnitSize::Large:  return 1.0f;
-                }
-                break;
-            case DamageType::Normal:
-            default:
-                return 1.0f;
-        }
-        return 1.0f;
-    }
-
     static float SplashFalloff(float Distance, float MaxRadius)
     {
         if (MaxRadius <= 0.0f) return 1.0f;
         float Ratio = Distance / MaxRadius;
-        if (Ratio >= 1.0f) return 0.0f;
-        if (Ratio <= 0.0f) return 1.0f;
-        return 1.0f - Ratio * 0.5f;
+        if (Ratio > 1.0f) return 0.0f;
+        if (Ratio <= (1.0f / 3.0f)) return 1.0f;
+        if (Ratio <= (2.0f / 3.0f)) return 0.5f;
+        return 0.25f;
     }
 
     static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID)
@@ -93,6 +64,18 @@ namespace
 
         auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
         return Status && Status->HasEffect(StatusEffect::Stasis);
+    }
+
+    static CombatComponent BulletDamageCombat(DamageType DamageKind, bool IsRangedAttack)
+    {
+        CombatComponent Combat;
+        Combat.GroundDmgType = DamageKind;
+        Combat.AirDmgType = DamageKind;
+        Combat.WeaponBeh = IsRangedAttack ? WeaponBehavior::FlyDirect : WeaponBehavior::Melee;
+        Combat.IsRanged = IsRangedAttack;
+        Combat.CanTargetGround = true;
+        Combat.CanTargetAir = true;
+        return Combat;
     }
 }
 
@@ -221,25 +204,11 @@ void BulletSystem::UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, floa
             if (auto* P = EM.GetComponent<PlayerComponent>(BulletID))
                 SourcePlayerID = P->PlayerID;
 
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-            for (int UID : Units)
-            {
-                auto* UP = EM.GetComponent<PlayerComponent>(UID);
-                auto* UT = EM.GetComponent<TransformComponent>(UID);
-                auto* UU = EM.GetComponent<UnitComponent>(UID);
-                if (!UP || !UT || !UU || UU->HitPoints <= 0) continue;
-                if (UP->PlayerID == SourcePlayerID) continue;
-
-                float D = UT->Position.DistanceTo(Center);
-                if (D <= Bullet->SplashRadius * 32.0f || D <= 96.0f)
-                {
-                    ApplySplashDamage(EM, Center, Bullet->SplashRadius * 32.0f,
-                                      Bullet->BaseDamage, Bullet->DamageKind,
-                                      Bullet->DamageUpgradeBonus, SourcePlayerID,
-                                      Bullet->SourceEntityID, Bullet->Splash,
-                                      Elevation::Both, Bullet->IsRangedAttack);
-                }
-            }
+            ApplySplashDamage(EM, Center, Bullet->SplashRadius * 32.0f,
+                              Bullet->BaseDamage, Bullet->DamageKind,
+                              Bullet->DamageUpgradeBonus, SourcePlayerID,
+                              Bullet->SourceEntityID, Bullet->Splash,
+                              Elevation::Both, Bullet->IsRangedAttack);
             if (Bullet->LifetimeRemaining <= 0.0f)
                 EM.DestroyEntity(BulletID);
             return;
@@ -296,7 +265,9 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
         if (TTarget) ImpactPos = TTarget->Position;
     }
 
-    if (DirectHitID >= 0)
+    const bool HasSplash = Bullet->Splash != SplashType::None && Bullet->SplashRadius > 0.0f;
+
+    if (DirectHitID >= 0 && !HasSplash)
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(DirectHitID);
         if (TargetUnit && TargetUnit->HitPoints > 0 &&
@@ -305,44 +276,16 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
             if (!IsInvulnerableByStatus(EM, DirectHitID) &&
                 (!Bullet->IsRangedAttack || !IsProtectedByDarkSwarm(EM, DirectHitID)))
             {
-                float SizeMod = GetSizeDamageModifier(Bullet->DamageKind, TargetUnit->SizeType);
-                int Damage = std::max(1, (int)((float)(Bullet->BaseDamage + Bullet->DamageUpgradeBonus) * SizeMod));
-
-                if (TargetUnit->ShieldPoints > 0)
-                {
-                    if (Damage <= TargetUnit->ShieldPoints)
-                    {
-                        TargetUnit->ShieldPoints -= Damage;
-                        Damage = 0;
-                    }
-                    else
-                    {
-                        Damage -= TargetUnit->ShieldPoints;
-                        TargetUnit->ShieldPoints = 0;
-                    }
-                }
-
-                if (Damage > 0)
-                {
-                    int FinalArmor = TargetUnit->Armor + UpgradeSystem::GetArmorBonus(EM, DirectHitID);
-                    Damage = std::max(1, Damage - FinalArmor);
-                    TargetUnit->HitPoints -= Damage;
-                }
-
-                if (TargetUnit->HitPoints <= 0)
-                {
-                    TargetUnit->HitPoints = 0;
-                    RecordUnitDeath(EM, DirectHitID, Bullet->SourceEntityID, true);
-                    EM.DestroyEntity(DirectHitID);
-                    Logger::Info("BulletSystem",
-                        "Entity " + std::to_string(DirectHitID) + " destroyed by bullet " +
-                        std::to_string(BulletID));
-                }
+                const CombatComponent BulletCombat =
+                    BulletDamageCombat(Bullet->DamageKind, Bullet->IsRangedAttack);
+                CombatSystem::ApplyDamage(
+                    EM, DirectHitID, BulletCombat, Bullet->SourceEntityID,
+                    Bullet->BaseDamage + Bullet->DamageUpgradeBonus);
             }
         }
     }
 
-    if (Bullet->Splash != SplashType::None && Bullet->SplashRadius > 0.0f)
+    if (HasSplash)
     {
         float Radius = Bullet->SplashRadius * 32.0f;
         ApplySplashDamage(EM, ImpactPos, Radius,
@@ -388,36 +331,9 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         float Falloff = SplashFalloff(Dist, Radius);
         if (Falloff <= 0.0f) continue;
 
-        float SizeMod = GetSizeDamageModifier(DamageKind, UU->SizeType);
-        int Damage = std::max(1, (int)((float)(BaseDamage + DamageUpgradeBonus) * SizeMod * Falloff * 0.5f));
-
-        if (UU->ShieldPoints > 0)
-        {
-            if (Damage <= UU->ShieldPoints)
-            {
-                UU->ShieldPoints -= Damage;
-                Damage = 0;
-            }
-            else
-            {
-                Damage -= UU->ShieldPoints;
-                UU->ShieldPoints = 0;
-            }
-        }
-
-        if (Damage > 0)
-        {
-            int FinalArmor = UU->Armor + UpgradeSystem::GetArmorBonus(EM, UID);
-            Damage = std::max(1, Damage - FinalArmor);
-            UU->HitPoints -= Damage;
-        }
-
-        if (UU->HitPoints <= 0)
-        {
-            UU->HitPoints = 0;
-            RecordUnitDeath(EM, UID, SourceEntityID, true);
-            EM.DestroyEntity(UID);
-        }
+        int Damage = std::max(1, (int)((float)(BaseDamage + DamageUpgradeBonus) * Falloff));
+        const CombatComponent SplashCombat = BulletDamageCombat(DamageKind, IsRangedAttack);
+        CombatSystem::ApplyDamage(EM, UID, SplashCombat, SourceEntityID, Damage);
     }
 }
 

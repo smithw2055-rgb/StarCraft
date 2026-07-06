@@ -222,16 +222,7 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     AUnit.SightRange = ArchonDef.SightRange;
     AUnit.SizeType = ArchonDef.SizeType;
 
-    ACombat.GroundDamage = ArchonDef.GroundDamage;
-    ACombat.AirDamage = ArchonDef.AirDamage;
-    ACombat.GroundDmgType = ArchonDef.GroundDmgType;
-    ACombat.AirDmgType = ArchonDef.AirDmgType;
-    ACombat.AttackRange = ArchonDef.AttackRange;
-    ACombat.AttackCooldown = ArchonDef.AttackCooldown;
-    ACombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
-    ACombat.CanTargetGround = ArchonDef.GroundDamage > 0;
-    ACombat.CanTargetAir = ArchonDef.AirDamage > 0;
-    ACombat.IsRanged = ArchonDef.AttackRange > 1.5f;
+    Races::ApplyCombatDefinition(ACombat, ArchonDef, false);
 
     ACmd.CurrentCommand = CommandType::Stop;
     APath.NodeTolerance = 8.0f;

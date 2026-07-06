@@ -39,6 +39,7 @@ enum class ResourceType : uint8_t
 enum class HarvestState : uint8_t
 {
     Idle,
+    QueuedAtResource,
     MovingToResource,
     Mining,
     MovingToDepot,
@@ -154,6 +155,7 @@ struct Order
     OrderType Type = OrderType::None;
     Core::Math::Vec2 TargetPosition;
     int TargetEntityID = -1;
+    int PathingIgnoreEntityID = -1;
     int AbilityID = -1;
 
     bool IsValid() const { return Type != OrderType::None; }
@@ -405,6 +407,9 @@ struct CombatComponent
     int PendingAttackUpgradeBonus = 0;
     float PendingAttackRangePixels = 0.0f;
     float PendingAttackElapsed = 0.0f;
+    int AutoTargetEntityID = -1;
+    int LastDamagerEntityID = -1;
+    float AutoTargetLockSeconds = 0.0f;
 };
 
 struct BuildingComponent
@@ -437,6 +442,8 @@ struct ResourceComponent
     int Amount = 0;
     int MaxAmount = 0;
     bool IsDepleted = false;
+    int ActiveGathererEntityID = -1;
+    std::vector<int> QueuedGatherers;
 };
 
 struct HarvestComponent
@@ -448,7 +455,9 @@ struct HarvestComponent
     float MineTimer = 0.0f;
     float MineInterval = 1.0f;
     int TargetResourceID = -1;
+    int DesiredResourceID = -1;
     int ReturnBuildingID = -1;
+    bool QueuedAtResource = false;
 };
 
 struct PathfindingComponent
@@ -456,6 +465,12 @@ struct PathfindingComponent
     std::vector<Core::Math::Vec2> Path;
     int PathIndex = 0;
     float NodeTolerance = 4.0f;
+    Core::Math::Vec2 RequestedDestination;
+    int RequestedTargetEntityID = -1;
+    int RequestedIgnoreEntityID = -1;
+    int RepathFailCount = 0;
+    float LastRepathTime = 0.0f;
+    int BlockedByEntityID = -1;
 
     // Movement state (OpenBW alignment)
     Core::Math::Vec2 CurrentVelocity;
@@ -482,6 +497,9 @@ struct PathfindingComponent
     float StallTimer = 0.0f;
     float LastWaypointDistance = 0.0f;
     bool HasLastWaypointDistance = false;
+    float DestinationStallTimer = 0.0f;
+    float LastDestinationDistance = 0.0f;
+    bool HasLastDestinationDistance = false;
 };
 
 struct UnitCollisionBounds

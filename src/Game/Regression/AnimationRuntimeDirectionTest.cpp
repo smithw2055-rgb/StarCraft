@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace Core::Audio
 {
@@ -230,6 +231,25 @@ int main()
     Require(FrozenAttackRender->FrameIndex == FrozenIdleRender->FrameIndex &&
                 FrozenAttackRender->Flipped == FrozenIdleRender->Flipped,
             "frozen pending attack uses idle direction instead of attack target direction");
+
+    const int ScriptedChildEntity = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ScriptedChildEntity)
+        .Position = {160.0f, 160.0f};
+    auto& Tree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(ScriptedChildEntity);
+    Tree.Nodes.emplace_back();
+    auto& ChildNode = Tree.Nodes.back();
+    ChildNode.ImageID = 500;
+    ChildNode.Visible = true;
+    ChildNode.AnimID = Game::IScriptAnims::Anim_Init;
+    static const std::vector<int> EndProgram = {
+        Game::IScriptOpcodes::Opc_PlayFram, 0,
+        Game::IScriptOpcodes::Opc_End
+    };
+    ChildNode.VM.LoadScript(Game::IScriptAnims::Anim_Init, &EndProgram, 0);
+    Anim.Update(1.0f / 24.0f);
+    Require(!Tree.Nodes.empty() && !Tree.Nodes.front().Visible,
+            "image tree child is hidden when its iscript reaches End");
 
     std::printf("AnimationRuntimeDirectionTest passed\n");
     return 0;

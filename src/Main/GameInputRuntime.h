@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <utility>
 
 #include "Client/ClientRuntime.h"
 #include "Core/Platform/Platform.h"
+#include "Core/Utils/InputDebug.h"
 #include "Main/GameClientViewRuntime.h"
 #include "Main/GameCommandDispatchRuntime.h"
 #include "Main/GameEntitySpawnRuntime.h"
@@ -16,6 +18,33 @@
 
 namespace Game::Client::GameLoop
 {
+
+inline void LogGameplayInputSnapshot(const char* Stage,
+                                     int ViewportWidth,
+                                     int ViewportHeight,
+                                     int MouseX,
+                                     int MouseY,
+                                     bool InGui,
+                                     bool HasPendingTarget,
+                                     bool LeftPressed,
+                                     bool RightReleased)
+{
+    if (!Core::Utils::InputDebugEnabled())
+        return;
+    if (!LeftPressed && !RightReleased)
+        return;
+
+    std::ostringstream Stream;
+    Stream << "stage=" << Stage
+           << " mouse=" << MouseX << "," << MouseY
+           << " viewport=" << ViewportWidth << "x" << ViewportHeight
+           << " framebuffer=" << Core::Platform::GetFramebufferWidth() << "x" << Core::Platform::GetFramebufferHeight()
+           << " inGui=" << (InGui ? 1 : 0)
+           << " pendingTarget=" << (HasPendingTarget ? 1 : 0)
+           << " leftPressed=" << (LeftPressed ? 1 : 0)
+           << " rightReleased=" << (RightReleased ? 1 : 0);
+    Core::Utils::InputDebugLog("InputGameplay", Stream.str());
+}
 
 inline bool UpdateClientInputGates(
     GuiRuntime& Gui,
@@ -49,7 +78,9 @@ inline bool UpdateClientInputGates(
     }
 
     const ScreenRectI HudMenuRect = ResolveHudMenuButtonRect(ViewportWidth, ViewportHeight);
-    if (Core::Platform::IsMouseButtonPressed(0) && HudMenuRect.Contains(MouseX, MouseY))
+    if (Core::Platform::IsMouseInGameContentArea() &&
+        Core::Platform::IsMouseButtonPressed(0) &&
+        HudMenuRect.Contains(MouseX, MouseY))
     {
         Menu.OpenAndPause();
         Hud.CancelPendingTarget();
@@ -69,6 +100,8 @@ inline void UpdateClientSelectionFromUiState(
     bool InGui)
 {
     bool BlockSelection = false;
+    if (!Core::Platform::IsMouseInGameContentArea())
+        BlockSelection = true;
     if (Core::Platform::IsMouseButtonPressed(0))
     {
         if (InGui)
@@ -252,7 +285,9 @@ inline void HandleClientWorldClickCommands(
     bool InGui,
     RecordGameActionT&& RecordGameAction)
 {
-    if (Core::Platform::IsMouseButtonPressed(0) && !InGui)
+    const bool RightReleased = Core::Platform::IsMouseButtonReleased(1);
+    const bool InGameContent = Core::Platform::IsMouseInGameContentArea();
+    if (Core::Platform::IsMouseButtonPressed(0) && !InGui && InGameContent)
     {
         bool ConsumedLeftClick = false;
         float WX, WY;
@@ -267,6 +302,13 @@ inline void HandleClientWorldClickCommands(
                 WX,
                 WY))
         {
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=minimap mouse=" << MouseX << "," << MouseY
+                       << " world=" << WX << "," << WY;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             Client.CenterCamera(WX, WY);
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
@@ -275,6 +317,13 @@ inline void HandleClientWorldClickCommands(
         const int CmdIdx = Hud.CheckCommandPanelClick(MouseX, MouseY, ViewportWidth, ViewportHeight);
         if (CmdIdx >= 0 && Session.IsEcsInitialized())
         {
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=command_panel mouse=" << MouseX << "," << MouseY
+                       << " cmd=" << CmdIdx;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
             ExecuteHudCommandIndex(EM, EcsIds, Hud, CmdIdx);
@@ -283,6 +332,12 @@ inline void HandleClientWorldClickCommands(
         }
         else if (Hud.IsPointInHudBand(MouseX, MouseY, ViewportWidth, ViewportHeight))
         {
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=hud_band mouse=" << MouseX << "," << MouseY;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
         }
@@ -290,6 +345,13 @@ inline void HandleClientWorldClickCommands(
         if (!ConsumedLeftClick && Session.IsEcsInitialized() && Hud.HasPendingTarget())
         {
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=pending_target mouse=" << MouseX << "," << MouseY
+                       << " world=" << Target.X << "," << Target.Y;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
             bool TargetCommandAccepted = false;
@@ -311,13 +373,20 @@ inline void HandleClientWorldClickCommands(
         else if (!ConsumedLeftClick && Session.IsEcsInitialized() && Core::Platform::IsKeyDown(65))
         {
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=attack_move mouse=" << MouseX << "," << MouseY
+                       << " world=" << Target.X << "," << Target.Y;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
             ExecuteAttackMoveCommand(EM, EcsIds, Target);
         }
     }
 
-    if (Session.IsEcsInitialized() && Core::Platform::IsMouseButtonReleased(1) && !InGui)
+    if (Session.IsEcsInitialized() && RightReleased && !InGui && InGameContent)
     {
         const bool InHudBand = Hud.IsPointInHudBand(MouseX, MouseY, ViewportWidth, ViewportHeight);
         float MinimapWX = 0.0f;
@@ -337,6 +406,13 @@ inline void HandleClientWorldClickCommands(
                      MinimapWX,
                      MinimapWY))
         {
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=right branch=minimap mouse=" << MouseX << "," << MouseY
+                       << " world=" << MinimapWX << "," << MinimapWY;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             ExecuteSmartClickAtWorldPosition(
                 Client,
                 Session,
@@ -350,6 +426,13 @@ inline void HandleClientWorldClickCommands(
         else
         {
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=right branch=world mouse=" << MouseX << "," << MouseY
+                       << " world=" << Target.X << "," << Target.Y;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
             ExecuteSmartClickAtWorldPosition(
                 Client,
                 Session,
@@ -410,6 +493,8 @@ inline bool UpdateActiveGameplayInputRuntime(
     const int ViewportHeight = Core::Platform::GetWindowHeight();
     const int MouseX = (int)Core::Platform::GetMouseX();
     const int MouseY = (int)Core::Platform::GetMouseY();
+    const bool LeftPressed = Core::Platform::IsMouseButtonPressed(0);
+    const bool RightReleased = Core::Platform::IsMouseButtonReleased(1);
 
     const bool InGui = UpdateClientInputGates(
         Gui,
@@ -419,6 +504,7 @@ inline bool UpdateActiveGameplayInputRuntime(
         ViewportHeight,
         MouseX,
         MouseY);
+    LogGameplayInputSnapshot("pre_menu", ViewportWidth, ViewportHeight, MouseX, MouseY, InGui, Hud.HasPendingTarget(), LeftPressed, RightReleased);
 
     if (HandleGameMenuPauseUpdateGate(
             Menu,

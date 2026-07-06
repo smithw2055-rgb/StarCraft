@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -63,11 +64,14 @@ namespace
         return {};
 #endif
     }
+
 }
 
 bool ResourceCache::Initialize(const std::string& GameInstallPath)
 {
-    Core::Utils::Logger::Info("ResourceCache", "Initializing with: " + GameInstallPath);
+    Core::Utils::Logger::Info(
+        "ResourceCache",
+        "Initializing this=" + std::to_string((uintptr_t)this) + " with: " + GameInstallPath);
 
     mIsInitialized = false;
     mSources.IsCasc = false;
@@ -92,6 +96,7 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
 
     for (const auto& AssetsPath : AssetCandidates)
     {
+        Core::Utils::Logger::Info("ResourceCache", "Probe assets candidate: " + AssetsPath);
         std::filesystem::path CandidatePath(AssetsPath);
         if (!std::filesystem::exists(CandidatePath) || !std::filesystem::is_directory(CandidatePath))
             continue;

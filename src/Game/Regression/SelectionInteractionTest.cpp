@@ -38,6 +38,7 @@ float GetMouseX() { return -1.0f; }
 float GetMouseY() { return -1.0f; }
 bool IsWindowFocused() { return true; }
 bool IsMouseInClientArea() { return true; }
+bool IsMouseInGameContentArea() { return true; }
 double GetAbsoluteTime() { return 0.0; }
 
 } // namespace Core::Platform

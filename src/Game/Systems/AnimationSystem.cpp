@@ -33,6 +33,35 @@ namespace
         return (int)std::lround(Normalized * 256.0f / 6.28318530718f) & 0xff;
     }
 
+    Core::Math::Vec2 QuantizeDirectionToEightWay(Core::Math::Vec2 Direction)
+    {
+        if (Direction.Length() <= 0.001f)
+            return {1.0f, 0.0f};
+        static const Core::Math::Vec2 Directions[8] = {
+            {1.0f, 0.0f},
+            {0.7071f, 0.7071f},
+            {0.0f, 1.0f},
+            {-0.7071f, 0.7071f},
+            {-1.0f, 0.0f},
+            {-0.7071f, -0.7071f},
+            {0.0f, -1.0f},
+            {0.7071f, -0.7071f}
+        };
+        const Core::Math::Vec2 Normalized = Direction.Normalized();
+        float BestDot = -2.0f;
+        Core::Math::Vec2 Best = Directions[0];
+        for (const auto& Candidate : Directions)
+        {
+            const float Dot = Normalized.Dot(Candidate);
+            if (Dot > BestDot)
+            {
+                BestDot = Dot;
+                Best = Candidate;
+            }
+        }
+        return Best;
+    }
+
     Core::Math::Vec2 ResolveMovementDirection(const TransformComponent& Trans,
                                               const PathfindingComponent* Path)
     {
@@ -92,7 +121,8 @@ namespace
                               const CombatComponent* Combat,
                               Game::IScriptVM::SpriteContext& Ctx)
     {
-        const auto Direction = ResolveAttackDirection(EM, Trans, Combat);
+        const auto Direction = QuantizeDirectionToEightWay(
+            ResolveAttackDirection(EM, Trans, Combat));
         Ctx.CurrentDirection = DirectionToIScriptDirection(Direction);
         Ctx.FlDirect = Ctx.CurrentDirection;
 
@@ -124,8 +154,8 @@ namespace
                                                const CombatComponent* Combat)
     {
         if (DesiredState == AnimState::Attacking || (Combat && Combat->PendingAttackFrame))
-            return ResolveAttackDirection(EM, Trans, Combat);
-        return ResolveMovementDirection(Trans, Path);
+            return QuantizeDirectionToEightWay(ResolveAttackDirection(EM, Trans, Combat));
+        return QuantizeDirectionToEightWay(ResolveMovementDirection(Trans, Path));
     }
 }
 
@@ -219,6 +249,7 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
         auto* Tree = EM.GetComponent<ImageTreeComponent>(ID);
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
+        auto* Combat = EM.GetComponent<CombatComponent>(ID);
         if (!Tree)
             continue;
         const size_t InitialCount = Tree->Nodes.size();
@@ -260,7 +291,13 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
                 {
                     const Core::Math::Vec2 NodeOffset = Node.Offset;
                     const float NodeLifetime = Node.LifetimeRemaining;
-                    ConsumeImageNodeEvents(ID, (int)I, NodeOffset, NodeLifetime, *Trans, Player);
+                    ConsumeImageNodeEvents(
+                        ID, (int)I, NodeOffset, NodeLifetime, *Trans, Player, Combat);
+                    if (!Node.VM.IsRunning())
+                    {
+                        Node.Visible = false;
+                        MarkImageSubtreeHidden(*Tree, (int)I);
+                    }
                 }
             }
         }
@@ -405,7 +442,8 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                                              Core::Math::Vec2 NodeOffset,
                                              float NodeLifetime,
                                              const TransformComponent& Trans,
-                                             const PlayerComponent* Player)
+                                             const PlayerComponent* Player,
+                                             CombatComponent* Combat)
 {
     auto* Tree = mSystemMgr.GetEntityManager().GetComponent<ImageTreeComponent>(EntityID);
     if (!Tree || NodeIndex < 0 || NodeIndex >= (int)Tree->Nodes.size())
@@ -438,6 +476,16 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                 AddImageTreeNode(EntityID, NodeIndex, Event.A,
                                  Core::Math::Vec2{(float)Event.B, (float)Event.C},
                                  Event.D != 0, false, NodeLifetime, true);
+                break;
+            case Game::IScriptEventType::Attack:
+            case Game::IScriptEventType::AttackMelee:
+            case Game::IScriptEventType::UseWeapon:
+            case Game::IScriptEventType::DoMissileDamage:
+            case Game::IScriptEventType::DoGroundDamage:
+            case Game::IScriptEventType::CastSpell:
+                if (Combat && Combat->PendingAttackFrame && mBulletSystem)
+                    CombatSystem::ResolvePendingAttackFrame(
+                        mSystemMgr.GetEntityManager(), *mBulletSystem, EntityID);
                 break;
             default:
                 break;
@@ -553,6 +601,10 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
 
     const bool IsBuilding = Bldg != nullptr;
     const bool UnderConstruction = Bldg && Bldg->UnderConstruction;
+    const float ConstructionProgress =
+        (Bldg && Bldg->TotalBuildTime > 0.0f)
+            ? std::clamp(Bldg->BuildProgress / Bldg->TotalBuildTime, 0.0f, 1.0f)
+            : 0.0f;
     const bool IsWorking =
         Prod && (Prod->CurrentTrainingUnitDefID >= 0 || !Prod->Queue.empty());
     const bool IsFrozen = IsFrozenByStatus(Status);
@@ -592,6 +644,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         DesiredState,
         IsBuilding,
         UnderConstruction,
+        ConstructionProgress,
         State.WasUnderConstruction || NeedsInitialBuilt,
         IsWorking,
         State.WasWorking,

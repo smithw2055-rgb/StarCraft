@@ -19,13 +19,35 @@
 
 #include "third_party/sokol/sokol_app.h"
 #include "third_party/sokol/sokol_gfx.h"
+#include "Core/Platform/Platform.h"
+#include "Core/Utils/InputDebug.h"
 
 #if defined(SOKOL_D3D11)
 struct ID3D11DeviceContext;
 #endif
 
+#include <sstream>
+
 namespace Game::Client::UI
 {
+namespace
+{
+float EventMouseToLogical(float Coord, int WindowExtent, int FramebufferExtent, bool Horizontal)
+{
+    if (WindowExtent <= 0 && FramebufferExtent <= 0)
+        return Coord;
+
+    int LogicalExtent = Horizontal ? Core::Platform::GetWindowWidth() : Core::Platform::GetWindowHeight();
+    int PhysicalExtent = Horizontal ? Core::Platform::GetClientWidth() : Core::Platform::GetClientHeight();
+    if (LogicalExtent <= 0)
+        LogicalExtent = WindowExtent;
+    if (PhysicalExtent <= 0)
+        PhysicalExtent = FramebufferExtent > 0 ? FramebufferExtent : WindowExtent;
+    if (LogicalExtent <= 0 || PhysicalExtent <= 0)
+        return Coord;
+    return Coord * (float)LogicalExtent / (float)PhysicalExtent;
+}
+}
 
 float GetGlueDpiScale()
 {
@@ -78,7 +100,9 @@ bool GlueGuiHost::Initialize(const std::string& AssetRoot, int Width, int Height
 
     mView->SetFlags(Aero::RenderFlags_PPAA);
     mView->SetScale(mDpiScale);
-    mView->SetSize(static_cast<uint32_t>(mWidth), static_cast<uint32_t>(mHeight));
+    mView->SetSize(
+        static_cast<uint32_t>(std::lround((float)mWidth * mDpiScale)),
+        static_cast<uint32_t>(std::lround((float)mHeight * mDpiScale)));
 
 #if defined(SOKOL_D3D11)
     auto* D3DContext = static_cast<ID3D11DeviceContext*>(const_cast<void*>(sg_d3d11_device_context()));
@@ -125,7 +149,9 @@ void GlueGuiHost::Resize(int Width, int Height)
     mHeight = std::max(1, Height);
     mDpiScale = GetGlueDpiScale();
     mView->SetScale(mDpiScale);
-    mView->SetSize(static_cast<uint32_t>(mWidth), static_cast<uint32_t>(mHeight));
+    mView->SetSize(
+        static_cast<uint32_t>(std::lround((float)mWidth * mDpiScale)),
+        static_cast<uint32_t>(std::lround((float)mHeight * mDpiScale)));
 }
 
 void GlueGuiHost::Update(double Time)
@@ -158,11 +184,17 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
     if (!mInitialized || !mView || !EventPtr) return false;
 
     const sapp_event* E = static_cast<const sapp_event*>(EventPtr);
-    // Sokol mouse coordinates are already in framebuffer pixels. Aero::IView
-    // converts them back to DIPs using SetScale(), so applying DPI here would
-    // double-scale hit testing on high-DPI displays.
-    int X = static_cast<int>(std::lround(E->mouse_x));
-    int Y = static_cast<int>(std::lround(E->mouse_y));
+    const float LogicalX = EventMouseToLogical(E->mouse_x, E->window_width, E->framebuffer_width, true);
+    const float LogicalY = EventMouseToLogical(E->mouse_y, E->window_height, E->framebuffer_height, false);
+    const float X = LogicalX * mDpiScale;
+    const float Y = LogicalY * mDpiScale;
+    const int ViewX = static_cast<int>(std::lround(X));
+    const int ViewY = static_cast<int>(std::lround(Y));
+    const bool ShouldLog =
+        E->type == SAPP_EVENTTYPE_MOUSE_DOWN ||
+        E->type == SAPP_EVENTTYPE_MOUSE_UP ||
+        (E->type == SAPP_EVENTTYPE_MOUSE_MOVE && Core::Utils::InputDebugShouldLogMove());
+    bool Handled = false;
 
     switch (E->type)
     {
@@ -171,30 +203,29 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
         Aero::MouseButton Btn = Aero::MouseButton_Left;
         if (E->mouse_button == SAPP_MOUSEBUTTON_RIGHT) Btn = Aero::MouseButton_Right;
         else if (E->mouse_button == SAPP_MOUSEBUTTON_MIDDLE) Btn = Aero::MouseButton_Middle;
-        return mView->MouseButtonDown(X, Y, Btn);
+        Handled = mView->MouseButtonDown(ViewX, ViewY, Btn);
+        break;
     }
     case SAPP_EVENTTYPE_MOUSE_UP:
     {
         Aero::MouseButton Btn = Aero::MouseButton_Left;
         if (E->mouse_button == SAPP_MOUSEBUTTON_RIGHT) Btn = Aero::MouseButton_Right;
         else if (E->mouse_button == SAPP_MOUSEBUTTON_MIDDLE) Btn = Aero::MouseButton_Middle;
-        if (mView->MouseButtonUp(X, Y, Btn))
-            return true;
+        if (mView->MouseButtonUp(ViewX, ViewY, Btn))
+            Handled = true;
 
-        bool Handled = false;
-        if (E->mouse_button == SAPP_MOUSEBUTTON_LEFT && mMenuControl)
+        if (!Handled && E->mouse_button == SAPP_MOUSEBUTTON_LEFT && mMenuControl)
         {
-            Handled = mMenuControl->HandleFallbackClick(static_cast<float>(X), static_cast<float>(Y),
+            Handled = mMenuControl->HandleFallbackClick(LogicalX, LogicalY,
                                                         static_cast<float>(mWidth), static_cast<float>(mHeight));
         }
-        if (Handled)
-            return true;
-        return false;
+        break;
     }
     case SAPP_EVENTTYPE_MOUSE_MOVE:
-        return mView->MouseMove(X, Y);
+        Handled = mView->MouseMove(ViewX, ViewY);
+        break;
     case SAPP_EVENTTYPE_MOUSE_SCROLL:
-        return mView->MouseWheel(X, Y, static_cast<int>(std::lround(E->scroll_y)));
+        return mView->MouseWheel(ViewX, ViewY, static_cast<int>(std::lround(E->scroll_y)));
     case SAPP_EVENTTYPE_KEY_DOWN:
         return mView->KeyDown(static_cast<Aero::Key>(E->key_code));
     case SAPP_EVENTTYPE_KEY_UP:
@@ -204,7 +235,25 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
     default:
         break;
     }
-    return false;
+    if (ShouldLog && Core::Utils::InputDebugEnabled())
+    {
+        std::ostringstream Stream;
+        Stream << "type=";
+        switch (E->type)
+        {
+            case SAPP_EVENTTYPE_MOUSE_DOWN: Stream << "mouse_down"; break;
+            case SAPP_EVENTTYPE_MOUSE_UP: Stream << "mouse_up"; break;
+            case SAPP_EVENTTYPE_MOUSE_MOVE: Stream << "mouse_move"; break;
+            default: Stream << "other"; break;
+        }
+        Stream << " raw=" << E->mouse_x << "," << E->mouse_y
+               << " logical=" << LogicalX << "," << LogicalY
+               << " view=" << ViewX << "," << ViewY
+               << " dpi=" << mDpiScale
+               << " handled=" << (Handled ? 1 : 0);
+        Core::Utils::InputDebugLog("InputGlueGuiHost", Stream.str());
+    }
+    return Handled;
 }
 
 } // namespace Game::Client::UI

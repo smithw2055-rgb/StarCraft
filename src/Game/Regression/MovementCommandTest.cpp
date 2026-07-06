@@ -33,6 +33,11 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
         Path->Path.clear();
         Path->Path.push_back(Target);
         Path->PathIndex = 0;
+        Path->RequestedDestination = Target;
+        Path->RequestedTargetEntityID = -1;
+        Path->RequestedIgnoreEntityID = -1;
+        Path->DestinationStallTimer = 0.0f;
+        Path->HasLastDestinationDistance = false;
     }
 }
 
@@ -74,6 +79,9 @@ namespace
         Path.NodeTolerance = 1.0f;
         Path.CollisionRadius = CollisionRadius;
         Path.Path.push_back(Target);
+        Path.RequestedDestination = Target;
+        Path.RequestedTargetEntityID = -1;
+        Path.RequestedIgnoreEntityID = -1;
 
         auto& Cmd = EM.AddComponent<Game::Components::CommandComponent>(UnitID);
         Cmd.CurrentCommand = Game::Components::CommandType::Move;

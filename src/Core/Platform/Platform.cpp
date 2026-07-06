@@ -1,11 +1,20 @@
 #include "Core/Platform/Platform.h"
 #include "Core/Platform/MouseCoordinate.h"
+#include "Core/Utils/InputDebug.h"
 
 #include "third_party/sokol/sokol_app.h"
 
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <sstream>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace
 {
@@ -14,8 +23,11 @@ namespace
 
     int g_windowWidth = 1280;
     int g_windowHeight = 720;
+    int g_framebufferWidth = 1280;
+    int g_framebufferHeight = 720;
     bool g_windowFocused = true;
     bool g_mouseInClientArea = true;
+    bool g_mouseInGameContentArea = false;
 
     bool g_mouseDown[3] = {false, false, false};
     bool g_mousePressed[3] = {false, false, false};
@@ -32,6 +44,13 @@ namespace
     bool g_cursorLocked = false;
     float g_mouseScaleX = 1.0f;
     float g_mouseScaleY = 1.0f;
+    float g_mouseOffsetX = 0.0f;
+    float g_mouseOffsetY = 0.0f;
+    float g_mouseMaxX = 0.0f;
+    float g_mouseMaxY = 0.0f;
+    int g_mouseSourceWidth = 1280;
+    int g_mouseSourceHeight = 720;
+    float g_nativeWindowScale = 1.0f;
 
     static constexpr int kKeyCount = 512;
     uint8_t g_keys[kKeyCount] = {};
@@ -44,19 +63,245 @@ namespace
     double g_currentTime = 0.0;
     float g_deltaTime = 0.016f;
 
-    void UpdateMouseScale(int WindowWidth, int WindowHeight, int FramebufferWidth, int FramebufferHeight)
+    void SyncNativeMouseSource()
+    {
+#if defined(_WIN32)
+        g_mouseSourceWidth = g_framebufferWidth;
+        g_mouseSourceHeight = g_framebufferHeight;
+        g_nativeWindowScale = sapp_dpi_scale();
+
+        if (const void* HwndPtr = sapp_win32_get_hwnd())
+        {
+            const HWND Hwnd = static_cast<HWND>(const_cast<void*>(HwndPtr));
+            RECT Rect = {};
+            if (GetClientRect(Hwnd, &Rect))
+            {
+                const int ClientWidth = std::max(1, (int)(Rect.right - Rect.left));
+                const int ClientHeight = std::max(1, (int)(Rect.bottom - Rect.top));
+                g_mouseSourceWidth = ClientWidth;
+                g_mouseSourceHeight = ClientHeight;
+            }
+
+            using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+            if (HMODULE User32 = GetModuleHandleW(L"user32.dll"))
+            {
+                const auto Fn =
+                    reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(User32, "GetDpiForWindow"));
+                if (Fn)
+                    g_nativeWindowScale = (float)Fn(Hwnd) / 96.0f;
+            }
+        }
+#else
+        g_mouseSourceWidth = g_framebufferWidth;
+        g_mouseSourceHeight = g_framebufferHeight;
+        g_nativeWindowScale = sapp_dpi_scale();
+#endif
+    }
+
+    bool QueryNativeCursorPosition(float& OutX, float& OutY, bool& OutInside)
+    {
+#if defined(_WIN32)
+        if (const void* HwndPtr = sapp_win32_get_hwnd())
+        {
+            const HWND Hwnd = static_cast<HWND>(const_cast<void*>(HwndPtr));
+            POINT Point = {};
+            if (GetCursorPos(&Point) && ScreenToClient(Hwnd, &Point))
+            {
+                RECT Rect = {};
+                if (GetClientRect(Hwnd, &Rect))
+                {
+                    OutX = static_cast<float>(Point.x);
+                    OutY = static_cast<float>(Point.y);
+                    OutInside =
+                        Point.x >= Rect.left && Point.x < Rect.right &&
+                        Point.y >= Rect.top && Point.y < Rect.bottom;
+                    return true;
+                }
+            }
+        }
+#endif
+        (void)OutX;
+        (void)OutY;
+        (void)OutInside;
+        return false;
+    }
+
+    void RefreshWindowMetricsFromNativeClient()
+    {
+#if defined(_WIN32)
+        SyncNativeMouseSource();
+#endif
+    }
+
+    void UpdateMouseScale(int WindowWidth, int WindowHeight, int MouseSourceWidth, int MouseSourceHeight)
     {
         const Core::Platform::MouseScale Scale =
             Core::Platform::ComputeMouseScale(
                 WindowWidth, WindowHeight,
-                FramebufferWidth, FramebufferHeight,
+                MouseSourceWidth, MouseSourceHeight,
                 sapp_dpi_scale());
         g_mouseScaleX = Scale.X;
         g_mouseScaleY = Scale.Y;
+        g_mouseOffsetX = Scale.OffsetX;
+        g_mouseOffsetY = Scale.OffsetY;
+        g_mouseMaxX = Scale.MaxX;
+        g_mouseMaxY = Scale.MaxY;
     }
 
-    float MouseXToFramebuffer(float X) { return Core::Platform::MouseCoordToFramebuffer(X, g_mouseScaleX); }
-    float MouseYToFramebuffer(float Y) { return Core::Platform::MouseCoordToFramebuffer(Y, g_mouseScaleY); }
+    void LogPlatformState(const char* Stage)
+    {
+        if (!Core::Utils::InputDebugEnabled())
+            return;
+
+        std::ostringstream Stream;
+        Stream << "stage=" << Stage
+               << " logical=" << g_windowWidth << "x" << g_windowHeight
+               << " client=" << g_mouseSourceWidth << "x" << g_mouseSourceHeight
+               << " framebuffer=" << g_framebufferWidth << "x" << g_framebufferHeight
+               << " sapp_dpi=" << sapp_dpi_scale()
+               << " native_scale=" << g_nativeWindowScale
+               << " scale=" << g_mouseScaleX << "," << g_mouseScaleY
+               << " offset=" << g_mouseOffsetX << "," << g_mouseOffsetY
+               << " max=" << g_mouseMaxX << "," << g_mouseMaxY;
+        Core::Utils::InputDebugLog("InputPlatformState", Stream.str());
+    }
+
+    void SyncDimensionsFromEvent(const sapp_event& Event)
+    {
+        const int EventWindowWidth = Event.window_width > 0 ? Event.window_width : g_windowWidth;
+        const int EventWindowHeight = Event.window_height > 0 ? Event.window_height : g_windowHeight;
+        const int EventFramebufferWidth = Event.framebuffer_width > 0 ? Event.framebuffer_width : g_framebufferWidth;
+        const int EventFramebufferHeight = Event.framebuffer_height > 0 ? Event.framebuffer_height : g_framebufferHeight;
+
+        if (EventWindowWidth <= 0 || EventWindowHeight <= 0 ||
+            EventFramebufferWidth <= 0 || EventFramebufferHeight <= 0)
+        {
+            return;
+        }
+
+        const int PrevWindowWidth = g_windowWidth;
+        const int PrevWindowHeight = g_windowHeight;
+        const int PrevFramebufferWidth = g_framebufferWidth;
+        const int PrevFramebufferHeight = g_framebufferHeight;
+        g_framebufferWidth = EventFramebufferWidth;
+        g_framebufferHeight = EventFramebufferHeight;
+#if defined(_WIN32)
+        RefreshWindowMetricsFromNativeClient();
+        const float DpiScale =
+            std::max(0.0001f, std::max(g_nativeWindowScale, sapp_dpi_scale()));
+        if (g_mouseSourceWidth > 0 && g_mouseSourceHeight > 0)
+        {
+            g_windowWidth = std::max(1, (int)std::lround((float)g_mouseSourceWidth / DpiScale));
+            g_windowHeight = std::max(1, (int)std::lround((float)g_mouseSourceHeight / DpiScale));
+        }
+        else
+        {
+            g_windowWidth = EventWindowWidth;
+            g_windowHeight = EventWindowHeight;
+        }
+#else
+        g_windowWidth = EventWindowWidth;
+        g_windowHeight = EventWindowHeight;
+        SyncNativeMouseSource();
+#endif
+
+        if (PrevWindowWidth == g_windowWidth &&
+            PrevWindowHeight == g_windowHeight &&
+            PrevFramebufferWidth == g_framebufferWidth &&
+            PrevFramebufferHeight == g_framebufferHeight)
+        {
+            return;
+        }
+
+        UpdateMouseScale(g_windowWidth, g_windowHeight, g_mouseSourceWidth, g_mouseSourceHeight);
+        LogPlatformState("sync_event");
+    }
+
+    const char* EventTypeName(sapp_event_type Type)
+    {
+        switch (Type)
+        {
+            case SAPP_EVENTTYPE_MOUSE_DOWN: return "mouse_down";
+            case SAPP_EVENTTYPE_MOUSE_UP: return "mouse_up";
+            case SAPP_EVENTTYPE_MOUSE_MOVE: return "mouse_move";
+            case SAPP_EVENTTYPE_MOUSE_SCROLL: return "mouse_scroll";
+            case SAPP_EVENTTYPE_RESIZED: return "resized";
+            default: return "other";
+        }
+    }
+
+    void LogResizeEvent(const sapp_event& Event)
+    {
+        if (!Core::Utils::InputDebugEnabled())
+            return;
+
+        std::ostringstream Stream;
+        Stream << "type=resized"
+               << " event_window=" << Event.window_width << "x" << Event.window_height
+               << " event_fb=" << Event.framebuffer_width << "x" << Event.framebuffer_height
+               << " dpi=" << sapp_dpi_scale()
+               << " logical=" << g_windowWidth << "x" << g_windowHeight
+               << " client=" << g_mouseSourceWidth << "x" << g_mouseSourceHeight
+               << " framebuffer=" << g_framebufferWidth << "x" << g_framebufferHeight
+               << " native_scale=" << g_nativeWindowScale
+               << " scale=" << g_mouseScaleX << "," << g_mouseScaleY
+               << " offset=" << g_mouseOffsetX << "," << g_mouseOffsetY
+               << " max=" << g_mouseMaxX << "," << g_mouseMaxY;
+        Core::Utils::InputDebugLog("InputPlatform", Stream.str());
+    }
+
+    void LogMouseEvent(const sapp_event& Event, float RawX, float RawY, float MappedX, float MappedY)
+    {
+        const bool IsMove = Event.type == SAPP_EVENTTYPE_MOUSE_MOVE;
+        if (!Core::Utils::InputDebugEnabled())
+            return;
+        if (IsMove && !Core::Utils::InputDebugShouldLogMove())
+            return;
+
+        std::ostringstream Stream;
+        Stream << "type=" << EventTypeName(Event.type)
+               << " button=" << Event.mouse_button
+               << " raw=" << RawX << "," << RawY
+               << " mapped=" << MappedX << "," << MappedY
+               << " inside_client=" << (g_mouseInClientArea ? 1 : 0)
+               << " inside_content=" << (g_mouseInGameContentArea ? 1 : 0)
+               << " delta=" << Event.mouse_dx << "," << Event.mouse_dy
+               << " logical=" << g_windowWidth << "x" << g_windowHeight
+               << " client_size=" << g_mouseSourceWidth << "x" << g_mouseSourceHeight
+               << " framebuffer=" << g_framebufferWidth << "x" << g_framebufferHeight
+               << " native_scale=" << g_nativeWindowScale
+               << " scale=" << g_mouseScaleX << "," << g_mouseScaleY;
+        Core::Utils::InputDebugLog("InputPlatform", Stream.str());
+    }
+
+    void UpdateMousePosition(float RawX, float RawY)
+    {
+        float NativeX = RawX;
+        float NativeY = RawY;
+        bool NativeInside = g_mouseInClientArea;
+        if (QueryNativeCursorPosition(NativeX, NativeY, NativeInside))
+        {
+            const auto MappedX = Core::Platform::MouseCoordToFramebufferChecked(
+                NativeX, g_mouseScaleX, g_mouseOffsetX, g_mouseMaxX);
+            const auto MappedY = Core::Platform::MouseCoordToFramebufferChecked(
+                NativeY, g_mouseScaleY, g_mouseOffsetY, g_mouseMaxY);
+            g_mouseX = MappedX.Value;
+            g_mouseY = MappedY.Value;
+            g_mouseInClientArea = NativeInside;
+            g_mouseInGameContentArea =
+                NativeInside && MappedX.InsideContent && MappedY.InsideContent;
+            return;
+        }
+
+        const auto MappedX = Core::Platform::MouseCoordToFramebufferChecked(
+            RawX, g_mouseScaleX, g_mouseOffsetX, g_mouseMaxX);
+        const auto MappedY = Core::Platform::MouseCoordToFramebufferChecked(
+            RawY, g_mouseScaleY, g_mouseOffsetY, g_mouseMaxY);
+        g_mouseX = MappedX.Value;
+        g_mouseY = MappedY.Value;
+        g_mouseInGameContentArea =
+            g_mouseInClientArea && MappedX.InsideContent && MappedY.InsideContent;
+    }
 }
 
 namespace Core::Platform
@@ -65,31 +310,21 @@ namespace Core::Platform
     {
         const sapp_event* Event = static_cast<const sapp_event*>(EventPtr);
         if (!Event) return;
+        SyncDimensionsFromEvent(*Event);
         switch (Event->type)
         {
             case SAPP_EVENTTYPE_QUIT_REQUESTED:
                 g_quitRequested = true;
                 break;
             case SAPP_EVENTTYPE_RESIZED:
-                if (Event->window_width > 0 && Event->window_height > 0)
-                {
-                    g_windowWidth = Event->framebuffer_width > 0 ? Event->framebuffer_width : Event->window_width;
-                    g_windowHeight = Event->framebuffer_height > 0 ? Event->framebuffer_height : Event->window_height;
-                    UpdateMouseScale(Event->window_width, Event->window_height,
-                                     Event->framebuffer_width, Event->framebuffer_height);
-                }
-                else
-                {
-                    g_windowWidth = std::max(1, Event->framebuffer_width);
-                    g_windowHeight = std::max(1, Event->framebuffer_height);
-                    UpdateMouseScale(g_windowWidth, g_windowHeight, g_windowWidth, g_windowHeight);
-                }
+                LogResizeEvent(*Event);
                 break;
             case SAPP_EVENTTYPE_FOCUSED:
                 g_windowFocused = true;
                 break;
             case SAPP_EVENTTYPE_UNFOCUSED:
                 g_windowFocused = false;
+                g_mouseInGameContentArea = false;
                 std::memset(g_mouseDown, 0, sizeof(g_mouseDown));
                 std::memset(g_mousePressedPending, 0, sizeof(g_mousePressedPending));
                 std::memset(g_mouseReleasedPending, 0, sizeof(g_mouseReleasedPending));
@@ -99,6 +334,7 @@ namespace Core::Platform
                 break;
             case SAPP_EVENTTYPE_MOUSE_LEAVE:
                 g_mouseInClientArea = false;
+                g_mouseInGameContentArea = false;
                 std::memset(g_mouseDown, 0, sizeof(g_mouseDown));
                 std::memset(g_mousePressedPending, 0, sizeof(g_mousePressedPending));
                 std::memset(g_mouseReleasedPending, 0, sizeof(g_mouseReleasedPending));
@@ -109,8 +345,8 @@ namespace Core::Platform
                     g_mouseDown[Event->mouse_button] = true;
                     g_mousePressedPending[Event->mouse_button] = true;
                 }
-                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
-                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
+                UpdateMousePosition(Event->mouse_x, Event->mouse_y);
+                LogMouseEvent(*Event, Event->mouse_x, Event->mouse_y, g_mouseX, g_mouseY);
                 break;
             case SAPP_EVENTTYPE_MOUSE_UP:
                 if (Event->mouse_button >= 0 && Event->mouse_button < 3)
@@ -118,14 +354,14 @@ namespace Core::Platform
                     g_mouseDown[Event->mouse_button] = false;
                     g_mouseReleasedPending[Event->mouse_button] = true;
                 }
-                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
-                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
+                UpdateMousePosition(Event->mouse_x, Event->mouse_y);
+                LogMouseEvent(*Event, Event->mouse_x, Event->mouse_y, g_mouseX, g_mouseY);
                 break;
             case SAPP_EVENTTYPE_MOUSE_MOVE:
-                g_mouseX = MouseXToFramebuffer(Event->mouse_x);
-                g_mouseY = MouseYToFramebuffer(Event->mouse_y);
-                g_mouseDX += Event->mouse_dx * g_mouseScaleX;
-                g_mouseDY += Event->mouse_dy * g_mouseScaleY;
+                UpdateMousePosition(Event->mouse_x, Event->mouse_y);
+                g_mouseDX += Core::Platform::MouseDeltaToFramebuffer(Event->mouse_dx, g_mouseScaleX);
+                g_mouseDY += Core::Platform::MouseDeltaToFramebuffer(Event->mouse_dy, g_mouseScaleY);
+                LogMouseEvent(*Event, Event->mouse_x, Event->mouse_y, g_mouseX, g_mouseY);
                 break;
             case SAPP_EVENTTYPE_MOUSE_SCROLL:
                 g_mouseScroll += Event->scroll_y;
@@ -169,9 +405,23 @@ namespace Core::Platform
         g_mouseScroll = 0.0f;
         g_windowFocused = true;
         g_mouseInClientArea = true;
-        g_windowWidth = std::max(1, sapp_width());
-        g_windowHeight = std::max(1, sapp_height());
-        UpdateMouseScale(g_windowWidth, g_windowHeight, g_windowWidth, g_windowHeight);
+        g_mouseInGameContentArea = false;
+        g_framebufferWidth = std::max(1, sapp_width());
+        g_framebufferHeight = std::max(1, sapp_height());
+#if defined(_WIN32)
+        RefreshWindowMetricsFromNativeClient();
+        const float DpiScale =
+            std::max(0.0001f, std::max(g_nativeWindowScale, sapp_dpi_scale()));
+        g_windowWidth = std::max(1, (int)std::lround((float)g_mouseSourceWidth / DpiScale));
+        g_windowHeight = std::max(1, (int)std::lround((float)g_mouseSourceHeight / DpiScale));
+#else
+        const float DpiScale = sapp_dpi_scale();
+        g_windowWidth = std::max(1, (int)std::lround((float)g_framebufferWidth / std::max(0.0001f, DpiScale)));
+        g_windowHeight = std::max(1, (int)std::lround((float)g_framebufferHeight / std::max(0.0001f, DpiScale)));
+        SyncNativeMouseSource();
+#endif
+        UpdateMouseScale(g_windowWidth, g_windowHeight, g_mouseSourceWidth, g_mouseSourceHeight);
+        LogPlatformState("initialize");
         g_lastFrameTime = 0.0;
         g_initialized = true;
         return true;
@@ -204,6 +454,22 @@ namespace Core::Platform
             g_mouseReleasedPending[i] = false;
         }
 
+        float NativeX = 0.0f;
+        float NativeY = 0.0f;
+        bool NativeInside = false;
+        if (QueryNativeCursorPosition(NativeX, NativeY, NativeInside))
+        {
+            const auto MappedX = Core::Platform::MouseCoordToFramebufferChecked(
+                NativeX, g_mouseScaleX, g_mouseOffsetX, g_mouseMaxX);
+            const auto MappedY = Core::Platform::MouseCoordToFramebufferChecked(
+                NativeY, g_mouseScaleY, g_mouseOffsetY, g_mouseMaxY);
+            g_mouseX = MappedX.Value;
+            g_mouseY = MappedY.Value;
+            g_mouseInClientArea = NativeInside;
+            g_mouseInGameContentArea =
+                NativeInside && MappedX.InsideContent && MappedY.InsideContent;
+        }
+
         // Frame timing
         // the platform backend gives us sapp_frame_duration() from main; we set g_deltaTime explicitly
         // from frame_cb before calling ProcessInput. Otherwise default 16ms.
@@ -215,6 +481,10 @@ namespace Core::Platform
 
     int GetWindowWidth() { return g_windowWidth; }
     int GetWindowHeight() { return g_windowHeight; }
+    int GetClientWidth() { return g_mouseSourceWidth; }
+    int GetClientHeight() { return g_mouseSourceHeight; }
+    int GetFramebufferWidth() { return g_framebufferWidth; }
+    int GetFramebufferHeight() { return g_framebufferHeight; }
     float GetAspect()
     {
         return g_windowHeight > 0
@@ -223,6 +493,7 @@ namespace Core::Platform
     }
     bool IsWindowFocused() { return g_windowFocused; }
     bool IsMouseInClientArea() { return g_mouseInClientArea; }
+    bool IsMouseInGameContentArea() { return g_mouseInGameContentArea; }
 
     bool IsMouseButtonDown(int Button)
     {

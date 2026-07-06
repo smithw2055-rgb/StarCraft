@@ -117,16 +117,16 @@ static void InitDefs()
 
     SetTerranMeta(0, 0x07, 0);
     SetTerranMeta(1, 0, 1);
-    SetTerranMeta(2, 20, 2);
-    SetTerranMeta(3, 21, 3);
+    SetTerranMeta(2, 32, 2);
+    SetTerranMeta(3, 34, 3);
     SetTerranMeta(4, 1, 4);
     SetTerranMeta(5, 2, 5);
     SetTerranMeta(6, 3, 6);
     SetTerranMeta(7, 5, 7);
-    SetTerranMeta(8, 10, 8);
-    SetTerranMeta(9, 12, 9);
-    SetTerranMeta(10, 11, 10);
-    SetTerranMeta(11, 13, 11);
+    SetTerranMeta(8, 8, 8);
+    SetTerranMeta(9, 11, 9);
+    SetTerranMeta(10, 9, 10);
+    SetTerranMeta(11, 12, 11);
     SetTerranMeta(12, 58, 12);
     SetTerranMeta(CommandCenterID, 0x6A, 13);
     SetTerranMeta(ComsatStationID, 0x6B, 14, true, CommandCenterID);
@@ -146,17 +146,30 @@ static void InitDefs()
     SetTerranMeta(ArmoryID, 0x7B, 28);
     SetTerranMeta(BunkerID, 0x7D, 29);
     SetTerranMeta(MissileTurretID, 0x7C, 30);
-auto& Z = ZergDefs;
+
+    auto ApplyDefaultWeaponMetadata = [](std::vector<UnitDef>& Defs)
+    {
+        for (auto& Def : Defs)
+        {
+            if (Def.GroundDamage <= 0 && Def.AirDamage <= 0)
+                continue;
+            Def.WeaponBeh = Def.AttackRange > 1.5f
+                ? Components::WeaponBehavior::FlyDirect
+                : Components::WeaponBehavior::Melee;
+        }
+    };
+
+    auto& Z = ZergDefs;
     int LarvaID = (int)Z.size();
     Z.push_back({"Larva",            Race::Zerg, UnitSize::Small,  20,  0,  0, 0,  0,  0,   0,  1,   0,  0,  0, 0,  0,   0,   false});
     int ZDroneID = (int)Z.size();
     Z.push_back({"Drone",            Race::Zerg, UnitSize::Small,  40,  0,  0, 0,  1,  50,  0,  17,  5,  0,  0, 1,  2.9f, 8,  false});
     int ZOverlordID = (int)Z.size();
-    Z.push_back({"Overlord",         Race::Zerg, UnitSize::Large, 200,  0,  0, 0,  0,  100, 0,  25,  0,  0,  0, 0,  0.7f, 10, false});
+    Z.push_back({"Overlord",         Race::Zerg, UnitSize::Large, 200,  0,  0, 0,  0,  100, 0,  25,  0,  0,  0, 0,  0.7f, 9,  false});
     int ZZerglingID = (int)Z.size();
     Z.push_back({"Zergling",         Race::Zerg, UnitSize::Small,  35,  0,  0, 0,  0,  50,  0,  24,  5,  0,  1, 1,  3.4f, 7,  false});
     int ZHydraliskID = (int)Z.size();
-    Z.push_back({"Hydralisk",        Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  1,  75,  25, 24,  10, 0,  4, 1,  2.5f, 7,  false});
+    Z.push_back({"Hydralisk",        Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  1,  75,  25, 24,  10, 0,  4, 1,  2.5f, 6,  false});
     int ZMutaliskID = (int)Z.size();
     Z.push_back({"Mutalisk",         Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  9,  0,  3, 1,  3.5f, 8,  false});
     int ZScourgeID = (int)Z.size();
@@ -261,7 +274,7 @@ auto& Z = ZergDefs;
     int PShuttleID = (int)P.size();
     P.push_back({"Shuttle",    Race::Protoss, UnitSize::Medium, 60, 60, 0, 0,  2, 100,  0,  30,  0,  0,  0, 0,  3.0f, 8,  false});
     int PScoutID = (int)P.size();
-    P.push_back({"Scout",      Race::Protoss, UnitSize::Medium,100, 80, 0, 0,  3, 275, 125,40,  8,   0,  4, 1,  3.5f, 9,  false});
+    P.push_back({"Scout",      Race::Protoss, UnitSize::Medium,100, 80, 0, 0,  3, 275, 125,40,  8,   0,  4, 1,  3.5f, 8,  false});
     int PCorsairID = (int)P.size();
     P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium, 80, 80, 0, 1,  2, 150, 100,30,  5,   0,  3, 1,  3.5f, 9,  false});
     int PCarrierID = (int)P.size();
@@ -269,7 +282,7 @@ auto& Z = ZergDefs;
     int PArbiterID = (int)P.size();
     P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 200, 150,50,  10,  0,  5, 1,  2.5f, 10, false});
     int PObserverID = (int)P.size();
-    P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  20, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 11, false});
+    P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  20, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 9,  false});
 
     // Protoss buildings
     int PNexusID = (int)P.size();
@@ -407,6 +420,7 @@ auto& Z = ZergDefs;
     P[PObservatoryID].ChkUnitID = 159;
 
     // ---- Hero & Special Units (data-driven alignment with openbw-ref) ----
+    const int TerranHeroBase = (int)T.size();
     T.push_back({"JimRaynorMarine",    Race::Terran, UnitSize::Small, 100,  0,  0, 3,  1,  0,   0,  24, 12,  0, 5, 1, 2.6f, 7,  false});
     T.push_back({"JimRaynorVulture",   Race::Terran, UnitSize::Medium,300,  0,  0, 1,  2,  0,   0,  30, 30,  0, 5, 1, 3.2f, 8,  false});
     T.push_back({"SarahKerrigan",      Race::Terran, UnitSize::Small, 250,  0,50, 1,  1,  0,   0,  30, 30,  0, 6, 1, 2.6f, 9,  false});
@@ -415,12 +429,26 @@ auto& Z = ZergDefs;
     T.push_back({"ArcturusMengsk",     Race::Terran, UnitSize::Large, 500,  0,200, 3,  6,  0,   0,  90, 50, 50, 6, 1, 2.2f, 11, false});
     T.push_back({"Hyperion",           Race::Terran, UnitSize::Large, 850,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
     T.push_back({"NoradII",            Race::Terran, UnitSize::Large, 700,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
+    T[TerranHeroBase + 0].ChkUnitID = 20;
+    T[TerranHeroBase + 1].ChkUnitID = 19;
+    T[TerranHeroBase + 2].ChkUnitID = 16;
+    T[TerranHeroBase + 3].ChkUnitID = 25;
+    T[TerranHeroBase + 4].ChkUnitID = 10;
+    T[TerranHeroBase + 5].ChkUnitID = 27;
+    T[TerranHeroBase + 6].ChkUnitID = 28;
+    T[TerranHeroBase + 7].ChkUnitID = 29;
 
+    const int ZergHeroBase = (int)Z.size();
     Z.push_back({"Torrasque",          Race::Zerg,   UnitSize::Large, 800,  0,  0, 4,  6,  0,   0,  50, 50,  0, 2, 1, 2.8f, 10, false});
     Z.push_back({"InfestedKerrigan",   Race::Zerg,   UnitSize::Small, 300,  0,50, 2,  1,  0,   0,  30, 50,  0, 5, 1, 2.6f, 9,  false});
     Z.push_back({"HunterKiller",       Race::Zerg,   UnitSize::Medium,250,  0,  0, 2,  2,  0,   0,  30, 25, 25, 5, 1, 2.8f, 10, false});
     Z.push_back({"DevouringOne",       Race::Zerg,   UnitSize::Small, 200,  0,  0, 1,  1,  0,   0,  20, 20,  0, 2, 1, 2.6f, 8,  false});
+    Z[ZergHeroBase + 0].ChkUnitID = 48;
+    Z[ZergHeroBase + 1].ChkUnitID = 51;
+    Z[ZergHeroBase + 2].ChkUnitID = 53;
+    Z[ZergHeroBase + 3].ChkUnitID = 54;
 
+    const int ProtossHeroBase = (int)P.size();
     P.push_back({"FenixZealot",        Race::Protoss, UnitSize::Medium,240, 50,  0, 1,  2,  0,   0,  40, 20,  0, 1, 0, 2.8f, 8,  false});
     P.push_back({"FenixDragoon",       Race::Protoss, UnitSize::Large, 300,100,  0, 2,  2,  0,   0,  50, 35, 35, 5, 0, 2.5f, 9,  false});
     P.push_back({"Zeratul",            Race::Protoss, UnitSize::Small, 200, 80,  0, 1,  1,  0,   0,  30, 50,  0, 1, 0, 2.8f, 9,  false});
@@ -429,20 +457,48 @@ auto& Z = ZergDefs;
     P.push_back({"Gantrithor",         Race::Protoss, UnitSize::Large, 500,200,  0, 3,  6,  0,   0,  90, 50, 50, 6, 0, 2.2f, 11, false});
     P.push_back({"Danimoth",           Race::Protoss, UnitSize::Large, 400,150,  0, 2,  4,  0,   0,  90, 30, 30, 5, 0, 2.5f, 10, false});
     P.push_back({"Aldaris",            Race::Protoss, UnitSize::Large, 500,150,100, 2,  4,  0,   0,  90, 40, 40, 6, 0, 2.2f, 11, false});
+    P[ProtossHeroBase + 0].ChkUnitID = 77;
+    P[ProtossHeroBase + 1].ChkUnitID = 78;
+    P[ProtossHeroBase + 2].ChkUnitID = 75;
+    P[ProtossHeroBase + 3].ChkUnitID = 79;
+    P[ProtossHeroBase + 4].ChkUnitID = 81;
+    P[ProtossHeroBase + 5].ChkUnitID = 82;
+    P[ProtossHeroBase + 6].ChkUnitID = 86;
+    P[ProtossHeroBase + 7].ChkUnitID = 87;
 
     // Critters
+    const int CritterBase = (int)T.size();
     T.push_back({"Rhynadon",           Race::Terran,  UnitSize::Large,  60,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     T.push_back({"Bengalaas",          Race::Terran,  UnitSize::Large,  60,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     T.push_back({"Scantid",            Race::Terran,  UnitSize::Small,  40,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     T.push_back({"Kakaru",             Race::Terran,  UnitSize::Small,  40,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     T.push_back({"Ragnasaur",          Race::Terran,  UnitSize::Large,  80,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
     T.push_back({"Ursadon",            Race::Terran,  UnitSize::Large,  80,  0,  0, 0,  0,  0,   0,   0,  0,  0, 0, 0, 1.5f,  5,  false});
+    T[CritterBase + 0].ChkUnitID = 89;
+    T[CritterBase + 1].ChkUnitID = 90;
+    T[CritterBase + 2].ChkUnitID = 93;
+    T[CritterBase + 3].ChkUnitID = 94;
+    T[CritterBase + 4].ChkUnitID = 95;
+    T[CritterBase + 5].ChkUnitID = 96;
     for (int I = 0; I < (int)T.size(); ++I)
         NameToID[T[I].Name] = I;
     for (int I = 0; I < (int)ZergDefs.size(); ++I)
         NameToID[ZergDefs[I].Name] = I + (int)T.size();
     for (int I = 0; I < (int)ProtossDefs.size(); ++I)
         NameToID[ProtossDefs[I].Name] = I + (int)T.size() + (int)ZergDefs.size();
+
+    ApplyDefaultWeaponMetadata(T);
+    ApplyDefaultWeaponMetadata(ZergDefs);
+    ApplyDefaultWeaponMetadata(ProtossDefs);
+
+    for (auto& Def : ProtossDefs)
+    {
+        if (Def.Name == "Archon")
+        {
+            Def.WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
+            break;
+        }
+    }
 }
 
 const std::vector<UnitDef>& GetTerranDefs()  { InitDefs(); return TerranDefs; }
@@ -512,6 +568,47 @@ int GetUnitDefIDByChkUnitID(int ChkUnitID)
     return -1;
 }
 
+Race GetRaceByChkUnitID(int ChkUnitID, Race Fallback)
+{
+    const int DefID = GetUnitDefIDByChkUnitID(ChkUnitID);
+    if (DefID >= 0)
+        return GetUnitDefByID(DefID).RaceType;
+
+    if ((ChkUnitID >= 35 && ChkUnitID <= 57) ||
+        ChkUnitID == 59 ||
+        ChkUnitID == 62 ||
+        ChkUnitID == 97 ||
+        ChkUnitID == 103 ||
+        ChkUnitID == 104 ||
+        (ChkUnitID >= 130 && ChkUnitID <= 152))
+    {
+        return Race::Zerg;
+    }
+
+    if (ChkUnitID == 60 ||
+        ChkUnitID == 61 ||
+        ChkUnitID == 63 ||
+        (ChkUnitID >= 64 && ChkUnitID <= 88) ||
+        ChkUnitID == 98 ||
+        ChkUnitID == 105 ||
+        (ChkUnitID >= 154 && ChkUnitID <= 175))
+    {
+        return Race::Protoss;
+    }
+
+    if ((ChkUnitID >= 0 && ChkUnitID <= 34) ||
+        ChkUnitID == 58 ||
+        ChkUnitID == 99 ||
+        ChkUnitID == 100 ||
+        ChkUnitID == 102 ||
+        (ChkUnitID >= 106 && ChkUnitID <= 127))
+    {
+        return Race::Terran;
+    }
+
+    return Fallback;
+}
+
 int GetSupplyProvidedByDefID(int ID)
 {
     const UnitDef Def = GetUnitDefByID(ID);
@@ -520,6 +617,23 @@ int GetSupplyProvidedByDefID(int ID)
     if (Def.Name == "Overlord")
         return 8;
     return Def.IsBuilding ? Def.SupplyCost : 0;
+}
+
+bool IsDetectorChkUnitID(int ChkUnitID)
+{
+    switch (ChkUnitID)
+    {
+        case 33:  // Spell Scanner Sweep
+        case 9:   // Terran Science Vessel
+        case 124: // Terran Missile Turret
+        case 42:  // Zerg Overlord
+        case 139: // Zerg Spore Colony
+        case 84:  // Protoss Observer
+        case 162: // Protoss Photon Cannon
+            return true;
+        default:
+            return false;
+    }
 }
 
 int GetUnitDefID(const std::string& Name)

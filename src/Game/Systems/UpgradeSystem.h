@@ -29,8 +29,13 @@ enum class ResearchId : uint8_t
     Terran_IonThrusters,
     Terran_Lockdown,
     Terran_MoebiusReactor,
+    Terran_OcularImplants,
+    Terran_ApolloReactor,
+    Terran_TitanReactor,
+    Terran_CaduceusReactor,
     Terran_YamatoGun,
     Terran_ColossusReactor,
+    Terran_CharonBoosters,
 
     // Zerg (16-33)
     Zerg_MeleeAttacks,
@@ -40,6 +45,10 @@ enum class ResearchId : uint8_t
     Zerg_FlyerCarapace,
     Zerg_AdrenalGlands,
     Zerg_MetabolicBoost,
+    Zerg_AnabolicSynthesis,
+    Zerg_ChitinousPlating,
+    Zerg_MuscularAugments,
+    Zerg_GroovedSpines,
     Zerg_VentralSacs,
     Zerg_Antennae,
     Zerg_PneumatizedCarapace,
@@ -62,7 +71,12 @@ enum class ResearchId : uint8_t
     Protoss_GraviticDrive,
     Protoss_ScarabDamage,
     Protoss_ZealotSpeed,
+    Protoss_SensorArray,
+    Protoss_ApialSensors,
     Protoss_KhaydarinAmulet,
+    Protoss_ArgusJewel,
+    Protoss_ArgusTalisman,
+    Protoss_KhaydarinCore,
     Protoss_PsionicStorm,
     Protoss_Hallucination,
     Protoss_Recall,
@@ -121,6 +135,15 @@ public:
     static int GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetRangeBonusPixels(const Core::ECS::EntityManager& EM, int EntityID);
+    static int GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& EM,
+                                            int EntityID,
+                                            bool TargetIsAir);
+    static int GetSightRangeBonusTiles(const Core::ECS::EntityManager& EM, int EntityID);
+    static float GetMovementSpeedMultiplier(const Core::ECS::EntityManager& EM, int EntityID);
+    static float GetAttackCooldownMultiplier(const Core::ECS::EntityManager& EM, int EntityID);
+    static int GetEffectiveMaxEnergyPoints(const Core::ECS::EntityManager& EM, int EntityID);
+    static void RefreshUnitEnergyCap(Core::ECS::EntityManager& EM, int EntityID);
+    static int GetMaxHangarCount(const Core::ECS::EntityManager& EM, int EntityID);
 
 private:
     Core::ECS::SystemManager& mSystemMgr;

@@ -11,18 +11,22 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "Main/GameSession.h"
 
 namespace Game::Client::GameLoop::GameEntitySpawnRuntime
 {
 
-inline int NormalizeChkPlayerID(uint8_t ChkOwner)
+inline constexpr int NormalizeChkPlayerID(uint8_t ChkOwner)
 {
-    if (ChkOwner >= 1 && ChkOwner <= 8)
-        return (int)ChkOwner - 1;
+    // CHK UNIT owner is already a zero-based StarCraft player id (0..11).
+    // Keep it as data here; callers that index arrays must bounds-check there.
     return (int)ChkOwner;
 }
+
+static_assert(NormalizeChkPlayerID(1) == 1,
+              "CHK owner values are data ids, not one-based display labels.");
 
 template <typename ResolveImageIdT, typename ResolveSubunitImageIdT, typename ResolveCollisionBoundsT>
 inline void SpawnChkEntities(GameSession& Session,
@@ -78,6 +82,13 @@ inline void SpawnChkEntities(GameSession& Session,
 
         auto& Player = EM.AddComponent<Game::Components::PlayerComponent>(EntityID);
         Player.PlayerID = NormalizeChkPlayerID(UnitPlacement.Owner);
+        Game::Systems::UpgradeSystem::RefreshUnitEnergyCap(EM, EntityID);
+        if (UnitPlacement.EnergyPercent > 0 && Unit.MaxEnergyPoints > 0)
+        {
+            Unit.EnergyPoints =
+                Unit.MaxEnergyPoints * std::min(100, (int)UnitPlacement.EnergyPercent) / 100;
+        }
+        Unit.HangarCount = std::max(0, (int)UnitPlacement.HangarCount);
 
         auto& RenderComp = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
         RenderComp.ImageID = (uint32_t)ResolveImageID(UnitPlacement.UnitID);
@@ -94,18 +105,8 @@ inline void SpawnChkEntities(GameSession& Session,
             if (Def.GroundDamage > 0 || Def.AirDamage > 0)
             {
                 auto& Combat = EM.AddComponent<Game::Components::CombatComponent>(EntityID);
-                Combat.GroundDamage = Def.GroundDamage;
-                Combat.AirDamage = Def.AirDamage;
-                Combat.GroundDmgType = Def.GroundDmgType;
-                Combat.AirDmgType = Def.AirDmgType;
-                Combat.AttackRange = Def.AttackRange;
-                Combat.AttackCooldown = Def.AttackCooldown;
-                Combat.CanTargetGround = Def.GroundDamage > 0;
-                Combat.CanTargetAir = Def.AirDamage > 0;
-                Combat.MyElevation = Game::Data::IsAirUnitType(Unit.ChkUnitID) ?
-                    Game::Components::Elevation::Air :
-                    Game::Components::Elevation::Ground;
-                Combat.IsRanged = Def.AttackRange > 1.5f;
+                Game::Races::ApplyCombatDefinition(
+                    Combat, Def, Game::Data::IsAirUnitType(Unit.ChkUnitID));
             }
         }
 

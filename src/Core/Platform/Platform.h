@@ -24,11 +24,16 @@ namespace Core::Platform
     // Window
     int GetWindowWidth();
     int GetWindowHeight();
+    int GetClientWidth();
+    int GetClientHeight();
+    int GetFramebufferWidth();
+    int GetFramebufferHeight();
     float GetAspect();
     bool IsWindowFocused();
     bool IsMouseInClientArea();
+    bool IsMouseInGameContentArea();
 
-    // Mouse (framebuffer pixels, top-left origin; matches rendering coordinates)
+    // Mouse in logical window pixels, top-left origin.
     bool IsMouseButtonDown(int Button);
     bool IsMouseButtonPressed(int Button);
     bool IsMouseButtonReleased(int Button);

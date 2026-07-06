@@ -1,10 +1,10 @@
+#include "Core/Platform/Platform.h"
+#include "GameController.h"
+
 #include "third_party/sokol/sokol_app.h"
 #include "third_party/sokol/sokol_gfx.h"
 #include "third_party/sokol/sokol_glue.h"
 #include "third_party/sokol/sokol_log.h"
-
-#include "Core/Platform/Platform.h"
-#include "GameController.h"
 
 #include <cstdlib>
 #include <cstring>

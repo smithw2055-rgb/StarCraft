@@ -1,5 +1,6 @@
 #include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/CommandSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/MovementTuning.h"
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
@@ -136,14 +137,63 @@ namespace
         Path.Path.clear();
         Path.PathIndex = 0;
         Path.CurrentSpeed = 0.0f;
+        Path.TargetSpeed = 0.0f;
         Path.CurrentVelocity = {0.0f, 0.0f};
         Path.StallTimer = 0.0f;
         Path.HasLastWaypointDistance = false;
+        Path.BlockedByEntityID = -1;
+    }
+
+    static bool IsMovementCommand(CommandType Type)
+    {
+        return Type == CommandType::Move ||
+               Type == CommandType::AttackMove ||
+               Type == CommandType::Attack ||
+               Type == CommandType::Patrol ||
+               Type == CommandType::Harvest ||
+               Type == CommandType::Build ||
+               Type == CommandType::Follow;
+    }
+
+    static bool ShouldHaveMovementSpeed(const TransformComponent* Trans,
+                                        const CommandComponent* Cmd,
+                                        const PathfindingComponent& Path)
+    {
+        if (Path.PathIndex < (int)Path.Path.size())
+            return true;
+        if (Path.CurrentSpeed > 0.01f || Path.CurrentVelocity.LengthSq() > 0.01f)
+            return true;
+        if (!Trans || !Cmd || !IsMovementCommand(Cmd->CurrentCommand))
+            return false;
+
+        const float ArrivalTolerance =
+            std::max(Path.NodeTolerance, (float)CollisionRadiusFromBounds(Path));
+        if (Trans->Position.DistanceTo(Path.RequestedDestination) <= ArrivalTolerance)
+            return false;
+        if (Path.HasRecentMoveFailure &&
+            Path.RecentFailedMoveTarget.DistanceTo(Path.RequestedDestination) <=
+                std::max(16.0f, ArrivalTolerance))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    static bool RecentlyFailedCurrentRequest(const PathfindingComponent& Path)
+    {
+        return Path.HasRecentMoveFailure &&
+               Path.RecentFailedMoveTarget.DistanceTo(Path.RequestedDestination) <=
+                   std::max(16.0f, Path.NodeTolerance);
     }
 
     static void MarkMoveTargetFailed(PathfindingComponent& Path)
     {
-        if (!Path.Path.empty())
+        if (Path.RequestedDestination.LengthSq() > 0.0f)
+        {
+            Path.HasRecentMoveFailure = true;
+            Path.RecentFailedMoveTarget = Path.RequestedDestination;
+        }
+        else if (!Path.Path.empty())
         {
             Path.HasRecentMoveFailure = true;
             Path.RecentFailedMoveTarget = Path.Path.back();
@@ -179,6 +229,41 @@ namespace
         Path.LastWaypointDistance = NewDistance;
         Path.HasLastWaypointDistance = true;
         return Path.StallTimer < 0.45f;
+    }
+
+    static bool TrackDestinationProgress(PathfindingComponent& Path,
+                                         const TransformComponent& Trans,
+                                         float AppliedDistance,
+                                         float DeltaTime)
+    {
+        if (Path.RequestedDestination.LengthSq() <= 0.0f)
+            return true;
+        if (AppliedDistance <= 0.05f)
+            return true;
+
+        const float Distance = Trans.Position.DistanceTo(Path.RequestedDestination);
+        const float ArrivalTolerance =
+            std::max(Path.NodeTolerance, (float)CollisionRadiusFromBounds(Path));
+        if (Distance <= ArrivalTolerance)
+        {
+            Path.DestinationStallTimer = 0.0f;
+            Path.LastDestinationDistance = Distance;
+            Path.HasLastDestinationDistance = true;
+            return true;
+        }
+
+        if (!Path.HasLastDestinationDistance ||
+            Distance < Path.LastDestinationDistance - 1.0f)
+        {
+            Path.DestinationStallTimer = 0.0f;
+            Path.LastDestinationDistance = Distance;
+            Path.HasLastDestinationDistance = true;
+            return true;
+        }
+
+        Path.DestinationStallTimer += DeltaTime;
+        Path.HasLastDestinationDistance = true;
+        return Path.DestinationStallTimer < 8.0f;
     }
 
     static float MovementSpeedMultiplier(const StatusEffectComponent* Status)
@@ -300,6 +385,9 @@ namespace
                 Proposed.Y <= ExpandedTop || Proposed.Y >= ExpandedBottom)
                 continue;
 
+            if (auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID))
+                MovingPath->BlockedByEntityID = BlockerID;
+
             const float PushLeft = Proposed.X - ExpandedLeft;
             const float PushRight = ExpandedRight - Proposed.X;
             const float PushTop = Proposed.Y - ExpandedTop;
@@ -329,18 +417,49 @@ namespace
         return Path.CollisionRadius > 16 ? Path.CollisionRadius : 0;
     }
 
+    static bool PathHasMeaningfulProgress(const TransformComponent& Trans,
+                                          const PathfindingComponent& Path,
+                                          const Core::Math::Vec2& Target,
+                                          const std::vector<Core::Math::Vec2>& Waypoints)
+    {
+        if (Waypoints.empty())
+            return false;
+
+        const Core::Math::Vec2 Last = Waypoints.back();
+        const float ArrivalTolerance =
+            std::max(Path.NodeTolerance, (float)CollisionRadiusFromBounds(Path));
+        if (Trans.Position.DistanceTo(Target) <= ArrivalTolerance)
+            return true;
+
+        const bool LastApproachesTarget =
+            Last.DistanceTo(Target) < Trans.Position.DistanceTo(Target) - ArrivalTolerance;
+        return LastApproachesTarget;
+    }
+
     static void RefreshPathToTarget(Core::ECS::EntityManager& EM,
                                     Core::ECS::EntityID EntityID,
                                     const Game::Map::GameMap* Map,
-                                    const Core::Math::Vec2& Target)
+                                    const Core::Math::Vec2& Target,
+                                    int IgnoreEntityID = -1)
     {
         auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
         auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
         if (!Trans || !Path)
             return;
 
+        const bool DestinationChanged =
+            Path->RequestedDestination.DistanceTo(Target) > 1.0f ||
+            Path->RequestedIgnoreEntityID != IgnoreEntityID;
+        Path->RequestedDestination = Target;
+        Path->RequestedIgnoreEntityID = IgnoreEntityID;
         Path->Path.clear();
         Path->PathIndex = 0;
+        Path->BlockedByEntityID = -1;
+        if (DestinationChanged)
+        {
+            Path->DestinationStallTimer = 0.0f;
+            Path->HasLastDestinationDistance = false;
+        }
 
         if (Path->IsAir || !Map)
         {
@@ -354,6 +473,8 @@ namespace
         std::vector<StaticBlockerRect> Blockers;
         for (auto BlockerID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
         {
+            if (BlockerID == IgnoreEntityID)
+                continue;
             if (BlockerID == EntityID || !IsStaticGroundBlocker(EM, BlockerID))
                 continue;
 
@@ -403,8 +524,102 @@ namespace
             1000,
             TerrainClearanceForPath(*Path),
             ExtraBlockedTile);
-        if (Result.Found && !Result.Waypoints.empty())
+        if (Result.Found &&
+            PathHasMeaningfulProgress(*Trans, *Path, Target, Result.Waypoints))
+        {
             Path->Path = std::move(Result.Waypoints);
+        }
+    }
+
+    static Core::Math::Vec2 ResolveEdgeApproachTarget(Core::ECS::EntityManager& EM,
+                                                      const Core::Math::Vec2& Current,
+                                                      int TargetEntityID,
+                                                      const Core::Math::Vec2& Fallback)
+    {
+        auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetEntityID);
+        auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetEntityID);
+        if (!TargetTrans || !TargetPath || !TargetPath->HasCollisionBounds)
+            return Fallback;
+
+        const Core::Math::Vec2 Delta = Current - TargetTrans->Position;
+        const float Left = (float)TargetPath->CollisionLeft;
+        const float Right = (float)TargetPath->CollisionRight;
+        const float Up = (float)TargetPath->CollisionUp;
+        const float Down = (float)TargetPath->CollisionDown;
+        const float ClampedX = std::clamp(Delta.X, -Left, Right);
+        const float ClampedY = std::clamp(Delta.Y, -Up, Down);
+        const bool HorizontalPrimary = std::fabs(Delta.X) >= std::fabs(Delta.Y);
+        Core::Math::Vec2 Result = TargetTrans->Position;
+        if (HorizontalPrimary)
+        {
+            Result.X += Delta.X < 0.0f ? -Left - 12.0f : Right + 12.0f;
+            Result.Y += ClampedY;
+        }
+        else
+        {
+            Result.X += ClampedX;
+            Result.Y += Delta.Y < 0.0f ? -Up - 12.0f : Down + 12.0f;
+        }
+        return Result;
+    }
+
+    static bool RefreshPathForCurrentRequest(Core::ECS::EntityManager& EM,
+                                             Core::ECS::EntityID EntityID,
+                                             const Game::Map::GameMap* Map,
+                                             bool UseEdgeTarget)
+    {
+        auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+        if (!Path || !Trans)
+            return false;
+
+        Core::Math::Vec2 Target = Path->RequestedDestination;
+        const Core::Math::Vec2 FinalDestination = Path->RequestedDestination;
+        const int RequestedTargetEntityID = Path->RequestedTargetEntityID;
+        const int RequestedIgnoreEntityID = Path->RequestedIgnoreEntityID;
+        int TargetEntityID = Path->RequestedTargetEntityID >= 0
+            ? Path->RequestedTargetEntityID
+            : Path->RequestedIgnoreEntityID;
+        if (Path->RequestedTargetEntityID >= 0)
+        {
+            if (auto* TargetTrans = EM.GetComponent<TransformComponent>(Path->RequestedTargetEntityID))
+                Target = TargetTrans->Position;
+        }
+        if (UseEdgeTarget && TargetEntityID >= 0)
+            Target = ResolveEdgeApproachTarget(EM, Trans->Position, TargetEntityID, Target);
+
+        RefreshPathToTarget(EM, EntityID, Map, Target, Path->RequestedIgnoreEntityID);
+        if (auto* RefreshedPath = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            RefreshedPath->RequestedDestination = FinalDestination;
+            RefreshedPath->RequestedTargetEntityID = RequestedTargetEntityID;
+            RefreshedPath->RequestedIgnoreEntityID = RequestedIgnoreEntityID;
+            return !RefreshedPath->Path.empty();
+        }
+        return false;
+    }
+
+    static bool HandleMovementStall(Core::ECS::EntityManager& EM,
+                                    Core::ECS::EntityID EntityID,
+                                    PathfindingComponent& Path,
+                                    const Game::Map::GameMap* Map)
+    {
+        if (Path.RepathFailCount == 0)
+        {
+            Path.RepathFailCount = 1;
+            Path.LastRepathTime = 0.0f;
+            return RefreshPathForCurrentRequest(EM, EntityID, Map, false);
+        }
+        if (Path.RepathFailCount == 1)
+        {
+            Path.RepathFailCount = 2;
+            Path.LastRepathTime = 0.0f;
+            return RefreshPathForCurrentRequest(EM, EntityID, Map, true);
+        }
+
+        MarkMoveTargetFailed(Path);
+        Path.RepathFailCount = 0;
+        return false;
     }
 
     static constexpr float kRepulseForce = 80.0f;     // push force scalar
@@ -425,6 +640,8 @@ void MovementSystem::Update(float DeltaTime)
     {
         auto* PathComp = EM.GetComponent<PathfindingComponent>(ID);
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        auto* Trans = EM.GetComponent<TransformComponent>(ID);
+        auto* Cmd = EM.GetComponent<CommandComponent>(ID);
         if (!PathComp) continue;
 
         if (Unit)
@@ -433,6 +650,17 @@ void MovementSystem::Update(float DeltaTime)
         if (!CanMoveEntity(EM, ID))
         {
             ClearMotion(*PathComp);
+            PathComp->RepulseVector = {0.0f, 0.0f};
+            continue;
+        }
+
+        const bool HasMovementSpeedIntent =
+            ShouldHaveMovementSpeed(Trans, Cmd, *PathComp);
+        if (!HasMovementSpeedIntent)
+        {
+            PathComp->TargetSpeed = 0.0f;
+            PathComp->CurrentSpeed = 0.0f;
+            PathComp->CurrentVelocity = {0.0f, 0.0f};
             PathComp->RepulseVector = {0.0f, 0.0f};
             continue;
         }
@@ -546,6 +774,8 @@ void MovementSystem::Update(float DeltaTime)
             continue;
         }
 
+        PathComp->LastRepathTime += Dt;
+
         // Stasis / lockdown / maelstrom: frozen, skip all movement
         auto* Status = EM.GetComponent<StatusEffectComponent>(ID);
         if (Status && (Status->HasEffect(StatusEffect::Stasis) ||
@@ -586,6 +816,24 @@ void MovementSystem::Update(float DeltaTime)
 
         if (Path.empty())
         {
+            if (Cmd &&
+                (Cmd->CurrentCommand == CommandType::Move ||
+                 Cmd->CurrentCommand == CommandType::AttackMove ||
+                 Cmd->CurrentCommand == CommandType::Follow ||
+                 Cmd->CurrentCommand == CommandType::Build ||
+                 Cmd->CurrentCommand == CommandType::Harvest) &&
+                !RecentlyFailedCurrentRequest(*PathComp) &&
+                Trans->Position.DistanceTo(PathComp->RequestedDestination) >
+                    std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp)))
+            {
+                if (RefreshPathForCurrentRequest(EM, ID, mMap, false))
+                    continue;
+                MarkMoveTargetFailed(*PathComp);
+                if (Cmd && Cmd->HasPendingOrders())
+                    CommandSystem::AdvanceQueue(EM, ID);
+                continue;
+            }
+
             // Patrol: reverse direction when reaching waypoint
             if (Cmd && Cmd->CurrentCommand == CommandType::Patrol)
             {
@@ -603,6 +851,7 @@ void MovementSystem::Update(float DeltaTime)
                 if (Cmd && Cmd->HasPendingOrders())
                     CommandSystem::AdvanceQueue(EM, ID);
 
+                PathComp->TargetSpeed = 0.0f;
                 PathComp->CurrentSpeed = 0.0f;
                 PathComp->CurrentVelocity = {0.0f, 0.0f};
             }
@@ -641,7 +890,9 @@ void MovementSystem::Update(float DeltaTime)
 
             // Speed management with acceleration
             const float TargetSpd =
-                PathComp->TargetSpeed * MovementSpeedMultiplier(Status);
+                PathComp->TargetSpeed *
+                MovementSpeedMultiplier(Status) *
+                UpgradeSystem::GetMovementSpeedMultiplier(EM, ID);
             float CurSpd = PathComp->CurrentSpeed;
             if (CurSpd < TargetSpd)
                 CurSpd = std::min(TargetSpd, CurSpd + PathComp->Acceleration * Dt);
@@ -680,6 +931,7 @@ void MovementSystem::Update(float DeltaTime)
 
             // Move along the actual direction (not facing)
             float MoveAmount = CurSpd * Dt;
+            PathComp->BlockedByEntityID = -1;
             if (MoveAmount > Dist)
             {
                 const float OldDistance = Dist;
@@ -694,10 +946,13 @@ void MovementSystem::Update(float DeltaTime)
                 const float AppliedDistance = AppliedMove.Length();
                 const float NewDistance = (Waypoint - Trans->Position).Length();
                 if (!PathComp->IsAir &&
-                    !TrackMovementProgress(*PathComp, OldDistance, NewDistance,
-                                           AppliedDistance, Dt))
+                    (!TrackMovementProgress(*PathComp, OldDistance, NewDistance,
+                                            AppliedDistance, Dt) ||
+                     !TrackDestinationProgress(*PathComp, *Trans,
+                                               AppliedDistance, Dt)))
                 {
-                    MarkMoveTargetFailed(*PathComp);
+                    if (!HandleMovementStall(EM, ID, *PathComp, mMap))
+                        break;
                     break;
                 }
                 if (NewDistance <= ArrivalTolerance)
@@ -725,10 +980,13 @@ void MovementSystem::Update(float DeltaTime)
                 const float AppliedDistance = AppliedMove.Length();
                 const float NewDistance = (Waypoint - Trans->Position).Length();
                 if (!PathComp->IsAir &&
-                    !TrackMovementProgress(*PathComp, OldDistance, NewDistance,
-                                           AppliedDistance, Dt))
+                    (!TrackMovementProgress(*PathComp, OldDistance, NewDistance,
+                                            AppliedDistance, Dt) ||
+                     !TrackDestinationProgress(*PathComp, *Trans,
+                                               AppliedDistance, Dt)))
                 {
-                    MarkMoveTargetFailed(*PathComp);
+                    if (!HandleMovementStall(EM, ID, *PathComp, mMap))
+                        break;
                     break;
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
@@ -740,8 +998,27 @@ void MovementSystem::Update(float DeltaTime)
 
         if (PathComp->PathIndex >= (int)Path.size())
         {
+            const bool NeedsContinuation =
+                Trans->Position.DistanceTo(PathComp->RequestedDestination) >
+                std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp));
             ClearMotion(*PathComp);
-            if (Cmd && Cmd->HasPendingOrders())
+            if (NeedsContinuation &&
+                Cmd &&
+                (Cmd->CurrentCommand == CommandType::Move ||
+                 Cmd->CurrentCommand == CommandType::AttackMove ||
+                 Cmd->CurrentCommand == CommandType::Follow ||
+                 Cmd->CurrentCommand == CommandType::Build ||
+                 Cmd->CurrentCommand == CommandType::Harvest) &&
+                !RecentlyFailedCurrentRequest(*PathComp))
+            {
+                if (!RefreshPathForCurrentRequest(EM, ID, mMap, false))
+                {
+                    MarkMoveTargetFailed(*PathComp);
+                    if (Cmd->HasPendingOrders())
+                        CommandSystem::AdvanceQueue(EM, ID);
+                }
+            }
+            else if (Cmd && Cmd->HasPendingOrders())
                 CommandSystem::AdvanceQueue(EM, ID);
         }
     }

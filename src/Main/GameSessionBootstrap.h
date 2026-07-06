@@ -90,14 +90,16 @@ inline StartRace RaceFromScriptPlayer(const GameSession& Session, int PlayerId)
 
 inline StartRace RaceFromChkUnitID(int ChkUnitID, StartRace Fallback)
 {
-    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
-    if (DefID < 0)
-        return Fallback;
+    Game::Components::Race FallbackRace = Game::Components::Race::Terran;
+    if (Fallback == StartRace::Zerg)
+        FallbackRace = Game::Components::Race::Zerg;
+    else if (Fallback == StartRace::Protoss)
+        FallbackRace = Game::Components::Race::Protoss;
 
-    const auto Def = Game::Races::GetUnitDefByID(DefID);
-    if (Def.RaceType == Game::Components::Race::Zerg)
+    const auto Race = Game::Races::GetRaceByChkUnitID(ChkUnitID, FallbackRace);
+    if (Race == Game::Components::Race::Zerg)
         return StartRace::Zerg;
-    if (Def.RaceType == Game::Components::Race::Protoss)
+    if (Race == Game::Components::Race::Protoss)
         return StartRace::Protoss;
     return StartRace::Terran;
 }

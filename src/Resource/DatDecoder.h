@@ -21,6 +21,7 @@ struct UnitEntry
     uint16_t ShieldAmount = 0;
     uint16_t Armor = 0;
     uint8_t ArmorUpgrade = 0;
+    uint8_t SightRange = 0;
     uint16_t BuildTime = 60;
     uint32_t MineralCost = 50;
     uint32_t GasCost = 0;
@@ -54,14 +55,24 @@ struct WeaponEntry
 {
     uint32_t Id = 0;
     std::string Name;
+    uint16_t Label = 0;
+    uint32_t FlingyID = 0;
+    uint16_t TargetFlags = 0;
+    uint32_t MinRange = 0;
     uint16_t DamageAmount = 0;
     uint16_t DamageBonus = 0;
     uint16_t DamageFactor = 0;
     uint16_t Cooldown = 30;
     uint16_t Range = 32;
+    uint8_t DamageUpgrade = 0;
+    uint8_t DamageType = 0;
     uint16_t SplashType = 0;
-    uint16_t TargetFlags = 0;
+    uint16_t InnerSplashRadius = 0;
+    uint16_t MediumSplashRadius = 0;
+    uint16_t OuterSplashRadius = 0;
     uint16_t WeaponBehavior = 0;
+    uint8_t BulletCount = 1;
+    uint16_t Icon = 0;
 };
 
 struct FlingyEntry

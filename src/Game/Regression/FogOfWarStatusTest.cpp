@@ -3,6 +3,7 @@
 #include "Core/ECS/SystemManager.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/Systems/UpgradeSystem.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -77,6 +78,22 @@ int main()
             "parasite visibility stops when the status is removed");
     Require(Fog.IsExplored(10, 10, 0),
             "previous parasite vision leaves explored fog after visibility ends");
+
+    const int Overlord = SpawnSightUnit(EM, {32.0f, 32.0f}, 2, 9);
+    auto* OverlordUnit = EM.GetComponent<Game::Components::UnitComponent>(Overlord);
+    Require(OverlordUnit != nullptr, "overlord sight test has unit data");
+    OverlordUnit->ChkUnitID = 42;
+    OverlordUnit->UnitRace = Game::Components::Race::Zerg;
+
+    Fog.Update(0.1f);
+    Require(!Fog.IsVisible(12, 1, 2),
+            "base Overlord sight does not reveal the eleventh tile");
+
+    Game::Systems::UpgradeSystem::GetUpgrades(2)
+        .Levels[static_cast<size_t>(Game::Systems::ResearchId::Zerg_Antennae)] = 1;
+    Fog.Update(0.1f);
+    Require(Fog.IsVisible(12, 1, 2),
+            "Antennae extends Overlord fog reveal to eleven tiles");
 
     const int RevealID = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(RevealID).Position =
