@@ -88,6 +88,72 @@ inline int CommandIconForResearch(Game::Systems::TerranResearchId ResearchId)
         case TerranResearchId::YamatoGun:
         case TerranResearchId::ColossusReactor:
             return IconForDef(Game::Races::GetUnitDefID("Battlecruiser"));
+        case TerranResearchId::CharonBoosters:
+            return IconForDef(Game::Races::GetUnitDefID("Goliath"));
+        case TerranResearchId::ZergMeleeAttacks:
+        case TerranResearchId::ZergAdrenalGlands:
+        case TerranResearchId::ZergMetabolicBoost:
+            return IconForDef(Game::Races::GetUnitDefID("Zergling"));
+        case TerranResearchId::ZergMissileAttacks:
+        case TerranResearchId::ZergMuscularAugments:
+        case TerranResearchId::ZergGroovedSpines:
+        case TerranResearchId::ZergLurkerMorph:
+            return IconForDef(Game::Races::GetUnitDefID("Hydralisk"));
+        case TerranResearchId::ZergCarapace:
+        case TerranResearchId::ZergAnabolicSynthesis:
+        case TerranResearchId::ZergChitinousPlating:
+            return IconForDef(Game::Races::GetUnitDefID("Ultralisk"));
+        case TerranResearchId::ZergFlyerAttacks:
+        case TerranResearchId::ZergFlyerCarapace:
+            return IconForDef(Game::Races::GetUnitDefID("Mutalisk"));
+        case TerranResearchId::ZergVentralSacs:
+        case TerranResearchId::ZergAntennae:
+        case TerranResearchId::ZergPneumatizedCarapace:
+            return IconForDef(Game::Races::GetUnitDefID("Overlord"));
+        case TerranResearchId::ZergEnsnare:
+        case TerranResearchId::ZergSpawnBroodling:
+        case TerranResearchId::ZergQueenEnergy:
+            return IconForDef(Game::Races::GetUnitDefID("Queen"));
+        case TerranResearchId::ZergConsume:
+        case TerranResearchId::ZergPlague:
+        case TerranResearchId::ZergDefilerEnergy:
+            return IconForDef(Game::Races::GetUnitDefID("Defiler"));
+        case TerranResearchId::ZergBurrow:
+            return IconForDef(Game::Races::GetUnitDefID("Drone"));
+        case TerranResearchId::ProtossGroundWeapons:
+        case TerranResearchId::ProtossGroundArmor:
+        case TerranResearchId::ProtossPlasmaShields:
+        case TerranResearchId::ProtossZealotSpeed:
+            return IconForDef(Game::Races::GetUnitDefID("Zealot"));
+        case TerranResearchId::ProtossAirWeapons:
+        case TerranResearchId::ProtossAirArmor:
+        case TerranResearchId::ProtossApialSensors:
+            return IconForDef(Game::Races::GetUnitDefID("Scout"));
+        case TerranResearchId::ProtossSingularityCharge:
+            return IconForDef(Game::Races::GetUnitDefID("Dragoon"));
+        case TerranResearchId::ProtossGraviticDrive:
+            return IconForDef(Game::Races::GetUnitDefID("Shuttle"));
+        case TerranResearchId::ProtossScarabDamage:
+        case TerranResearchId::ProtossReaverCapacity:
+            return IconForDef(Game::Races::GetUnitDefID("Reaver"));
+        case TerranResearchId::ProtossSensorArray:
+            return IconForDef(Game::Races::GetUnitDefID("Observer"));
+        case TerranResearchId::ProtossKhaydarinAmulet:
+        case TerranResearchId::ProtossPsionicStorm:
+        case TerranResearchId::ProtossHallucination:
+            return IconForDef(Game::Races::GetUnitDefID("High Templar"));
+        case TerranResearchId::ProtossArgusJewel:
+            return IconForDef(Game::Races::GetUnitDefID("Corsair"));
+        case TerranResearchId::ProtossArgusTalisman:
+        case TerranResearchId::ProtossMindControl:
+        case TerranResearchId::ProtossMaelstrom:
+            return IconForDef(Game::Races::GetUnitDefID("Dark Archon"));
+        case TerranResearchId::ProtossKhaydarinCore:
+        case TerranResearchId::ProtossRecall:
+        case TerranResearchId::ProtossStasisField:
+            return IconForDef(Game::Races::GetUnitDefID("Arbiter"));
+        case TerranResearchId::ProtossCarrierCapacity:
+            return IconForDef(Game::Races::GetUnitDefID("Carrier"));
         default:
             return -1;
     }
@@ -104,6 +170,16 @@ inline bool IsLeveledResearch(Game::Systems::TerranResearchId ResearchId)
         case TerranResearchId::VehicleArmor:
         case TerranResearchId::ShipWeapons:
         case TerranResearchId::ShipArmor:
+        case TerranResearchId::ZergMeleeAttacks:
+        case TerranResearchId::ZergMissileAttacks:
+        case TerranResearchId::ZergCarapace:
+        case TerranResearchId::ZergFlyerAttacks:
+        case TerranResearchId::ZergFlyerCarapace:
+        case TerranResearchId::ProtossGroundWeapons:
+        case TerranResearchId::ProtossGroundArmor:
+        case TerranResearchId::ProtossPlasmaShields:
+        case TerranResearchId::ProtossAirWeapons:
+        case TerranResearchId::ProtossAirArmor:
             return true;
         default:
             return false;

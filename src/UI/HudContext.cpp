@@ -3,17 +3,13 @@
 #include <vector>
 
 #include "Game/Components.h"
+#include "Game/Races/RaceDef.h"
 
 namespace Game::Client::UI
 {
 
 namespace
 {
-    constexpr int ZergDrone = 41;
-    constexpr int ZergHatchery = 131;
-    constexpr int ZergLair = 132;
-    constexpr int ZergHive = 133;
-
     int FindFirstSelectedEntityId(const std::vector<int>& SelectedIds)
     {
         return SelectedIds.empty() ? -1 : SelectedIds.front();
@@ -25,6 +21,19 @@ namespace
             return -1;
         auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(SelectedEntityId);
         return Unit ? Unit->ChkUnitID : -1;
+    }
+
+    Game::Components::Race FindSelectedRace(Core::ECS::EntityManager& Entities,
+                                            int SelectedEntityId,
+                                            int SelectedChkUnitId)
+    {
+        if (SelectedEntityId >= 0)
+        {
+            if (auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(SelectedEntityId))
+                return Unit->UnitRace;
+        }
+        return Game::Races::GetRaceByChkUnitID(
+            SelectedChkUnitId, Game::Components::Race::Terran);
     }
 }
 
@@ -78,19 +87,20 @@ void Hud::UpdateContext(Core::ECS::EntityManager& Entities,
         return;
     }
 
-    switch (SelectedChkUnitId)
+    switch (FindSelectedRace(Entities, SelectedEntityId, SelectedChkUnitId))
     {
-        case ZergDrone:
-        case ZergHatchery:
-        case ZergLair:
-        case ZergHive:
+        case Game::Components::Race::Zerg:
             mState.CommandPanel.PanelCategory = HudPanelCategory::Zerg;
             BuildZergPage(SelectedEntityId, SelectedChkUnitId, &Entities);
             break;
 
-        default:
+        case Game::Components::Race::Protoss:
             mState.CommandPanel.PanelCategory = HudPanelCategory::Protoss;
             BuildProtossPage(SelectedEntityId, SelectedChkUnitId, &Entities);
+            break;
+
+        default:
+            mState.CommandPanel.PanelCategory = HudPanelCategory::None;
             break;
     }
 

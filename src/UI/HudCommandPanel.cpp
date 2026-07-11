@@ -24,12 +24,28 @@ namespace
     constexpr int ZergHatchery = 131;
     constexpr int ZergLair = 132;
     constexpr int ZergHive = 133;
+    constexpr int ZergHydraliskDen = 135;
+    constexpr int ZergDefilerMound = 136;
+    constexpr int ZergGreaterSpire = 137;
+    constexpr int ZergQueensNest = 138;
+    constexpr int ZergEvolutionChamber = 139;
+    constexpr int ZergUltraliskCavern = 140;
+    constexpr int ZergSpire = 141;
+    constexpr int ZergSpawningPool = 142;
 
     constexpr int ProtoProbe = 64;
     constexpr int ProtoNexus = 154;
+    constexpr int ProtoObservatory = 159;
     constexpr int ProtoRoboticsFacility = 155;
     constexpr int ProtoGateway = 160;
+    constexpr int ProtoCitadelOfAdun = 163;
+    constexpr int ProtoCyberneticsCore = 164;
+    constexpr int ProtoTemplarArchives = 165;
+    constexpr int ProtoForge = 166;
     constexpr int ProtoStargate = 167;
+    constexpr int ProtoFleetBeacon = 169;
+    constexpr int ProtoArbiterTribunal = 170;
+    constexpr int ProtoRoboticsSupportBay = 171;
 
     constexpr int IconBuild = 0;
     constexpr int IconBack = 1;
@@ -47,11 +63,27 @@ int Hud::GetDefaultPageForSelection(int SelectedChkUnitId) const
         case ZergHatchery:
         case ZergLair:
         case ZergHive: return PageZergHatchery;
+        case ZergSpawningPool: return PageZergSpawningPool;
+        case ZergEvolutionChamber: return PageZergEvolutionChamber;
+        case ZergHydraliskDen: return PageZergHydraliskDen;
+        case ZergSpire: return PageZergSpire;
+        case ZergQueensNest: return PageZergQueensNest;
+        case ZergGreaterSpire: return PageZergGreaterSpire;
+        case ZergUltraliskCavern: return PageZergUltraliskCavern;
+        case ZergDefilerMound: return PageZergDefilerMound;
         case ProtoProbe: return PageProtossProbeMain;
         case ProtoNexus: return PageProtossNexus;
         case ProtoGateway: return PageProtossGateway;
+        case ProtoForge: return PageProtossForge;
+        case ProtoCyberneticsCore: return PageProtossCyberneticsCore;
         case ProtoRoboticsFacility: return PageProtossRoboticsFacility;
         case ProtoStargate: return PageProtossStargate;
+        case ProtoCitadelOfAdun: return PageProtossCitadelOfAdun;
+        case ProtoTemplarArchives: return PageProtossTemplarArchives;
+        case ProtoRoboticsSupportBay: return PageProtossRoboticsSupportBay;
+        case ProtoFleetBeacon: return PageProtossFleetBeacon;
+        case ProtoArbiterTribunal: return PageProtossArbiterTribunal;
+        case ProtoObservatory: return PageProtossObservatory;
         default: return PageNone;
     }
 }
@@ -605,6 +637,8 @@ void Hud::BuildZergPage(int SelectedEntityId,
                         int SelectedChkUnitId,
                         Core::ECS::EntityManager* EcsEntities)
 {
+    using Game::Systems::UpgradeSystem;
+
     auto TrainEnabled = [&](int DefId) -> bool
     {
         return EcsEntities && SelectedEntityId > 0 &&
@@ -616,6 +650,21 @@ void Hud::BuildZergPage(int SelectedEntityId,
         return EcsEntities && SelectedEntityId > 0 &&
                Game::Systems::ZergSystem::CanMorphDroneIntoBuilding(
                    *EcsEntities, SelectedEntityId, DefId);
+    };
+
+    auto PlayerIdForSelection = [&]() -> int
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return 0;
+        if (auto* Player = EcsEntities->GetComponent<Game::Components::PlayerComponent>(SelectedEntityId))
+            return Player->PlayerID;
+        return 0;
+    };
+
+    auto SetCommandButton = [&](int Slot, const std::string& Label, HudCommandId CommandId, bool Enabled)
+    {
+        SetButton(Slot, Label, ActionKind::Command, -1, CommandId,
+                  TerranResearchId::None, IconCommand, Enabled);
     };
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
@@ -636,8 +685,44 @@ void Hud::BuildZergPage(int SelectedEntityId,
                   Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
+    auto ResearchButton = [&](int Slot,
+                              TerranResearchId ResearchId,
+                              const std::string& BaseLabel,
+                              int IconDefId)
+    {
+        const int PlayerID = PlayerIdForSelection();
+        const auto SystemResearchId = ToResearchId(ResearchId);
+        const bool Enabled = EcsEntities && SelectedEntityId > 0 &&
+            UpgradeSystem::CanStartResearch(*EcsEntities, SelectedEntityId, SystemResearchId);
+        int MineralCost = 0;
+        int GasCost = 0;
+        UpgradeSystem::GetResearchCost(SystemResearchId, PlayerID, MineralCost, GasCost);
+        SetButton(Slot,
+                  ResearchLabel(PlayerID, ResearchId, BaseLabel),
+                  UpgradeSystem::IsUpgradeType(SystemResearchId)
+                      ? ActionKind::Upgrade
+                      : ActionKind::Research,
+                  -1,
+                  HudCommandId::None,
+                  ResearchId,
+                  IconForDef(IconDefId),
+                  Enabled,
+                  0,
+                  HudVisualId::None,
+                  MineralCost,
+                  GasCost);
+    };
+
     const int Hatchery = Game::Races::GetUnitDefID("Hatchery");
     const int SpawningPool = Game::Races::GetUnitDefID("Spawning Pool");
+    const int EvolutionChamber = Game::Races::GetUnitDefID("Evolution Chamber");
+    const int HydraliskDen = Game::Races::GetUnitDefID("Hydralisk Den");
+    const int Spire = Game::Races::GetUnitDefID("Spire");
+    const int NydusCanal = Game::Races::GetUnitDefID("Nydus Canal");
+    const int QueensNest = Game::Races::GetUnitDefID("Queen's Nest");
+    const int GreaterSpire = Game::Races::GetUnitDefID("Greater Spire");
+    const int UltraliskCavern = Game::Races::GetUnitDefID("Ultralisk Cavern");
+    const int DefilerMound = Game::Races::GetUnitDefID("Defiler Mound");
     const int Extractor = Game::Races::GetUnitDefID("Extractor");
     const int Drone = Game::Races::GetUnitDefID("Drone");
     const int Zergling = Game::Races::GetUnitDefID("Zergling");
@@ -652,22 +737,64 @@ void Hud::BuildZergPage(int SelectedEntityId,
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
         EffectivePage = GetDefaultPageForSelection(SelectedChkUnitId);
+    if (EffectivePage == PageNone)
+    {
+        int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+        if (EcsEntities && SelectedEntityId > 0)
+        {
+            if (auto* Building =
+                    EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
+            {
+                if (Building->BuildingDefID >= 0)
+                    SelectedDefId = Building->BuildingDefID;
+            }
+        }
+        const auto SelectedDef = Game::Races::GetUnitDefByID(SelectedDefId);
+        EffectivePage = SelectedDef.IsBuilding ? PageNone : PageZergUnitCommands;
+    }
 
     switch (EffectivePage)
     {
         case PageZergDroneMain:
-            SetButton(0, "Build", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+            SetCommandButton(0, "Harvest", HudCommandId::Harvest, true);
+            SetCommandButton(1, "Move", HudCommandId::Move, true);
+            SetCommandButton(2, "Stop", HudCommandId::Stop, true);
+            SetCommandButton(4, "Hold", HudCommandId::Hold, true);
+            SetCommandButton(5, "Patrol", HudCommandId::Patrol, true);
+            SetButton(6, "Build", ActionKind::OpenSubmenu, -1, HudCommandId::None,
                       TerranResearchId::None, IconBuild, true, PageZergDroneBuild);
-            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
-                      TerranResearchId::None, IconBack, true, PageZergDroneMain);
             break;
 
         case PageZergDroneBuild:
             BuildButtonForDef(0, Hatchery);
             BuildButtonForDef(1, SpawningPool);
             BuildButtonForDef(2, Extractor);
+            BuildButtonForDef(3, EvolutionChamber);
+            BuildButtonForDef(4, HydraliskDen);
+            BuildButtonForDef(5, Spire);
+            BuildButtonForDef(6, NydusCanal);
+            SetButton(7, "Advanced", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+                      TerranResearchId::None, IconMore, true, PageZergDroneBuild2);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
                       TerranResearchId::None, IconBack, true, PageZergDroneMain);
+            break;
+
+        case PageZergDroneBuild2:
+            BuildButtonForDef(0, QueensNest);
+            BuildButtonForDef(1, GreaterSpire);
+            BuildButtonForDef(2, UltraliskCavern);
+            BuildButtonForDef(3, DefilerMound);
+            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, PageZergDroneBuild);
+            break;
+
+        case PageZergUnitCommands:
+            SetCommandButton(0, "Move", HudCommandId::Move, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
+            SetCommandButton(2, "Stop", HudCommandId::Stop, true);
+            SetCommandButton(3, "Hold", HudCommandId::Hold, true);
+            SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
+            SetCommandButton(5, "Follow", HudCommandId::Follow, true);
             break;
 
         case PageZergHatchery:
@@ -682,6 +809,46 @@ void Hud::BuildZergPage(int SelectedEntityId,
             TrainButtonForDef(8, Defiler);
             break;
 
+        case PageZergSpawningPool:
+            ResearchButton(0, TerranResearchId::ZergMetabolicBoost, "Metabolic", Zergling);
+            ResearchButton(1, TerranResearchId::ZergAdrenalGlands, "Adrenal", Zergling);
+            break;
+
+        case PageZergEvolutionChamber:
+            ResearchButton(0, TerranResearchId::ZergMeleeAttacks, "Melee", Zergling);
+            ResearchButton(1, TerranResearchId::ZergMissileAttacks, "Missile", Hydralisk);
+            ResearchButton(2, TerranResearchId::ZergCarapace, "Carapace", Ultralisk);
+            break;
+
+        case PageZergHydraliskDen:
+            ResearchButton(0, TerranResearchId::ZergMuscularAugments, "Muscular", Hydralisk);
+            ResearchButton(1, TerranResearchId::ZergGroovedSpines, "Spines", Hydralisk);
+            ResearchButton(2, TerranResearchId::ZergLurkerMorph, "Lurker", Hydralisk);
+            break;
+
+        case PageZergSpire:
+        case PageZergGreaterSpire:
+            ResearchButton(0, TerranResearchId::ZergFlyerAttacks, "Flyer Wpn", Mutalisk);
+            ResearchButton(1, TerranResearchId::ZergFlyerCarapace, "Flyer Arm", Mutalisk);
+            break;
+
+        case PageZergQueensNest:
+            ResearchButton(0, TerranResearchId::ZergEnsnare, "Ensnare", Queen);
+            ResearchButton(1, TerranResearchId::ZergSpawnBroodling, "Broodling", Queen);
+            ResearchButton(2, TerranResearchId::ZergQueenEnergy, "Gamete", Queen);
+            break;
+
+        case PageZergUltraliskCavern:
+            ResearchButton(0, TerranResearchId::ZergAnabolicSynthesis, "Anabolic", Ultralisk);
+            ResearchButton(1, TerranResearchId::ZergChitinousPlating, "Chitinous", Ultralisk);
+            break;
+
+        case PageZergDefilerMound:
+            ResearchButton(0, TerranResearchId::ZergConsume, "Consume", Defiler);
+            ResearchButton(1, TerranResearchId::ZergPlague, "Plague", Defiler);
+            ResearchButton(2, TerranResearchId::ZergDefilerEnergy, "Node", Defiler);
+            break;
+
         default:
             break;
     }
@@ -691,6 +858,8 @@ void Hud::BuildProtossPage(int SelectedEntityId,
                            int SelectedChkUnitId,
                            Core::ECS::EntityManager* EcsEntities)
 {
+    using Game::Systems::UpgradeSystem;
+
     auto TrainEnabled = [&](int DefId) -> bool
     {
         return EcsEntities && SelectedEntityId > 0 &&
@@ -703,6 +872,21 @@ void Hud::BuildProtossPage(int SelectedEntityId,
                Game::Systems::BuildingSystem::CanBuild(
                    *EcsEntities, SelectedEntityId, DefId,
                    Game::Systems::BuildTarget{}, nullptr, false);
+    };
+
+    auto PlayerIdForSelection = [&]() -> int
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return 0;
+        if (auto* Player = EcsEntities->GetComponent<Game::Components::PlayerComponent>(SelectedEntityId))
+            return Player->PlayerID;
+        return 0;
+    };
+
+    auto SetCommandButton = [&](int Slot, const std::string& Label, HudCommandId CommandId, bool Enabled)
+    {
+        SetButton(Slot, Label, ActionKind::Command, -1, CommandId,
+                  TerranResearchId::None, IconCommand, Enabled);
     };
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
@@ -723,12 +907,51 @@ void Hud::BuildProtossPage(int SelectedEntityId,
                   Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
+    auto ResearchButton = [&](int Slot,
+                              TerranResearchId ResearchId,
+                              const std::string& BaseLabel,
+                              int IconDefId)
+    {
+        const int PlayerID = PlayerIdForSelection();
+        const auto SystemResearchId = ToResearchId(ResearchId);
+        const bool Enabled = EcsEntities && SelectedEntityId > 0 &&
+            UpgradeSystem::CanStartResearch(*EcsEntities, SelectedEntityId, SystemResearchId);
+        int MineralCost = 0;
+        int GasCost = 0;
+        UpgradeSystem::GetResearchCost(SystemResearchId, PlayerID, MineralCost, GasCost);
+        SetButton(Slot,
+                  ResearchLabel(PlayerID, ResearchId, BaseLabel),
+                  UpgradeSystem::IsUpgradeType(SystemResearchId)
+                      ? ActionKind::Upgrade
+                      : ActionKind::Research,
+                  -1,
+                  HudCommandId::None,
+                  ResearchId,
+                  IconForDef(IconDefId),
+                  Enabled,
+                  0,
+                  HudVisualId::None,
+                  MineralCost,
+                  GasCost);
+    };
+
     const int Probe = Game::Races::GetUnitDefID("Probe");
     const int Nexus = Game::Races::GetUnitDefID("Nexus");
     const int Pylon = Game::Races::GetUnitDefID("Pylon");
     const int Assimilator = Game::Races::GetUnitDefID("Assimilator");
     const int Gateway = Game::Races::GetUnitDefID("Gateway");
     const int Forge = Game::Races::GetUnitDefID("Forge");
+    const int PhotonCannon = Game::Races::GetUnitDefID("Photon Cannon");
+    const int CyberneticsCore = Game::Races::GetUnitDefID("Cybernetics Core");
+    const int ShieldBattery = Game::Races::GetUnitDefID("Shield Battery");
+    const int RoboticsFacility = Game::Races::GetUnitDefID("Robotics Facility");
+    const int Stargate = Game::Races::GetUnitDefID("Stargate");
+    const int CitadelOfAdun = Game::Races::GetUnitDefID("Citadel of Adun");
+    const int TemplarArchives = Game::Races::GetUnitDefID("Templar Archives");
+    const int RoboticsSupportBay = Game::Races::GetUnitDefID("Robotics Support Bay");
+    const int FleetBeacon = Game::Races::GetUnitDefID("Fleet Beacon");
+    const int ArbiterTribunal = Game::Races::GetUnitDefID("Arbiter Tribunal");
+    const int Observatory = Game::Races::GetUnitDefID("Observatory");
     const int Zealot = Game::Races::GetUnitDefID("Zealot");
     const int Dragoon = Game::Races::GetUnitDefID("Dragoon");
     const int HighTemplar = Game::Races::GetUnitDefID("High Templar");
@@ -744,14 +967,32 @@ void Hud::BuildProtossPage(int SelectedEntityId,
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
         EffectivePage = GetDefaultPageForSelection(SelectedChkUnitId);
+    if (EffectivePage == PageNone)
+    {
+        int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+        if (EcsEntities && SelectedEntityId > 0)
+        {
+            if (auto* Building =
+                    EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
+            {
+                if (Building->BuildingDefID >= 0)
+                    SelectedDefId = Building->BuildingDefID;
+            }
+        }
+        const auto SelectedDef = Game::Races::GetUnitDefByID(SelectedDefId);
+        EffectivePage = SelectedDef.IsBuilding ? PageNone : PageProtossUnitCommands;
+    }
 
     switch (EffectivePage)
     {
         case PageProtossProbeMain:
-            SetButton(0, "Build", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+            SetCommandButton(0, "Harvest", HudCommandId::Harvest, true);
+            SetCommandButton(1, "Move", HudCommandId::Move, true);
+            SetCommandButton(2, "Stop", HudCommandId::Stop, true);
+            SetCommandButton(4, "Hold", HudCommandId::Hold, true);
+            SetCommandButton(5, "Patrol", HudCommandId::Patrol, true);
+            SetButton(6, "Build", ActionKind::OpenSubmenu, -1, HudCommandId::None,
                       TerranResearchId::None, IconBuild, true, PageProtossProbeBuild);
-            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
-                      TerranResearchId::None, IconBack, true, PageProtossProbeMain);
             break;
 
         case PageProtossProbeBuild:
@@ -760,8 +1001,42 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             BuildButtonForDef(2, Assimilator);
             BuildButtonForDef(3, Gateway);
             BuildButtonForDef(4, Forge);
+            BuildButtonForDef(5, PhotonCannon);
+            BuildButtonForDef(6, CyberneticsCore);
+            SetButton(7, "Advanced", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+                      TerranResearchId::None, IconMore, true, PageProtossProbeBuild2);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
                       TerranResearchId::None, IconBack, true, PageProtossProbeMain);
+            break;
+
+        case PageProtossProbeBuild2:
+            BuildButtonForDef(0, ShieldBattery);
+            BuildButtonForDef(1, RoboticsFacility);
+            BuildButtonForDef(2, Stargate);
+            BuildButtonForDef(3, CitadelOfAdun);
+            BuildButtonForDef(4, TemplarArchives);
+            BuildButtonForDef(5, RoboticsSupportBay);
+            SetButton(7, "Advanced", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+                      TerranResearchId::None, IconMore, true, PageProtossProbeBuild3);
+            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, PageProtossProbeBuild);
+            break;
+
+        case PageProtossProbeBuild3:
+            BuildButtonForDef(0, FleetBeacon);
+            BuildButtonForDef(1, ArbiterTribunal);
+            BuildButtonForDef(2, Observatory);
+            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, PageProtossProbeBuild2);
+            break;
+
+        case PageProtossUnitCommands:
+            SetCommandButton(0, "Move", HudCommandId::Move, true);
+            SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
+            SetCommandButton(2, "Stop", HudCommandId::Stop, true);
+            SetCommandButton(3, "Hold", HudCommandId::Hold, true);
+            SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
+            SetCommandButton(5, "Follow", HudCommandId::Follow, true);
             break;
 
         case PageProtossNexus:
@@ -775,6 +1050,18 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(3, DarkTemplar);
             break;
 
+        case PageProtossForge:
+            ResearchButton(0, TerranResearchId::ProtossGroundWeapons, "Ground Wpn", Zealot);
+            ResearchButton(1, TerranResearchId::ProtossGroundArmor, "Ground Arm", Zealot);
+            ResearchButton(2, TerranResearchId::ProtossPlasmaShields, "Shields", Zealot);
+            break;
+
+        case PageProtossCyberneticsCore:
+            ResearchButton(0, TerranResearchId::ProtossAirWeapons, "Air Wpn", Scout);
+            ResearchButton(1, TerranResearchId::ProtossAirArmor, "Air Arm", Scout);
+            ResearchButton(2, TerranResearchId::ProtossSingularityCharge, "Singularity", Dragoon);
+            break;
+
         case PageProtossRoboticsFacility:
             TrainButtonForDef(0, Shuttle);
             TrainButtonForDef(1, Reaver);
@@ -786,6 +1073,41 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(1, Corsair);
             TrainButtonForDef(2, Carrier);
             TrainButtonForDef(3, Arbiter);
+            break;
+
+        case PageProtossCitadelOfAdun:
+            ResearchButton(0, TerranResearchId::ProtossZealotSpeed, "Legs", Zealot);
+            break;
+
+        case PageProtossTemplarArchives:
+            ResearchButton(0, TerranResearchId::ProtossPsionicStorm, "Storm", HighTemplar);
+            ResearchButton(1, TerranResearchId::ProtossHallucination, "Hallucination", HighTemplar);
+            ResearchButton(2, TerranResearchId::ProtossKhaydarinAmulet, "Amulet", HighTemplar);
+            ResearchButton(3, TerranResearchId::ProtossMindControl, "Mind Control", DarkTemplar);
+            ResearchButton(4, TerranResearchId::ProtossMaelstrom, "Maelstrom", DarkTemplar);
+            ResearchButton(5, TerranResearchId::ProtossArgusTalisman, "Talisman", DarkTemplar);
+            break;
+
+        case PageProtossRoboticsSupportBay:
+            ResearchButton(0, TerranResearchId::ProtossGraviticDrive, "Gravitic", Shuttle);
+            ResearchButton(1, TerranResearchId::ProtossScarabDamage, "Scarab Dmg", Reaver);
+            ResearchButton(2, TerranResearchId::ProtossReaverCapacity, "Capacity", Reaver);
+            break;
+
+        case PageProtossFleetBeacon:
+            ResearchButton(0, TerranResearchId::ProtossApialSensors, "Apial", Scout);
+            ResearchButton(1, TerranResearchId::ProtossArgusJewel, "Argus", Corsair);
+            ResearchButton(2, TerranResearchId::ProtossCarrierCapacity, "Capacity", Carrier);
+            break;
+
+        case PageProtossArbiterTribunal:
+            ResearchButton(0, TerranResearchId::ProtossRecall, "Recall", Arbiter);
+            ResearchButton(1, TerranResearchId::ProtossStasisField, "Stasis", Arbiter);
+            ResearchButton(2, TerranResearchId::ProtossKhaydarinCore, "Core", Arbiter);
+            break;
+
+        case PageProtossObservatory:
+            ResearchButton(0, TerranResearchId::ProtossSensorArray, "Sensor", Observer);
             break;
 
         default:

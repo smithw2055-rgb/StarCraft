@@ -18,6 +18,65 @@ namespace Game::Systems
 
 using namespace Game::Components;
 
+namespace
+{
+    constexpr float kAttackWaveCooldownSeconds = 20.0f;
+
+    int NormalizeDefIDForRace(int DefID, Race RaceType)
+    {
+        if (DefID < 0)
+            return DefID;
+
+        const auto Candidate = Game::Races::GetUnitDefByID(DefID);
+        if (Candidate.Name != "Unknown" && Candidate.RaceType == RaceType)
+            return DefID;
+
+        if (RaceType == Race::Zerg)
+            return (int)Game::Races::GetTerranDefs().size() + DefID;
+        if (RaceType == Race::Protoss)
+            return (int)Game::Races::GetTerranDefs().size() +
+                   (int)Game::Races::GetZergDefs().size() + DefID;
+        return DefID;
+    }
+
+    int ResolveOwnedDefID(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+            Building && Building->BuildingDefID >= 0)
+        {
+            return Building->BuildingDefID;
+        }
+
+        if (auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
+            return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        return -1;
+    }
+
+    bool IsResourceDepotDefID(int DefID)
+    {
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        return Def.Name == "CommandCenter" ||
+               Def.Name == "Hatchery" ||
+               Def.Name == "Lair" ||
+               Def.Name == "Hive" ||
+               Def.Name == "Nexus";
+    }
+
+    bool IsWorkerIdle(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        if (auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID))
+            return Harvest->State == HarvestState::Idle;
+
+        auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+        return !Command || Command->CurrentCommand == CommandType::Stop;
+    }
+
+    bool IsCombatUnit(const UnitComponent& Unit, const CombatComponent& Combat)
+    {
+        return Unit.HitPoints > 0 && (Combat.GroundDamage > 0 || Combat.AirDamage > 0);
+    }
+}
+
 AIBrain::AIBrain(Core::ECS::SystemManager& SysMgr, int AIPlayerID, int TargetPlayerID)
     : mSystemMgr(SysMgr)
     , mAIPlayerID(AIPlayerID)
@@ -28,14 +87,24 @@ AIBrain::AIBrain(Core::ECS::SystemManager& SysMgr, int AIPlayerID, int TargetPla
 Core::Math::Vec2 AIBrain::FindBaseLocation(Core::ECS::EntityManager& EM)
 {
     auto Entities = EM.GetEntitiesWith<TransformComponent, PlayerComponent, BuildingComponent>();
+    Core::Math::Vec2 Fallback(1000.0f, 1000.0f);
     for (int Eid : Entities)
     {
         auto* Player = EM.GetComponent<PlayerComponent>(Eid);
         auto* Trans = EM.GetComponent<TransformComponent>(Eid);
-        if (Player && Player->PlayerID == mAIPlayerID && Trans)
+        auto* Building = EM.GetComponent<BuildingComponent>(Eid);
+        if (!Player || Player->PlayerID != mAIPlayerID || !Trans || !Building ||
+            Building->UnderConstruction || Building->IsAddon)
+        {
+            continue;
+        }
+
+        if (IsResourceDepotDefID(ResolveOwnedDefID(EM, Eid)))
             return Trans->Position;
+
+        Fallback = Trans->Position;
     }
-    return Core::Math::Vec2(1000.0f, 1000.0f);
+    return Fallback;
 }
 
 Core::Math::Vec2 AIBrain::FindEnemyBaseLocation(Core::ECS::EntityManager& EM)
@@ -100,7 +169,8 @@ int AIBrain::CountBuildings(Core::ECS::EntityManager& EM, int PlayerID, bool Exc
     return Count;
 }
 
-int AIBrain::CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID)
+int AIBrain::CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID,
+                          bool IncludeUnderConstruction)
 {
     int Count = 0;
     auto Entities = EM.GetEntitiesWith<PlayerComponent>();
@@ -112,9 +182,21 @@ int AIBrain::CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID)
         auto* Bldg = EM.GetComponent<BuildingComponent>(Eid);
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
 
-        if (Bldg && Bldg->BuildingDefID == DefID && !Bldg->UnderConstruction) Count++;
-        else if (Unit && Unit->HitPoints > 0 && Unit->ChkUnitID ==
-                 Game::Races::GetUnitDefByID(DefID).ChkUnitID) Count++;
+        if (Bldg)
+        {
+            if (Bldg->BuildingDefID == DefID &&
+                (IncludeUnderConstruction || !Bldg->UnderConstruction))
+            {
+                Count++;
+            }
+            continue;
+        }
+
+        if (Unit && Unit->HitPoints > 0 && Unit->ChkUnitID ==
+            Game::Races::GetUnitDefByID(DefID).ChkUnitID)
+        {
+            Count++;
+        }
     }
     return Count;
 }
@@ -136,7 +218,7 @@ int AIBrain::FindProducerFor(Core::ECS::EntityManager& EM, int UnitDefID)
 {
     const auto& Def = Game::Races::GetUnitDefByID(UnitDefID);
     if (Def.ProducedBy < 0) return -1;
-    const auto& ProducerDef = Game::Races::GetUnitDefByID(Def.ProducedBy);
+    const int ProducerDefID = NormalizeDefIDForRace(Def.ProducedBy, Def.RaceType);
 
     auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
     for (int Bid : Buildings)
@@ -144,8 +226,11 @@ int AIBrain::FindProducerFor(Core::ECS::EntityManager& EM, int UnitDefID)
         auto* B = EM.GetComponent<BuildingComponent>(Bid);
         auto* P = EM.GetComponent<PlayerComponent>(Bid);
         if (B && P && P->PlayerID == mAIPlayerID &&
-            B->BuildingDefID == Def.ProducedBy && !B->UnderConstruction)
+            B->BuildingDefID == ProducerDefID && !B->UnderConstruction &&
+            ProductionSystem::CanTrain(EM, Bid, UnitDefID))
+        {
             return Bid;
+        }
     }
     return -1;
 }
@@ -155,19 +240,84 @@ int AIBrain::FindIdleWorker(Core::ECS::EntityManager& EM)
     int RaceVal = GetRace(EM);
     int WorkerChkIDs[] = {0x07, 0x29, 0x2D}; // SCV, Drone, Probe
 
-    auto Units = EM.GetEntitiesWith<UnitComponent, PlayerComponent, HarvestComponent>();
+    auto Units = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
     for (int Eid : Units)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
         auto* P = EM.GetComponent<PlayerComponent>(Eid);
-        auto* H = EM.GetComponent<HarvestComponent>(Eid);
-        if (!U || !P || !H) continue;
+        if (!U || !P) continue;
         if (P->PlayerID != mAIPlayerID) continue;
+        if (U->HitPoints <= 0) continue;
         if (U->ChkUnitID != WorkerChkIDs[RaceVal]) continue;
-        if (H->State == HarvestState::Idle)
+        if (auto* Morph = EM.GetComponent<MorphComponent>(Eid); Morph && Morph->IsMorphing)
+            continue;
+        if (IsWorkerIdle(EM, Eid))
             return Eid;
     }
     return -1;
+}
+
+bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDefID,
+                                    const Core::Math::Vec2& NearPos, Core::Math::Vec2& OutPos)
+{
+    const float Step = 64.0f;
+    if (BuildingSystem::IsPlacementValid(EM, BuildingDefID, NearPos, mAIPlayerID))
+    {
+        OutPos = NearPos;
+        return true;
+    }
+
+    for (int Radius = 1; Radius <= 5; ++Radius)
+    {
+        for (int Y = -Radius; Y <= Radius; ++Y)
+        {
+            for (int X = -Radius; X <= Radius; ++X)
+            {
+                if (std::max(std::abs(X), std::abs(Y)) != Radius)
+                    continue;
+
+                const Core::Math::Vec2 Candidate(
+                    NearPos.X + (float)X * Step,
+                    NearPos.Y + (float)Y * Step);
+                if (BuildingSystem::IsPlacementValid(
+                        EM, BuildingDefID, Candidate, mAIPlayerID))
+                {
+                    OutPos = Candidate;
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool AIBrain::StartBuildingNear(Core::ECS::EntityManager& EM, int BuilderID,
+                                int BuildingDefID, const Core::Math::Vec2& NearPos)
+{
+    const auto& Def = Game::Races::GetUnitDefByID(BuildingDefID);
+    if (Def.IsAddon)
+        return BuildingSystem::StartBuild(EM, BuilderID, BuildingDefID, BuildTarget{});
+
+    Core::Math::Vec2 BuildPos;
+    if (!FindBuildPositionNear(EM, BuildingDefID, NearPos, BuildPos))
+        return false;
+    return BuildingSystem::StartBuild(EM, BuilderID, BuildingDefID, BuildPos);
+}
+
+bool AIBrain::StartZergBuildingNear(Core::ECS::EntityManager& EM, int DroneID,
+                                    int BuildingDefID, const Core::Math::Vec2& NearPos)
+{
+    Core::Math::Vec2 BuildPos;
+    if (!FindBuildPositionNear(EM, BuildingDefID, NearPos, BuildPos))
+        return false;
+    return ZergSystem::StartMorphDroneIntoBuilding(EM, DroneID, BuildingDefID, BuildPos);
+}
+
+bool AIBrain::TrainUnitIfPossible(Core::ECS::EntityManager& EM, int UnitDefID)
+{
+    int Producer = FindProducerFor(EM, UnitDefID);
+    return Producer >= 0 && ProductionSystem::StartTrain(EM, Producer, UnitDefID);
 }
 
 int AIBrain::FindNearestFreeBuilding(Core::ECS::EntityManager& EM, int BuildingDefID)
@@ -199,25 +349,16 @@ int AIBrain::FindNearestFreeBuilding(Core::ECS::EntityManager& EM, int BuildingD
 void AIBrain::TrainWorkerIfNeeded(Core::ECS::EntityManager& EM,
                                    int ProducerDefID, int WorkerDefID, int MaxWorkers)
 {
+    (void)ProducerDefID;
     int WorkerCount = CountByDefID(EM, mAIPlayerID, WorkerDefID);
-    auto& Res = HarvestSystem::GetResources(mAIPlayerID);
-    const auto& WorkerDef = Game::Races::GetUnitDefByID(WorkerDefID);
-
-    if (WorkerCount < MaxWorkers && Res.Minerals >= WorkerDef.MineralCost)
-    {
-        int Producer = FindProducerFor(EM, WorkerDefID);
-        if (Producer >= 0)
-            ProductionSystem::StartTrain(EM, Producer, WorkerDefID);
-    }
+    if (WorkerCount < MaxWorkers)
+        TrainUnitIfPossible(EM, WorkerDefID);
 }
 
 void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
 {
     int SvcDefID = Game::Races::GetUnitDefID("SCV");
     int MarineDefID = Game::Races::GetUnitDefID("Marine");
-    int FirebatDefID = Game::Races::GetUnitDefID("Firebat");
-    int MedicDefID = Game::Races::GetUnitDefID("Medic");
-    int VultureDefID = Game::Races::GetUnitDefID("Vulture");
     int TankDefID = Game::Races::GetUnitDefID("SiegeTank");
     int GoliathDefID = Game::Races::GetUnitDefID("Goliath");
     int WraithDefID = Game::Races::GetUnitDefID("Wraith");
@@ -228,15 +369,13 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
     int StarportDefID = Game::Races::GetUnitDefID("Starport");
     int AcademyDefID = Game::Races::GetUnitDefID("Academy");
     int MachineShopDefID = Game::Races::GetUnitDefID("MachineShop");
-    int ControlTowerDefID = Game::Races::GetUnitDefID("ControlTower");
     int ScienceFacilityDefID = Game::Races::GetUnitDefID("ScienceFacility");
-    int PhysicsLabDefID = Game::Races::GetUnitDefID("PhysicsLab");
-    int ArmoryDefID = Game::Races::GetUnitDefID("Armory");
-    int EngineeringBayDefID = Game::Races::GetUnitDefID("EngineeringBay");
 
     auto& Res = HarvestSystem::GetResources(mAIPlayerID);
     int scvCount = CountByDefID(EM, mAIPlayerID, SvcDefID);
     int supplyDepotCount = CountByDefID(EM, mAIPlayerID, SupplyDepotDefID);
+    int supplyDepotStartedCount =
+        CountByDefID(EM, mAIPlayerID, SupplyDepotDefID, true);
     int barracksCount = CountByDefID(EM, mAIPlayerID, BarracksDefID);
     int factoryCount = CountByDefID(EM, mAIPlayerID, FactoryDefID);
     int starportCount = CountByDefID(EM, mAIPlayerID, StarportDefID);
@@ -254,11 +393,14 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
 
     // Always: workers + supply
     TrainWorkerIfNeeded(EM, Game::Races::GetUnitDefID("CommandCenter"), SvcDefID, 20);
-    if (scvCount >= 8 && supplyDepotCount < 3 && Res.Minerals >= 100)
+    if (scvCount >= 8 &&
+        Res.SupplyUsed + 4 >= Res.SupplyMax &&
+        supplyDepotStartedCount <= supplyDepotCount &&
+        Res.Minerals >= 100)
     {
         int idleSCV = FindIdleWorker(EM);
         if (idleSCV >= 0)
-            BuildingSystem::StartBuild(EM, idleSCV, SupplyDepotDefID,
+            StartBuildingNear(EM, idleSCV, SupplyDepotDefID,
                 Core::Math::Vec2(mAiBasePos.X + 60.0f * (float)(supplyDepotCount + 1),
                                  mAiBasePos.Y));
     }
@@ -270,20 +412,19 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         {
             int idleSCV = FindIdleWorker(EM);
             if (idleSCV >= 0)
-                BuildingSystem::StartBuild(EM, idleSCV, BarracksDefID,
+                StartBuildingNear(EM, idleSCV, BarracksDefID,
                     Core::Math::Vec2(mAiBasePos.X + 100.0f, mAiBasePos.Y + 80.0f * (float)(barracksCount + 1)));
         }
         if (academyCount < 1 && barracksCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 0)
         {
             int idleSCV = FindIdleWorker(EM);
             if (idleSCV >= 0)
-                BuildingSystem::StartBuild(EM, idleSCV, AcademyDefID,
+                StartBuildingNear(EM, idleSCV, AcademyDefID,
                     Core::Math::Vec2(mAiBasePos.X + 180.0f, mAiBasePos.Y));
         }
         // Train Marines
-        int producer = FindProducerFor(EM, MarineDefID);
-        if (producer >= 0 && marineCount < 12 && Res.Minerals >= 50)
-            ProductionSystem::StartTrain(EM, producer, MarineDefID);
+        if (marineCount < 12)
+            TrainUnitIfPossible(EM, MarineDefID);
     }
 
     // Stage 1: Factory + Machine Shop
@@ -293,19 +434,19 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         {
             int idleSCV = FindIdleWorker(EM);
             if (idleSCV >= 0)
-                BuildingSystem::StartBuild(EM, idleSCV, FactoryDefID,
+                StartBuildingNear(EM, idleSCV, FactoryDefID,
                     Core::Math::Vec2(mAiBasePos.X - 100.0f, mAiBasePos.Y));
         }
         if (factoryCount >= 1 && CountByDefID(EM, mAIPlayerID, MachineShopDefID) < 1 && Res.Minerals >= 50)
         {
             int factory = FindNearestFreeBuilding(EM, FactoryDefID);
             if (factory >= 0)
-                BuildingSystem::StartBuild(EM, factory, MachineShopDefID,
+                StartBuildingNear(EM, factory, MachineShopDefID,
                     Core::Math::Vec2(mAiBasePos.X - 120.0f, mAiBasePos.Y));
         }
         // Tanks + Goliaths
-        if (tankCount < 4) { int p = FindProducerFor(EM, TankDefID); if (p >= 0 && Res.Minerals >= 150 && Res.VespeneGas >= 100) ProductionSystem::StartTrain(EM, p, TankDefID); }
-        if (goliathCount < 3) { int p = FindProducerFor(EM, GoliathDefID); if (p >= 0 && Res.Minerals >= 100 && Res.VespeneGas >= 50) ProductionSystem::StartTrain(EM, p, GoliathDefID); }
+        if (tankCount < 4) TrainUnitIfPossible(EM, TankDefID);
+        if (goliathCount < 3) TrainUnitIfPossible(EM, GoliathDefID);
     }
 
     // Stage 2: Starport + Wraiths
@@ -315,10 +456,10 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         {
             int idleSCV = FindIdleWorker(EM);
             if (idleSCV >= 0)
-                BuildingSystem::StartBuild(EM, idleSCV, StarportDefID,
+                StartBuildingNear(EM, idleSCV, StarportDefID,
                     Core::Math::Vec2(mAiBasePos.X - 160.0f, mAiBasePos.Y - 80.0f));
         }
-        if (wraithCount < 4) { int p = FindProducerFor(EM, WraithDefID); if (p >= 0 && Res.Minerals >= 150 && Res.VespeneGas >= 100) ProductionSystem::StartTrain(EM, p, WraithDefID); }
+        if (wraithCount < 4) TrainUnitIfPossible(EM, WraithDefID);
     }
 
     // Stage 3: Science Facility + Battlecruisers
@@ -328,11 +469,11 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         {
             int idleSCV = FindIdleWorker(EM);
             if (idleSCV >= 0)
-                BuildingSystem::StartBuild(EM, idleSCV, ScienceFacilityDefID,
+                StartBuildingNear(EM, idleSCV, ScienceFacilityDefID,
                     Core::Math::Vec2(mAiBasePos.X - 200.0f, mAiBasePos.Y - 160.0f));
         }
         if (CountByDefID(EM, mAIPlayerID, BattlecruiserDefID) < 2)
-        { int p = FindProducerFor(EM, BattlecruiserDefID); if (p >= 0 && Res.Minerals >= 400 && Res.VespeneGas >= 300) ProductionSystem::StartTrain(EM, p, BattlecruiserDefID); }
+            TrainUnitIfPossible(EM, BattlecruiserDefID);
     }
 
     // Send harvesters to work
@@ -346,31 +487,22 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
 
 void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
 {
-    int LarvaDefID = Game::Races::GetUnitDefID("Larva");
     int DroneDefID = Game::Races::GetUnitDefID("Drone");
     int OverlordDefID = Game::Races::GetUnitDefID("Overlord");
     int ZerglingDefID = Game::Races::GetUnitDefID("Zergling");
     int HydraliskDefID = Game::Races::GetUnitDefID("Hydralisk");
     int MutaliskDefID = Game::Races::GetUnitDefID("Mutalisk");
     int UltraliskDefID = Game::Races::GetUnitDefID("Ultralisk");
-    int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
-    int GuardianDefID = Game::Races::GetUnitDefID("Guardian");
-    int ScourgeDefID = Game::Races::GetUnitDefID("Scourge");
     int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
     int LairDefID = Game::Races::GetUnitDefID("Lair");
     int HiveDefID = Game::Races::GetUnitDefID("Hive");
     int SpawningPoolDefID = Game::Races::GetUnitDefID("Spawning Pool");
     int HydraliskDenDefID = Game::Races::GetUnitDefID("Hydralisk Den");
     int SpireDefID = Game::Races::GetUnitDefID("Spire");
-    int EvolutionChamberDefID = Game::Races::GetUnitDefID("Evolution Chamber");
-    int QueensNestDefID = Game::Races::GetUnitDefID("Queen's Nest");
     int UltraliskCavernDefID = Game::Races::GetUnitDefID("Ultralisk Cavern");
-    int DefilerMoundDefID = Game::Races::GetUnitDefID("Defiler Mound");
-    int ExtractorDefID = Game::Races::GetUnitDefID("Extractor");
 
     auto& Res = HarvestSystem::GetResources(mAIPlayerID);
     int droneCount = CountByDefID(EM, mAIPlayerID, DroneDefID);
-    int overlordCount = CountByDefID(EM, mAIPlayerID, OverlordDefID);
     int hatcheryCount = CountByDefID(EM, mAIPlayerID, HatcheryDefID);
     int lairCount = CountByDefID(EM, mAIPlayerID, LairDefID);
     int poolCount = CountByDefID(EM, mAIPlayerID, SpawningPoolDefID);
@@ -428,7 +560,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         {
             int drone = FindIdleWorker(EM);
             if (drone >= 0)
-                ZergSystem::StartMorphDroneIntoBuilding(EM, drone, SpawningPoolDefID,
+                StartZergBuildingNear(EM, drone, SpawningPoolDefID,
                     Core::Math::Vec2(mAiBasePos.X + 100.0f, mAiBasePos.Y));
         }
 
@@ -466,7 +598,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         {
             int drone = FindIdleWorker(EM);
             if (drone >= 0)
-                ZergSystem::StartMorphDroneIntoBuilding(EM, drone, HydraliskDenDefID,
+                StartZergBuildingNear(EM, drone, HydraliskDenDefID,
                     Core::Math::Vec2(mAiBasePos.X - 100.0f, mAiBasePos.Y));
         }
 
@@ -483,7 +615,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         {
             int drone = FindIdleWorker(EM);
             if (drone >= 0)
-                ZergSystem::StartMorphDroneIntoBuilding(EM, drone, SpireDefID,
+                StartZergBuildingNear(EM, drone, SpireDefID,
                     Core::Math::Vec2(mAiBasePos.X - 140.0f, mAiBasePos.Y));
         }
 
@@ -522,7 +654,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         {
             int drone = FindIdleWorker(EM);
             if (drone >= 0)
-                ZergSystem::StartMorphDroneIntoBuilding(EM, drone, UltraliskCavernDefID,
+                StartZergBuildingNear(EM, drone, UltraliskCavernDefID,
                     Core::Math::Vec2(mAiBasePos.X - 180.0f, mAiBasePos.Y - 80.0f));
         }
 
@@ -540,7 +672,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     {
         int drone = FindIdleWorker(EM);
         if (drone >= 0)
-            ZergSystem::StartMorphDroneIntoBuilding(EM, drone, HatcheryDefID,
+            StartZergBuildingNear(EM, drone, HatcheryDefID,
                 Core::Math::Vec2(mAiBasePos.X + 300.0f, mAiBasePos.Y));
     }
 
@@ -556,18 +688,13 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     int ProbeDefID = Game::Races::GetUnitDefID("Probe");
     int ZealotDefID = Game::Races::GetUnitDefID("Zealot");
     int DragoonDefID = Game::Races::GetUnitDefID("Dragoon");
-    int HighTemplarDefID = Game::Races::GetUnitDefID("High Templar");
-    int ReaverDefID = Game::Races::GetUnitDefID("Reaver");
     int ScoutDefID = Game::Races::GetUnitDefID("Scout");
-    int CorsairDefID = Game::Races::GetUnitDefID("Corsair");
     int CarrierDefID = Game::Races::GetUnitDefID("Carrier");
     int NexusDefID = Game::Races::GetUnitDefID("Nexus");
     int PylonDefID = Game::Races::GetUnitDefID("Pylon");
     int GatewayDefID = Game::Races::GetUnitDefID("Gateway");
-    int ForgeDefID = Game::Races::GetUnitDefID("Forge");
     int CyberneticsCoreDefID = Game::Races::GetUnitDefID("Cybernetics Core");
     int CitadelOfAdunDefID = Game::Races::GetUnitDefID("Citadel of Adun");
-    int TemplarArchivesDefID = Game::Races::GetUnitDefID("Templar Archives");
     int RoboticsFacilityDefID = Game::Races::GetUnitDefID("Robotics Facility");
     int StargateDefID = Game::Races::GetUnitDefID("Stargate");
     int FleetBeaconDefID = Game::Races::GetUnitDefID("Fleet Beacon");
@@ -575,6 +702,7 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     auto& Res = HarvestSystem::GetResources(mAIPlayerID);
     int probeCount = CountByDefID(EM, mAIPlayerID, ProbeDefID);
     int pylonCount = CountByDefID(EM, mAIPlayerID, PylonDefID);
+    int pylonStartedCount = CountByDefID(EM, mAIPlayerID, PylonDefID, true);
     int gatewayCount = CountByDefID(EM, mAIPlayerID, GatewayDefID);
     int coreCount = CountByDefID(EM, mAIPlayerID, CyberneticsCoreDefID);
     int citadelCount = CountByDefID(EM, mAIPlayerID, CitadelOfAdunDefID);
@@ -594,11 +722,14 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     TrainWorkerIfNeeded(EM, NexusDefID, ProbeDefID, 18);
 
     // Pylons for power and supply
-    if (pylonCount < 4 && probeCount >= 6 && Res.Minerals >= 100)
+    if (probeCount >= 6 &&
+        (pylonCount < 1 || Res.SupplyUsed + 4 >= Res.SupplyMax) &&
+        pylonStartedCount <= pylonCount &&
+        Res.Minerals >= 100)
     {
         int probe = FindIdleWorker(EM);
         if (probe >= 0)
-            BuildingSystem::StartBuild(EM, probe, PylonDefID,
+            StartBuildingNear(EM, probe, PylonDefID,
                 Core::Math::Vec2(mAiBasePos.X + 60.0f * (float)(pylonCount),
                                  mAiBasePos.Y + 80.0f));
     }
@@ -610,12 +741,12 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, GatewayDefID,
+                StartBuildingNear(EM, probe, GatewayDefID,
                     Core::Math::Vec2(mAiBasePos.X + 100.0f,
                                      mAiBasePos.Y + 80.0f * (float)(gatewayCount + 1)));
         }
         if (zealotCount < 8)
-        { int p = FindProducerFor(EM, ZealotDefID); if (p >= 0 && Res.Minerals >= 100) ProductionSystem::StartTrain(EM, p, ZealotDefID); }
+            TrainUnitIfPossible(EM, ZealotDefID);
     }
 
     // Stage 1: Cybernetics Core + Dragoons + Citadel
@@ -625,17 +756,17 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, CyberneticsCoreDefID,
+                StartBuildingNear(EM, probe, CyberneticsCoreDefID,
                     Core::Math::Vec2(mAiBasePos.X - 100.0f, mAiBasePos.Y));
         }
         if (dragoonCount < 6 && coreCount >= 1)
-        { int p = FindProducerFor(EM, DragoonDefID); if (p >= 0 && Res.Minerals >= 125 && Res.VespeneGas >= 50) ProductionSystem::StartTrain(EM, p, DragoonDefID); }
+            TrainUnitIfPossible(EM, DragoonDefID);
 
         if (citadelCount < 1 && coreCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 100)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, CitadelOfAdunDefID,
+                StartBuildingNear(EM, probe, CitadelOfAdunDefID,
                     Core::Math::Vec2(mAiBasePos.X - 140.0f, mAiBasePos.Y));
         }
     }
@@ -647,18 +778,18 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, StargateDefID,
+                StartBuildingNear(EM, probe, StargateDefID,
                     Core::Math::Vec2(mAiBasePos.X - 180.0f, mAiBasePos.Y + 80.0f));
         }
         if (scoutCount < 4 && stargateCount >= 1)
-        { int p = FindProducerFor(EM, ScoutDefID); if (p >= 0 && Res.Minerals >= 275 && Res.VespeneGas >= 125) ProductionSystem::StartTrain(EM, p, ScoutDefID); }
+            TrainUnitIfPossible(EM, ScoutDefID);
 
         if (CountByDefID(EM, mAIPlayerID, FleetBeaconDefID) < 1 && stargateCount >= 1 &&
             Res.Minerals >= 200 && Res.VespeneGas >= 150)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, FleetBeaconDefID,
+                StartBuildingNear(EM, probe, FleetBeaconDefID,
                     Core::Math::Vec2(mAiBasePos.X - 220.0f, mAiBasePos.Y));
         }
     }
@@ -667,13 +798,13 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     if (mStage >= 3)
     {
         if (carrierCount < 2 && CountByDefID(EM, mAIPlayerID, FleetBeaconDefID) >= 1)
-        { int p = FindProducerFor(EM, CarrierDefID); if (p >= 0 && Res.Minerals >= 350 && Res.VespeneGas >= 250) ProductionSystem::StartTrain(EM, p, CarrierDefID); }
+            TrainUnitIfPossible(EM, CarrierDefID);
 
         if (roboCount < 1 && coreCount >= 1 && Res.Minerals >= 200 && Res.VespeneGas >= 100)
         {
             int probe = FindIdleWorker(EM);
             if (probe >= 0)
-                BuildingSystem::StartBuild(EM, probe, RoboticsFacilityDefID,
+                StartBuildingNear(EM, probe, RoboticsFacilityDefID,
                     Core::Math::Vec2(mAiBasePos.X - 260.0f, mAiBasePos.Y));
         }
     }
@@ -720,6 +851,9 @@ void AIBrain::ManageMilitary(Core::ECS::EntityManager& EM)
 
 void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM)
 {
+    if (mAttackCooldownRemaining > 0.0f)
+        return;
+
     std::vector<int> Attackers;
     auto Units = EM.GetEntitiesWith<UnitComponent, PlayerComponent, CombatComponent, TransformComponent>();
     for (int Eid : Units)
@@ -729,8 +863,7 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM)
         auto* C = EM.GetComponent<CombatComponent>(Eid);
         if (!U || !P || !C) continue;
         if (P->PlayerID != mAIPlayerID) continue;
-        if (U->HitPoints <= 0) continue;
-        if (C->GroundDamage > 0 || C->AirDamage > 0)
+        if (IsCombatUnit(*U, *C))
             Attackers.push_back(Eid);
     }
 
@@ -738,6 +871,7 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM)
     {
         CombatSystem::IssueAttackMove(EM, Attackers, mEnemyBasePos);
         mAttackWaveCount++;
+        mAttackCooldownRemaining = kAttackWaveCooldownSeconds;
     }
 }
 
@@ -748,13 +882,11 @@ void AIBrain::BuildOrTrain(Core::ECS::EntityManager& EM, int DefID, const Core::
     {
         int Builder = FindIdleWorker(EM);
         if (Builder >= 0)
-            BuildingSystem::StartBuild(EM, Builder, DefID, NearPos);
+            StartBuildingNear(EM, Builder, DefID, NearPos);
     }
     else
     {
-        int Producer = FindProducerFor(EM, DefID);
-        if (Producer >= 0)
-            ProductionSystem::StartTrain(EM, Producer, DefID);
+        TrainUnitIfPossible(EM, DefID);
     }
 }
 
@@ -762,6 +894,9 @@ void AIBrain::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
+
+    mAttackCooldownRemaining =
+        std::max(0.0f, mAttackCooldownRemaining - DeltaTime);
 
     if (!mPositionsResolved)
     {

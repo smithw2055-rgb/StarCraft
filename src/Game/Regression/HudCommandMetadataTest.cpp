@@ -130,6 +130,31 @@ namespace
         return EntityID;
     }
 
+    int CreateCompletedRaceBuilding(Core::ECS::EntityManager& EM,
+                                    int DefID,
+                                    int PlayerID,
+                                    Core::Math::Vec2 Position)
+    {
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        const int EntityID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(EntityID).Position = Position;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.ChkUnitID = Def.ChkUnitID;
+        Unit.UnitRace = Def.RaceType;
+        Unit.HitPoints = Def.HitPoints;
+        Unit.MaxHitPoints = Def.HitPoints;
+        Unit.ShieldPoints = Def.ShieldPoints;
+        Unit.MaxShieldPoints = Def.ShieldPoints;
+        Unit.EnergyPoints = Def.EnergyPoints;
+        Unit.MaxEnergyPoints = Def.EnergyPoints;
+        EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
+        auto& Building = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);
+        Building.IsBuilding = true;
+        Building.BuildingDefID = DefID;
+        Building.UnderConstruction = false;
+        return EntityID;
+    }
+
     const Game::Client::UI::CmdButtonDef& RequireButton(
         const Game::Client::UI::Hud& Hud,
         int Slot,
@@ -608,7 +633,7 @@ int main()
     const auto Hatchery = Game::Races::GetUnitDefByID(HatcheryDef);
     const int DroneEntity = CreateZergUnit(EM, DroneDef, 0, Map.TileToWorld(24, 20));
     Hud.UpdateContext(EM, {DroneEntity});
-    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {DroneEntity}, Hud, 0),
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {DroneEntity}, Hud, 6),
         "Zerg Drone build submenu click is dispatched through the shared HUD command path");
     Hud.UpdateContext(EM, {DroneEntity});
     const auto& HatcheryButton = RequireButton(Hud, 0, "Hatchery");
@@ -678,8 +703,14 @@ int main()
     const int ExtractorDef = Game::Races::GetUnitDefID("Extractor");
     const auto Extractor = Game::Races::GetUnitDefByID(ExtractorDef);
     const int ExtractorDrone = CreateZergUnit(EM, DroneDef, 0, Map.TileToWorld(26, 20));
+    auto* ExtractorDroneUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(ExtractorDrone);
+    const int ExtractorDroneSupplyCost =
+        Game::Races::GetUnitDefByID(DroneDef).SupplyCost;
+    ExtractorDroneUnit->SupplyCost = ExtractorDroneSupplyCost;
+    Resources.SupplyUsed = ExtractorDroneSupplyCost;
     Hud.UpdateContext(EM, {ExtractorDrone});
-    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ExtractorDrone}, Hud, 0),
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ExtractorDrone}, Hud, 6),
         "Zerg Drone build submenu can be reopened for Extractor");
     Hud.UpdateContext(EM, {ExtractorDrone});
     const auto& ExtractorButton = RequireButton(Hud, 2, "Extractor");
@@ -703,6 +734,8 @@ int main()
         "Zerg Extractor target click fails when no geyser was clicked");
     Require(EM.IsAlive(ExtractorDrone) && Resources.Minerals == ExtractorMineralsBefore,
         "invalid Extractor target does not consume the Drone or resources");
+    Require(Resources.SupplyUsed == ExtractorDroneSupplyCost,
+        "invalid Extractor target keeps the Drone supply reserved");
     const int ZergGeyser = CreateVespeneGeyser(EM, Map.TileToWorld(26, 20));
     Game::Client::GameLoop::ClickTargetContext ZergGeyserTarget;
     ZergGeyserTarget.ResourceEntityID = ZergGeyser;
@@ -719,6 +752,8 @@ int main()
         "Zerg Extractor target click consumes the Drone");
     Require(Resources.Minerals == ExtractorMineralsBefore - Extractor.MineralCost,
         "Zerg Extractor target click spends the mineral cost");
+    Require(Resources.SupplyUsed == 0,
+        "Zerg Extractor target click releases the consumed Drone supply");
     auto* ExtractorBuilding = EM.GetComponent<Game::Components::BuildingComponent>(ZergGeyser);
     Require(ExtractorBuilding &&
             ExtractorBuilding->BuildingDefID == ExtractorDef &&
@@ -731,7 +766,7 @@ int main()
     const auto Assimilator = Game::Races::GetUnitDefByID(AssimilatorDef);
     const int ProbeEntity = CreateProtossUnit(EM, ProbeDef, 0, Map.TileToWorld(28, 20));
     Hud.UpdateContext(EM, {ProbeEntity});
-    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ProbeEntity}, Hud, 0),
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ProbeEntity}, Hud, 6),
         "Protoss Probe build submenu click is dispatched through the shared HUD command path");
     Hud.UpdateContext(EM, {ProbeEntity});
     const auto& AssimilatorButton = RequireButton(Hud, 2, "Assimilator");
@@ -784,7 +819,7 @@ int main()
     const int GatewayProbe = CreateProtossUnit(EM, ProbeDef, 0, Map.TileToWorld(22, 24));
     const Core::Math::Vec2 GatewayPlacement = Map.TileToWorld(24, 24);
     Hud.UpdateContext(EM, {GatewayProbe});
-    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {GatewayProbe}, Hud, 0),
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {GatewayProbe}, Hud, 6),
         "Protoss Probe build submenu can be reopened for Gateway");
     Hud.UpdateContext(EM, {GatewayProbe});
     const auto& GatewayButton = RequireButton(Hud, 3, "Gateway");
@@ -840,6 +875,108 @@ int main()
             GatewayBuilding->RequiresPylon &&
             GatewayBuilding->HasPylonPower,
         "new Protoss Gateway records required and available Pylon power");
+
+    Resources.Minerals = 3000;
+    Resources.VespeneGas = 3000;
+    Resources.SupplyUsed = 0;
+    Resources.SupplyMax = 80;
+
+    const int HydraliskDef = Game::Races::GetUnitDefID("Hydralisk");
+    const int HydraliskEntity =
+        CreateZergUnit(EM, HydraliskDef, 0, Map.TileToWorld(8, 28));
+    Hud.UpdateContext(EM, {HydraliskEntity});
+    const auto& ZergAttackButton = RequireButton(Hud, 1, "Attack");
+    Require(ZergAttackButton.Kind == Game::Client::UI::ActionKind::Command &&
+            ZergAttackButton.CommandId == Game::Client::UI::HudCommandId::AttackMove,
+        "Zerg combat units default to a real command page instead of an empty Protoss page");
+
+    const int ZergAdvancedDrone =
+        CreateZergUnit(EM, DroneDef, 0, Map.TileToWorld(10, 28));
+    Hud.UpdateContext(EM, {ZergAdvancedDrone});
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ZergAdvancedDrone}, Hud, 6),
+        "Zerg Drone opens the expanded build menu from the worker command page");
+    Hud.UpdateContext(EM, {ZergAdvancedDrone});
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ZergAdvancedDrone}, Hud, 7),
+        "Zerg Drone build page exposes an advanced build submenu");
+    Hud.UpdateContext(EM, {ZergAdvancedDrone});
+    const auto& QueensNestButton = RequireButton(Hud, 0, "Queen's Nest");
+    Require(QueensNestButton.Kind == Game::Client::UI::ActionKind::Build,
+        "Zerg advanced build page exposes Queen's Nest as a build action");
+
+    const int EvolutionChamberDef = Game::Races::GetUnitDefID("Evolution Chamber");
+    const int EvolutionChamber = CreateCompletedRaceBuilding(
+        EM, EvolutionChamberDef, 0, Map.TileToWorld(12, 28));
+    Hud.UpdateContext(EM, {EvolutionChamber});
+    const auto& ZergMeleeButton = RequireButton(Hud, 0, "Melee +1");
+    Require(ZergMeleeButton.Kind == Game::Client::UI::ActionKind::Upgrade &&
+            ZergMeleeButton.Enabled &&
+            ZergMeleeButton.ResearchId == Game::Systems::TerranResearchId::ZergMeleeAttacks,
+        "Zerg Evolution Chamber exposes melee upgrades as enabled command-card actions");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {EvolutionChamber}, Hud, 0),
+        "Zerg Evolution Chamber upgrade button starts research");
+    auto* EvolutionBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(EvolutionChamber);
+    Require(EvolutionBuilding && EvolutionBuilding->IsResearching &&
+            EvolutionBuilding->ResearchingID ==
+                static_cast<int>(Game::Systems::ResearchId::Zerg_MeleeAttacks),
+        "Zerg Evolution Chamber records active melee upgrade research");
+
+    const int HydraliskDenDef = Game::Races::GetUnitDefID("Hydralisk Den");
+    const int HydraliskDen = CreateCompletedRaceBuilding(
+        EM, HydraliskDenDef, 0, Map.TileToWorld(14, 28));
+    Hud.UpdateContext(EM, {HydraliskDen});
+    const auto& LurkerButton = RequireButton(Hud, 2, "Lurker");
+    Require(LurkerButton.Kind == Game::Client::UI::ActionKind::Research &&
+            LurkerButton.Enabled,
+        "Zerg Hydralisk Den exposes Lurker Aspect as research");
+
+    const int DragoonDef = Game::Races::GetUnitDefID("Dragoon");
+    const int DragoonEntity =
+        CreateProtossUnit(EM, DragoonDef, 0, Map.TileToWorld(16, 28));
+    Hud.UpdateContext(EM, {DragoonEntity});
+    const auto& ProtossAttackButton = RequireButton(Hud, 1, "Attack");
+    Require(ProtossAttackButton.Kind == Game::Client::UI::ActionKind::Command &&
+            ProtossAttackButton.CommandId == Game::Client::UI::HudCommandId::AttackMove,
+        "Protoss combat units default to a real command page");
+
+    const int ProtossAdvancedProbe =
+        CreateProtossUnit(EM, ProbeDef, 0, Map.TileToWorld(18, 28));
+    Hud.UpdateContext(EM, {ProtossAdvancedProbe});
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ProtossAdvancedProbe}, Hud, 6),
+        "Protoss Probe opens the expanded build menu from the worker command page");
+    Hud.UpdateContext(EM, {ProtossAdvancedProbe});
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ProtossAdvancedProbe}, Hud, 7),
+        "Protoss Probe first build page exposes an advanced submenu");
+    Hud.UpdateContext(EM, {ProtossAdvancedProbe});
+    const auto& RoboticsButton = RequireButton(Hud, 1, "Robotics Facility");
+    Require(RoboticsButton.Kind == Game::Client::UI::ActionKind::Build,
+        "Protoss advanced build page exposes Robotics Facility as a build action");
+
+    const int ForgeDef = Game::Races::GetUnitDefID("Forge");
+    const int Forge = CreateCompletedRaceBuilding(
+        EM, ForgeDef, 0, Map.TileToWorld(20, 28));
+    Hud.UpdateContext(EM, {Forge});
+    const auto& GroundWeaponsButton = RequireButton(Hud, 0, "Ground Wpn +1");
+    Require(GroundWeaponsButton.Kind == Game::Client::UI::ActionKind::Upgrade &&
+            GroundWeaponsButton.Enabled &&
+            GroundWeaponsButton.ResearchId == Game::Systems::TerranResearchId::ProtossGroundWeapons,
+        "Protoss Forge exposes ground weapon upgrades");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Forge}, Hud, 0),
+        "Protoss Forge upgrade button starts research");
+    auto* ForgeBuilding = EM.GetComponent<Game::Components::BuildingComponent>(Forge);
+    Require(ForgeBuilding && ForgeBuilding->IsResearching &&
+            ForgeBuilding->ResearchingID ==
+                static_cast<int>(Game::Systems::ResearchId::Protoss_GroundWeapons),
+        "Protoss Forge records active ground weapon research");
+
+    const int CyberneticsCoreDef = Game::Races::GetUnitDefID("Cybernetics Core");
+    const int CyberneticsCore = CreateCompletedRaceBuilding(
+        EM, CyberneticsCoreDef, 0, Map.TileToWorld(22, 28));
+    Hud.UpdateContext(EM, {CyberneticsCore});
+    const auto& SingularityButton = RequireButton(Hud, 2, "Singularity");
+    Require(SingularityButton.Kind == Game::Client::UI::ActionKind::Upgrade &&
+            SingularityButton.Enabled,
+        "Protoss Cybernetics Core exposes Singularity Charge as an upgrade action");
 
     std::printf("HudCommandMetadataTest passed\n");
     return 0;

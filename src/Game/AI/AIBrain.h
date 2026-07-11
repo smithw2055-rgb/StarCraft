@@ -47,10 +47,18 @@ private:
     int FindProducerFor(Core::ECS::EntityManager& EM, int UnitDefID);
     int FindIdleWorker(Core::ECS::EntityManager& EM);
     int FindNearestFreeBuilding(Core::ECS::EntityManager& EM, int BuildingDefID);
+    bool FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDefID,
+                               const Core::Math::Vec2& NearPos, Core::Math::Vec2& OutPos);
+    bool StartBuildingNear(Core::ECS::EntityManager& EM, int BuilderID, int BuildingDefID,
+                           const Core::Math::Vec2& NearPos);
+    bool StartZergBuildingNear(Core::ECS::EntityManager& EM, int DroneID, int BuildingDefID,
+                               const Core::Math::Vec2& NearPos);
+    bool TrainUnitIfPossible(Core::ECS::EntityManager& EM, int UnitDefID);
 
     int CountUnits(Core::ECS::EntityManager& EM, int PlayerID, int ChkUnitID = -1);
     int CountBuildings(Core::ECS::EntityManager& EM, int PlayerID, bool ExcludeAddons = true);
-    int CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID);
+    int CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID,
+                     bool IncludeUnderConstruction = false);
     int GetRace(Core::ECS::EntityManager& EM);
     void BuildOrTrain(Core::ECS::EntityManager& EM, int DefID, const Core::Math::Vec2& NearPos);
 
@@ -60,6 +68,7 @@ private:
     float mDecisionTimer = 0.0f;
     float mDecisionInterval = 2.0f;
     int mAttackWaveCount = 0;
+    float mAttackCooldownRemaining = 0.0f;
     int mStage = 0;
     Core::Math::Vec2 mAiBasePos;
     Core::Math::Vec2 mEnemyBasePos;

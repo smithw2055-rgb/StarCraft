@@ -54,6 +54,24 @@ namespace
         return EntityID;
     }
 
+    int CreateCompletedBuilding(Core::ECS::EntityManager& EM,
+                                const char* DefName,
+                                Core::Math::Vec2 Position,
+                                int PlayerID)
+    {
+        const int DefID = Game::Races::GetUnitDefID(DefName);
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        const int EntityID = CreateUnit(EM, Def.ChkUnitID, Position, PlayerID);
+        auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+        Unit->UnitRace = Def.RaceType;
+        Unit->Speed = 0.0f;
+        auto& Building = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);
+        Building.IsBuilding = true;
+        Building.BuildingDefID = DefID;
+        Building.UnderConstruction = false;
+        return EntityID;
+    }
+
     Game::Components::CombatComponent& AddCombat(
         Core::ECS::EntityManager& EM,
         int EntityID,
@@ -174,6 +192,35 @@ namespace
         Require(Path && !Path->Path.empty(),
             "smart-click empty-ground move creates a movement path");
     }
+
+    void TestFactorySmartClickSetsRallyPoint()
+    {
+        Core::ECS::EntityManager EM;
+        const int Barracks = CreateCompletedBuilding(EM, "Barracks", {96.0f, 96.0f}, 0);
+        const int Marine = CreateUnit(EM, 0, {64.0f, 64.0f}, 0);
+        AddCombat(EM, Marine, 6, 0, true, false);
+        const Core::Math::Vec2 TargetPos{224.0f, 160.0f};
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = TargetPos;
+
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM,
+            {Barracks, Marine},
+            Target,
+            TargetPos);
+
+        auto* BarracksCommand = EM.GetComponent<Game::Components::CommandComponent>(Barracks);
+        Require(BarracksCommand && BarracksCommand->HasRallyPoint,
+            "smart-clicking with a production building selected sets rally point");
+        Require(BarracksCommand->RallyPoint.X == TargetPos.X &&
+                BarracksCommand->RallyPoint.Y == TargetPos.Y,
+            "production building rally point keeps clicked world position");
+
+        auto* MarineCommand = EM.GetComponent<Game::Components::CommandComponent>(Marine);
+        Require(MarineCommand && MarineCommand->CurrentCommand == Game::Components::CommandType::Move,
+            "smart-click still moves non-factory units in a mixed selection");
+    }
 }
 
 int main()
@@ -181,6 +228,7 @@ int main()
     TestMixedSelectionSmartClicksAirTarget();
     TestWorkerSmartClicksMinerals();
     TestSmartClickEmptyGroundMovesSelection();
+    TestFactorySmartClickSetsRallyPoint();
 
     std::printf("SmartClickCommandTest passed\n");
     return 0;

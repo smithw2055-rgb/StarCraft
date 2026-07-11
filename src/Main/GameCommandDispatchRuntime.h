@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 
 #include "Core/ECS/EntityManager.h"
@@ -28,6 +29,53 @@ enum class KeyboardCommandShortcut
     Patrol,
     Follow
 };
+
+inline bool CanUseRallyPoint(Core::ECS::EntityManager& EntityManager, int EntityID)
+{
+    auto* Building = EntityManager.GetComponent<Game::Components::BuildingComponent>(EntityID);
+    if (!Building || Building->UnderConstruction || Building->IsLifted)
+        return false;
+
+    int DefID = Building->BuildingDefID;
+    if (DefID < 0)
+    {
+        if (auto* Unit = EntityManager.GetComponent<Game::Components::UnitComponent>(EntityID))
+            DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+    }
+
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    if (!Def.IsBuilding || Def.IsAddon)
+        return false;
+
+    return Def.Name == "CommandCenter" ||
+           Def.Name == "Barracks" ||
+           Def.Name == "Factory" ||
+           Def.Name == "Starport" ||
+           Def.Name == "Hatchery" ||
+           Def.Name == "Lair" ||
+           Def.Name == "Hive" ||
+           Def.Name == "Nexus" ||
+           Def.Name == "Gateway" ||
+           Def.Name == "Robotics Facility" ||
+           Def.Name == "Stargate";
+}
+
+inline std::vector<int> ApplyRallyPointDefaultOrder(
+    Core::ECS::EntityManager& EntityManager,
+    const std::vector<int>& EntityIDs,
+    const Core::Math::Vec2& Target)
+{
+    std::vector<int> Remaining;
+    Remaining.reserve(EntityIDs.size());
+    for (int EntityID : EntityIDs)
+    {
+        if (CanUseRallyPoint(EntityManager, EntityID))
+            Game::Systems::CommandSystem::SetRallyPoint(EntityManager, EntityID, Target);
+        else
+            Remaining.push_back(EntityID);
+    }
+    return Remaining;
+}
 
 inline void ExecuteHudCommandSlot(
     Core::ECS::EntityManager& EntityManager,
@@ -167,10 +215,24 @@ inline bool ExecutePendingTargetCommand(
         if (ClickTarget.ResourceEntityID >= 0)
         {
             const auto BuildDef = Game::Races::GetUnitDefByID(BuildDefID);
+            int PlayerID = 0;
+            int ConsumedSupply = 0;
+            if (BuildDef.RaceType == Game::Components::Race::Zerg)
+            {
+                if (auto* Player = EntityManager.GetComponent<Game::Components::PlayerComponent>(EntityIDs[0]))
+                    PlayerID = Player->PlayerID;
+                if (auto* Unit = EntityManager.GetComponent<Game::Components::UnitComponent>(EntityIDs[0]))
+                    ConsumedSupply = std::max(0, Unit->SupplyCost);
+            }
+
             const bool Built = Game::Systems::BuildingSystem::StartBuild(
                 EntityManager, EntityIDs[0], BuildDefID, Game::Systems::BuildTarget::FromEntity(ClickTarget.ResourceEntityID));
             if (Built && BuildDef.RaceType == Game::Components::Race::Zerg)
+            {
+                auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
+                Resources.SupplyUsed = std::max(0, Resources.SupplyUsed - ConsumedSupply);
                 EntityManager.DestroyEntity(EntityIDs[0]);
+            }
             return Built;
         }
         return false;
@@ -225,17 +287,22 @@ inline void ExecuteSmartClickCommand(
     if (EntityIDs.empty())
         return;
 
+    const std::vector<int> ActingEntityIDs =
+        ApplyRallyPointDefaultOrder(EntityManager, EntityIDs, Target);
+    if (ActingEntityIDs.empty())
+        return;
+
     if (ClickTarget.EnemyEntityID >= 0)
     {
-        auto Attackers = FilterAttackersForTarget(EntityManager, EntityIDs, ClickTarget.EnemyEntityID);
+        auto Attackers = FilterAttackersForTarget(EntityManager, ActingEntityIDs, ClickTarget.EnemyEntityID);
         if (!Attackers.empty())
             Game::Systems::CombatSystem::IssueAttack(EntityManager, Attackers, ClickTarget.EnemyEntityID);
 
-        if (Attackers.size() < EntityIDs.size())
+        if (Attackers.size() < ActingEntityIDs.size())
         {
             std::vector<int> Movers;
-            Movers.reserve(EntityIDs.size() - Attackers.size());
-            for (int EntityID : EntityIDs)
+            Movers.reserve(ActingEntityIDs.size() - Attackers.size());
+            for (int EntityID : ActingEntityIDs)
             {
                 if (!CanEntityAttackTarget(EntityManager, EntityID, ClickTarget.EnemyEntityID))
                     Movers.push_back(EntityID);
@@ -246,13 +313,13 @@ inline void ExecuteSmartClickCommand(
     }
     else if (ClickTarget.ResourceEntityID >= 0)
     {
-        auto Harvesters = FilterHarvesters(EntityManager, EntityIDs);
+        auto Harvesters = FilterHarvesters(EntityManager, ActingEntityIDs);
         if (!Harvesters.empty())
             Game::Systems::HarvestSystem::IssueHarvest(EntityManager, Harvesters, ClickTarget.ResourceEntityID);
     }
     else
     {
-        Game::Systems::CommandSystem::IssueMove(EntityManager, EntityIDs, Target);
+        Game::Systems::CommandSystem::IssueMove(EntityManager, ActingEntityIDs, Target);
     }
 }
 
