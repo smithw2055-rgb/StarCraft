@@ -134,12 +134,30 @@ namespace
         }
         return -1;
     }
+
+    int FindMorphByTarget(Core::ECS::EntityManager& EM, int TargetDefID, int PlayerID)
+    {
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::MorphComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            auto* Morph = EM.GetComponent<Game::Components::MorphComponent>(EntityID);
+            auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+            if (Morph && Player && Player->PlayerID == PlayerID &&
+                Morph->MorphTargetDefID == TargetDefID && Morph->IsMorphing)
+            {
+                return EntityID;
+            }
+        }
+        return -1;
+    }
 }
 
 int main()
 {
     Core::ECS::SystemManager SysMgr;
     auto& EM = SysMgr.GetEntityManager();
+    Game::Systems::ZergSystem::SetImageResolver(
+        [](int ChkUnitID) { return 50000u + (uint32_t)ChkUnitID; });
 
     constexpr int PlayerID = 0;
     auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
@@ -334,6 +352,13 @@ int main()
             BusyResearchBuilding->ResearchingID ==
                 static_cast<int>(Game::Systems::ResearchId::Terran_InfantryWeapons),
         "research building tracks first active upgrade");
+    const int DuplicateEngineeringBay =
+        CreateCompletedBuilding(EM, "EngineeringBay", OverlapResearchPlayerID,
+                                {272.0f, 192.0f});
+    Require(!Game::Systems::UpgradeSystem::StartResearch(
+                EM, DuplicateEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "a player cannot research the same upgrade in two buildings at once");
     Require(!Game::Systems::UpgradeSystem::StartResearch(
                 EM, BusyEngineeringBay,
                 Game::Systems::ResearchId::Terran_InfantryArmor),
@@ -357,6 +382,10 @@ int main()
                 OverlapResearchPlayerID,
                 Game::Systems::ResearchId::Terran_InfantryWeapons) == 0,
         "manual research cancel does not grant the canceled upgrade");
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                EM, DuplicateEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "manual research cancel releases the player-wide research lock");
 
     const int DoomedEngineeringBay =
         CreateCompletedBuilding(EM, "EngineeringBay", DeadResearchPlayerID, {256.0f, 160.0f});
@@ -382,9 +411,16 @@ int main()
                 DeadResearchPlayerID,
                 Game::Systems::ResearchId::Terran_InfantryWeapons) == 0,
             "dead research building does not complete its upgrade after death");
-    Require(DeadResearchResources.Minerals == 200 &&
-            DeadResearchResources.VespeneGas == 200,
-        "research building death does not refund already-spent research resources");
+    Require(DeadResearchResources.Minerals == 275 &&
+            DeadResearchResources.VespeneGas == 275,
+        "destroyed research building refunds three quarters of spent resources like OpenBW");
+    const int ReplacementEngineeringBay =
+        CreateCompletedBuilding(EM, "EngineeringBay", DeadResearchPlayerID,
+                                {272.0f, 160.0f});
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                EM, ReplacementEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "research building death releases the player-wide research lock");
 
     constexpr int HighSlotResearchPlayerID = 8;
     auto& HighSlotResearchResources =
@@ -582,6 +618,11 @@ int main()
     Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(EM, LarvaWithPool, ZerglingDefID),
         "Zerg larva morph starts after normalized prerequisite check succeeds");
     Require(!EM.IsAlive(LarvaWithPool), "Zerg larva morph consumes the source larva");
+    const int ZerglingEgg = FindMorphByTarget(EM, ZerglingDefID, ZergMorphPlayerID);
+    auto* ZerglingEggRender = EM.GetComponent<Game::Components::RenderComponent>(ZerglingEgg);
+    Require(ZerglingEgg > 0 && ZerglingEggRender &&
+            ZerglingEggRender->ImageID == 50000u + 0x24u,
+        "Zerg larva morph creates a visible Egg using the Egg image id");
     Require(ZergMorphResources.Minerals == 300 - ZerglingDef.MineralCost &&
             ZergMorphResources.SupplyUsed == ZerglingDef.SupplyCost,
         "Zerg larva morph reserves resources and supply");
@@ -615,6 +656,13 @@ int main()
 
     Game::Map::GameMap ZergMorphMap;
     Game::Systems::ZergSystem ZergMorphSystem(SysMgr, &ZergMorphMap);
+    ZergMorphSystem.Update((float)LairDef.BuildTime + 0.1f);
+    auto* MorphedLairUnit = EM.GetComponent<Game::Components::UnitComponent>(MorphHatchery);
+    auto* MorphedLairRender = EM.GetComponent<Game::Components::RenderComponent>(MorphHatchery);
+    Require(MorphedLairUnit && MorphedLairUnit->ChkUnitID == LairDef.ChkUnitID &&
+            MorphedLairRender &&
+            MorphedLairRender->ImageID == 50000u + (uint32_t)LairDef.ChkUnitID,
+        "completed Zerg building morph switches to the target building image");
 
     constexpr int ZergLarvaEconomyPlayerID = 6;
     auto& ZergLarvaEconomyResources =
@@ -627,6 +675,20 @@ int main()
     const int EconomyHatchery =
         CreateCompletedBuilding(EM, "Hatchery", ZergLarvaEconomyPlayerID, {960.0f, 520.0f});
     Require(EconomyHatchery > 0, "completed Hatchery can support larva economy morphs");
+    auto* EconomyHatcheryBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(EconomyHatchery);
+    Require(EconomyHatcheryBuilding, "economy Hatchery has building state");
+    EconomyHatcheryBuilding->IsOrganic = true;
+    ZergMorphSystem.Update(15.1f);
+    const int SpawnedLarva = FindUnitByDef(EM, "Larva", ZergLarvaEconomyPlayerID);
+    auto* SpawnedLarvaRender = EM.GetComponent<Game::Components::RenderComponent>(SpawnedLarva);
+    auto* SpawnedLarvaOwner = EM.GetComponent<Game::Components::LarvaComponent>(SpawnedLarva);
+    Require(SpawnedLarva > 0 && SpawnedLarvaRender &&
+            SpawnedLarvaRender->ImageID == 50000u + 0x23u,
+        "Hatchery-spawned larva has a visible render image for IScript Init");
+    Require(SpawnedLarvaOwner &&
+            SpawnedLarvaOwner->ParentHatcheryEntityID == EconomyHatchery,
+        "Hatchery-spawned larva is owned by the individual source Hatchery");
     const int DroneDefID = Game::Races::GetUnitDefID("Drone");
     const auto DroneDef = Game::Races::GetUnitDefByID(DroneDefID);
     const int DroneLarva =
@@ -635,11 +697,22 @@ int main()
         "Zerg larva can morph into Drone for worker economy closure");
     Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(EM, DroneLarva, DroneDefID),
         "Zerg Drone morph starts from larva");
+    const int DroneEgg =
+        FindMorphByTarget(EM, DroneDefID, ZergLarvaEconomyPlayerID);
+    auto* DroneEggRender = EM.GetComponent<Game::Components::RenderComponent>(DroneEgg);
+    Require(DroneEgg > 0 && DroneEggRender &&
+            DroneEggRender->ImageID == 50000u + 0x24u,
+        "Drone morph remains visible as an Egg while construction is active");
     Require(ZergLarvaEconomyResources.SupplyUsed == 9,
         "Zerg Drone morph reserves worker supply");
     ZergMorphSystem.Update((float)DroneDef.BuildTime + 0.1f);
     Require(CountUnitsByDef(EM, "Drone", ZergLarvaEconomyPlayerID) >= 1,
         "Zerg Drone morph completes into a worker unit");
+    const int MorphedDrone = FindUnitByDef(EM, "Drone", ZergLarvaEconomyPlayerID);
+    auto* MorphedDroneRender = EM.GetComponent<Game::Components::RenderComponent>(MorphedDrone);
+    Require(MorphedDroneRender &&
+            MorphedDroneRender->ImageID == 50000u + (uint32_t)DroneDef.ChkUnitID,
+        "completed Drone morph has the target unit image for IScript Init");
 
     ZergLarvaEconomyResources.Minerals = 300;
     const int OverlordDefID = Game::Races::GetUnitDefID("Overlord");
@@ -653,6 +726,12 @@ int main()
         "Zerg larva can morph Overlord while supply capped");
     Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(EM, OverlordLarva, OverlordDefID),
         "Zerg Overlord morph starts from larva");
+    const int OverlordEgg =
+        FindMorphByTarget(EM, OverlordDefID, ZergLarvaEconomyPlayerID);
+    auto* OverlordEggRender = EM.GetComponent<Game::Components::RenderComponent>(OverlordEgg);
+    Require(OverlordEgg > 0 && OverlordEggRender &&
+            OverlordEggRender->ImageID == 50000u + 0x24u,
+        "Overlord morph uses the Egg image until completion");
     Require(ZergLarvaEconomyResources.SupplyUsed == 9,
         "Zerg Overlord morph does not consume supply");
     Require(ZergLarvaEconomyResources.SupplyMax == SupplyMaxBeforeOverlord,
@@ -666,6 +745,11 @@ int main()
         EM.GetComponent<Game::Components::UnitComponent>(MorphedOverlord);
     Require(MorphedOverlordUnit && MorphedOverlordUnit->IsDetector,
         "Zerg Overlord morph preserves detector metadata");
+    auto* MorphedOverlordRender =
+        EM.GetComponent<Game::Components::RenderComponent>(MorphedOverlord);
+    Require(MorphedOverlordRender &&
+            MorphedOverlordRender->ImageID == 50000u + (uint32_t)OverlordDef.ChkUnitID,
+        "completed Overlord morph has the target unit image for IScript Init");
     Require(ZergLarvaEconomyResources.SupplyMax ==
             SupplyMaxBeforeOverlord + Game::Races::GetSupplyProvidedByDefID(OverlordDefID),
         "completed Zerg Overlord increases supply cap");
@@ -686,6 +770,13 @@ int main()
                 EM, BuilderDrone, HatcheryDefID, {1088.0f, 560.0f}),
         "Zerg Drone can start morphing into a Hatchery");
     Require(!EM.IsAlive(BuilderDrone), "Zerg Drone building morph consumes the source Drone");
+    const int MorphingHatchery =
+        FindMorphByTarget(EM, HatcheryDefID, ZergDroneBuildingPlayerID);
+    auto* MorphingHatcheryRender =
+        EM.GetComponent<Game::Components::RenderComponent>(MorphingHatchery);
+    Require(MorphingHatchery > 0 && MorphingHatcheryRender &&
+            MorphingHatcheryRender->ImageID == 50000u + (uint32_t)HatcheryDef.ChkUnitID,
+        "Drone building morph is visible with the target Zerg building image");
     Require(ZergDroneBuildingResources.SupplyUsed == 0,
         "Zerg Drone building morph releases the consumed Drone supply");
     Require(ZergDroneBuildingResources.SupplyMax == 10,

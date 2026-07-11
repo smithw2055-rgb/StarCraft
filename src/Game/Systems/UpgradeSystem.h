@@ -120,7 +120,9 @@ public:
                                int BuildingID,
                                ResearchId ResearchId);
 
-    static bool CancelResearch(Core::ECS::EntityManager& EM, int BuildingID);
+    static bool CancelResearch(Core::ECS::EntityManager& EM,
+                               int BuildingID,
+                               bool BuildingDestroyed = false);
 
     static int GetResearchLevel(int PlayerID, ResearchId ResearchId);
     static bool HasResearch(int PlayerID, ResearchId ResearchId);

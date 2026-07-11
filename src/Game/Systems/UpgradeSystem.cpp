@@ -34,6 +34,8 @@ namespace
     };
 
     PlayerUpgrades gUpgrades[kPlayerResourceSlots];
+    std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>,
+               kPlayerResourceSlots> gResearching{};
 
     constexpr ResearchDef kResearchDefs[] =
     {
@@ -309,6 +311,11 @@ void UpgradeSystem::Update(float DeltaTime)
                             RefreshUnitEnergyCap(EM, UnitID);
                     }
                 }
+                if (PlayerID < kPlayerResourceSlots &&
+                    Rid < static_cast<int>(ResearchId::Count))
+                {
+                    gResearching[(size_t)PlayerID][(size_t)Rid] = false;
+                }
             }
 
             Bldg->IsResearching = false;
@@ -374,6 +381,12 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "research already maxed");
         return false;
     }
+    if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots &&
+        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)])
+    {
+        SetReason(OutReason, "research already in progress for player");
+        return false;
+    }
 
     const int MineralCost = Research->MineralCost + CurrentLevel * Research->MineralStep;
     const int GasCost = Research->GasCost + CurrentLevel * Research->GasStep;
@@ -418,6 +431,8 @@ bool UpgradeSystem::StartResearch(Core::ECS::EntityManager& EM,
         Bldg->ResearchingID = static_cast<int>(ResearchId);
         Bldg->ResearchPlayer = PlayerID;
     }
+    if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots)
+        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = true;
 
     Logger::Info("UpgradeSystem",
         "Player " + std::to_string(PlayerID) + " started " +
@@ -426,7 +441,9 @@ bool UpgradeSystem::StartResearch(Core::ECS::EntityManager& EM,
     return true;
 }
 
-bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM, int BuildingID)
+bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM,
+                                   int BuildingID,
+                                   bool BuildingDestroyed)
 {
     auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
     if (!Bldg || !Bldg->IsResearching) return false;
@@ -441,8 +458,14 @@ bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM, int BuildingID)
     if (GetResearchCost(ResearchId, PlayerID, MineralCost, GasCost))
     {
         auto& Resources = HarvestSystem::GetResources(PlayerID);
-        Resources.Minerals += MineralCost;
-        Resources.VespeneGas += GasCost;
+        const int RefundNumerator = BuildingDestroyed ? 3 : 4;
+        Resources.Minerals += MineralCost * RefundNumerator / 4;
+        Resources.VespeneGas += GasCost * RefundNumerator / 4;
+    }
+    if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots &&
+        ResearchId > ResearchId::None && ResearchId < ResearchId::Count)
+    {
+        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = false;
     }
 
     Bldg->BuildTimeRemaining = 0.0f;

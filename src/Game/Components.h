@@ -244,6 +244,11 @@ struct ImageTreeComponent
     std::vector<ImageSubnode> Nodes;
 };
 
+struct LarvaComponent
+{
+    int ParentHatcheryEntityID = -1;
+};
+
 struct UnitComponent
 {
     int ChkUnitID = 0;

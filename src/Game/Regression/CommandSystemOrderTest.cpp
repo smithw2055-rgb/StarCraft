@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <vector>
 
 namespace Game::Systems
@@ -31,6 +32,11 @@ namespace
             std::fprintf(stderr, "FAIL: %s\n", Message);
             std::exit(1);
         }
+    }
+
+    bool NearlyEqual(float A, float B)
+    {
+        return std::fabs(A - B) < 0.01f;
     }
 
     int CreateUnit(Core::ECS::EntityManager& EM,
@@ -131,6 +137,64 @@ int main()
         "mobile units receive move commands");
     Require(ScvPath && !ScvPath->Path.empty(),
         "mobile units receive movement paths");
+
+    int GroupMarineA = CreateUnit(EM, 0, 4.0f, {32.0f, 32.0f});
+    int GroupMarineB = CreateUnit(EM, 0, 4.0f, {64.0f, 32.0f});
+    int GroupMarineC = CreateUnit(EM, 0, 4.0f, {32.0f, 64.0f});
+    const std::vector<int> MoveGroup{GroupMarineA, GroupMarineB, GroupMarineC};
+    Game::Systems::CommandSystem::IssueMove(EM, MoveGroup, {320.0f, 320.0f});
+
+    auto* GroupCmdA = EM.GetComponent<Game::Components::CommandComponent>(GroupMarineA);
+    auto* GroupCmdB = EM.GetComponent<Game::Components::CommandComponent>(GroupMarineB);
+    auto* GroupCmdC = EM.GetComponent<Game::Components::CommandComponent>(GroupMarineC);
+    Require(GroupCmdA && GroupCmdB && GroupCmdC,
+        "group move assigns commands to every mobile selected unit");
+    Require(NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 32.0f) &&
+            NearlyEqual(GroupCmdC->TargetPosition.Y - GroupCmdA->TargetPosition.Y, 32.0f),
+        "compact group move preserves each unit's relative formation offset");
+    Require(NearlyEqual((GroupCmdA->TargetPosition.X + GroupCmdB->TargetPosition.X +
+                         GroupCmdC->TargetPosition.X) / 3.0f, 320.0f) &&
+            NearlyEqual((GroupCmdA->TargetPosition.Y + GroupCmdB->TargetPosition.Y +
+                         GroupCmdC->TargetPosition.Y) / 3.0f, 320.0f),
+        "compact group move centers the formation on the clicked destination");
+
+    Game::Systems::CommandSystem::IssueMove(EM, MoveGroup, {48.0f, 48.0f});
+    Require(NearlyEqual(GroupCmdA->TargetPosition.X, 32.0f) &&
+            NearlyEqual(GroupCmdA->TargetPosition.Y, 32.0f) &&
+            NearlyEqual(GroupCmdB->TargetPosition.X, 64.0f) &&
+            NearlyEqual(GroupCmdC->TargetPosition.Y, 64.0f),
+        "clicking inside a compact group does not collapse it onto one point");
+
+    Game::Components::Order QueuedGroupMove;
+    QueuedGroupMove.Type = Game::Components::OrderType::Move;
+    QueuedGroupMove.TargetPosition = {480.0f, 320.0f};
+    Game::Systems::CommandSystem::IssueOrder(EM, MoveGroup, QueuedGroupMove, true);
+    Require(GroupCmdA->Orders.size() == 2 &&
+            GroupCmdB->Orders.size() == 2 &&
+            GroupCmdC->Orders.size() == 2,
+        "queued group move appends one order per selected unit");
+    Require(NearlyEqual(GroupCmdB->Orders[1].TargetPosition.X -
+                        GroupCmdA->Orders[1].TargetPosition.X, 32.0f) &&
+            NearlyEqual(GroupCmdC->Orders[1].TargetPosition.Y -
+                        GroupCmdA->Orders[1].TargetPosition.Y, 32.0f),
+        "queued group move stores per-unit formation positions");
+
+    Game::Systems::CommandSystem::IssueAttackMove(EM, MoveGroup, {640.0f, 320.0f});
+    Require(GroupCmdA->CurrentCommand == Game::Components::CommandType::AttackMove &&
+            GroupCmdB->CurrentCommand == Game::Components::CommandType::AttackMove &&
+            NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 32.0f),
+        "attack-move uses the same per-unit group positioning semantics");
+
+    int WideMarineA = CreateUnit(EM, 0, 4.0f, {0.0f, 160.0f});
+    int WideMarineB = CreateUnit(EM, 0, 4.0f, {256.0f, 160.0f});
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {WideMarineA, WideMarineB}, {400.0f, 160.0f});
+    auto* WideCmdA = EM.GetComponent<Game::Components::CommandComponent>(WideMarineA);
+    auto* WideCmdB = EM.GetComponent<Game::Components::CommandComponent>(WideMarineB);
+    Require(WideCmdA && WideCmdB &&
+            NearlyEqual(WideCmdA->TargetPosition.X, 400.0f) &&
+            NearlyEqual(WideCmdB->TargetPosition.X, 400.0f),
+        "widely scattered selections converge instead of preserving an oversized formation");
 
     int DeadScv = CreateUnit(
         EM,

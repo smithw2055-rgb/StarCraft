@@ -58,6 +58,13 @@ static bool IsMovementOrder(OrderType Type)
            Type == OrderType::Guard;
 }
 
+static bool IsGroupPositionOrder(OrderType Type)
+{
+    return Type == OrderType::Move ||
+           Type == OrderType::AttackMove ||
+           Type == OrderType::Patrol;
+}
+
 static bool IsSiegedTankUnit(int ChkUnitID)
 {
     return ChkUnitID == 30 ||  // Terran Siege Tank Siege Mode
@@ -578,8 +585,116 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                                 const Order& InOrder,
                                 bool Queued)
 {
+    struct GroupMove
+    {
+        Core::Math::Vec2 Center;
+        Core::Math::Vec2 Min;
+        Core::Math::Vec2 Max;
+        int Count = 0;
+        bool AnyGroundUnit = false;
+        bool TargetInsideBounds = false;
+        bool PreserveOffsets = false;
+    } Group;
+
+    const bool AdjustGroupPositions =
+        Entities.size() >= 2 &&
+        InOrder.TargetEntityID < 0 &&
+        IsGroupPositionOrder(InOrder.Type);
+
+    if (AdjustGroupPositions)
+    {
+        for (Core::ECS::EntityID ID : Entities)
+        {
+            if (!CanReceiveMovementOrder(EM, ID))
+                continue;
+            auto* Trans = EM.GetComponent<TransformComponent>(ID);
+            if (!Trans)
+                continue;
+
+            if (Group.Count == 0)
+            {
+                Group.Min = Trans->Position;
+                Group.Max = Trans->Position;
+            }
+            else
+            {
+                Group.Min.X = std::min(Group.Min.X, Trans->Position.X);
+                Group.Min.Y = std::min(Group.Min.Y, Trans->Position.Y);
+                Group.Max.X = std::max(Group.Max.X, Trans->Position.X);
+                Group.Max.Y = std::max(Group.Max.Y, Trans->Position.Y);
+            }
+            Group.Center += Trans->Position;
+            ++Group.Count;
+            Group.AnyGroundUnit = Group.AnyGroundUnit || !ShouldMoveAsAir(EM, ID);
+        }
+
+        if (Group.Count >= 2)
+        {
+            Group.Center = Group.Center / (float)Group.Count;
+            Group.TargetInsideBounds =
+                InOrder.TargetPosition.X >= Group.Min.X &&
+                InOrder.TargetPosition.X <= Group.Max.X &&
+                InOrder.TargetPosition.Y >= Group.Min.Y &&
+                InOrder.TargetPosition.Y <= Group.Max.Y;
+            const float MaxSpan = Group.AnyGroundUnit ? 192.0f : 256.0f;
+            Group.PreserveOffsets =
+                !Group.TargetInsideBounds &&
+                Group.Max.X - Group.Min.X <= MaxSpan &&
+                Group.Max.Y - Group.Min.Y <= MaxSpan;
+        }
+    }
+
     for (Core::ECS::EntityID ID : Entities)
-        IssueOrder(EM, ID, InOrder, Queued);
+    {
+        Order EntityOrder = InOrder;
+        if (AdjustGroupPositions && Group.Count >= 2)
+        {
+            if (auto* Trans = EM.GetComponent<TransformComponent>(ID))
+            {
+                if (Group.TargetInsideBounds)
+                {
+                    EntityOrder.TargetPosition.X = std::clamp(
+                        Trans->Position.X,
+                        InOrder.TargetPosition.X - 32.0f,
+                        InOrder.TargetPosition.X + 32.0f);
+                    EntityOrder.TargetPosition.Y = std::clamp(
+                        Trans->Position.Y,
+                        InOrder.TargetPosition.Y - 32.0f,
+                        InOrder.TargetPosition.Y + 32.0f);
+                }
+                else if (Group.PreserveOffsets)
+                {
+                    EntityOrder.TargetPosition =
+                        Trans->Position + (InOrder.TargetPosition - Group.Center);
+                }
+            }
+        }
+
+        if (gCmdMap)
+        {
+            float Left = (float)CollisionRadiusForUnit(EM.GetComponent<UnitComponent>(ID));
+            float Up = Left;
+            float Right = Left;
+            float Down = Left;
+            if (auto* Path = EM.GetComponent<PathfindingComponent>(ID);
+                Path && Path->HasCollisionBounds)
+            {
+                Left = (float)Path->CollisionLeft;
+                Up = (float)Path->CollisionUp;
+                Right = (float)Path->CollisionRight + 1.0f;
+                Down = (float)Path->CollisionDown + 1.0f;
+            }
+
+            const float MapWidth = (float)gCmdMap->GetWidth() * 32.0f;
+            const float MapHeight = (float)gCmdMap->GetHeight() * 32.0f;
+            EntityOrder.TargetPosition.X = std::clamp(
+                EntityOrder.TargetPosition.X, Left, std::max(Left, MapWidth - Right));
+            EntityOrder.TargetPosition.Y = std::clamp(
+                EntityOrder.TargetPosition.Y, Up, std::max(Up, MapHeight - Down));
+        }
+
+        IssueOrder(EM, ID, EntityOrder, Queued);
+    }
 }
 
 void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
@@ -618,13 +733,10 @@ void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
                                      const std::vector<int>& Units,
                                      Core::Math::Vec2 Target)
 {
-    for (int ID : Units)
-    {
-        Order AtkOrder;
-        AtkOrder.Type = OrderType::AttackMove;
-        AtkOrder.TargetPosition = Target;
-        IssueOrder(EM, {ID}, AtkOrder, false);
-    }
+    Order AtkOrder;
+    AtkOrder.Type = OrderType::AttackMove;
+    AtkOrder.TargetPosition = Target;
+    IssueOrder(EM, Units, AtkOrder, false);
 }
 
 void CommandSystem::QueueOrder(Core::ECS::EntityManager& EM,

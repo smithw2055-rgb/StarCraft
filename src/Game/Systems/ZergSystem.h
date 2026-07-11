@@ -16,6 +16,7 @@ namespace Game::Systems
 class ZergSystem : public Core::ECS::ISystem
 {
 public:
+    using ImageIDResolver = std::function<uint32_t(int)>;
     using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
 
     ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map);
@@ -24,6 +25,7 @@ public:
 
     static bool HasCreep(int TileX, int TileY);
     static void SetMap(Game::Map::GameMap* Map);
+    static void SetImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
 
     static void BurrowUnit(Core::ECS::EntityManager& EM, int EntityID);

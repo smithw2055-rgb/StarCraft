@@ -102,6 +102,42 @@ namespace
         Path.CollisionDown = Down;
         Path.CollisionRadius = std::max(4, std::max(Left + Right + 1, Up + Down + 1) / 2);
     }
+
+    int CreateStationaryCollisionUnit(Core::ECS::EntityManager& EM,
+                                      Core::Math::Vec2 Position,
+                                      int Left,
+                                      int Up,
+                                      int Right,
+                                      int Down)
+    {
+        int UnitID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(UnitID).Position = Position;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(UnitID);
+        Unit.ChkUnitID = 0;
+        Unit.Speed = 4.0f;
+        auto& Path = EM.AddComponent<Game::Components::PathfindingComponent>(UnitID);
+        SetCollisionBounds(Path, Left, Up, Right, Down);
+        EM.AddComponent<Game::Components::CommandComponent>(UnitID).CurrentCommand =
+            Game::Components::CommandType::Stop;
+        return UnitID;
+    }
+
+    bool CollisionBoundsOverlap(const Game::Components::TransformComponent& ATrans,
+                                const Game::Components::PathfindingComponent& APath,
+                                const Game::Components::TransformComponent& BTrans,
+                                const Game::Components::PathfindingComponent& BPath)
+    {
+        const float ALeft = ATrans.Position.X - (float)APath.CollisionLeft;
+        const float ARight = ATrans.Position.X + (float)APath.CollisionRight + 1.0f;
+        const float ATop = ATrans.Position.Y - (float)APath.CollisionUp;
+        const float ABottom = ATrans.Position.Y + (float)APath.CollisionDown + 1.0f;
+        const float BLeft = BTrans.Position.X - (float)BPath.CollisionLeft;
+        const float BRight = BTrans.Position.X + (float)BPath.CollisionRight + 1.0f;
+        const float BTop = BTrans.Position.Y - (float)BPath.CollisionUp;
+        const float BBottom = BTrans.Position.Y + (float)BPath.CollisionDown + 1.0f;
+        return ALeft < BRight && ARight > BLeft &&
+               ATop < BBottom && ABottom > BTop;
+    }
 }
 
 int main()
@@ -331,6 +367,81 @@ int main()
         "middle unit is not pushed backward by overlap repulsion");
     Require(BackTrans->Position.X > -22.0f,
         "rear large unit is not pushed backward by overlap repulsion");
+
+    Core::ECS::SystemManager DynamicCollisionSysMgr;
+    auto& DynamicCollisionEM = DynamicCollisionSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem DynamicCollisionMovement(DynamicCollisionSysMgr);
+    int AsymmetricBlocker = CreateStationaryCollisionUnit(
+        DynamicCollisionEM, {96.0f, 0.0f}, 40, 12, 4, 12);
+    int LeftMover = CreateMovableUnit(
+        DynamicCollisionEM, {0.0f, 0.0f}, {192.0f, 0.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* LeftMoverPath =
+        DynamicCollisionEM.GetComponent<Game::Components::PathfindingComponent>(LeftMover);
+    auto* BlockerPath =
+        DynamicCollisionEM.GetComponent<Game::Components::PathfindingComponent>(AsymmetricBlocker);
+    auto* LeftMoverTrans =
+        DynamicCollisionEM.GetComponent<Game::Components::TransformComponent>(LeftMover);
+    auto* BlockerTrans =
+        DynamicCollisionEM.GetComponent<Game::Components::TransformComponent>(AsymmetricBlocker);
+    Require(LeftMoverPath && BlockerPath && LeftMoverTrans && BlockerTrans,
+        "dynamic collision coverage has transforms and DAT bounds");
+    SetCollisionBounds(*LeftMoverPath, 8, 8, 8, 8);
+
+    float LeftSideXAtSlide = -1.0f;
+    for (int I = 0; I < 80; ++I)
+    {
+        const float PreviousY = LeftMoverTrans->Position.Y;
+        DynamicCollisionMovement.Update(0.05f);
+        Require(!CollisionBoundsOverlap(
+                    *LeftMoverTrans, *LeftMoverPath, *BlockerTrans, *BlockerPath),
+            "moving units never penetrate another unit's asymmetric collision bounds");
+        if (LeftSideXAtSlide < 0.0f &&
+            std::fabs(LeftMoverTrans->Position.Y - PreviousY) > 0.001f)
+        {
+            LeftSideXAtSlide = LeftMoverTrans->Position.X;
+        }
+    }
+    Require(LeftSideXAtSlide >= 0.0f && LeftSideXAtSlide <= 48.1f,
+        "approaching from the left respects the blocker's extended DAT left edge");
+
+    Core::ECS::SystemManager RightCollisionSysMgr;
+    auto& RightCollisionEM = RightCollisionSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem RightCollisionMovement(RightCollisionSysMgr);
+    int RightBlocker = CreateStationaryCollisionUnit(
+        RightCollisionEM, {96.0f, 0.0f}, 40, 12, 4, 12);
+    int RightMover = CreateMovableUnit(
+        RightCollisionEM, {192.0f, 0.0f}, {0.0f, 0.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* RightMoverPath =
+        RightCollisionEM.GetComponent<Game::Components::PathfindingComponent>(RightMover);
+    auto* RightBlockerPath =
+        RightCollisionEM.GetComponent<Game::Components::PathfindingComponent>(RightBlocker);
+    auto* RightMoverTrans =
+        RightCollisionEM.GetComponent<Game::Components::TransformComponent>(RightMover);
+    auto* RightBlockerTrans =
+        RightCollisionEM.GetComponent<Game::Components::TransformComponent>(RightBlocker);
+    Require(RightMoverPath && RightBlockerPath && RightMoverTrans && RightBlockerTrans,
+        "right-side dynamic collision coverage has transforms and DAT bounds");
+    SetCollisionBounds(*RightMoverPath, 8, 8, 8, 8);
+
+    float RightSideXAtSlide = 999.0f;
+    for (int I = 0; I < 80; ++I)
+    {
+        const float PreviousY = RightMoverTrans->Position.Y;
+        RightCollisionMovement.Update(0.05f);
+        Require(!CollisionBoundsOverlap(
+                    *RightMoverTrans, *RightMoverPath,
+                    *RightBlockerTrans, *RightBlockerPath),
+            "right-side movement never penetrates asymmetric collision bounds");
+        if (RightSideXAtSlide > 998.0f &&
+            std::fabs(RightMoverTrans->Position.Y - PreviousY) > 0.001f)
+        {
+            RightSideXAtSlide = RightMoverTrans->Position.X;
+        }
+    }
+    Require(RightSideXAtSlide < 999.0f && RightSideXAtSlide >= 108.9f,
+        "approaching from the right uses the blocker's shorter DAT right edge");
 
     Core::ECS::SystemManager ImmobileSysMgr;
     auto& ImmobileEM = ImmobileSysMgr.GetEntityManager();

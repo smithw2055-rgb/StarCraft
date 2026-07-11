@@ -6,6 +6,7 @@
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 
 namespace Game::Systems
 {
@@ -101,10 +102,13 @@ inline void SettleSupplyForDeath(Core::ECS::EntityManager& EM,
     }
     if (auto* MutableBuilding = EM.GetComponent<Game::Components::BuildingComponent>(VictimEntityID))
     {
-        MutableBuilding->BuildTimeRemaining = 0.0f;
-        MutableBuilding->IsResearching = false;
-        MutableBuilding->ResearchingID = -1;
-        MutableBuilding->ResearchPlayer = -1;
+        if (!UpgradeSystem::CancelResearch(EM, VictimEntityID, true))
+        {
+            MutableBuilding->BuildTimeRemaining = 0.0f;
+            MutableBuilding->IsResearching = false;
+            MutableBuilding->ResearchingID = -1;
+            MutableBuilding->ResearchPlayer = -1;
+        }
     }
 
     int SupplyUsed = 0;

@@ -412,6 +412,154 @@ namespace
         return Proposed;
     }
 
+    static StaticBlockerRect DynamicCollisionRectForPath(
+        const PathfindingComponent& Path)
+    {
+        StaticBlockerRect Rect;
+        if (Path.HasCollisionBounds)
+        {
+            Rect.Left = (float)Path.CollisionLeft;
+            Rect.Top = (float)Path.CollisionUp;
+            Rect.Right = (float)Path.CollisionRight + 1.0f;
+            Rect.Bottom = (float)Path.CollisionDown + 1.0f;
+        }
+        else
+        {
+            const float Radius = (float)std::max(4, Path.CollisionRadius);
+            Rect.Left = Radius;
+            Rect.Top = Radius;
+            Rect.Right = Radius;
+            Rect.Bottom = Radius;
+        }
+        return Rect;
+    }
+
+    static float DynamicCollisionOverlap(Core::Math::Vec2 PositionA,
+                                         const StaticBlockerRect& RectA,
+                                         Core::Math::Vec2 PositionB,
+                                         const StaticBlockerRect& RectB)
+    {
+        const float OverlapX = std::min(PositionA.X + RectA.Right,
+                                        PositionB.X + RectB.Right) -
+                               std::max(PositionA.X - RectA.Left,
+                                        PositionB.X - RectB.Left);
+        const float OverlapY = std::min(PositionA.Y + RectA.Bottom,
+                                        PositionB.Y + RectB.Bottom) -
+                               std::max(PositionA.Y - RectA.Top,
+                                        PositionB.Y - RectB.Top);
+        if (OverlapX <= 0.0f || OverlapY <= 0.0f)
+            return 0.0f;
+        return OverlapX * OverlapY;
+    }
+
+    static Core::ECS::EntityID FindDynamicUnitCollision(
+        Core::ECS::EntityManager& EM,
+        Core::ECS::EntityID MovingID,
+        Core::Math::Vec2 Current,
+        Core::Math::Vec2 Proposed)
+    {
+        auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID);
+        if (!MovingPath || MovingPath->IsAir)
+            return -1;
+
+        const StaticBlockerRect MovingRect =
+            DynamicCollisionRectForPath(*MovingPath);
+        auto Units = EM.GetEntitiesWith<TransformComponent,
+                                        UnitComponent,
+                                        PathfindingComponent>();
+        for (auto OtherID : Units)
+        {
+            if (OtherID == MovingID || IsStaticGroundBlocker(EM, OtherID))
+                continue;
+
+            auto* OtherTrans = EM.GetComponent<TransformComponent>(OtherID);
+            auto* OtherUnit = EM.GetComponent<UnitComponent>(OtherID);
+            auto* OtherPath = EM.GetComponent<PathfindingComponent>(OtherID);
+            if (!OtherTrans || !OtherUnit || !OtherPath ||
+                OtherUnit->HitPoints <= 0 || OtherPath->IsAir)
+            {
+                continue;
+            }
+
+            const StaticBlockerRect OtherRect =
+                DynamicCollisionRectForPath(*OtherPath);
+            const float CurrentOverlap = DynamicCollisionOverlap(
+                Current, MovingRect, OtherTrans->Position, OtherRect);
+            const float ProposedOverlap = DynamicCollisionOverlap(
+                Proposed, MovingRect, OtherTrans->Position, OtherRect);
+            // Existing overlaps can occur during spawn, map load, or dense group
+            // movement. Leave those to the soft repulse field so units can
+            // separate; the hard boundary prevents a separated pair from
+            // entering a new overlap.
+            if (CurrentOverlap <= 0.0f && ProposedOverlap > 0.0f)
+            {
+                return OtherID;
+            }
+        }
+        return -1;
+    }
+
+    static Core::Math::Vec2 ResolveDynamicUnitBlockers(
+        Core::ECS::EntityManager& EM,
+        Core::ECS::EntityID MovingID,
+        Core::Math::Vec2 Current,
+        Core::Math::Vec2 Proposed,
+        Core::Math::Vec2 MoveDir,
+        bool IsAir)
+    {
+        if (IsAir)
+            return Proposed;
+
+        const Core::ECS::EntityID BlockerID =
+            FindDynamicUnitCollision(EM, MovingID, Current, Proposed);
+        if (BlockerID < 0)
+            return Proposed;
+
+        if (auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID))
+            MovingPath->BlockedByEntityID = BlockerID;
+
+        const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
+        if ((SlideX - Current).LengthSq() > 0.001f &&
+            FindDynamicUnitCollision(EM, MovingID, Current, SlideX) < 0)
+        {
+            return SlideX;
+        }
+
+        const Core::Math::Vec2 SlideY{Current.X, Proposed.Y};
+        if ((SlideY - Current).LengthSq() > 0.001f &&
+            FindDynamicUnitCollision(EM, MovingID, Current, SlideY) < 0)
+        {
+            return SlideY;
+        }
+
+        const float Step = (Proposed - Current).Length();
+        if (Step > 0.001f)
+        {
+            Core::Math::Vec2 Lateral{-MoveDir.Y, MoveDir.X};
+            if (MovingID > BlockerID)
+                Lateral = Lateral * -1.0f;
+            Core::Math::Vec2 Diagonal = (MoveDir * 0.35f + Lateral).Normalized();
+            Core::Math::Vec2 Slide = Current + Diagonal * Step;
+            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
+                return Slide;
+
+            Diagonal = (MoveDir * 0.35f - Lateral).Normalized();
+            Slide = Current + Diagonal * Step;
+            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
+                return Slide;
+
+            Slide = Current + Lateral * Step;
+            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
+                return Slide;
+
+            Slide = Current - Lateral * Step;
+            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
+                return Slide;
+        }
+
+        return Current;
+    }
+
     static int TerrainClearanceForPath(const PathfindingComponent& Path)
     {
         return Path.CollisionRadius > 16 ? Path.CollisionRadius : 0;
@@ -940,6 +1088,18 @@ void MovementSystem::Update(float DeltaTime)
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
+                Proposed = ResolveDynamicUnitBlockers(
+                    EM, ID, Trans->Position, Proposed, MoveDir, PathComp->IsAir);
+                Proposed = ResolveStaticBlockers(
+                    EM, ID, Proposed, MoveDir,
+                    MovingRadius, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                if (FindDynamicUnitCollision(
+                        EM, ID, Trans->Position, Proposed) >= 0)
+                {
+                    Proposed = Trans->Position;
+                }
                 Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;
@@ -974,6 +1134,18 @@ void MovementSystem::Update(float DeltaTime)
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
+                Proposed = ResolveDynamicUnitBlockers(
+                    EM, ID, Trans->Position, Proposed, ActualMove, PathComp->IsAir);
+                Proposed = ResolveStaticBlockers(
+                    EM, ID, Proposed, ActualMove,
+                    MovingRadius, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                if (FindDynamicUnitCollision(
+                        EM, ID, Trans->Position, Proposed) >= 0)
+                {
+                    Proposed = Trans->Position;
+                }
                 Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;

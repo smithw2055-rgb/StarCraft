@@ -14,7 +14,8 @@ namespace Game::Client::GameLoop
 inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int)> Resolver)
 {
     Game::Systems::ProductionSystem::SetImageResolver(Resolver);
-    Game::Systems::BuildingSystem::SetImageResolver(std::move(Resolver));
+    Game::Systems::BuildingSystem::SetImageResolver(Resolver);
+    Game::Systems::ZergSystem::SetImageResolver(std::move(Resolver));
 }
 
 inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int)> Resolver,
@@ -22,6 +23,7 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
 {
     Game::Systems::ProductionSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetImageResolver(Resolver);
+    Game::Systems::ZergSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetConstructionImageResolver(std::move(ConstructionResolver));
 }
 

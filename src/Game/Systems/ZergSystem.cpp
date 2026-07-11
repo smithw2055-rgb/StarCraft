@@ -21,7 +21,13 @@ Game::Map::GameMap* ZergSystem::sMap = nullptr;
 
 namespace
 {
+    ZergSystem::ImageIDResolver gImageResolver;
     ZergSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+
+    uint32_t ResolveImageID(int ChkUnitID)
+    {
+        return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
+    }
 
     UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
     {
@@ -126,6 +132,11 @@ void ZergSystem::SetMap(Game::Map::GameMap* Map)
 void ZergSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
 {
     gCollisionBoundsResolver = std::move(Resolver);
+}
+
+void ZergSystem::SetImageResolver(ImageIDResolver Resolver)
+{
+    gImageResolver = std::move(Resolver);
 }
 
 bool ZergSystem::HasCreep(int TileX, int TileY)
@@ -266,19 +277,48 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
 
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
         if (!Unit) continue;
-        int ChkID = Unit->ChkUnitID;
-        if (ChkID != 0x75 && ChkID != 0x76 && ChkID != 0x77) continue;
+        const int BuildingDefID =
+            Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        const auto BuildingDef = Game::Races::GetUnitDefByID(BuildingDefID);
+        if (BuildingDef.Name != "Hatchery" &&
+            BuildingDef.Name != "Lair" &&
+            BuildingDef.Name != "Hive")
+        {
+            continue;
+        }
 
-        // Count existing larva entities belonging to this hatchery
+        auto* HatcheryPlayer = EM.GetComponent<PlayerComponent>(Eid);
+        auto* HatcheryTrans = EM.GetComponent<TransformComponent>(Eid);
+        if (!HatcheryPlayer || !HatcheryTrans)
+            continue;
+
+        // Larvae are owned by an individual Hatchery/Lair/Hive in OpenBW.
+        // Adopt nearby map-placed larvae that predate the explicit link.
         int ExistingLarvae = 0;
         auto AllUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
         for (int Uid : AllUnits)
         {
             auto* UU = EM.GetComponent<UnitComponent>(Uid);
             auto* UP = EM.GetComponent<PlayerComponent>(Uid);
-            auto* UPlayer = EM.GetComponent<PlayerComponent>(Eid);
-            if (UU && UP && UPlayer && UU->ChkUnitID == 0x23 &&
-                UP->PlayerID == UPlayer->PlayerID && UU->HitPoints > 0)
+            if (!UU || !UP || UU->ChkUnitID != 0x23 || UU->HitPoints <= 0 ||
+                UP->PlayerID != HatcheryPlayer->PlayerID)
+            {
+                continue;
+            }
+
+            auto* Larva = EM.GetComponent<LarvaComponent>(Uid);
+            if (!Larva)
+            {
+                auto* LarvaTrans = EM.GetComponent<TransformComponent>(Uid);
+                if (!LarvaTrans ||
+                    LarvaTrans->Position.DistanceTo(HatcheryTrans->Position) > 96.0f)
+                {
+                    continue;
+                }
+                Larva = &EM.AddComponent<LarvaComponent>(Uid);
+                Larva->ParentHatcheryEntityID = Eid;
+            }
+            if (Larva->ParentHatcheryEntityID == Eid)
                 ExistingLarvae++;
         }
 
@@ -297,6 +337,8 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
                     auto& LTrans = EM.AddComponent<TransformComponent>(LarvaEid);
                     auto& LUnit = EM.AddComponent<UnitComponent>(LarvaEid);
                     auto& LPlayer = EM.AddComponent<PlayerComponent>(LarvaEid);
+                    auto& LRender = EM.AddComponent<RenderComponent>(LarvaEid);
+                    auto& LLarva = EM.AddComponent<LarvaComponent>(LarvaEid);
 
                     LTrans.Position = Trans->Position;
                     LTrans.Position.X += (float)((B->LarvaCount % 3) * 24.0f - 24.0f);
@@ -308,6 +350,8 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
                     LUnit.SupplyCost = 0;
                     LUnit.Speed = 0.0f;
                     LUnit.SightRange = 4;
+                    LRender.ImageID = ResolveImageID(LUnit.ChkUnitID);
+                    LLarva.ParentHatcheryEntityID = Eid;
 
                     auto* P = EM.GetComponent<PlayerComponent>(Eid);
                     if (P) LPlayer = *P;
@@ -395,6 +439,7 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     auto& BPlayer = EM.AddComponent<PlayerComponent>(BldgID);
     auto& BBuild = EM.AddComponent<BuildingComponent>(BldgID);
     auto& BPath = EM.AddComponent<PathfindingComponent>(BldgID);
+    auto& BRender = EM.AddComponent<RenderComponent>(BldgID);
 
     BTrans.Position = Position;
     BPlayer.PlayerID = PlayerID;
@@ -412,6 +457,7 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
     BUnit.Speed = 0.0f;
     BUnit.SightRange = 4;
     BUnit.SizeType = BldgDef.SizeType;
+    BRender.ImageID = ResolveImageID(BUnit.ChkUnitID);
 
     BBuild.IsBuilding = true;
     BBuild.UnderConstruction = true;
@@ -536,6 +582,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     auto& EBuild = EM.AddComponent<BuildingComponent>(EggID);
     auto& EMorph = EM.AddComponent<MorphComponent>(EggID);
     auto& EPath = EM.AddComponent<PathfindingComponent>(EggID);
+    auto& ERender = EM.AddComponent<RenderComponent>(EggID);
 
     ETrans.Position = LarvaTrans ? LarvaTrans->Position : Core::Math::Vec2();
     EPlayer.PlayerID = PlayerID;
@@ -553,6 +600,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     EUnit.Speed = 0.0f;
     EUnit.SightRange = 2;
     EUnit.SizeType = UnitSize::Medium;
+    ERender.ImageID = ResolveImageID(EUnit.ChkUnitID);
 
     EBuild.IsBuilding = true;
     EBuild.UnderConstruction = true;
@@ -754,6 +802,10 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             Path->IsAir = false;
             ApplyCollisionBounds(*Path, ResolveCollisionBounds(TargetDef.ChkUnitID));
         }
+        auto* Render = EM.GetComponent<RenderComponent>(MorphEntityID);
+        if (!Render)
+            Render = &EM.AddComponent<RenderComponent>(MorphEntityID);
+        Render->ImageID = ResolveImageID(TargetDef.ChkUnitID);
 
         Logger::Info("ZergSystem",
             "Building morph complete: " + TargetDef.Name +
@@ -778,6 +830,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         auto& NPlayer = EM.AddComponent<PlayerComponent>(NewUnitID);
         auto& NCmd = EM.AddComponent<CommandComponent>(NewUnitID);
         auto& NPath = EM.AddComponent<PathfindingComponent>(NewUnitID);
+        auto& NRender = EM.AddComponent<RenderComponent>(NewUnitID);
 
         NTrans.Position = SpawnPos;
         NPlayer.PlayerID = PlayerID;
@@ -796,6 +849,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         NUnit.SightRange = TargetDef.SightRange;
         NUnit.SizeType = TargetDef.SizeType;
         NUnit.IsDetector = Game::Races::IsDetectorChkUnitID(NUnit.ChkUnitID);
+        NRender.ImageID = ResolveImageID(NUnit.ChkUnitID);
         UpgradeSystem::RefreshUnitEnergyCap(EM, NewUnitID);
 
         HarvestSystem::GetResources(PlayerID).SupplyMax +=
