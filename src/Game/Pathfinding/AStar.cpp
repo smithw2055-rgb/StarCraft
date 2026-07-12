@@ -349,20 +349,28 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
             if (Raw.size() > 2)
             {
                 Result.Waypoints.push_back(Raw[0]);
-                for (size_t I = 1; I < Raw.size(); I++)
+                size_t Anchor = 0;
+                while (Anchor + 1 < Raw.size())
                 {
-                    auto& Prev = Result.Waypoints.back();
-                    auto& Next = Raw[I];
-                    int PX, PY, NX, NY;
-                    Map.WorldToTile(Prev, PX, PY);
-                    Map.WorldToTile(Next, NX, NY);
-                    if (!HasLineOfSight(Map, PX, PY, NX, NY,
-                            ClearanceRadiusPixels, ExtraBlockedTile))
+                    size_t Furthest = Raw.size() - 1;
+                    int AX = 0;
+                    int AY = 0;
+                    Map.WorldToTile(Raw[Anchor], AX, AY);
+                    while (Furthest > Anchor + 1)
                     {
-                        Result.Waypoints.push_back(Raw[I - 1]);
+                        int FX = 0;
+                        int FY = 0;
+                        Map.WorldToTile(Raw[Furthest], FX, FY);
+                        if (HasLineOfSight(Map, AX, AY, FX, FY,
+                                ClearanceRadiusPixels, ExtraBlockedTile))
+                        {
+                            break;
+                        }
+                        --Furthest;
                     }
+                    Result.Waypoints.push_back(Raw[Furthest]);
+                    Anchor = Furthest;
                 }
-                Result.Waypoints.push_back(Raw.back());
             }
             else
             {

@@ -52,12 +52,26 @@ int main()
 {
     using Game::Components::ResourceType;
 
+    float HotspotX = 0.0f;
+    float HotspotY = 0.0f;
+    Game::Client::GameLoop::CursorHotspot(
+        Game::Client::GameLoop::GameCursorKind::Arrow, HotspotX, HotspotY);
+    Require(HotspotX == 64.0f && HotspotY == 64.0f,
+        "classic 128x128 cursor canvas keeps the click at its center hotspot");
+    Game::Client::GameLoop::CursorHotspot(
+        Game::Client::GameLoop::GameCursorKind::Drag, HotspotX, HotspotY);
+    Require(HotspotX == 64.0f && HotspotY == 64.0f,
+        "drag cursor hotspot aligns the visible cursor with the selection rectangle corner");
+
     Require(HitsResource({100.0f, 100.0f}, {140.0f, 100.0f},
                          ResourceType::Minerals, 176),
             "mineral edge clicks resolve to the mineral resource");
     Require(HitsResource({100.0f, 100.0f}, {100.0f, 128.0f},
                          ResourceType::Minerals, 176),
             "mineral lower edge clicks resolve to the mineral resource");
+    Require(HitsResource({100.0f, 100.0f}, {140.0f, 120.0f},
+                         ResourceType::Minerals, 176),
+            "visible mineral corner clicks resolve to the mineral resource");
     Require(!HitsResource({100.0f, 100.0f}, {156.0f, 100.0f},
                           ResourceType::Minerals, 176),
             "clicks past the visible mineral footprint do not resolve to minerals");

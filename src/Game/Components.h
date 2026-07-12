@@ -228,9 +228,16 @@ struct ImageSubnode
     int FrameIndex = 0;
     int TotalFrames = 1;
     Core::Math::Vec2 Offset;
+    Core::Math::Vec2 CreationOffset;
     bool DrawAbove = true;
     bool Visible = true;
     bool Flipped = false;
+    // Directional images belong to the same sprite as the root image. StarCraft
+    // updates every directional image (including air-unit shadows) when the
+    // sprite heading changes.
+    bool InheritSpriteDirection = false;
+    bool PersistentSpriteAttachment = false;
+    bool UseSpecialOffset = false;
     bool UseSpriteID = false;
     float LifetimeRemaining = -1.0f; // negative means persistent until animation changes.
     int ScriptID = -1;
@@ -485,6 +492,9 @@ struct PathfindingComponent
     float TurnRate = 8.0f;          // radians/sec
     float FacingAngle = 0.0f;       // current facing in radians
     Core::Math::Vec2 RepulseVector; // accumulated repulse from neighbors
+    Core::Math::Vec2 FriendlyYieldVector; // soft nudge requested by an allied mover
+    Core::Math::Vec2 FriendlyYieldAnchor;
+    bool HasFriendlyYieldAnchor = false;
 
     // Air / ground flag
     bool IsAir = false;
@@ -499,6 +509,7 @@ struct PathfindingComponent
     // stops making progress, and higher-level orders can try another edge.
     bool HasRecentMoveFailure = false;
     Core::Math::Vec2 RecentFailedMoveTarget;
+    float RecentMoveFailureCooldown = 0.0f;
     float StallTimer = 0.0f;
     float LastWaypointDistance = 0.0f;
     bool HasLastWaypointDistance = false;

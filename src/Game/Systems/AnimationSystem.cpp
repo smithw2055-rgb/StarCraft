@@ -162,6 +162,12 @@ namespace
 std::unordered_map<int, AnimationSystem::UnitAnimData> AnimationSystem::sAnimDB;
 Game::IScriptDatabase AnimationSystem::sIScriptDB;
 bool AnimationSystem::sTriedLoadIScript = false;
+AnimationSystem::OverlayOffsetResolver AnimationSystem::sOverlayOffsetResolver;
+
+void AnimationSystem::SetOverlayOffsetResolver(OverlayOffsetResolver Resolver)
+{
+    sOverlayOffsetResolver = std::move(Resolver);
+}
 
 void AnimationSystem::RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips)
 {
@@ -250,12 +256,22 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
         auto* Combat = EM.GetComponent<CombatComponent>(ID);
+        auto* RootRender = EM.GetComponent<RenderComponent>(ID);
+        const auto RootState = mScriptStates.find(ID);
         if (!Tree)
             continue;
         const size_t InitialCount = Tree->Nodes.size();
         for (size_t I = 0; I < InitialCount && I < Tree->Nodes.size(); ++I)
         {
             auto& Node = Tree->Nodes[I];
+            if (Node.Visible && Node.UseSpecialOffset && RootRender && sOverlayOffsetResolver)
+            {
+                const auto Offset = sOverlayOffsetResolver(
+                    RootRender->ImageID, 2, (size_t)std::max(0, RootRender->FrameIndex),
+                    0, RootRender->Flipped);
+                if (Offset)
+                    Node.Offset = *Offset;
+            }
             if (Node.ParentIndex >= 0 &&
                 (Node.ParentIndex >= (int)Tree->Nodes.size() ||
                  !Tree->Nodes[(size_t)Node.ParentIndex].Visible))
@@ -273,6 +289,14 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
             }
             if (Node.Visible && Node.VM.IsRunning())
             {
+                if (Node.InheritSpriteDirection && RootState != mScriptStates.end())
+                {
+                    const auto& RootContext = RootState->second.VM.GetContext();
+                    auto& NodeContext = Node.VM.GetContext();
+                    NodeContext.CurrentDirection = RootContext.CurrentDirection;
+                    NodeContext.FlDirect = RootContext.FlDirect;
+                    Node.VM.RefreshDirectionalFrame();
+                }
                 constexpr float kIScriptFrameSeconds = 1.0f / 24.0f;
                 Node.StepAccumulator += DeltaTime;
                 bool Ran = false;
@@ -285,6 +309,19 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
                 }
                 if (!Ran && Node.AnimID == Game::IScriptAnims::Anim_Init)
                     Node.VM.ExecuteFrame();
+                if (Node.InheritSpriteDirection && RootState != mScriptStates.end())
+                {
+                    const auto& RootContext = RootState->second.VM.GetContext();
+                    auto& NodeContext = Node.VM.GetContext();
+                    NodeContext.CurrentDirection = RootContext.CurrentDirection;
+                    NodeContext.FlDirect = RootContext.FlDirect;
+                    Node.VM.RefreshDirectionalFrame();
+                }
+                const auto& NodeContext = Node.VM.GetContext();
+                if (NodeContext.HorPosSet)
+                    Node.Offset.X = (float)NodeContext.HorPos;
+                if (NodeContext.VertPosSet)
+                    Node.Offset.Y = (float)NodeContext.VertPos;
                 Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
                 Node.Flipped = Node.VM.GetContext().FlipState;
                 if (Trans)
@@ -306,10 +343,25 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
     }
 }
 
-void AnimationSystem::ClearImageTree(int EntityID)
+void AnimationSystem::ClearImageTree(int EntityID, bool PreservePersistentAttachments)
 {
     if (auto* Tree = mSystemMgr.GetEntityManager().GetComponent<ImageTreeComponent>(EntityID))
-        Tree->Nodes.clear();
+    {
+        if (!PreservePersistentAttachments)
+        {
+            Tree->Nodes.clear();
+            return;
+        }
+
+        for (size_t I = 0; I < Tree->Nodes.size(); ++I)
+        {
+            if (!Tree->Nodes[I].PersistentSpriteAttachment)
+            {
+                Tree->Nodes[I].Visible = false;
+                MarkImageSubtreeHidden(*Tree, (int)I);
+            }
+        }
+    }
 }
 
 void AnimationSystem::MarkImageSubtreeHidden(ImageTreeComponent& Tree, int ParentIndex)
@@ -333,10 +385,13 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        bool DrawAbove,
                                        bool Flipped,
                                        float Lifetime,
-                                       bool UseSpriteID)
+                                       bool UseSpriteID,
+                                       bool PersistentSpriteAttachment,
+                                       bool UseSpecialOffset)
 {
     AddImageTreeNode(EntityID, -1, ImageID, Core::Math::Vec2{(float)OffsetX, (float)OffsetY},
-                     DrawAbove, Flipped, Lifetime, UseSpriteID);
+                     DrawAbove, Flipped, Lifetime, UseSpriteID,
+                     PersistentSpriteAttachment, UseSpecialOffset);
 }
 
 void AnimationSystem::AddImageTreeNode(int EntityID,
@@ -346,7 +401,9 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        bool DrawAbove,
                                        bool Flipped,
                                        float Lifetime,
-                                       bool UseSpriteID)
+                                       bool UseSpriteID,
+                                       bool PersistentSpriteAttachment,
+                                       bool UseSpecialOffset)
 {
     if (ImageID < 0)
         return;
@@ -360,14 +417,17 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     {
         if ((int)Node.ImageID == ImageID &&
             Node.ParentIndex == ParentIndex &&
-            Node.Offset.X == Offset.X &&
-            Node.Offset.Y == Offset.Y &&
+            ((Node.UseSpecialOffset && UseSpecialOffset) ||
+             (Node.CreationOffset.X == Offset.X && Node.CreationOffset.Y == Offset.Y)) &&
             Node.DrawAbove == DrawAbove &&
             Node.UseSpriteID == UseSpriteID)
         {
             Node.Visible = true;
             Node.Flipped = Flipped;
             Node.LifetimeRemaining = Lifetime;
+            Node.PersistentSpriteAttachment =
+                Node.PersistentSpriteAttachment || PersistentSpriteAttachment;
+            Node.UseSpecialOffset = Node.UseSpecialOffset || UseSpecialOffset;
             if (!Node.UseSpriteID && !Node.VM.IsRunning())
                 StartImageNodeScript(Node);
             return;
@@ -382,11 +442,14 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             Node.ImageID = (uint32_t)ImageID;
             Node.ParentIndex = ParentIndex;
             Node.Offset = Offset;
+            Node.CreationOffset = Offset;
             Node.DrawAbove = DrawAbove;
             Node.Flipped = Flipped;
             Node.UseSpriteID = UseSpriteID;
             Node.Visible = true;
             Node.LifetimeRemaining = Lifetime;
+            Node.PersistentSpriteAttachment = PersistentSpriteAttachment;
+            Node.UseSpecialOffset = UseSpecialOffset;
             if (!Node.UseSpriteID)
                 StartImageNodeScript(Node);
             return;
@@ -402,11 +465,14 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     Node.FrameIndex = 0;
     Node.TotalFrames = 1;
     Node.Offset = Offset;
+    Node.CreationOffset = Offset;
     Node.DrawAbove = DrawAbove;
     Node.Flipped = Flipped;
     Node.UseSpriteID = UseSpriteID;
     Node.Visible = true;
     Node.LifetimeRemaining = Lifetime;
+    Node.PersistentSpriteAttachment = PersistentSpriteAttachment;
+    Node.UseSpecialOffset = UseSpecialOffset;
     if (!Node.UseSpriteID)
         StartImageNodeScript(Node);
     Tree->Nodes.push_back(Node);
@@ -435,6 +501,38 @@ void AnimationSystem::StartImageNodeScript(ImageSubnode& Node)
     Node.VM.GetContext().ImageID = (int)Node.ImageID;
     Node.VM.GetContext().FrameIndex = Node.FrameIndex;
     Node.VM.GetContext().HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
+    Node.InheritSpriteDirection = ImageInfo->HasDirectionalFrames;
+}
+
+void AnimationSystem::CreateGasOverlay(int EntityID,
+                                       int ParentIndex,
+                                       int SourceImageID,
+                                       int SourceFrame,
+                                       bool SourceFlipped,
+                                       int OffsetIndex,
+                                       float Lifetime)
+{
+    if (!sOverlayOffsetResolver || SourceImageID < 0 || SourceFrame < 0 || OffsetIndex < 0)
+        return;
+
+    auto& EM = mSystemMgr.GetEntityManager();
+    const auto* Resource = EM.GetComponent<ResourceComponent>(EntityID);
+    if (!Resource)
+        return;
+
+    constexpr int VespeneGeyserSmoke1 = 430;
+    constexpr int VespeneGeyserSmoke1Overlay = 435;
+    const auto Offset = sOverlayOffsetResolver((uint32_t)SourceImageID, 2,
+                                               (size_t)SourceFrame, (size_t)OffsetIndex,
+                                               SourceFlipped);
+    if (!Offset)
+        return;
+
+    const int OverlayImage = (Resource->Amount > 0
+        ? VespeneGeyserSmoke1
+        : VespeneGeyserSmoke1Overlay) + OffsetIndex;
+    AddImageTreeNode(EntityID, ParentIndex, OverlayImage, *Offset,
+                     true, false, Lifetime);
 }
 
 void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
@@ -449,6 +547,9 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
     if (!Tree || NodeIndex < 0 || NodeIndex >= (int)Tree->Nodes.size())
         return;
 
+    const int SourceImageID = (int)Tree->Nodes[(size_t)NodeIndex].ImageID;
+    const int SourceFrame = Tree->Nodes[(size_t)NodeIndex].FrameIndex;
+    const bool SourceFlipped = Tree->Nodes[(size_t)NodeIndex].Flipped;
     auto Events = Tree->Nodes[(size_t)NodeIndex].VM.ConsumeEvents();
     for (const auto& Event : Events)
     {
@@ -472,10 +573,21 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                                  Core::Math::Vec2{(float)Event.B, (float)Event.C},
                                  Event.D != 0, false, NodeLifetime);
                 break;
+            case Game::IScriptEventType::CreateImageOverlaySpecialOffset:
+                AddImageTreeNode(EntityID, NodeIndex, Event.A, {},
+                                 Event.D != 0, false, NodeLifetime,
+                                 false, false, true);
+                break;
             case Game::IScriptEventType::CreateSpriteOverlay:
                 AddImageTreeNode(EntityID, NodeIndex, Event.A,
                                  Core::Math::Vec2{(float)Event.B, (float)Event.C},
                                  Event.D != 0, false, NodeLifetime, true);
+                break;
+            case Game::IScriptEventType::CreateGasOverlays:
+                CreateGasOverlay(EntityID, NodeIndex, SourceImageID, SourceFrame,
+                                 SourceFlipped, Event.A, NodeLifetime);
+                break;
+            case Game::IScriptEventType::FlightState:
                 break;
             case Game::IScriptEventType::Attack:
             case Game::IScriptEventType::AttackMelee:
@@ -547,10 +659,25 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
+            {
+                const bool PersistentAttachment =
+                    State.AnimID == Game::IScriptAnims::Anim_Init;
                 AddImageTreeNode(EntityID, Event.A, Event.B, Event.C,
                                  Event.D != 0, false,
-                                 TransientOverlay ? 0.35f : -1.0f);
+                                 TransientOverlay ? 0.35f : -1.0f,
+                                 false, PersistentAttachment);
                 break;
+            }
+            case Game::IScriptEventType::CreateImageOverlaySpecialOffset:
+            {
+                const bool PersistentAttachment =
+                    State.AnimID == Game::IScriptAnims::Anim_Init;
+                AddImageTreeNode(EntityID, Event.A, 0, 0,
+                                 Event.D != 0, false,
+                                 TransientOverlay ? 0.35f : -1.0f,
+                                 false, PersistentAttachment, true);
+                break;
+            }
             case Game::IScriptEventType::CreateSpriteOverlay:
                 AddImageTreeNode(EntityID, Event.A, Event.B, Event.C,
                                  Event.D != 0, false,
@@ -558,10 +685,19 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                                  true);
                 break;
             case Game::IScriptEventType::WarpOverlay:
-                SpawnIScriptOverlay(EntityID, Trans, Event.A, 0, 0, 1.0f, true);
+                // OpenBW stores the packed operand as image modifier data; it is
+                // not an image id and must not create a standalone overlay.
                 break;
             case Game::IScriptEventType::CreateGasOverlays:
+            {
+                const auto* Render = mSystemMgr.GetEntityManager().GetComponent<RenderComponent>(EntityID);
+                if (Render)
+                {
+                    CreateGasOverlay(EntityID, -1, State.ImageID, Render->FrameIndex,
+                                     Render->Flipped, Event.A, -1.0f);
+                }
                 break;
+            }
             case Game::IScriptEventType::Attack:
             case Game::IScriptEventType::AttackMelee:
             case Game::IScriptEventType::UseWeapon:
@@ -573,9 +709,10 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 break;
             case Game::IScriptEventType::OrderSignal:
             case Game::IScriptEventType::OrderDone:
-            case Game::IScriptEventType::FlightState:
             case Game::IScriptEventType::SpawnFrame:
             case Game::IScriptEventType::TemporaryGraphicState:
+                break;
+            case Game::IScriptEventType::FlightState:
                 break;
         }
     }
@@ -697,7 +834,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         if (ShouldClearImageTreeForAnimRestart(
                 IsBuilding, ImageOrScriptChanged, PreviousAnim, TargetAnim, UnderConstruction))
         {
-            ClearImageTree(EntityID);
+            ClearImageTree(EntityID, !ImageOrScriptChanged);
         }
     }
 
@@ -813,7 +950,6 @@ void AnimationSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
     UpdateScriptEffects(DeltaTime);
-    UpdateImageTrees(DeltaTime);
 
     auto Entities = EM.GetEntitiesWith<TransformComponent, RenderComponent>();
     for (int Eid : Entities)
@@ -914,6 +1050,11 @@ void AnimationSystem::Update(float DeltaTime)
             Render->FrameIndex = std::clamp(Render->FrameIndex, 0, Render->TotalFrames - 1);
         }
     }
+
+    // Root scripts establish the current sprite heading and may create image
+    // overlays. Advance those overlays afterwards so a newly-created shadow
+    // receives the same heading in this frame.
+    UpdateImageTrees(DeltaTime);
 }
 
 } // namespace Game::Systems

@@ -206,6 +206,49 @@ namespace
 
 int main()
 {
+    {
+        Core::ECS::SystemManager VisualSysMgr;
+        auto& VisualEM = VisualSysMgr.GetEntityManager();
+        Game::Systems::BulletSystem VisualBullet(VisualSysMgr);
+
+        const int Source = VisualEM.CreateEntity();
+        auto& SourceTrans = VisualEM.AddComponent<Game::Components::TransformComponent>(Source);
+        SourceTrans.Position = {16.0f, 20.0f};
+        auto& SourceUnit = VisualEM.AddComponent<Game::Components::UnitComponent>(Source);
+        SourceUnit.ChkUnitID = 7;
+        auto& SourcePlayer = VisualEM.AddComponent<Game::Components::PlayerComponent>(Source);
+        SourcePlayer.PlayerID = 2;
+
+        const int Target = VisualEM.CreateEntity();
+        VisualEM.AddComponent<Game::Components::TransformComponent>(Target).Position = {176.0f, 20.0f};
+        VisualEM.AddComponent<Game::Components::UnitComponent>(Target);
+
+        bool ResolverCalled = false;
+        Game::Systems::BulletSystem::SetVisualResolver(
+            [&](int ChkUnitID, bool TargetIsAir)
+                -> std::optional<Game::Systems::BulletSystem::VisualSpec> {
+                ResolverCalled = ChkUnitID == 7 && !TargetIsAir;
+                return Game::Systems::BulletSystem::VisualSpec{321u, 240.0f};
+            });
+
+        Game::Components::CombatComponent Weapon;
+        Weapon.WeaponBeh = Game::Components::WeaponBehavior::FlyDirect;
+        Weapon.IsRanged = true;
+        const int BulletID = VisualBullet.SpawnBullet(
+            VisualEM, Weapon, SourceTrans, SourcePlayer, Source,
+            6, 0, 160.0f, Target, {176.0f, 20.0f});
+
+        const auto* Render = VisualEM.GetComponent<Game::Components::RenderComponent>(BulletID);
+        const auto* Direction = VisualEM.GetComponent<Game::Components::PathfindingComponent>(BulletID);
+        Require(ResolverCalled, "bullet visual resolver receives source unit and target elevation");
+        Require(Render && Render->ImageID == 321u,
+            "ranged bullet carries the resolved images.dat visual instead of a placeholder");
+        Require(Direction && Direction->CurrentVelocity.Length() > 0.0f,
+            "rendered bullet exposes flight direction to eight-way animation");
+
+        Game::Systems::BulletSystem::SetVisualResolver({});
+    }
+
     Core::ECS::SystemManager SysMgr;
     auto& EM = SysMgr.GetEntityManager();
     Game::Systems::BulletSystem Bullet(SysMgr);

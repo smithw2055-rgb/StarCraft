@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 namespace Resource
@@ -79,10 +80,13 @@ struct FlingyEntry
 {
     uint32_t Id = 0;
     uint32_t Speed = 0;
-    uint32_t Acceleration = 0;
-    uint32_t TurnRate = 0;
+    int16_t Acceleration = 0;
+    uint8_t TurnRate = 0;
     uint32_t SpriteID = 0;
-    uint32_t TopSpeed = 0;
+    int32_t TopSpeed = 0;
+    int32_t HaltDistance = 0;
+    uint8_t Unused = 0;
+    uint8_t MovementType = 0;
 };
 
 struct SpriteEntry
@@ -111,6 +115,23 @@ struct ImageEntry
     uint8_t Modifier = 0;
     uint8_t ColorShift = 0;
     uint32_t IScriptID = 0;
+    uint32_t ShieldFilenameIndex = 0;
+    uint32_t AttackFilenameIndex = 0;
+    uint32_t DamageFilenameIndex = 0;
+    uint32_t SpecialFilenameIndex = 0;
+    uint32_t LandingDustFilenameIndex = 0;
+    uint32_t LiftOffFilenameIndex = 0;
+};
+
+struct ImageOffset
+{
+    int X = 0;
+    int Y = 0;
+};
+
+struct ImageOffsetTable
+{
+    std::vector<std::vector<ImageOffset>> Frames;
 };
 
 enum class ImageRelationKind : int32_t
@@ -171,6 +192,7 @@ public:
     static std::vector<FlingyEntry> DecodeFlingy(const std::vector<uint8_t>& Data);
     static std::vector<SpriteEntry> DecodeSprites(const std::vector<uint8_t>& Data);
     static std::vector<ImageEntry> DecodeImages(const std::vector<uint8_t>& Data);
+    static std::optional<ImageOffsetTable> DecodeImageOffsets(const std::vector<uint8_t>& Data);
     static std::vector<ImageRelationEntry> DecodeImageRelations(const std::vector<uint8_t>& Data);
     static std::vector<ImageTblEntry> DecodeImageTbl(const std::vector<uint8_t>& Data);
     static std::vector<UpgradeEntry> DecodeUpgrades(const std::vector<uint8_t>& Data);

@@ -198,6 +198,7 @@ namespace
             Path.HasRecentMoveFailure = true;
             Path.RecentFailedMoveTarget = Path.Path.back();
         }
+        Path.RecentMoveFailureCooldown = 1.0f;
         ClearMotion(Path);
     }
 
@@ -351,20 +352,50 @@ namespace
         return Current;
     }
 
+    static StaticBlockerRect CollisionRectForPath(const PathfindingComponent& Path)
+    {
+        StaticBlockerRect Rect;
+        if (Path.HasCollisionBounds)
+        {
+            Rect.Left = (float)Path.CollisionLeft;
+            Rect.Top = (float)Path.CollisionUp;
+            Rect.Right = (float)Path.CollisionRight + 1.0f;
+            Rect.Bottom = (float)Path.CollisionDown + 1.0f;
+        }
+        else
+        {
+            const float Radius = (float)std::max(4, Path.CollisionRadius);
+            Rect.Left = Radius;
+            Rect.Top = Radius;
+            Rect.Right = Radius;
+            Rect.Bottom = Radius;
+        }
+        return Rect;
+    }
+
     static Core::Math::Vec2 ResolveStaticBlockers(Core::ECS::EntityManager& EM,
                                                   Core::ECS::EntityID MovingID,
                                                   Core::Math::Vec2 Proposed,
                                                   Core::Math::Vec2 MoveDir,
-                                                  float MovingRadius,
                                                   bool IsAir)
     {
         if (IsAir)
             return Proposed;
 
         auto Blockers = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID);
+        if (!MovingPath)
+            return Proposed;
         for (auto BlockerID : Blockers)
         {
             if (BlockerID == MovingID || !IsStaticGroundBlocker(EM, BlockerID))
+                continue;
+            // CommandSystem has already planned this order with the explicit
+            // target excluded (for example, a worker approaching a mineral
+            // field). Applying that target again as a hard runtime blocker
+            // leaves the unit parked at the footprint edge with a path that
+            // can never finish.
+            if (MovingPath && BlockerID == MovingPath->RequestedIgnoreEntityID)
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -377,15 +408,16 @@ namespace
 
             const StaticBlockerRect Rect = StaticBlockerRectForEntity(
                 BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
-            const float ExpandedLeft = BlockerTrans->Position.X - Rect.Left - MovingRadius;
-            const float ExpandedRight = BlockerTrans->Position.X + Rect.Right + MovingRadius;
-            const float ExpandedTop = BlockerTrans->Position.Y - Rect.Top - MovingRadius;
-            const float ExpandedBottom = BlockerTrans->Position.Y + Rect.Bottom + MovingRadius;
+            const StaticBlockerRect MovingRect = CollisionRectForPath(*MovingPath);
+            const float ExpandedLeft = BlockerTrans->Position.X - Rect.Left - MovingRect.Right;
+            const float ExpandedRight = BlockerTrans->Position.X + Rect.Right + MovingRect.Left;
+            const float ExpandedTop = BlockerTrans->Position.Y - Rect.Top - MovingRect.Bottom;
+            const float ExpandedBottom = BlockerTrans->Position.Y + Rect.Bottom + MovingRect.Top;
             if (Proposed.X <= ExpandedLeft || Proposed.X >= ExpandedRight ||
                 Proposed.Y <= ExpandedTop || Proposed.Y >= ExpandedBottom)
                 continue;
 
-            if (auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID))
+            if (MovingPath)
                 MovingPath->BlockedByEntityID = BlockerID;
 
             const float PushLeft = Proposed.X - ExpandedLeft;
@@ -415,23 +447,7 @@ namespace
     static StaticBlockerRect DynamicCollisionRectForPath(
         const PathfindingComponent& Path)
     {
-        StaticBlockerRect Rect;
-        if (Path.HasCollisionBounds)
-        {
-            Rect.Left = (float)Path.CollisionLeft;
-            Rect.Top = (float)Path.CollisionUp;
-            Rect.Right = (float)Path.CollisionRight + 1.0f;
-            Rect.Bottom = (float)Path.CollisionDown + 1.0f;
-        }
-        else
-        {
-            const float Radius = (float)std::max(4, Path.CollisionRadius);
-            Rect.Left = Radius;
-            Rect.Top = Radius;
-            Rect.Right = Radius;
-            Rect.Bottom = Radius;
-        }
-        return Rect;
+        return CollisionRectForPath(Path);
     }
 
     static float DynamicCollisionOverlap(Core::Math::Vec2 PositionA,
@@ -450,6 +466,36 @@ namespace
         if (OverlapX <= 0.0f || OverlapY <= 0.0f)
             return 0.0f;
         return OverlapX * OverlapY;
+    }
+
+    static Core::Math::Vec2 DynamicCollisionSeparation(
+        Core::Math::Vec2 PositionA,
+        const StaticBlockerRect& RectA,
+        Core::Math::Vec2 PositionB,
+        const StaticBlockerRect& RectB,
+        bool PreferPositive)
+    {
+        const float OverlapX = std::min(PositionA.X + RectA.Right,
+                                        PositionB.X + RectB.Right) -
+                               std::max(PositionA.X - RectA.Left,
+                                        PositionB.X - RectB.Left);
+        const float OverlapY = std::min(PositionA.Y + RectA.Bottom,
+                                        PositionB.Y + RectB.Bottom) -
+                               std::max(PositionA.Y - RectA.Top,
+                                        PositionB.Y - RectB.Top);
+        if (OverlapX <= 0.0f || OverlapY <= 0.0f)
+            return {0.0f, 0.0f};
+
+        if (OverlapX < OverlapY)
+        {
+            const float Direction = PositionA.X < PositionB.X ? -1.0f :
+                (PositionA.X > PositionB.X ? 1.0f : (PreferPositive ? 1.0f : -1.0f));
+            return {Direction * OverlapX, 0.0f};
+        }
+
+        const float Direction = PositionA.Y < PositionB.Y ? -1.0f :
+            (PositionA.Y > PositionB.Y ? 1.0f : (PreferPositive ? 1.0f : -1.0f));
+        return {0.0f, Direction * OverlapY};
     }
 
     static Core::ECS::EntityID FindDynamicUnitCollision(
@@ -517,6 +563,27 @@ namespace
 
         if (auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID))
             MovingPath->BlockedByEntityID = BlockerID;
+
+        // A friendly mobile unit is a soft reservation. Ask it to yield a small
+        // amount instead of forcing the whole selected group to wait forever.
+        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
+        const auto* BlockerPlayer = EM.GetComponent<PlayerComponent>(BlockerID);
+        auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+        auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
+        const auto* BlockerCommand = EM.GetComponent<CommandComponent>(BlockerID);
+        if (MovingPlayer && BlockerPlayer && BlockerPath && BlockerTrans &&
+            MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
+            CanMoveEntity(EM, BlockerID) &&
+            (!BlockerCommand || BlockerCommand->CurrentCommand != CommandType::HoldPosition))
+        {
+            Core::Math::Vec2 Lateral{-MoveDir.Y, MoveDir.X};
+            if (MovingID > BlockerID)
+                Lateral = Lateral * -1.0f;
+            const Core::Math::Vec2 YieldDirection =
+                (MoveDir * 0.35f + Lateral).Normalized();
+            BlockerPath->FriendlyYieldVector =
+                BlockerPath->FriendlyYieldVector + YieldDirection;
+        }
 
         const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
         if ((SlideX - Current).LengthSq() > 0.001f &&
@@ -588,7 +655,8 @@ namespace
                                     Core::ECS::EntityID EntityID,
                                     const Game::Map::GameMap* Map,
                                     const Core::Math::Vec2& Target,
-                                    int IgnoreEntityID = -1)
+                                    int IgnoreEntityID = -1,
+                                    int AvoidDynamicEntityID = -1)
     {
         auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
         auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
@@ -623,7 +691,10 @@ namespace
         {
             if (BlockerID == IgnoreEntityID)
                 continue;
-            if (BlockerID == EntityID || !IsStaticGroundBlocker(EM, BlockerID))
+            const bool IsRequestedDynamicAvoid =
+                BlockerID == AvoidDynamicEntityID;
+            if (BlockerID == EntityID ||
+                (!IsStaticGroundBlocker(EM, BlockerID) && !IsRequestedDynamicAvoid))
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -636,11 +707,11 @@ namespace
 
             auto Rect = StaticBlockerRectForEntity(
                 BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
-            const float MovingRadius = (float)std::max(4, Path->CollisionRadius);
-            Rect.Left += MovingRadius;
-            Rect.Top += MovingRadius;
-            Rect.Right += MovingRadius;
-            Rect.Bottom += MovingRadius;
+            const StaticBlockerRect MovingRect = CollisionRectForPath(*Path);
+            Rect.Left += MovingRect.Right;
+            Rect.Top += MovingRect.Bottom;
+            Rect.Right += MovingRect.Left;
+            Rect.Bottom += MovingRect.Top;
             Rect.Position = BlockerTrans->Position;
             Blockers.push_back(Rect);
         }
@@ -714,7 +785,8 @@ namespace
     static bool RefreshPathForCurrentRequest(Core::ECS::EntityManager& EM,
                                              Core::ECS::EntityID EntityID,
                                              const Game::Map::GameMap* Map,
-                                             bool UseEdgeTarget)
+                                             bool UseEdgeTarget,
+                                             int AvoidDynamicEntityID = -1)
     {
         auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
         auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
@@ -736,7 +808,9 @@ namespace
         if (UseEdgeTarget && TargetEntityID >= 0)
             Target = ResolveEdgeApproachTarget(EM, Trans->Position, TargetEntityID, Target);
 
-        RefreshPathToTarget(EM, EntityID, Map, Target, Path->RequestedIgnoreEntityID);
+        RefreshPathToTarget(EM, EntityID, Map, Target,
+                            Path->RequestedIgnoreEntityID,
+                            AvoidDynamicEntityID);
         if (auto* RefreshedPath = EM.GetComponent<PathfindingComponent>(EntityID))
         {
             RefreshedPath->RequestedDestination = FinalDestination;
@@ -770,6 +844,39 @@ namespace
         return false;
     }
 
+    static bool IsTemporaryUnitBlocker(Core::ECS::EntityManager& EM,
+                                       const PathfindingComponent& Path)
+    {
+        if (Path.BlockedByEntityID < 0 ||
+            IsStaticGroundBlocker(EM, Path.BlockedByEntityID))
+        {
+            return false;
+        }
+
+        const auto* Unit = EM.GetComponent<UnitComponent>(Path.BlockedByEntityID);
+        const auto* OtherPath = EM.GetComponent<PathfindingComponent>(Path.BlockedByEntityID);
+        if (!Unit || Unit->HitPoints <= 0 || !OtherPath || OtherPath->IsAir)
+            return false;
+
+        // Dynamic units are transient reservations, not permanent terrain.
+        // Re-running A* against the unchanged static map returns the same path
+        // and eventually blacklists a perfectly reachable group destination.
+        return true;
+    }
+
+    static bool IsFriendlyTemporaryUnitBlocker(Core::ECS::EntityManager& EM,
+                                               Core::ECS::EntityID MovingID,
+                                               const PathfindingComponent& Path)
+    {
+        if (!IsTemporaryUnitBlocker(EM, Path))
+            return false;
+        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
+        const auto* BlockingPlayer =
+            EM.GetComponent<PlayerComponent>(Path.BlockedByEntityID);
+        return MovingPlayer && BlockingPlayer &&
+               MovingPlayer->PlayerID == BlockingPlayer->PlayerID;
+    }
+
     static constexpr float kRepulseForce = 80.0f;     // push force scalar
 } // anonymous namespace
 
@@ -791,6 +898,18 @@ void MovementSystem::Update(float DeltaTime)
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
         if (!PathComp) continue;
+        // BulletSystem owns projectile integration. The path component exists
+        // only to expose the flight direction to the IScript animation layer.
+        if (EM.GetComponent<BulletComponent>(ID))
+            continue;
+
+        if (PathComp->HasRecentMoveFailure)
+        {
+            PathComp->RecentMoveFailureCooldown =
+                std::max(0.0f, PathComp->RecentMoveFailureCooldown - Dt);
+            if (PathComp->RecentMoveFailureCooldown <= 0.0f)
+                PathComp->HasRecentMoveFailure = false;
+        }
 
         if (Unit)
             PathComp->IsAir = ShouldMoveAsAir(EM, ID);
@@ -812,6 +931,7 @@ void MovementSystem::Update(float DeltaTime)
             PathComp->RepulseVector = {0.0f, 0.0f};
             continue;
         }
+        PathComp->HasFriendlyYieldAnchor = false;
 
         // Set defaults from unit data if not yet initialized
         if (PathComp->TargetSpeed <= 0.0f && Unit)
@@ -856,14 +976,14 @@ void MovementSystem::Update(float DeltaTime)
             auto* PathB = EM.GetComponent<PathfindingComponent>(ID2);
             if (!TransB || !PathB || PathB->IsAir) continue;
 
-            float Dist = TransA->Position.DistanceTo(TransB->Position);
-            float MinDist = (float)(CollisionRadiusFromBounds(*PathA) +
-                CollisionRadiusFromBounds(*PathB));
-
-            if (Dist < MinDist && Dist > 0.1f)
+            const StaticBlockerRect RectA = CollisionRectForPath(*PathA);
+            const StaticBlockerRect RectB = CollisionRectForPath(*PathB);
+            const Core::Math::Vec2 Separation = DynamicCollisionSeparation(
+                TransA->Position, RectA, TransB->Position, RectB, ID > ID2);
+            const float Overlap = Separation.Length();
+            if (Overlap > 0.001f)
             {
-                Core::Math::Vec2 Push = (TransA->Position - TransB->Position).Normalized();
-                float Overlap = MinDist - Dist;
+                const Core::Math::Vec2 Push = Separation.Normalized();
                 float Force = Overlap * kRepulseForce * Dt;
                 PathA->RepulseVector = PathA->RepulseVector + Push * Force;
             }
@@ -885,19 +1005,14 @@ void MovementSystem::Update(float DeltaTime)
 
             const StaticBlockerRect Rect = StaticBlockerRectForEntity(
                 BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
-            const Core::Math::Vec2 Delta = TransA->Position - BlockerTrans->Position;
-            const float NearestX = std::clamp(Delta.X, -Rect.Left, Rect.Right);
-            const float NearestY = std::clamp(Delta.Y, -Rect.Top, Rect.Bottom);
-            const Core::Math::Vec2 Nearest{
-                BlockerTrans->Position.X + NearestX,
-                BlockerTrans->Position.Y + NearestY
-            };
-            const float MinDist = (float)CollisionRadiusFromBounds(*PathA);
-            float Dist = TransA->Position.DistanceTo(Nearest);
-            if (Dist < MinDist && Dist > 0.1f)
+            const StaticBlockerRect MovingRect = CollisionRectForPath(*PathA);
+            const Core::Math::Vec2 Separation = DynamicCollisionSeparation(
+                TransA->Position, MovingRect,
+                BlockerTrans->Position, Rect, ID > BlockerID);
+            const float Overlap = Separation.Length();
+            if (Overlap > 0.001f)
             {
-                Core::Math::Vec2 Push = (TransA->Position - Nearest).Normalized();
-                float Overlap = MinDist - Dist;
+                const Core::Math::Vec2 Push = Separation.Normalized();
                 float Force = Overlap * kRepulseForce * Dt;
                 PathA->RepulseVector = PathA->RepulseVector + Push * Force;
             }
@@ -914,6 +1029,10 @@ void MovementSystem::Update(float DeltaTime)
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
 
         if (!Trans || !PathComp) continue;
+        const Core::Math::Vec2 FriendlyYield = PathComp->FriendlyYieldVector;
+        // A request created after this entity's turn remains queued for the
+        // next frame; a request already present is consumed exactly once here.
+        PathComp->FriendlyYieldVector = {0.0f, 0.0f};
         auto& Path = PathComp->Path;
 
         if (!CanMoveEntity(EM, ID))
@@ -933,6 +1052,37 @@ void MovementSystem::Update(float DeltaTime)
             PathComp->CurrentSpeed = 0.0f;
             PathComp->CurrentVelocity = {0.0f, 0.0f};
             continue;
+        }
+
+        // Stopped friendly units may step aside briefly. The nudge is bounded,
+        // terrain/static-blocker checked, and rejected if it would enter a new
+        // unit overlap. Hold-position remains a hard reservation.
+        if (FriendlyYield.LengthSq() > 0.001f &&
+            (!Cmd || Cmd->CurrentCommand != CommandType::HoldPosition))
+        {
+            constexpr float kFriendlyYieldSpeed = 24.0f;
+            constexpr float kFriendlyYieldMaxDistance = 24.0f;
+            const Core::Math::Vec2 YieldDir = FriendlyYield.Normalized();
+            if (!PathComp->HasFriendlyYieldAnchor)
+            {
+                PathComp->FriendlyYieldAnchor = Trans->Position;
+                PathComp->HasFriendlyYieldAnchor = true;
+            }
+            Core::Math::Vec2 Yielded =
+                Trans->Position + YieldDir * (kFriendlyYieldSpeed * Dt);
+            const Core::Math::Vec2 FromAnchor =
+                Yielded - PathComp->FriendlyYieldAnchor;
+            if (FromAnchor.Length() > kFriendlyYieldMaxDistance)
+            {
+                Yielded = PathComp->FriendlyYieldAnchor +
+                    FromAnchor.Normalized() * kFriendlyYieldMaxDistance;
+            }
+            Yielded = ResolveStaticBlockers(EM, ID, Yielded, YieldDir, PathComp->IsAir);
+            Yielded = ResolveMapWalkability(
+                mMap, Trans->Position, Yielded,
+                (float)TerrainClearanceForPath(*PathComp), PathComp->IsAir);
+            if (FindDynamicUnitCollision(EM, ID, Trans->Position, Yielded) < 0)
+                Trans->Position = Yielded;
         }
 
         // Stop/HoldPosition: clear path, don't move.
@@ -1084,23 +1234,27 @@ void MovementSystem::Update(float DeltaTime)
             {
                 const float OldDistance = Dist;
                 Core::Math::Vec2 Proposed = ResolveStaticBlockers(
-                    EM, ID, Waypoint, MoveDir,
-                    MovingRadius, PathComp->IsAir);
+                    EM, ID, Waypoint, MoveDir, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveDynamicUnitBlockers(
                     EM, ID, Trans->Position, Proposed, MoveDir, PathComp->IsAir);
                 Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, MoveDir,
-                    MovingRadius, PathComp->IsAir);
+                    EM, ID, Proposed, MoveDir, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
-                if (FindDynamicUnitCollision(
-                        EM, ID, Trans->Position, Proposed) >= 0)
+                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
+                Proposed = ResolveStaticBlockers(
+                    EM, ID, Proposed, MoveDir, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                if (const auto BlockerID = FindDynamicUnitCollision(
+                        EM, ID, Trans->Position, Proposed);
+                    BlockerID >= 0)
                 {
+                    PathComp->BlockedByEntityID = BlockerID;
                     Proposed = Trans->Position;
                 }
-                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;
                 const float AppliedDistance = AppliedMove.Length();
@@ -1111,6 +1265,22 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
+                    if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
+                    {
+                        const int AvoidEntityID = PathComp->BlockedByEntityID;
+                        if (mMap && RefreshPathForCurrentRequest(
+                                EM, ID, mMap, false, AvoidEntityID))
+                        {
+                            PathComp->StallTimer = 0.0f;
+                            PathComp->HasLastWaypointDistance = false;
+                            break;
+                        }
+                        PathComp->StallTimer = 0.0f;
+                        PathComp->HasLastWaypointDistance = false;
+                        PathComp->CurrentSpeed = 0.0f;
+                        PathComp->CurrentVelocity = {0.0f, 0.0f};
+                        break;
+                    }
                     if (!HandleMovementStall(EM, ID, *PathComp, mMap))
                         break;
                     break;
@@ -1130,23 +1300,27 @@ void MovementSystem::Update(float DeltaTime)
                 const float OldDistance = Dist;
                 Core::Math::Vec2 Proposed = Trans->Position + ActualMove * MoveAmount;
                 Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, ActualMove,
-                    MovingRadius, PathComp->IsAir);
+                    EM, ID, Proposed, ActualMove, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveDynamicUnitBlockers(
                     EM, ID, Trans->Position, Proposed, ActualMove, PathComp->IsAir);
                 Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, ActualMove,
-                    MovingRadius, PathComp->IsAir);
+                    EM, ID, Proposed, ActualMove, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
-                if (FindDynamicUnitCollision(
-                        EM, ID, Trans->Position, Proposed) >= 0)
+                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
+                Proposed = ResolveStaticBlockers(
+                    EM, ID, Proposed, MoveDir, PathComp->IsAir);
+                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
+                    MovingRadius, PathComp->IsAir);
+                if (const auto BlockerID = FindDynamicUnitCollision(
+                        EM, ID, Trans->Position, Proposed);
+                    BlockerID >= 0)
                 {
+                    PathComp->BlockedByEntityID = BlockerID;
                     Proposed = Trans->Position;
                 }
-                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
                 Trans->Position = Proposed;
                 const float AppliedDistance = AppliedMove.Length();
@@ -1157,6 +1331,22 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
+                    if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
+                    {
+                        const int AvoidEntityID = PathComp->BlockedByEntityID;
+                        if (mMap && RefreshPathForCurrentRequest(
+                                EM, ID, mMap, false, AvoidEntityID))
+                        {
+                            PathComp->StallTimer = 0.0f;
+                            PathComp->HasLastWaypointDistance = false;
+                            break;
+                        }
+                        PathComp->StallTimer = 0.0f;
+                        PathComp->HasLastWaypointDistance = false;
+                        PathComp->CurrentSpeed = 0.0f;
+                        PathComp->CurrentVelocity = {0.0f, 0.0f};
+                        break;
+                    }
                     if (!HandleMovementStall(EM, ID, *PathComp, mMap))
                         break;
                     break;

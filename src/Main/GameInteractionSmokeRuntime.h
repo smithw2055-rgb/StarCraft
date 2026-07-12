@@ -2,6 +2,7 @@
 
 #include "Client/ClientRuntime.h"
 #include "Client/Selection.h"
+#include "Resource/GameDataLoader.h"
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
@@ -698,6 +699,28 @@ namespace InteractionSmoke
             return false;
         }
 
+        if (const auto* Loader = Client.GetDataAssets().GetDataLoader())
+        {
+            const auto* WorkerUnit = EM.GetComponent<Game::Components::UnitComponent>(WorkerID);
+            const auto* Sprite = WorkerUnit
+                ? Loader->FindSpriteByID(
+                    Loader->ResolveUnitSpriteID((uint32_t)WorkerUnit->ChkUnitID))
+                : nullptr;
+            if (Sprite && Sprite->SelectionCircleVerticalOffset > 0)
+            {
+                const int RingPicked = Selector.PickEntityAtWorld(
+                    EM,
+                    WorkerTrans->Position.X,
+                    WorkerTrans->Position.Y +
+                        (float)Sprite->SelectionCircleVerticalOffset);
+                if (RingPicked != WorkerID)
+                {
+                    Fail(Error, "point selection is not aligned with the sprites.dat selection ring");
+                    return false;
+                }
+            }
+        }
+
         const auto Rect = Selector.CollectRectSelection(
             EM, WorkerTrans->Position.X - 32.0f, WorkerTrans->Position.Y - 32.0f, 64.0f, 64.0f);
         if (!ContainsEntity(Rect, WorkerID))
@@ -945,10 +968,35 @@ namespace InteractionSmoke
         auto& PlayerResources = Game::Systems::HarvestSystem::GetResources(0);
         const int StartMinerals = PlayerResources.Minerals;
         const int StartAmount = Resource->Amount;
-        TickSystems(Session, 16, 0.1f);
+        // A campaign mineral patch can already have a worker in its gather
+        // queue.  Wait through a complete gather hand-off instead of assuming
+        // that the newly selected worker owns the patch within 1.6 seconds.
+        // This keeps the runtime smoke aligned with the ordered multi-worker
+        // queue used by HarvestSystem.
+        for (int I = 0;
+             I < 80 && Resource->Amount >= StartAmount && Harvest->CarryingAmount <= 0;
+             ++I)
+        {
+            TickSystems(Session, 1, 0.1f);
+        }
         if (Resource->Amount >= StartAmount && Harvest->CarryingAmount <= 0)
         {
-            Fail(Error, "harvest system did not mine from the resource");
+            const auto* WorkerTrans = EM.GetComponent<Game::Components::TransformComponent>(WorkerID);
+            const auto* WorkerPath = EM.GetComponent<Game::Components::PathfindingComponent>(WorkerID);
+            Fail(Error,
+                 "harvest system did not mine from the resource; state=" +
+                     std::to_string((int)Harvest->State) +
+                     " queued=" + std::to_string(Resource->QueuedGatherers.size()) +
+                     " active=" + std::to_string(Resource->ActiveGathererEntityID) +
+                     " worker=" +
+                     (WorkerTrans
+                          ? std::to_string((int)WorkerTrans->Position.X) + "," +
+                                std::to_string((int)WorkerTrans->Position.Y)
+                          : std::string("missing")) +
+                     " resource=" + std::to_string((int)ResourceTrans->Position.X) + "," +
+                     std::to_string((int)ResourceTrans->Position.Y) +
+                     " path=" +
+                     (WorkerPath ? std::to_string(WorkerPath->Path.size()) : std::string("missing")));
             return false;
         }
 
@@ -2345,7 +2393,26 @@ namespace InteractionSmoke
             return false;
         }
 
-        TickSystems(Session, 79, 0.1f);
+        bool SawRenderableBullet = false;
+        for (int Tick = 0; Tick < 79; ++Tick)
+        {
+            TickSystems(Session, 1, 0.1f);
+            for (int BulletID : EM.GetEntitiesWith<Game::Components::BulletComponent>())
+            {
+                const auto* Bullet = EM.GetComponent<Game::Components::BulletComponent>(BulletID);
+                const auto* BulletRender = EM.GetComponent<Game::Components::RenderComponent>(BulletID);
+                if (!Bullet || Bullet->SourceEntityID != AttackerID || !BulletRender)
+                    continue;
+                const auto* Frames = Client.GetSpriteAssets().GetDatImageFrames(BulletRender->ImageID);
+                if (Frames && !Frames->empty() && (*Frames)[0].Valid())
+                    SawRenderableBullet = true;
+            }
+        }
+        if (Combat->IsRanged && !SawRenderableBullet)
+        {
+            Fail(Error, "ranged attack did not produce a renderable weapons.dat projectile");
+            return false;
+        }
         const bool TargetDestroyed = !EM.IsAlive(ActualTargetID);
         const auto* UpdatedTargetUnit = TargetDestroyed
             ? nullptr

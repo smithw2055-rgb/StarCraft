@@ -55,6 +55,7 @@ public:
 
     const UnitEntry* FindUnitByID(uint32_t ID) const;
     const WeaponEntry* FindWeaponByID(uint32_t ID) const;
+    const FlingyEntry* FindFlingyByID(uint32_t ID) const;
     const SpriteEntry* FindSpriteByID(uint32_t ID) const;
     const ImageEntry* FindImageByID(uint32_t ID) const;
     const ImageRelationEntry* FindImageRelationByID(uint32_t ID) const;
@@ -66,6 +67,8 @@ public:
     // Resolve an image.dat image id to its images.tbl GRP path.
     std::string ResolveGrpPath(uint32_t ImageID) const;
     std::string ResolveImageGrpPath(uint32_t ImageID) const;
+    // LO types follow OpenBW ordering: attack, damage, special, landing, lift-off, shield.
+    std::string ResolveImageOverlayPath(uint32_t ImageID, size_t LoType) const;
 
     // Resolve a CHK unit id through units.dat/sprites.dat to an image.dat id.
     // Returns UINT32_MAX when the data chain is unavailable or invalid.

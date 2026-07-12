@@ -915,8 +915,12 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
 
     const float HW = Img.Width * 0.5f;
     const float HH = Img.Height * 0.5f;
-    OffsetX = RenderComp->Flipped ? -OffsetX : OffsetX;
-    const bool Flipped = RenderComp->Flipped != Node.Flipped;
+    // IScript image offsets are sprite-space values. Special LO offsets have
+    // already been resolved for the current flipped frame, so mirroring again
+    // would put engine flames on the wrong side of the aircraft.
+    // Node.Flipped is the image VM's absolute directional flip state. Combining
+    // it with the root flip reverses directional shadows a second time.
+    const bool Flipped = Node.Flipped;
     DrawSpriteWithEffect(Render::g_Draw2D,
                          Img,
                          Trans->Position.X + OffsetX - HW,
@@ -1227,6 +1231,61 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                                18.0f,
                                Render::Color(0, 0, 0, 255),
                                2.0f);
+        }
+    }
+
+    auto Bullets = Entities.GetEntitiesWith<Game::Components::TransformComponent,
+                                            Game::Components::RenderComponent,
+                                            Game::Components::BulletComponent>();
+    std::stable_sort(Bullets.begin(), Bullets.end(), [&](int A, int B) {
+        const auto* TA = Entities.GetComponent<Game::Components::TransformComponent>(A);
+        const auto* TB = Entities.GetComponent<Game::Components::TransformComponent>(B);
+        return TA && TB ? TA->Position.Y < TB->Position.Y : A < B;
+    });
+    for (int EntityId : Bullets)
+    {
+        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
+        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        if (!Trans || !RenderComp || !RenderComp->Visible ||
+            Trans->Position.X < CullMinX || Trans->Position.X > CullMaxX ||
+            Trans->Position.Y < CullMinY || Trans->Position.Y > CullMaxY)
+        {
+            continue;
+        }
+
+        if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
+        {
+            for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
+                if (Tree->Nodes[NodeIndex].ParentIndex < 0 && !Tree->Nodes[NodeIndex].DrawAbove)
+                    DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
+        }
+
+        const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->ImageID);
+        if (Frames && !Frames->empty())
+        {
+            RenderComp->TotalFrames = std::max(RenderComp->TotalFrames, (int)Frames->size());
+            const int FrameIndex = std::clamp(RenderComp->FrameIndex, 0, (int)Frames->size() - 1);
+            const auto& Img = (*Frames)[FrameIndex];
+            if (Img.Valid())
+            {
+                const float HW = (float)Img.Width * 0.5f;
+                const float HH = (float)Img.Height * 0.5f;
+                DrawSpriteWithEffect(
+                    Draw, Img,
+                    Trans->Position.X - HW, Trans->Position.Y - HH,
+                    (float)Img.Width, (float)Img.Height,
+                    RenderComp->Tint, RenderComp->Flipped,
+                    ResolveSpriteVisualEffect(Entities, EntityId),
+                    Entities.GetComponent<Game::Components::PlayerComponent>(EntityId));
+                ++DebugSpriteCount;
+            }
+        }
+
+        if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
+        {
+            for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
+                if (Tree->Nodes[NodeIndex].ParentIndex < 0 && Tree->Nodes[NodeIndex].DrawAbove)
+                    DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
     }
 

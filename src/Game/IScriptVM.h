@@ -147,6 +147,7 @@ enum class IScriptEventType : uint8_t
     PlayRandomSound,
     PlaySoundBetween,
     CreateImageOverlay,
+    CreateImageOverlaySpecialOffset,
     CreateSpriteOverlay,
     CreateGasOverlays,
     WarpOverlay,
@@ -201,6 +202,8 @@ public:
         int BaseFrameIndex = 0;
         int HorPos = 0;
         int VertPos = 0;
+        bool HorPosSet = false;
+        bool VertPosSet = false;
         bool FlipState = false;
         int FlSpeed = 8;
         int FlDirect = 0;

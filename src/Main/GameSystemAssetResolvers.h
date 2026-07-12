@@ -4,6 +4,8 @@
 #include <functional>
 #include <utility>
 
+#include "Game/Systems/AnimationSystem.h"
+#include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/ZergSystem.h"
@@ -33,6 +35,18 @@ inline void ConfigureGameplayCollisionBoundsResolvers(
     Game::Systems::ProductionSystem::SetCollisionBoundsResolver(Resolver);
     Game::Systems::BuildingSystem::SetCollisionBoundsResolver(Resolver);
     Game::Systems::ZergSystem::SetCollisionBoundsResolver(std::move(Resolver));
+}
+
+inline void ConfigureAnimationOverlayOffsetResolver(
+    Game::Systems::AnimationSystem::OverlayOffsetResolver Resolver)
+{
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(std::move(Resolver));
+}
+
+inline void ConfigureBulletVisualResolver(
+    Game::Systems::BulletSystem::VisualResolver Resolver)
+{
+    Game::Systems::BulletSystem::SetVisualResolver(std::move(Resolver));
 }
 
 } // namespace Game::Client::GameLoop

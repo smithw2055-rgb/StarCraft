@@ -386,6 +386,13 @@ const WeaponEntry* GameDataLoader::FindWeaponByID(uint32_t ID) const
     return nullptr;
 }
 
+const FlingyEntry* GameDataLoader::FindFlingyByID(uint32_t ID) const
+{
+    if (ID < mFlingy.size())
+        return &mFlingy[ID];
+    return nullptr;
+}
+
 const SpriteEntry* GameDataLoader::FindSpriteByID(uint32_t ID) const
 {
     if (ID < mSprites.size())
@@ -450,6 +457,29 @@ std::string GameDataLoader::ResolveImageGrpPath(uint32_t ImageID) const
     }
 
     return {};
+}
+
+std::string GameDataLoader::ResolveImageOverlayPath(uint32_t ImageID, size_t LoType) const
+{
+    if (ImageID >= mImages.size())
+        return {};
+
+    const auto& Image = mImages[(size_t)ImageID];
+    uint32_t TblIndex = 0;
+    switch (LoType)
+    {
+        case 0: TblIndex = Image.AttackFilenameIndex; break;
+        case 1: TblIndex = Image.DamageFilenameIndex; break;
+        case 2: TblIndex = Image.SpecialFilenameIndex; break;
+        case 3: TblIndex = Image.LandingDustFilenameIndex; break;
+        case 4: TblIndex = Image.LiftOffFilenameIndex; break;
+        case 5: TblIndex = Image.ShieldFilenameIndex; break;
+        default: return {};
+    }
+
+    if (TblIndex == 0 || TblIndex > mImageTbl.size())
+        return {};
+    return NormalizeGrpPath(mImageTbl[(size_t)TblIndex - 1].Filename);
 }
 
 uint32_t GameDataLoader::ResolveUnitSpriteID(uint32_t ChkUnitID) const

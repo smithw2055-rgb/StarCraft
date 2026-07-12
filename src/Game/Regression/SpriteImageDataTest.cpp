@@ -160,6 +160,56 @@ int main()
     Require(Loader.LoadImageRelationDataRaw(ReadAll("assets/images.rel")),
         "load images.rel");
 
+    const auto Flingy = Resource::DatDecoder::DecodeFlingy(ReadAll("assets/arr/flingy.dat"));
+    Require(Flingy.size() == 209, "flingy.dat decodes all entries");
+    Require(Flingy[0].SpriteID == 130 &&
+            Flingy[0].TopSpeed == 1707 &&
+            Flingy[0].Acceleration == 107 &&
+            Flingy[0].HaltDistance == 13616 &&
+            Flingy[0].TurnRate == 40 &&
+            Flingy[0].Unused == 30 &&
+            Flingy[0].MovementType == 0,
+        "flingy.dat column-major movement fields match the Brood War asset");
+
+    const uint32_t GeyserImageID = Loader.ResolveUnitImageID(188);
+    Require(GeyserImageID == 344, "Vespene geyser resolves to its main image");
+    const std::string GeyserLoPath = Loader.ResolveImageOverlayPath(GeyserImageID, 2);
+    Require(GeyserLoPath == "neutral/geyser.los",
+        "geyser special overlay resolves through images.dat and images.tbl");
+    const auto GeyserOffsets = Resource::DatDecoder::DecodeImageOffsets(
+        ReadAll("assets/unit/" + GeyserLoPath));
+    Require(GeyserOffsets && GeyserOffsets->Frames.size() == 8 &&
+            GeyserOffsets->Frames[0].size() == 5,
+        "geyser special overlay decodes eight frames with five smoke slots");
+    Require(GeyserOffsets->Frames[0][0].X == 11 &&
+            GeyserOffsets->Frames[0][0].Y == -19 &&
+            GeyserOffsets->Frames[0][2].X == 34 &&
+            GeyserOffsets->Frames[0][2].Y == 2,
+        "geyser LO coordinates preserve signed byte offsets");
+
+    const uint32_t BattlecruiserImageID = Loader.ResolveUnitImageID(12);
+    Require(BattlecruiserImageID == 218,
+        "Battlecruiser resolves to the canonical main image");
+    const auto* BattlecruiserImage = Loader.FindImageByID(BattlecruiserImageID);
+    const auto* BattlecruiserShadow = Loader.FindImageByID(219);
+    const auto* BattlecruiserShadowRelation = Loader.FindImageRelationByID(219);
+    Require(BattlecruiserImage && BattlecruiserImage->HasDirectionalFrames &&
+            BattlecruiserShadow && BattlecruiserShadow->HasDirectionalFrames,
+        "Battlecruiser main image and shadow both use directional GRP frames");
+    Require(BattlecruiserShadowRelation && BattlecruiserShadowRelation->IsShadow() &&
+            BattlecruiserShadowRelation->ParentImageID == (int32_t)BattlecruiserImageID,
+        "images.rel links the real Battlecruiser shadow to its main image");
+    const std::string BattlecruiserSpecialLoPath =
+        Loader.ResolveImageOverlayPath(BattlecruiserImageID, 2);
+    Require(BattlecruiserSpecialLoPath == "terran/BattleCr.lol",
+        "Battlecruiser main image resolves its special overlay LO table");
+    const auto BattlecruiserSpecialOffsets = Resource::DatDecoder::DecodeImageOffsets(
+        ReadAll("assets/unit/" + BattlecruiserSpecialLoPath));
+    Require(BattlecruiserSpecialOffsets &&
+            !BattlecruiserSpecialOffsets->Frames.empty() &&
+            !BattlecruiserSpecialOffsets->Frames.front().empty(),
+        "real BattleCr.lol offsets decode for directional flight overlays");
+
     const auto* Marine = Loader.FindUnitByID(0);
     Require(Marine, "Marine units.dat entry");
     Require(Marine->HitPoints == 40 &&
@@ -228,6 +278,20 @@ int main()
             GaussRifle->SplashType == 1 &&
             GaussRifle->BulletCount == 1,
         "Gauss Rifle decodes from column-major weapons.dat");
+    const auto* GaussFlingy = Loader.FindFlingyByID(GaussRifle->FlingyID);
+    Require(GaussFlingy, "Gauss Rifle resolves weapons.dat to flingy.dat");
+    const auto* GaussSprite = GaussFlingy
+        ? Loader.FindSpriteByID(GaussFlingy->SpriteID)
+        : nullptr;
+    Require(GaussSprite, "Gauss Rifle resolves flingy.dat to sprites.dat");
+    const std::string GaussImagePath = GaussSprite
+        ? Loader.ResolveImageGrpPath(GaussSprite->ImageID)
+        : std::string{};
+    Require(!GaussImagePath.empty(),
+        "Gauss Rifle resolves sprites.dat through images.dat/images.tbl to a GRP path");
+    const auto GaussFrames = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(GaussImagePath));
+    Require(GaussFrames && !GaussFrames->Frames.empty(),
+        "Gauss Rifle projectile GRP decodes to renderable weapon frames");
 
     const auto Upgrades = Resource::DatDecoder::DecodeUpgrades(ReadAll("assets/arr/upgrades.dat"));
     Require(Upgrades.size() > 0, "upgrades.dat decodes");

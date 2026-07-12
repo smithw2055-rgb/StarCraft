@@ -67,37 +67,14 @@ float CursorAnimationFps(GameCursorKind Kind)
 
 void CursorHotspot(GameCursorKind Kind, float& OutX, float& OutY)
 {
-    switch (Kind)
-    {
-        case GameCursorKind::Arrow:
-            OutX = 3.0f; OutY = 3.0f; return;
-        case GameCursorKind::Drag:
-            OutX = 8.0f; OutY = 8.0f; return;
-        case GameCursorKind::Illegal:
-            OutX = 8.0f; OutY = 8.0f; return;
-        case GameCursorKind::TargetNeutral:
-        case GameCursorKind::TargetGreen:
-        case GameCursorKind::TargetRed:
-        case GameCursorKind::TargetYellow:
-            OutX = 9.0f; OutY = 8.0f; return;
-        case GameCursorKind::MagnifierGreen:
-        case GameCursorKind::MagnifierRed:
-        case GameCursorKind::MagnifierYellow:
-            OutX = 9.0f; OutY = 8.0f; return;
-        case GameCursorKind::ScrollUp:
-        case GameCursorKind::ScrollDown:
-        case GameCursorKind::ScrollLeft:
-        case GameCursorKind::ScrollRight:
-        case GameCursorKind::ScrollUpLeft:
-        case GameCursorKind::ScrollUpRight:
-        case GameCursorKind::ScrollDownLeft:
-        case GameCursorKind::ScrollDownRight:
-            OutX = 7.0f; OutY = 8.0f; return;
-        case GameCursorKind::Time:
-            OutX = 11.0f; OutY = 5.0f; return;
-        default:
-            OutX = 8.0f; OutY = 8.0f; return;
-    }
+    (void)Kind;
+    // Original cursor GRPs keep every frame on a 128x128 canvas; their opaque
+    // pixels carry per-frame offsets around the canvas center. The hotspot is
+    // therefore (64,64), not a coordinate relative to the cropped opaque
+    // pixels. Small values such as (8,8) displaced the visible cursor roughly
+    // fifty pixels down/right from the actual click and drag rectangle.
+    OutX = 64.0f;
+    OutY = 64.0f;
 }
 
 bool IsMineralUnit(int Id)
@@ -227,8 +204,9 @@ std::vector<Core::ECS::EntityID> FilterHarvesters(Core::ECS::EntityManager& EM,
     {
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
         if (!Unit) continue;
+        // CHK unit IDs: Terran SCV 7, Zerg Drone 41, Protoss Probe 64.
         const bool MatchesRawWorkerId =
-            Unit->ChkUnitID == 0x07 || Unit->ChkUnitID == 0x29 || Unit->ChkUnitID == 0x2D;
+            Unit->ChkUnitID == 7 || Unit->ChkUnitID == 41 || Unit->ChkUnitID == 64;
         if (MatchesRawWorkerId)
             Harvesters.push_back(EntityId);
     }

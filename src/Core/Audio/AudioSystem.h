@@ -94,6 +94,7 @@ public:
     // WAV data loading (from game archives)
     using LoadCallback = std::function<std::vector<uint8_t>(const std::string& FilePath)>;
     void SetFileLoader(LoadCallback Callback) { mFileLoader = std::move(Callback); }
+    void SetSoundPath(int SoundID, std::string FilePath);
     bool LoadWavData(int SoundID, const std::vector<uint8_t>& WavData);
     bool LoadWavFromFile(const std::string& FilePath, int SoundID);
 
@@ -124,6 +125,7 @@ private:
 
     // WAV data cache (indexed by sound ID)
     std::vector<std::vector<uint8_t>> mWavCache;
+    std::vector<std::string> mSoundPaths;
 
     // Sound type metadata
     std::vector<SoundType> mSoundTypes;

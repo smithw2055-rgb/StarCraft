@@ -259,6 +259,31 @@ int main()
         CornerDetourMap.TileToWorld(3, 0));
     Require(CornerDetourPath.Found,
         "A* finds a legal detour when diagonal corner cutting is blocked");
+
+    Game::Map::GameMap SmoothingDetourMap;
+    SmoothingDetourMap.Generate(7, 5);
+    for (int Y = 0; Y < 4; ++Y)
+    {
+        auto Tile = SmoothingDetourMap.GetTile(3, Y);
+        Tile.Walkable = false;
+        SmoothingDetourMap.SetTile(3, Y, Tile);
+    }
+    auto SmoothingDetourPath = Game::Pathfinding::AStar::FindPath(
+        SmoothingDetourMap,
+        SmoothingDetourMap.TileToWorld(1, 1),
+        SmoothingDetourMap.TileToWorld(5, 1));
+    Require(SmoothingDetourPath.Found && SmoothingDetourPath.Waypoints.size() >= 2,
+        "A* smoothing keeps bend waypoints when the direct line is blocked");
+    bool UsesWallGap = false;
+    for (const auto& Waypoint : SmoothingDetourPath.Waypoints)
+    {
+        int WX = 0;
+        int WY = 0;
+        SmoothingDetourMap.WorldToTile(Waypoint, WX, WY);
+        UsesWallGap = UsesWallGap || WY == 4;
+    }
+    Require(UsesWallGap,
+        "smoothed A* route goes around the wall through its reachable gap");
     Game::Pathfinding::AStar::SetConfig(SavedConfig);
 
     Core::ECS::SystemManager SysMgr;
@@ -544,6 +569,35 @@ int main()
     Require(DatMoverTrans && DatMoverTrans->Position.X <= 40.1f,
         "ground units use units.dat asymmetric building bounds for static blockers");
 
+    Core::ECS::SystemManager IgnoredTargetSysMgr;
+    auto& IgnoredTargetEM = IgnoredTargetSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem IgnoredTargetMovement(IgnoredTargetSysMgr);
+    const int HarvestMover = CreateMovableUnit(
+        IgnoredTargetEM, {0.0f, 0.0f}, {128.0f, 0.0f},
+        7, Game::Components::UnitSize::Small, 12);
+    const int HarvestTarget = IgnoredTargetEM.CreateEntity();
+    IgnoredTargetEM.AddComponent<Game::Components::TransformComponent>(HarvestTarget).Position =
+        {64.0f, 0.0f};
+    auto& HarvestTargetUnit =
+        IgnoredTargetEM.AddComponent<Game::Components::UnitComponent>(HarvestTarget);
+    HarvestTargetUnit.ChkUnitID = 176;
+    IgnoredTargetEM.AddComponent<Game::Components::ResourceComponent>(HarvestTarget).Type =
+        Game::Components::ResourceType::Minerals;
+    auto& HarvestTargetPath =
+        IgnoredTargetEM.AddComponent<Game::Components::PathfindingComponent>(HarvestTarget);
+    SetCollisionBounds(HarvestTargetPath, 32, 20, 31, 19);
+    auto* HarvestMoverPath =
+        IgnoredTargetEM.GetComponent<Game::Components::PathfindingComponent>(HarvestMover);
+    auto* HarvestMoverTrans =
+        IgnoredTargetEM.GetComponent<Game::Components::TransformComponent>(HarvestMover);
+    Require(HarvestMoverPath && HarvestMoverTrans,
+        "harvest approach mover has pathing and transform state");
+    HarvestMoverPath->RequestedIgnoreEntityID = HarvestTarget;
+    for (int I = 0; I < 45; ++I)
+        IgnoredTargetMovement.Update(0.05f);
+    Require(HarvestMoverTrans->Position.X > 96.0f,
+        "movement honors the command target ignore id instead of sticking at a resource boundary");
+
     Core::ECS::SystemManager TerrainSysMgr;
     auto& TerrainEM = TerrainSysMgr.GetEntityManager();
     Game::Map::GameMap TerrainMap;
@@ -592,6 +646,159 @@ int main()
         "small ground unit can move through a one-tile walkable corridor");
     Require(LargeCorridorTrans && LargeCorridorTrans->Position.X <= 48.1f,
         "large ground unit does not squeeze into a one-tile walkable corridor");
+
+    Core::ECS::SystemManager InfantryGapSysMgr;
+    auto& InfantryGapEM = InfantryGapSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem InfantryGapMovement(InfantryGapSysMgr);
+    const int GapMarine = CreateMovableUnit(
+        InfantryGapEM, {64.0f, 0.0f}, {64.0f, 192.0f},
+        0, Game::Components::UnitSize::Small, 10);
+    auto* GapMarinePath =
+        InfantryGapEM.GetComponent<Game::Components::PathfindingComponent>(GapMarine);
+    Require(GapMarinePath, "infantry gap test has movement bounds");
+    SetCollisionBounds(*GapMarinePath, 8, 9, 8, 10);
+
+    const int LeftGapBlocker = InfantryGapEM.CreateEntity();
+    InfantryGapEM.AddComponent<Game::Components::TransformComponent>(LeftGapBlocker).Position =
+        {20.0f, 96.0f};
+    auto& LeftGapUnit = InfantryGapEM.AddComponent<Game::Components::UnitComponent>(LeftGapBlocker);
+    LeftGapUnit.ChkUnitID = 125;
+    InfantryGapEM.AddComponent<Game::Components::BuildingComponent>(LeftGapBlocker).IsBuilding = true;
+    auto& LeftGapPath = InfantryGapEM.AddComponent<Game::Components::PathfindingComponent>(LeftGapBlocker);
+    SetCollisionBounds(LeftGapPath, 20, 96, 34, 96);
+
+    const int RightGapBlocker = InfantryGapEM.CreateEntity();
+    InfantryGapEM.AddComponent<Game::Components::TransformComponent>(RightGapBlocker).Position =
+        {100.0f, 96.0f};
+    auto& RightGapUnit = InfantryGapEM.AddComponent<Game::Components::UnitComponent>(RightGapBlocker);
+    RightGapUnit.ChkUnitID = 30;
+    InfantryGapEM.AddComponent<Game::Components::BuildingComponent>(RightGapBlocker).IsBuilding = true;
+    auto& RightGapPath = InfantryGapEM.AddComponent<Game::Components::PathfindingComponent>(RightGapBlocker);
+    SetCollisionBounds(RightGapPath, 27, 96, 20, 96);
+
+    for (int I = 0; I < 80; ++I)
+        InfantryGapMovement.Update(0.05f);
+    const auto* GapMarineTrans =
+        InfantryGapEM.GetComponent<Game::Components::TransformComponent>(GapMarine);
+    Require(GapMarineTrans && GapMarineTrans->Position.Y > 150.0f,
+        "Marine uses directional units.dat bounds to pass an infantry-width bunker/tank gap");
+
+    Core::ECS::SystemManager TeamQueueSysMgr;
+    auto& TeamQueueEM = TeamQueueSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem TeamQueueMovement(TeamQueueSysMgr);
+    const int SlowFront = CreateMovableUnit(
+        TeamQueueEM, {48.0f, 32.0f}, {288.0f, 32.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    const int FastRear = CreateMovableUnit(
+        TeamQueueEM, {16.0f, 32.0f}, {256.0f, 32.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* SlowFrontPath =
+        TeamQueueEM.GetComponent<Game::Components::PathfindingComponent>(SlowFront);
+    auto* FastRearPath =
+        TeamQueueEM.GetComponent<Game::Components::PathfindingComponent>(FastRear);
+    Require(SlowFrontPath && FastRearPath, "team queue test units have movement state");
+    SetCollisionBounds(*SlowFrontPath, 8, 9, 8, 10);
+    SetCollisionBounds(*FastRearPath, 8, 9, 8, 10);
+    SlowFrontPath->TargetSpeed = 24.0f;
+    FastRearPath->TargetSpeed = 64.0f;
+    for (int I = 0; I < 240; ++I)
+        TeamQueueMovement.Update(0.05f);
+    const auto* FastRearTrans =
+        TeamQueueEM.GetComponent<Game::Components::TransformComponent>(FastRear);
+    Require(FastRearTrans && FastRearTrans->Position.X > 220.0f,
+        "rear group unit waits for a moving teammate and continues after the lane clears");
+    Require(!FastRearPath->HasRecentMoveFailure,
+        "temporary teammate blocking does not blacklist a reachable group destination");
+
+    Core::ECS::SystemManager FriendlyYieldSysMgr;
+    auto& FriendlyYieldEM = FriendlyYieldSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem FriendlyYieldMovement(FriendlyYieldSysMgr);
+    const int YieldingFriend = CreateStationaryCollisionUnit(
+        FriendlyYieldEM, {80.0f, 64.0f}, 8, 9, 8, 10);
+    const int YieldingMover = CreateMovableUnit(
+        FriendlyYieldEM, {48.0f, 64.0f}, {192.0f, 64.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    FriendlyYieldEM.AddComponent<Game::Components::PlayerComponent>(YieldingFriend).PlayerID = 0;
+    FriendlyYieldEM.AddComponent<Game::Components::PlayerComponent>(YieldingMover).PlayerID = 0;
+    auto* YieldingMoverPath =
+        FriendlyYieldEM.GetComponent<Game::Components::PathfindingComponent>(YieldingMover);
+    auto* YieldingFriendTrans =
+        FriendlyYieldEM.GetComponent<Game::Components::TransformComponent>(YieldingFriend);
+    auto* YieldingMoverTrans =
+        FriendlyYieldEM.GetComponent<Game::Components::TransformComponent>(YieldingMover);
+    Require(YieldingMoverPath && YieldingFriendTrans && YieldingMoverTrans,
+        "friendly yielding test has movement and transform state");
+    SetCollisionBounds(*YieldingMoverPath, 8, 9, 8, 10);
+    const Core::Math::Vec2 FriendStart = YieldingFriendTrans->Position;
+    for (int I = 0; I < 120; ++I)
+        FriendlyYieldMovement.Update(0.05f);
+    Require(YieldingFriendTrans->Position.DistanceTo(FriendStart) > 1.0f,
+        "a stopped friendly unit yields a small amount to an approaching teammate");
+    Require(YieldingMoverTrans->Position.X > 120.0f,
+        "the approaching teammate continues after the friendly unit yields");
+    Require(YieldingFriendTrans->Position.DistanceTo(FriendStart) <= 24.1f,
+        "friendly yielding stays bounded instead of pushing the blocker away indefinitely");
+
+    Core::ECS::SystemManager FriendlyDetourSysMgr;
+    auto& FriendlyDetourEM = FriendlyDetourSysMgr.GetEntityManager();
+    Game::Map::GameMap FriendlyDetourMap;
+    FriendlyDetourMap.Generate(12, 6);
+    Game::Systems::MovementSystem FriendlyDetourMovement(
+        FriendlyDetourSysMgr, &FriendlyDetourMap);
+    const int HoldingFriend = CreateStationaryCollisionUnit(
+        FriendlyDetourEM, {112.0f, 80.0f}, 8, 9, 8, 10);
+    auto* HoldingCommand =
+        FriendlyDetourEM.GetComponent<Game::Components::CommandComponent>(HoldingFriend);
+    Require(HoldingCommand, "friendly detour blocker has a command component");
+    HoldingCommand->CurrentCommand = Game::Components::CommandType::HoldPosition;
+    const int DetourMover = CreateMovableUnit(
+        FriendlyDetourEM, {48.0f, 80.0f}, {304.0f, 80.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    FriendlyDetourEM.AddComponent<Game::Components::PlayerComponent>(HoldingFriend).PlayerID = 0;
+    FriendlyDetourEM.AddComponent<Game::Components::PlayerComponent>(DetourMover).PlayerID = 0;
+    auto* DetourMoverPath =
+        FriendlyDetourEM.GetComponent<Game::Components::PathfindingComponent>(DetourMover);
+    auto* DetourMoverTrans =
+        FriendlyDetourEM.GetComponent<Game::Components::TransformComponent>(DetourMover);
+    Require(DetourMoverPath && DetourMoverTrans,
+        "friendly detour mover has path and transform state");
+    SetCollisionBounds(*DetourMoverPath, 8, 9, 8, 10);
+    float MaxDetourY = DetourMoverTrans->Position.Y;
+    for (int I = 0; I < 160; ++I)
+    {
+        FriendlyDetourMovement.Update(0.05f);
+        MaxDetourY = std::max(MaxDetourY, DetourMoverTrans->Position.Y);
+    }
+    Require(DetourMoverTrans->Position.X > 240.0f,
+        "unit reroutes around a friendly blocker when yielding cannot clear the lane");
+    Require(MaxDetourY > 96.0f,
+        "friendly-blocker reroute contains a real lateral A* detour");
+
+    Core::ECS::SystemManager RetrySysMgr;
+    auto& RetryEM = RetrySysMgr.GetEntityManager();
+    Game::Systems::MovementSystem RetryMovement(RetrySysMgr);
+    int RetryUnit = CreateMovableUnit(
+        RetryEM, {0.0f, 0.0f}, {128.0f, 0.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* RetryPath =
+        RetryEM.GetComponent<Game::Components::PathfindingComponent>(RetryUnit);
+    auto* RetryTrans =
+        RetryEM.GetComponent<Game::Components::TransformComponent>(RetryUnit);
+    Require(RetryPath && RetryTrans, "failed-target retry unit has movement state");
+    RetryPath->Path.clear();
+    RetryPath->HasRecentMoveFailure = true;
+    RetryPath->RecentFailedMoveTarget = RetryPath->RequestedDestination;
+    RetryPath->RecentMoveFailureCooldown = 1.0f;
+    for (int I = 0; I < 9; ++I)
+        RetryMovement.Update(0.1f);
+    Require(RetryPath->HasRecentMoveFailure && RetryPath->Path.empty(),
+        "failed movement target remains backed off during the retry cooldown");
+    for (int I = 0; I < 3; ++I)
+        RetryMovement.Update(0.1f);
+    Require(!RetryPath->HasRecentMoveFailure,
+        "failed movement target expires instead of remaining permanently blacklisted");
+    Require(!RetryPath->Path.empty() || RetryTrans->Position.X > 0.0f,
+        "movement automatically retries the same target after the cooldown");
 
     std::printf("MovementCommandTest passed\n");
     return 0;

@@ -149,9 +149,9 @@ int main()
     auto* GroupCmdC = EM.GetComponent<Game::Components::CommandComponent>(GroupMarineC);
     Require(GroupCmdA && GroupCmdB && GroupCmdC,
         "group move assigns commands to every mobile selected unit");
-    Require(NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 32.0f) &&
-            NearlyEqual(GroupCmdC->TargetPosition.Y - GroupCmdA->TargetPosition.Y, 32.0f),
-        "compact group move preserves each unit's relative formation offset");
+    Require(NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 25.6f) &&
+            NearlyEqual(GroupCmdC->TargetPosition.Y - GroupCmdA->TargetPosition.Y, 25.6f),
+        "compact infantry group closes ranks without collapsing onto one point");
     Require(NearlyEqual((GroupCmdA->TargetPosition.X + GroupCmdB->TargetPosition.X +
                          GroupCmdC->TargetPosition.X) / 3.0f, 320.0f) &&
             NearlyEqual((GroupCmdA->TargetPosition.Y + GroupCmdB->TargetPosition.Y +
@@ -174,15 +174,15 @@ int main()
             GroupCmdC->Orders.size() == 2,
         "queued group move appends one order per selected unit");
     Require(NearlyEqual(GroupCmdB->Orders[1].TargetPosition.X -
-                        GroupCmdA->Orders[1].TargetPosition.X, 32.0f) &&
+                        GroupCmdA->Orders[1].TargetPosition.X, 25.6f) &&
             NearlyEqual(GroupCmdC->Orders[1].TargetPosition.Y -
-                        GroupCmdA->Orders[1].TargetPosition.Y, 32.0f),
+                        GroupCmdA->Orders[1].TargetPosition.Y, 25.6f),
         "queued group move stores per-unit formation positions");
 
     Game::Systems::CommandSystem::IssueAttackMove(EM, MoveGroup, {640.0f, 320.0f});
     Require(GroupCmdA->CurrentCommand == Game::Components::CommandType::AttackMove &&
             GroupCmdB->CurrentCommand == Game::Components::CommandType::AttackMove &&
-            NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 32.0f),
+            NearlyEqual(GroupCmdB->TargetPosition.X - GroupCmdA->TargetPosition.X, 25.6f),
         "attack-move uses the same per-unit group positioning semantics");
 
     int WideMarineA = CreateUnit(EM, 0, 4.0f, {0.0f, 160.0f});
@@ -192,9 +192,20 @@ int main()
     auto* WideCmdA = EM.GetComponent<Game::Components::CommandComponent>(WideMarineA);
     auto* WideCmdB = EM.GetComponent<Game::Components::CommandComponent>(WideMarineB);
     Require(WideCmdA && WideCmdB &&
-            NearlyEqual(WideCmdA->TargetPosition.X, 400.0f) &&
-            NearlyEqual(WideCmdB->TargetPosition.X, 400.0f),
-        "widely scattered selections converge instead of preserving an oversized formation");
+            WideCmdA->TargetPosition.DistanceTo(WideCmdB->TargetPosition) >= 23.9f &&
+            NearlyEqual((WideCmdA->TargetPosition.X + WideCmdB->TargetPosition.X) * 0.5f,
+                        400.0f),
+        "widely scattered selections converge into distinct centered formation slots");
+
+    const int SpiderMine = CreateUnit(EM, 13, 10.0f, {96.0f, 224.0f});
+    auto& SpiderMinePath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(SpiderMine);
+    SpiderMinePath.Path.push_back({128.0f, 224.0f});
+    EM.AddComponent<Game::Components::SpiderMineComponent>(SpiderMine).IsPlaced = true;
+    Game::Systems::CommandSystem::IssueMove(EM, {SpiderMine}, {320.0f, 224.0f});
+    Require(SpiderMinePath.Path.empty() &&
+            !EM.GetComponent<Game::Components::CommandComponent>(SpiderMine),
+        "placed Spider Mine rejects player movement orders");
 
     int DeadScv = CreateUnit(
         EM,

@@ -39,10 +39,13 @@ inline std::string Ellipsize(const std::string& Text, size_t MaxChars)
 inline int IconForDef(int DefID)
 {
     const auto Def = Game::Races::GetUnitDefByID(DefID);
+    // cmdicons.grp keeps unit and building portraits at their canonical CHK
+    // unit ids. DefaultIconIndex historically held the internal definition
+    // index, which makes (for example) SCV resolve to the Marine icon.
+    if (Def.Name != "Unknown" && Def.ChkUnitID >= 0)
+        return Def.ChkUnitID;
     if (Def.DefaultIconIndex >= 0)
         return Def.DefaultIconIndex;
-    if (Def.ChkUnitID > 0)
-        return Def.ChkUnitID;
     return DefID;
 }
 

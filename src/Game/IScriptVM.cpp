@@ -458,11 +458,23 @@ void IScriptVM::RegisterDefaultOpcodes()
         return false;
     };
     mOpcodeHandlers[Opc_PlayFramTile] = mOpcodeHandlers[Opc_PlayFram];
-    mOpcodeHandlers[Opc_SetHorPos] = [](IScriptVM& VM) { VM.mSprite.HorPos = VM.PeekArg(); VM.AdvanceArgs(1); return false; };
-    mOpcodeHandlers[Opc_SetVertPos] = [](IScriptVM& VM) { VM.mSprite.VertPos = VM.PeekArg(); VM.AdvanceArgs(1); return false; };
+    mOpcodeHandlers[Opc_SetHorPos] = [](IScriptVM& VM) {
+        VM.mSprite.HorPos = VM.PeekArg();
+        VM.mSprite.HorPosSet = true;
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    mOpcodeHandlers[Opc_SetVertPos] = [](IScriptVM& VM) {
+        VM.mSprite.VertPos = VM.PeekArg();
+        VM.mSprite.VertPosSet = true;
+        VM.AdvanceArgs(1);
+        return false;
+    };
     mOpcodeHandlers[Opc_SetPos] = [](IScriptVM& VM) {
         VM.mSprite.HorPos = VM.PeekArg(1);
         VM.mSprite.VertPos = VM.PeekArg(2);
+        VM.mSprite.HorPosSet = true;
+        VM.mSprite.VertPosSet = true;
         VM.AdvanceArgs(2);
         return false;
     };
@@ -501,14 +513,18 @@ void IScriptVM::RegisterDefaultOpcodes()
         return false;
     };
     mOpcodeHandlers[Opc_SigOrder] = [](IScriptVM& VM) {
-        VM.mSprite.OrderSignal = VM.PeekArg();
-        VM.Emit(IScriptEventType::OrderSignal, VM.mSprite.OrderSignal);
+        const int Signal = VM.PeekArg();
+        VM.mSprite.OrderSignal |= Signal;
+        VM.mSprite.OrderDone = false;
+        VM.Emit(IScriptEventType::OrderSignal, Signal);
         VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_OrderDone] = [](IScriptVM& VM) {
-        VM.mSprite.OrderDone = true;
-        VM.Emit(IScriptEventType::OrderDone, VM.PeekArg());
+        const int Signal = VM.PeekArg();
+        VM.mSprite.OrderSignal &= ~Signal;
+        VM.mSprite.OrderDone = VM.mSprite.OrderSignal == 0;
+        VM.Emit(IScriptEventType::OrderDone, Signal);
         VM.AdvanceArgs(1);
         return false;
     };
@@ -535,7 +551,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip1;
 
     for (int Op : {Opc_PlayFram, Opc_PlayFramTile, Opc_SetPos, Opc_WaitRand,
-                   Opc_SwitchUl, Opc_SprOlUseLo})
+                   Opc_SprOlUseLo})
         if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip2;
 
     for (int Op : {Opc_SprUlUseLo})
@@ -576,7 +592,14 @@ void IScriptVM::RegisterDefaultOpcodes()
     };
     mOpcodeHandlers[Opc_GrdSprOl] = SpriteOverlay3Above;
     mOpcodeHandlers[Opc_ImgOlOrig] = [](IScriptVM& VM) {
-        VM.Emit(IScriptEventType::CreateImageOverlay, VM.PeekArg(1), 0, 0, 1);
+        VM.Emit(IScriptEventType::CreateImageOverlaySpecialOffset,
+                VM.PeekArg(1), 0, 0, 1);
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    mOpcodeHandlers[Opc_SwitchUl] = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateImageOverlaySpecialOffset,
+                VM.PeekArg(1), 0, 0, 0);
         VM.AdvanceArgs(1);
         return false;
     };
@@ -618,16 +641,15 @@ void IScriptVM::RegisterDefaultOpcodes()
     mOpcodeHandlers[Opc_DoGrdDamage] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::DoGroundDamage); VM.AdvanceArgs(0); return false; };
     mOpcodeHandlers[Opc_CastSpell] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::CastSpell); VM.AdvanceArgs(0); return false; };
     mOpcodeHandlers[Opc_SetFlDirect] = [](IScriptVM& VM) {
-        VM.mSprite.FlDirect = VM.PeekArg(1);
-        VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed);
+        VM.mSprite.FlDirect = (VM.PeekArg(1) * 8) & 0xFF;
+        VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed, 1);
         VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_SetFlSpeed] = [](IScriptVM& VM) {
-        VM.mSprite.FlDirect = VM.PeekArg(1);
-        VM.mSprite.FlSpeed = VM.PeekArg(2);
-        VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed);
-        VM.AdvanceArgs(2);
+        VM.mSprite.FlSpeed = VM.PeekArg(1);
+        VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed, 2);
+        VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_CreateGasOverlays] = [](IScriptVM& VM) {
@@ -636,13 +658,20 @@ void IScriptVM::RegisterDefaultOpcodes()
         return false;
     };
     mOpcodeHandlers[Opc_WarpOverlay] = [](IScriptVM& VM) {
+        const int PackedModifier = VM.PeekArg(1);
         VM.mSprite.HasWarpOverlay = true;
-        VM.Emit(IScriptEventType::WarpOverlay, VM.PeekArg(1), VM.PeekArg(2));
-        VM.AdvanceArgs(2);
+        VM.Emit(IScriptEventType::WarpOverlay,
+                PackedModifier & 0xff,
+                (PackedModifier >> 8) & 0xff);
+        VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_ImgUlNextId] = [](IScriptVM& VM) {
-        VM.Emit(IScriptEventType::CreateImageOverlay, VM.PeekArg(1), VM.PeekArg(2), 0, 1);
+        VM.Emit(IScriptEventType::CreateImageOverlay,
+                VM.mSprite.ImageID + 1,
+                VM.PeekArg(1),
+                VM.PeekArg(2),
+                0);
         VM.AdvanceArgs(2);
         return false;
     };

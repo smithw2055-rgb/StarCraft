@@ -9,6 +9,13 @@ namespace Game::Systems
 
 using namespace Game::Components;
 
+BulletSystem::VisualResolver BulletSystem::sVisualResolver;
+
+void BulletSystem::SetVisualResolver(VisualResolver Resolver)
+{
+    sVisualResolver = std::move(Resolver);
+}
+
 namespace
 {
     static float SplashFalloff(float Distance, float MaxRadius)
@@ -122,6 +129,15 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
     Core::Math::Vec2 Dir = TargetPos - SourceTrans.Position;
     float Dist = Dir.Length();
 
+    std::optional<VisualSpec> Visual;
+    if (sVisualResolver)
+    {
+        if (const auto* SourceUnit = EM.GetComponent<UnitComponent>(SourceEntityID))
+            Visual = sVisualResolver(SourceUnit->ChkUnitID, IsAirTarget(EM, TargetEntityID));
+    }
+    if (Visual && Visual->Speed > 0.0f)
+        BulletComp.Speed = Visual->Speed;
+
     switch (BulletComp.Behavior)
     {
         case WeaponBehavior::Melee:
@@ -168,6 +184,20 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
         }
     }
 
+    if (Visual && Visual->ImageID != UINT32_MAX &&
+        BulletComp.Behavior != WeaponBehavior::Melee)
+    {
+        auto& Render = EM.AddComponent<RenderComponent>(BulletID);
+        Render.ImageID = Visual->ImageID;
+        Render.TotalFrames = 1;
+        Render.Layer = RenderLayer::Effects;
+
+        auto& Direction = EM.AddComponent<PathfindingComponent>(BulletID);
+        Direction.CurrentVelocity = BulletComp.Velocity;
+        Direction.FacingAngle = std::atan2(BulletComp.Velocity.Y, BulletComp.Velocity.X);
+        Direction.IsAir = true;
+    }
+
     return BulletID;
 }
 
@@ -188,6 +218,12 @@ void BulletSystem::UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, floa
     if (!Bullet || !Trans) return;
 
     Bullet->LifetimeRemaining -= DeltaTime;
+    if (auto* Direction = EM.GetComponent<PathfindingComponent>(BulletID))
+    {
+        Direction->CurrentVelocity = Bullet->Velocity;
+        if (Bullet->Velocity.Length() > 0.001f)
+            Direction->FacingAngle = std::atan2(Bullet->Velocity.Y, Bullet->Velocity.X);
+    }
 
     switch (Bullet->Behavior)
     {

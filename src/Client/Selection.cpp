@@ -44,6 +44,13 @@ namespace
         return Entities.GetComponent<Game::Components::EffectComponent>(EntityId) != nullptr;
     }
 
+    bool IsSelectableUnit(Core::ECS::EntityManager& Entities, int EntityId)
+    {
+        const auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        return Unit && Unit->ChkUnitID != 13 &&
+               !Entities.GetComponent<Game::Components::SpiderMineComponent>(EntityId);
+    }
+
     struct PickBounds
     {
         float Left = -12.0f;
@@ -76,17 +83,44 @@ namespace
                     const int DimH = UnitData->DimensionHeight();
                     if (DimW > 0 && DimH > 0)
                     {
-                        const float Left = Trans.Position.X - (float)UnitData->DimensionLeft - Padding;
-                        const float Top = Trans.Position.Y - (float)UnitData->DimensionUp - Padding;
-                        const float Right = Trans.Position.X + (float)UnitData->DimensionRight + 1.0f + Padding;
-                        const float Bottom = Trans.Position.Y + (float)UnitData->DimensionDown + 1.0f + Padding;
+                        float Left = Trans.Position.X - (float)UnitData->DimensionLeft - Padding;
+                        float Top = Trans.Position.Y - (float)UnitData->DimensionUp - Padding;
+                        float Right = Trans.Position.X + (float)UnitData->DimensionRight + 1.0f + Padding;
+                        float Bottom = Trans.Position.Y + (float)UnitData->DimensionDown + 1.0f + Padding;
+                        float ScoreCenterX = (Left + Right) * 0.5f;
+                        float ScoreCenterY = (Top + Bottom) * 0.5f;
+
+                        // The visible selection ring is offset by sprites.dat's
+                        // selection-circle vertical position. Picking only the
+                        // collision rectangle makes clicks and drag-selection
+                        // appear several pixels above the unit on screen. Use
+                        // the union so the body remains clickable while the
+                        // score center follows the rendered selection ring.
+                        const uint32_t SpriteID = Loader->ResolveUnitSpriteID(
+                            (uint32_t)Unit.ChkUnitID);
+                        if (const auto* Sprite = Loader->FindSpriteByID(SpriteID))
+                        {
+                            const BuildingFootprintSpec Circle =
+                                SelectionEllipseFromSpriteCircle(
+                                    Trans.Position.X,
+                                    Trans.Position.Y,
+                                    (int)Sprite->SelectionCircle,
+                                    (int)Sprite->SelectionCircleVerticalOffset,
+                                    std::max(UnitHalfW, UnitHalfH));
+                            Left = std::min(Left, Circle.CenterX - Circle.RadiusX - Padding);
+                            Top = std::min(Top, Circle.CenterY - Circle.RadiusY - Padding);
+                            Right = std::max(Right, Circle.CenterX + Circle.RadiusX + Padding);
+                            Bottom = std::max(Bottom, Circle.CenterY + Circle.RadiusY + Padding);
+                            ScoreCenterX = Circle.CenterX;
+                            ScoreCenterY = Circle.CenterY;
+                        }
                         return {
                             Left,
                             Top,
                             Right,
                             Bottom,
-                            (Left + Right) * 0.5f,
-                            (Top + Bottom) * 0.5f
+                            ScoreCenterX,
+                            ScoreCenterY
                         };
                     }
                 }
@@ -148,7 +182,8 @@ float Selection::PickRadiusForSize(Game::Components::UnitSize Size) const
 bool Selection::EntityHitTest(Core::ECS::EntityManager& Entities, int EntityId,
                               float WX, float WY, float& OutScore) const
 {
-    if (IsEffect(Entities, EntityId) || !IsVisible(Entities, EntityId))
+    if (IsEffect(Entities, EntityId) || !IsVisible(Entities, EntityId) ||
+        !IsSelectableUnit(Entities, EntityId))
         return false;
 
     auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
@@ -175,7 +210,8 @@ bool Selection::EntityHitTest(Core::ECS::EntityManager& Entities, int EntityId,
 bool Selection::EntityInRect(Core::ECS::EntityManager& Entities, int EntityId,
                              float RX, float RY, float RW, float RH) const
 {
-    if (IsEffect(Entities, EntityId) || !IsVisible(Entities, EntityId))
+    if (IsEffect(Entities, EntityId) || !IsVisible(Entities, EntityId) ||
+        !IsSelectableUnit(Entities, EntityId))
         return false;
 
     auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
@@ -195,6 +231,8 @@ bool Selection::EntityInRect(Core::ECS::EntityManager& Entities, int EntityId,
 bool Selection::IsMultiSelectable(Core::ECS::EntityManager& Entities, int EntityId) const
 {
     if (!IsVisible(Entities, EntityId) || IsBuilding(Entities, EntityId) || IsResource(Entities, EntityId))
+        return false;
+    if (!IsSelectableUnit(Entities, EntityId))
         return false;
     auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
     if (!Unit)

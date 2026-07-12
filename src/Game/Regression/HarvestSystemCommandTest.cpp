@@ -36,6 +36,14 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
                               const std::vector<Core::ECS::EntityID>& Entities,
                               const Core::Math::Vec2& Target)
 {
+    IssueMove(EM, Entities, Target, -1);
+}
+
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                              const std::vector<Core::ECS::EntityID>& Entities,
+                              const Core::Math::Vec2& Target,
+                              int PathingIgnoreEntityID)
+{
     for (Core::ECS::EntityID EntityID : Entities)
     {
         auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID);
@@ -49,6 +57,8 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
             Path = &EM.AddComponent<Components::PathfindingComponent>(EntityID);
         Path->Path.clear();
         Path->PathIndex = 0;
+        Path->RequestedDestination = Target;
+        Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
 
         auto* Trans = EM.GetComponent<Components::TransformComponent>(EntityID);
         if (sCommandMap && Trans)
@@ -67,9 +77,10 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
 
 bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
-                                        const Core::Math::Vec2& Target)
+                                        const Core::Math::Vec2& Target,
+                                        int PathingIgnoreEntityID)
 {
-    IssueMove(EM, {EntityID}, Target);
+    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
     if (auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID))
         return !Path->Path.empty();
     return false;
@@ -452,6 +463,52 @@ int main()
     Require(BlockedPath->Path.back().X != 128.0f || BlockedPath->Path.back().Y != 100.0f,
         "alternate harvest approach does not keep the blocked primary edge waypoint");
     Game::Systems::CommandSystem::SetMap(nullptr);
+
+    Core::ECS::SystemManager QueueSysMgr;
+    auto& QueueEM = QueueSysMgr.GetEntityManager();
+    const auto CreateQueuedScv = [&](Core::Math::Vec2 Position)
+    {
+        const int ID = QueueEM.CreateEntity();
+        QueueEM.AddComponent<Game::Components::TransformComponent>(ID).Position = Position;
+        auto& Unit = QueueEM.AddComponent<Game::Components::UnitComponent>(ID);
+        Unit.ChkUnitID = 7;
+        Unit.Speed = 2.8f;
+        QueueEM.AddComponent<Game::Components::PlayerComponent>(ID).PlayerID = 0;
+        return ID;
+    };
+    const int QueueScvA = CreateQueuedScv({24.0f, 0.0f});
+    const int QueueScvB = CreateQueuedScv({24.0f, 32.0f});
+    const int QueueMineral = QueueEM.CreateEntity();
+    QueueEM.AddComponent<Game::Components::TransformComponent>(QueueMineral).Position =
+        {128.0f, 0.0f};
+    auto& QueueMineralUnit = QueueEM.AddComponent<Game::Components::UnitComponent>(QueueMineral);
+    QueueMineralUnit.ChkUnitID = 176;
+    auto& QueueResource = QueueEM.AddComponent<Game::Components::ResourceComponent>(QueueMineral);
+    QueueResource.Type = Game::Components::ResourceType::Minerals;
+    QueueResource.Amount = 1500;
+    QueueResource.MaxAmount = 1500;
+    auto& QueueMineralPath =
+        QueueEM.AddComponent<Game::Components::PathfindingComponent>(QueueMineral);
+    SetCollisionBounds(QueueMineralPath, 32, 20, 31, 19);
+
+    Require(Game::Systems::HarvestSystem::IssueHarvest(
+                QueueEM, {QueueScvA, QueueScvB}, QueueMineral),
+        "multi-selection harvest order is accepted");
+    const auto* QueuePathA =
+        QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvA);
+    const auto* QueuePathB =
+        QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvB);
+    Require(QueueResource.QueuedGatherers.size() == 2 &&
+            QueueResource.QueuedGatherers[0] == QueueScvA &&
+            QueueResource.QueuedGatherers[1] == QueueScvB,
+        "multi-selection harvest preserves selection order in the resource queue");
+    Require(QueuePathA && QueuePathB && !QueuePathA->Path.empty() &&
+            !QueuePathB->Path.empty(),
+        "queued harvesters each receive a movement destination");
+    Require((QueuePathA->Path.back() - QueuePathB->Path.back()).LengthSq() > 1.0f &&
+            QueuePathB->Path.back().DistanceTo({128.0f, 0.0f}) >
+                QueuePathA->Path.back().DistanceTo({128.0f, 0.0f}),
+        "non-front harvesters wait outside the resource footprint instead of stacking on it");
 
     std::printf("HarvestSystemCommandTest passed\n");
     return 0;

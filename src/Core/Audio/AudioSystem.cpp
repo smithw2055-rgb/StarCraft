@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
+#include <utility>
 
 namespace Core::Audio
 {
@@ -115,6 +116,8 @@ struct AudioSystem::Impl
     bool ChannelSoundInit[kMaxChannels] = {};
     ma_audio_buffer ChannelBuffers[kMaxChannels];
     bool ChannelBufferInit[kMaxChannels] = {};
+    ma_decoder ChannelDecoders[kMaxChannels];
+    bool ChannelDecoderInit[kMaxChannels] = {};
 
     // Builtin enum sounds (backward compat)
     struct SoundEntry
@@ -238,6 +241,11 @@ void AudioSystem::Shutdown()
             ma_sound_uninit(&mImpl->ChannelSounds[i]);
             mImpl->ChannelSoundInit[i] = false;
         }
+        if (mImpl->ChannelDecoderInit[i])
+        {
+            ma_decoder_uninit(&mImpl->ChannelDecoders[i]);
+            mImpl->ChannelDecoderInit[i] = false;
+        }
         if (mImpl->ChannelBufferInit[i])
         {
             ma_audio_buffer_uninit(&mImpl->ChannelBuffers[i]);
@@ -272,26 +280,28 @@ void AudioSystem::Play(SoundEffect Effect)
         ma_sound_uninit(&Snd);
         mImpl->ChannelSoundInit[ch] = false;
     }
+    if (mImpl->ChannelDecoderInit[ch])
+    {
+        ma_decoder_uninit(&mImpl->ChannelDecoders[ch]);
+        mImpl->ChannelDecoderInit[ch] = false;
+    }
     if (mImpl->ChannelBufferInit[ch])
     {
         ma_audio_buffer_uninit(&mImpl->ChannelBuffers[ch]);
         mImpl->ChannelBufferInit[ch] = false;
     }
 
-    // Create audio buffer from WAV data
-    ma_audio_buffer_config BufferConfig = ma_audio_buffer_config_init(
-        ma_format_s16, 1, Data.size() / 2, Data.data(), nullptr);
-    auto& Buffer = mImpl->ChannelBuffers[ch];
-    if (ma_audio_buffer_init(&BufferConfig, &Buffer) != MA_SUCCESS)
+    auto& Decoder = mImpl->ChannelDecoders[ch];
+    if (ma_decoder_init_memory(Data.data(), Data.size(), nullptr, &Decoder) != MA_SUCCESS)
         return;
-    mImpl->ChannelBufferInit[ch] = true;
+    mImpl->ChannelDecoderInit[ch] = true;
 
-    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer,
+    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Decoder,
         MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &Snd);
     if (Result != MA_SUCCESS)
     {
-        ma_audio_buffer_uninit(&Buffer);
-        mImpl->ChannelBufferInit[ch] = false;
+        ma_decoder_uninit(&Decoder);
+        mImpl->ChannelDecoderInit[ch] = false;
         return;
     }
 
@@ -334,18 +344,32 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
 
     // Load WAV data
     const std::vector<uint8_t>* WavData = nullptr;
+    bool LoadedFromArchive = false;
 
-    // Check builtin sounds first
-    if (SoundID >= 0 && SoundID < (int)SoundEffect::Count &&
-        mImpl->BuiltinSounds[SoundID].Loaded)
-    {
-        WavData = &mImpl->BuiltinSounds[SoundID].Wav;
-    }
-    // Check WAV cache (external loaded sounds)
-    else if (SoundID >= 0 && SoundID < (int)mWavCache.size() &&
+    // IScript sound IDs share the low numeric range with the synthetic
+    // compatibility effects. Prefer real game assets whenever one is mapped.
+    if (SoundID >= 0 && SoundID < (int)mWavCache.size() &&
              !mWavCache[SoundID].empty())
     {
         WavData = &mWavCache[SoundID];
+    }
+
+    if (!WavData && mFileLoader && SoundID >= 0 &&
+        SoundID < (int)mSoundPaths.size() && !mSoundPaths[SoundID].empty())
+    {
+        std::vector<uint8_t> Data = mFileLoader(mSoundPaths[SoundID]);
+        if (!Data.empty())
+        {
+            LoadWavData(SoundID, Data);
+            WavData = &mWavCache[SoundID];
+            LoadedFromArchive = true;
+        }
+    }
+
+    if (!WavData && SoundID >= 0 && SoundID < (int)SoundEffect::Count &&
+        mImpl->BuiltinSounds[SoundID].Loaded)
+    {
+        WavData = &mImpl->BuiltinSounds[SoundID].Wav;
     }
 
     if (!WavData || WavData->empty()) return -1;
@@ -378,26 +402,30 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
         ma_sound_uninit(&Snd);
         mImpl->ChannelSoundInit[ch] = false;
     }
+    if (mImpl->ChannelDecoderInit[ch])
+    {
+        ma_decoder_uninit(&mImpl->ChannelDecoders[ch]);
+        mImpl->ChannelDecoderInit[ch] = false;
+    }
     if (mImpl->ChannelBufferInit[ch])
     {
         ma_audio_buffer_uninit(&mImpl->ChannelBuffers[ch]);
         mImpl->ChannelBufferInit[ch] = false;
     }
 
-    // Create audio buffer from WAV data
-    ma_audio_buffer_config BufferConfig = ma_audio_buffer_config_init(
-        ma_format_s16, 1, WavData->size() / 2, WavData->data(), nullptr);
-    auto& Buffer = mImpl->ChannelBuffers[ch];
-    if (ma_audio_buffer_init(&BufferConfig, &Buffer) != MA_SUCCESS)
+    // Decode the archive WAV/OGG payload instead of treating its container
+    // bytes as raw PCM samples.
+    auto& Decoder = mImpl->ChannelDecoders[ch];
+    if (ma_decoder_init_memory(WavData->data(), WavData->size(), nullptr, &Decoder) != MA_SUCCESS)
         return -1;
-    mImpl->ChannelBufferInit[ch] = true;
+    mImpl->ChannelDecoderInit[ch] = true;
 
-    // Init sound from buffer with full spatialization
-    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Buffer, 0, nullptr, &Snd);
+    // Init sound from the decoded game asset with full spatialization.
+    ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Decoder, 0, nullptr, &Snd);
     if (Result != MA_SUCCESS)
     {
-        ma_audio_buffer_uninit(&Buffer);
-        mImpl->ChannelBufferInit[ch] = false;
+        ma_decoder_uninit(&Decoder);
+        mImpl->ChannelDecoderInit[ch] = false;
         return -1;
     }
 
@@ -410,6 +438,15 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
     ma_sound_set_max_distance(&Snd, 500.0f);
     ma_sound_set_volume(&Snd, Volume);
     ma_sound_start(&Snd);
+
+    if (LoadedFromArchive)
+    {
+        Core::Utils::Logger::Debug(
+            "AudioSystem",
+            "Decoded archive sound id=" + std::to_string(SoundID) +
+            " path=" + mSoundPaths[SoundID] +
+            " bytes=" + std::to_string(WavData->size()));
+    }
 
     mImpl->ChannelSoundInit[ch] = true;
 
@@ -440,6 +477,11 @@ int AudioSystem::PlayFile(const std::string& FilePath, float SourceX, float Sour
     {
         ma_sound_uninit(&Snd);
         mImpl->ChannelSoundInit[ch] = false;
+    }
+    if (mImpl->ChannelDecoderInit[ch])
+    {
+        ma_decoder_uninit(&mImpl->ChannelDecoders[ch]);
+        mImpl->ChannelDecoderInit[ch] = false;
     }
     if (mImpl->ChannelBufferInit[ch])
     {
@@ -649,6 +691,17 @@ bool AudioSystem::LoadWavData(int SoundID, const std::vector<uint8_t>& WavData)
         mLastPlayed.resize(SoundID + 1);
 
     return true;
+}
+
+void AudioSystem::SetSoundPath(int SoundID, std::string FilePath)
+{
+    if (SoundID < 0)
+        return;
+    if (SoundID >= (int)mSoundPaths.size())
+        mSoundPaths.resize((size_t)SoundID + 1);
+    mSoundPaths[(size_t)SoundID] = std::move(FilePath);
+    if (SoundID >= (int)mLastPlayed.size())
+        mLastPlayed.resize((size_t)SoundID + 1);
 }
 
 bool AudioSystem::LoadWavFromFile(const std::string& FilePath, int SoundID)

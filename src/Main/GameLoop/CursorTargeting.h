@@ -40,10 +40,13 @@ inline float ResourceClickScore(const Core::Math::Vec2& ResourceCenter,
     const float DY = ClickPosition.Y - ResourceCenter.Y;
     const float NX = DX / std::max(1.0f, Footprint.HalfW);
     const float NY = DY / std::max(1.0f, Footprint.HalfH);
-    const float EllipseScore = NX * NX + NY * NY;
-    if (EllipseScore > 1.0f)
+    // Resource sprites fill a rectangular command footprint. The old ellipse
+    // rejected visible corner pixels, so a right click there degraded to a
+    // normal move and grouped workers piled up at the mineral edge.
+    const float RectScore = std::max(NX * NX, NY * NY);
+    if (RectScore > 1.0f)
         return std::numeric_limits<float>::max();
-    return EllipseScore;
+    return RectScore;
 }
 
 inline float EntityClickScore(Core::ECS::EntityManager& EM,

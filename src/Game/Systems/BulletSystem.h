@@ -4,15 +4,26 @@
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
 
+#include <functional>
+#include <optional>
+
 namespace Game::Systems
 {
 
 class BulletSystem : public Core::ECS::ISystem
 {
 public:
+    struct VisualSpec
+    {
+        uint32_t ImageID = UINT32_MAX;
+        float Speed = 0.0f;
+    };
+    using VisualResolver = std::function<std::optional<VisualSpec>(int, bool)>;
+
     BulletSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "BulletSystem"; }
+    static void SetVisualResolver(VisualResolver Resolver);
 
     int SpawnBullet(Core::ECS::EntityManager& EM,
                     const Components::CombatComponent& SourceCombat,
@@ -41,6 +52,7 @@ private:
                            bool IsRangedAttack);
 
     Core::ECS::SystemManager& mSystemMgr;
+    static VisualResolver sVisualResolver;
 };
 
 } // namespace Game::Systems

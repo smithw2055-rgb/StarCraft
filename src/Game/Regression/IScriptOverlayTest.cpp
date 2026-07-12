@@ -112,6 +112,41 @@ int main()
     Require(OverlayX > -64 && OverlayX < 64 && OverlayY > -64 && OverlayY < 64,
         "missile turret overlay offset stays near the base");
 
+    const auto* BattlecruiserInfo = Database.FindImageInfo(218);
+    Require(BattlecruiserInfo && BattlecruiserInfo->IScriptID >= 0,
+        "Battlecruiser image has iscript metadata");
+    const auto* BattlecruiserScript = Database.FindScript(BattlecruiserInfo->IScriptID);
+    Require(BattlecruiserScript && !BattlecruiserScript->AnimationPC.empty(),
+        "Battlecruiser iscript has Init animation");
+    bool SawBattlecruiserEngine = false;
+    int BattlecruiserEngineAnim = -1;
+    for (int Anim = 0; Anim < (int)BattlecruiserScript->AnimationPC.size(); ++Anim)
+    {
+        if (BattlecruiserScript->AnimationPC[(size_t)Anim] <= 0)
+            continue;
+        Game::IScriptVM BattlecruiserVM;
+        BattlecruiserVM.LoadScript(Anim, &Database.GetProgram().ProgramData,
+            BattlecruiserScript->AnimationPC[(size_t)Anim]);
+        BattlecruiserVM.GetContext().ImageID = 218;
+        for (int Frame = 0; Frame < 32 && BattlecruiserVM.IsRunning(); ++Frame)
+        {
+            BattlecruiserVM.ExecuteFrame();
+            for (const auto& Event : BattlecruiserVM.ConsumeEvents())
+            {
+                if (Event.Type == Game::IScriptEventType::CreateImageOverlay &&
+                    Event.A == 220)
+                {
+                    SawBattlecruiserEngine = true;
+                    BattlecruiserEngineAnim = Anim;
+                }
+            }
+        }
+    }
+    Require(SawBattlecruiserEngine,
+        "real Battlecruiser iscript creates its movement engine image");
+    Require(BattlecruiserEngineAnim == Game::IScriptAnims::Anim_Walking,
+        "Battlecruiser engine flame is attached by Walking rather than Idle");
+
     auto HighSprite = RunOverlayOpcode(Game::IScriptOpcodes::Opc_HighSprOl, 321, 4, -3);
     Require(HighSprite.Type == Game::IScriptEventType::CreateSpriteOverlay,
         "HighSprOl emits a sprite overlay event, not an image overlay");
@@ -124,11 +159,120 @@ int main()
     Require(LowSprite.A == 322 && LowSprite.B == -5 && LowSprite.C == 6 && LowSprite.D == 0,
         "LowSprUl preserves sprite overlay id, offset, and draw-below flag");
 
+    std::vector<int> NextImageProgram = {
+        Game::IScriptOpcodes::Opc_ImgUlNextId, -4, 7,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM NextImageVM;
+    NextImageVM.LoadScript(0, &NextImageProgram, 0);
+    NextImageVM.GetContext().ImageID = 218;
+    NextImageVM.ExecuteFrame();
+    const auto NextImageEvents = NextImageVM.ConsumeEvents();
+    Require(NextImageEvents.size() == 1 &&
+            NextImageEvents[0].Type == Game::IScriptEventType::CreateImageOverlay &&
+            NextImageEvents[0].A == 219 &&
+            NextImageEvents[0].B == -4 && NextImageEvents[0].C == 7 &&
+            NextImageEvents[0].D == 0,
+        "ImgUlNextId creates the next image below using both operands as offsets");
+
+    std::vector<int> SwitchUnderProgram = {
+        Game::IScriptOpcodes::Opc_SwitchUl, 220,
+        Game::IScriptOpcodes::Opc_PlayFram, 9,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM SwitchUnderVM;
+    SwitchUnderVM.LoadScript(0, &SwitchUnderProgram, 0);
+    SwitchUnderVM.ExecuteFrame();
+    const auto SwitchUnderEvents = SwitchUnderVM.ConsumeEvents();
+    Require(SwitchUnderEvents.size() == 1 &&
+            SwitchUnderEvents[0].Type ==
+                Game::IScriptEventType::CreateImageOverlaySpecialOffset &&
+            SwitchUnderEvents[0].A == 220 && SwitchUnderEvents[0].D == 0,
+        "SwitchUl creates a below-image that tracks the main image LO offset");
+    Require(SwitchUnderVM.GetContext().BaseFrameIndex == 9,
+        "SwitchUl consumes one image operand and preserves the next opcode boundary");
+
     auto UnderSprite = RunOverlayOpcode(Game::IScriptOpcodes::Opc_SprUl, 323, 7, 8);
     Require(UnderSprite.Type == Game::IScriptEventType::CreateSpriteOverlay,
         "SprUl emits a sprite overlay event, not an image overlay");
     Require(UnderSprite.A == 323 && UnderSprite.B == 7 && UnderSprite.C == 8 && UnderSprite.D == 0,
         "SprUl preserves sprite overlay id, offset, and draw-below flag");
+
+    std::vector<int> SignalProgram = {
+        Game::IScriptOpcodes::Opc_SigOrder, 0x01,
+        Game::IScriptOpcodes::Opc_SigOrder, 0x04,
+        Game::IScriptOpcodes::Opc_OrderDone, 0x01,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM SignalVM;
+    SignalVM.LoadScript(0, &SignalProgram, 0);
+    SignalVM.ExecuteFrame();
+    Require(SignalVM.GetContext().OrderSignal == 0x04,
+        "sigorder accumulates bits and orderdone clears only its requested bits");
+    Require(!SignalVM.GetContext().OrderDone,
+        "orderdone does not finish while another order signal remains active");
+
+    std::vector<int> FlightProgram = {
+        Game::IScriptOpcodes::Opc_SetFlDirect, 3,
+        Game::IScriptOpcodes::Opc_SetFlSpeed, 0x1234,
+        Game::IScriptOpcodes::Opc_PlayFram, 7,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM FlightVM;
+    FlightVM.LoadScript(0, &FlightProgram, 0);
+    FlightVM.ExecuteFrame();
+    const auto FlightEvents = FlightVM.ConsumeEvents();
+    Require(FlightVM.GetContext().FlDirect == 24 &&
+            FlightVM.GetContext().FlSpeed == 0x1234,
+        "flight opcodes use the OpenBW heading unit and one 16-bit speed operand");
+    Require(FlightEvents.size() == 2 &&
+            FlightEvents[0].Type == Game::IScriptEventType::FlightState &&
+            FlightEvents[0].C == 1 &&
+            FlightEvents[1].Type == Game::IScriptEventType::FlightState &&
+            FlightEvents[1].C == 2,
+        "flight events distinguish heading changes from top-speed changes");
+    Require(FlightVM.GetContext().BaseFrameIndex == 7,
+        "setflspeed preserves the following opcode boundary");
+
+    std::vector<int> WarpProgram = {
+        Game::IScriptOpcodes::Opc_WarpOverlay, 0x3412,
+        Game::IScriptOpcodes::Opc_PlayFram, 9,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM WarpVM;
+    WarpVM.LoadScript(0, &WarpProgram, 0);
+    WarpVM.ExecuteFrame();
+    auto WarpEvents = WarpVM.ConsumeEvents();
+    Require(!WarpEvents.empty() &&
+            WarpEvents.front().Type == Game::IScriptEventType::WarpOverlay &&
+            WarpEvents.front().A == 0x12 && WarpEvents.front().B == 0x34,
+        "warpoverlay splits its packed modifier operand without treating it as an image id");
+    Require(WarpVM.GetContext().BaseFrameIndex == 9,
+        "warpoverlay consumes one operand and preserves the following opcode boundary");
+
+    std::vector<int> TemporaryGraphicProgram = {
+        Game::IScriptOpcodes::Opc_TmpRmGraphicStart,
+        Game::IScriptOpcodes::Opc_Wait, 1,
+        Game::IScriptOpcodes::Opc_TmpRmGraphicEnd,
+        Game::IScriptOpcodes::Opc_PlayFram, 11,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM TemporaryGraphicVM;
+    TemporaryGraphicVM.LoadScript(0, &TemporaryGraphicProgram, 0);
+    TemporaryGraphicVM.ExecuteFrame();
+    auto TemporaryEvents = TemporaryGraphicVM.ConsumeEvents();
+    Require(!TemporaryEvents.empty() &&
+            TemporaryEvents.front().Type == Game::IScriptEventType::TemporaryGraphicState &&
+            TemporaryEvents.front().A == 1,
+        "tmprmgraphicstart reports temporary removal without owning renderer visibility");
+    TemporaryGraphicVM.ExecuteFrame();
+    TemporaryGraphicVM.ExecuteFrame();
+    TemporaryEvents = TemporaryGraphicVM.ConsumeEvents();
+    Require(!TemporaryEvents.empty() &&
+            TemporaryEvents.front().Type == Game::IScriptEventType::TemporaryGraphicState &&
+            TemporaryEvents.front().A == 0 &&
+            TemporaryGraphicVM.GetContext().BaseFrameIndex == 11,
+        "tmprmgraphicend reports restoration and preserves subsequent script execution");
 
     const int GoliathEast = WalkingFrameSignatureForDirection(Database, 234, 0);
     const int GoliathWest = WalkingFrameSignatureForDirection(Database, 234, 128);

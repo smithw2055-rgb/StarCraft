@@ -104,6 +104,7 @@ void GameController::InitGameSystems()
 
     if (!InitializeClientResourcesAndSystemAssetResolvers(mRuntime.Client.Runtime, mRuntime.App.Runtime.InstallPath))
         return;
+    mRuntime.App.Audio.ConfigureGameSounds(mRuntime.Client.Runtime);
     Core::Utils::Logger::Info("GameBootstrap", "Client resources initialized");
 
     if (!ResolveAndLoadStartupMap(

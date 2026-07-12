@@ -162,6 +162,8 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         if (mSources.IsCasc)
         {
             GrpData = ReadFile(GrpPath);
+            if (!GrpData) GrpData = ReadFile("unit/" + GrpPath);
+            if (!GrpData) GrpData = ReadFile("unit\\" + GrpPath);
             if (!GrpData) GrpData = ReadFile("arr/" + GrpPath);
             if (!GrpData) GrpData = ReadFile("arr\\" + GrpPath);
             if (!GrpData) GrpData = ReadFile("data/" + GrpPath);
@@ -170,6 +172,7 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         else
         {
             GrpData = ReadWithFallback(GrpPath);
+            if (!GrpData) GrpData = ReadWithFallback("unit/" + GrpPath);
             if (!GrpData) GrpData = ReadWithFallback("arr/" + GrpPath);
             if (!GrpData) GrpData = ReadWithFallback("data/" + GrpPath);
         }

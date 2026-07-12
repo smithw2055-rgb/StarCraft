@@ -800,6 +800,23 @@ int main()
         CreateCompletedUnit(EM, "High Templar", ProtossMorphPlayerID, {1232.0f, 600.0f});
     const int ArchonDefID = Game::Races::GetUnitDefID("Archon");
     const auto ArchonDef = Game::Races::GetUnitDefByID(ArchonDefID);
+    Require(!Game::Systems::ProtossSystem::MorphArchon(EM, TemplarA, TemplarA, false),
+        "Protoss Archon morph rejects using the same source unit twice");
+    Require(EM.IsAlive(TemplarA) && EM.IsAlive(TemplarB),
+        "rejected Archon morph preserves both source units");
+    const int InvalidArchonSource =
+        CreateCompletedUnit(EM, "SCV", ProtossMorphPlayerID, {1264.0f, 600.0f});
+    Require(!Game::Systems::ProtossSystem::MorphArchon(
+                EM, TemplarA, InvalidArchonSource, false),
+        "Protoss Archon morph rejects non-High-Templar source units");
+    Require(EM.IsAlive(TemplarA) && EM.IsAlive(InvalidArchonSource),
+        "wrong-type Archon morph preserves its source units");
+    Game::Systems::ProductionSystem::SetImageResolver(
+        [](int ChkUnitID) { return 60000u + (uint32_t)ChkUnitID; });
+    Game::Systems::ProductionSystem::SetCollisionBoundsResolver(
+        [](int) {
+            return Game::Components::UnitCollisionBounds{true, 11, 12, 13, 14};
+        });
     Require(Game::Systems::ProtossSystem::MorphArchon(EM, TemplarA, TemplarB, false),
         "Protoss High Templar pair can morph into Archon");
     Require(!EM.IsAlive(TemplarA) && !EM.IsAlive(TemplarB),
@@ -821,11 +838,14 @@ int main()
             ArchonUnit->SupplyCost == ArchonDef.SupplyCost,
         "Protoss Archon morph initializes unit data from RaceDef");
     Require(ArchonRender &&
-            ArchonRender->ImageID == (uint32_t)ArchonDef.ChkUnitID &&
+            ArchonRender->ImageID == 60000u + (uint32_t)ArchonDef.ChkUnitID &&
             ArchonRender->Visible,
-        "Protoss Archon morph creates a renderable unit");
-    Require(ArchonPath && !ArchonPath->IsAir && ArchonPath->NodeTolerance == 8.0f,
-        "Protoss Archon morph creates ground pathing state");
+        "Protoss Archon morph uses the configured production image resolver");
+    Require(ArchonPath && !ArchonPath->IsAir && ArchonPath->NodeTolerance == 8.0f &&
+            ArchonPath->HasCollisionBounds &&
+            ArchonPath->CollisionLeft == 11 && ArchonPath->CollisionUp == 12 &&
+            ArchonPath->CollisionRight == 13 && ArchonPath->CollisionDown == 14,
+        "Protoss Archon morph applies production collision bounds");
     Require(ArchonCommand &&
             ArchonCommand->CurrentCommand == Game::Components::CommandType::Stop,
         "Protoss Archon morph creates command state");

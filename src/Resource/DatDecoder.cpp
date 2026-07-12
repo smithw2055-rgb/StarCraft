@@ -247,18 +247,32 @@ std::vector<FlingyEntry> DatDecoder::DecodeFlingy(const std::vector<uint8_t>& Da
 {
     std::vector<FlingyEntry> Entries;
     constexpr size_t Count = 209;
+    constexpr size_t SpriteOffset = 0;
+    constexpr size_t TopSpeedOffset = SpriteOffset + Count * 2;
+    constexpr size_t AccelerationOffset = TopSpeedOffset + Count * 4;
+    constexpr size_t HaltDistanceOffset = AccelerationOffset + Count * 2;
+    constexpr size_t TurnRateOffset = HaltDistanceOffset + Count * 4;
+    constexpr size_t UnusedOffset = TurnRateOffset + Count;
+    constexpr size_t MovementTypeOffset = UnusedOffset + Count;
+    constexpr size_t RequiredSize = MovementTypeOffset + Count;
+
+    if (Data.size() < RequiredSize)
+        return Entries;
+
     Entries.reserve(Count);
 
     for (size_t I = 0; I < Count; ++I)
     {
-        const size_t Off = I * 2;
-        if (Off + 2 > Data.size())
-            break;
-
         FlingyEntry E;
         E.Id = (uint32_t)I;
-        // First column is sprite.dat id.
-        E.SpriteID = ReadU16(Data.data(), Off);
+        E.SpriteID = ReadU16(Data.data(), SpriteOffset + I * 2);
+        E.TopSpeed = (int32_t)ReadU32(Data.data(), TopSpeedOffset + I * 4);
+        E.Speed = (uint32_t)E.TopSpeed;
+        E.Acceleration = (int16_t)ReadU16(Data.data(), AccelerationOffset + I * 2);
+        E.HaltDistance = (int32_t)ReadU32(Data.data(), HaltDistanceOffset + I * 4);
+        E.TurnRate = Data[TurnRateOffset + I];
+        E.Unused = Data[UnusedOffset + I];
+        E.MovementType = Data[MovementTypeOffset + I];
 
         Entries.push_back(E);
     }
@@ -344,6 +358,12 @@ std::vector<ImageEntry> DatDecoder::DecodeImages(const std::vector<uint8_t>& Dat
         E.Modifier = Data[Count * 8 + I];
         E.ColorShift = Data[Count * 9 + I];
         E.IScriptID = ReadU32(Data.data(), Count * 10 + I * 4);
+        E.ShieldFilenameIndex = ReadU32(Data.data(), Count * 14 + I * 4);
+        E.AttackFilenameIndex = ReadU32(Data.data(), Count * 18 + I * 4);
+        E.DamageFilenameIndex = ReadU32(Data.data(), Count * 22 + I * 4);
+        E.SpecialFilenameIndex = ReadU32(Data.data(), Count * 26 + I * 4);
+        E.LandingDustFilenameIndex = ReadU32(Data.data(), Count * 30 + I * 4);
+        E.LiftOffFilenameIndex = ReadU32(Data.data(), Count * 34 + I * 4);
 
         Entries.push_back(E);
     }
@@ -351,6 +371,35 @@ std::vector<ImageEntry> DatDecoder::DecodeImages(const std::vector<uint8_t>& Dat
     Core::Utils::Logger::Info("DatDecoder",
         "Decoded " + std::to_string(Entries.size()) + " image entries");
     return Entries;
+}
+
+std::optional<ImageOffsetTable> DatDecoder::DecodeImageOffsets(const std::vector<uint8_t>& Data)
+{
+    if (Data.size() < 8)
+        return std::nullopt;
+
+    const size_t FrameCount = ReadU32(Data.data(), 0);
+    const size_t OffsetCount = ReadU32(Data.data(), 4);
+    if (FrameCount > (Data.size() - 8) / 4)
+        return std::nullopt;
+
+    ImageOffsetTable Table;
+    Table.Frames.reserve(FrameCount);
+    for (size_t Frame = 0; Frame < FrameCount; ++Frame)
+    {
+        const size_t FileOffset = ReadU32(Data.data(), 8 + Frame * 4);
+        if (FileOffset > Data.size() || OffsetCount > (Data.size() - FileOffset) / 2)
+            return std::nullopt;
+
+        auto& Offsets = Table.Frames.emplace_back();
+        Offsets.reserve(OffsetCount);
+        for (size_t Index = 0; Index < OffsetCount; ++Index)
+        {
+            const size_t Pos = FileOffset + Index * 2;
+            Offsets.push_back({(int)(int8_t)Data[Pos], (int)(int8_t)Data[Pos + 1]});
+        }
+    }
+    return Table;
 }
 
 std::vector<ImageRelationEntry> DatDecoder::DecodeImageRelations(const std::vector<uint8_t>& Data)

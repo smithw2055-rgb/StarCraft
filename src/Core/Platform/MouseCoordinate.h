@@ -33,26 +33,15 @@ inline MouseScale ComputeMouseScale(int WindowWidth,
     if (WindowWidth <= 0 || WindowHeight <= 0 || FramebufferWidth <= 0 || FramebufferHeight <= 0)
         return Scale;
 
-    // Gameplay, HUD layout, and world picking all consume logical window
-    // coordinates. Sokol mouse events arrive in framebuffer pixels, while the
-    // scene can be uniformly scaled inside that framebuffer when the window
-    // aspect differs. Convert from framebuffer space back into the logical
-    // content rect, including any letterbox / pillarbox offset.
-    const float ScaleToFramebufferX = (float)FramebufferWidth / (float)WindowWidth;
-    const float ScaleToFramebufferY = (float)FramebufferHeight / (float)WindowHeight;
-    const float UniformScale = ScaleToFramebufferX < ScaleToFramebufferY
-        ? ScaleToFramebufferX
-        : ScaleToFramebufferY;
-
-    if (UniformScale <= 0.0f)
-        return Scale;
-
-    const float ContentWidth = (float)WindowWidth * UniformScale;
-    const float ContentHeight = (float)WindowHeight * UniformScale;
-    Scale.OffsetX = ((float)FramebufferWidth - ContentWidth) * 0.5f;
-    Scale.OffsetY = ((float)FramebufferHeight - ContentHeight) * 0.5f;
-    Scale.X = 1.0f / UniformScale;
-    Scale.Y = 1.0f / UniformScale;
+    // Draw2D projects the logical window over the complete swapchain; it does
+    // not create a letterboxed content rectangle. Map each client axis to that
+    // same logical extent independently. A uniform scale plus a fabricated
+    // offset makes the pointer drift away from screen-space overlays after an
+    // odd-sized resize or at fractional Windows DPI scales.
+    Scale.X = (float)WindowWidth / (float)FramebufferWidth;
+    Scale.Y = (float)WindowHeight / (float)FramebufferHeight;
+    Scale.OffsetX = 0.0f;
+    Scale.OffsetY = 0.0f;
     return Scale;
 }
 

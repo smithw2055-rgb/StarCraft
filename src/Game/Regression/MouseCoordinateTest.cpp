@@ -45,28 +45,19 @@ int main()
 
     {
         const auto Scale = Core::Platform::ComputeMouseScale(800, 600, 1600, 900, 1.0f);
-        RequireNear(Scale.X, 0.6666667f, "pillarbox X maps back to logical scale");
-        RequireNear(Scale.Y, 0.6666667f, "pillarbox Y maps back to logical scale");
-        RequireNear(Scale.OffsetX, 200.0f, "pillarbox offset is centered on X");
-        RequireNear(Scale.OffsetY, 0.0f, "pillarbox has no Y offset");
+        RequireNear(Scale.X, 0.5f, "stretched viewport maps X independently");
+        RequireNear(Scale.Y, 0.6666667f, "stretched viewport maps Y independently");
+        RequireNear(Scale.OffsetX, 0.0f, "stretched viewport has no X offset");
+        RequireNear(Scale.OffsetY, 0.0f, "stretched viewport has no Y offset");
 
-        const auto LeftPillar = Core::Platform::MouseCoordToFramebufferChecked(
-            100.0f, Scale.X, Scale.OffsetX, Scale.MaxX);
-        const auto ContentLeft = Core::Platform::MouseCoordToFramebufferChecked(
-            200.0f, Scale.X, Scale.OffsetX, Scale.MaxX);
-        const auto ContentRight = Core::Platform::MouseCoordToFramebufferChecked(
-            1399.0f, Scale.X, Scale.OffsetX, Scale.MaxX);
-        const auto RightPillar = Core::Platform::MouseCoordToFramebufferChecked(
-            1400.0f, Scale.X, Scale.OffsetX, Scale.MaxX);
-
-        RequireNear(LeftPillar.Value, 0.0f, "left pillar clamps to content edge");
-        Require(!LeftPillar.InsideContent, "left pillar is not game content");
-        RequireNear(ContentLeft.Value, 0.0f, "content left maps to zero");
-        Require(ContentLeft.InsideContent, "content left is game content");
-        RequireNear(ContentRight.Value, 799.0f, "content right clamps to logical max");
-        Require(ContentRight.InsideContent, "content right is game content");
-        RequireNear(RightPillar.Value, 799.0f, "right pillar clamps to content edge");
-        Require(!RightPillar.InsideContent, "right pillar is not game content");
+        const auto MidpointX = Core::Platform::MouseCoordToFramebufferChecked(
+            800.0f, Scale.X, Scale.OffsetX, Scale.MaxX);
+        const auto MidpointY = Core::Platform::MouseCoordToFramebufferChecked(
+            450.0f, Scale.Y, Scale.OffsetY, Scale.MaxY);
+        RequireNear(MidpointX.Value, 400.0f, "client midpoint maps to logical X midpoint");
+        RequireNear(MidpointY.Value, 300.0f, "client midpoint maps to logical Y midpoint");
+        Require(MidpointX.InsideContent && MidpointY.InsideContent,
+                "full stretched viewport remains game content");
     }
 
     {
@@ -82,32 +73,28 @@ int main()
 
     {
         const auto Scale = Core::Platform::ComputeMouseScale(1920, 1080, 1024, 768, 1.0f);
-        RequireNear(Scale.X, 1.875f, "letterbox X maps back to logical scale");
-        RequireNear(Scale.Y, 1.875f, "letterbox Y maps back to logical scale");
-        RequireNear(Scale.OffsetX, 0.0f, "no X offset is applied during ratio remap");
-        RequireNear(Scale.OffsetY, 96.0f, "letterbox offset is centered on Y");
+        RequireNear(Scale.X, 1.875f, "narrow client maps full logical X extent");
+        RequireNear(Scale.Y, 1.40625f, "tall client maps full logical Y extent");
+        RequireNear(Scale.OffsetX, 0.0f, "full viewport has no X offset");
+        RequireNear(Scale.OffsetY, 0.0f, "full viewport has no Y offset");
         RequireNear(Core::Platform::MouseCoordToFramebuffer(0.0f, Scale.X, Scale.OffsetX, Scale.MaxX), 0.0f,
-                    "left content edge maps to logical origin");
-        RequireNear(Core::Platform::MouseCoordToFramebuffer(1024.0f, Scale.X, Scale.OffsetX, Scale.MaxX), 1919.0f,
-                    "right content edge clamps to logical max");
+                    "client left maps to logical origin");
+        RequireNear(Core::Platform::MouseCoordToFramebuffer(1023.0f, Scale.X, Scale.OffsetX, Scale.MaxX), 1918.125f,
+                    "client right maps near logical right edge");
+        RequireNear(Core::Platform::MouseCoordToFramebuffer(767.0f, Scale.Y, Scale.OffsetY, Scale.MaxY), 1078.59375f,
+                    "client bottom maps near logical bottom edge");
+    }
 
-        const auto TopLetterbox = Core::Platform::MouseCoordToFramebufferChecked(
-            95.0f, Scale.Y, Scale.OffsetY, Scale.MaxY);
-        const auto ContentTop = Core::Platform::MouseCoordToFramebufferChecked(
-            96.0f, Scale.Y, Scale.OffsetY, Scale.MaxY);
-        const auto ContentBottom = Core::Platform::MouseCoordToFramebufferChecked(
-            671.0f, Scale.Y, Scale.OffsetY, Scale.MaxY);
-        const auto BottomLetterbox = Core::Platform::MouseCoordToFramebufferChecked(
-            673.0f, Scale.Y, Scale.OffsetY, Scale.MaxY);
-
-        RequireNear(TopLetterbox.Value, 0.0f, "top letterbox clamps to content edge");
-        Require(!TopLetterbox.InsideContent, "top letterbox is not game content");
-        RequireNear(ContentTop.Value, 0.0f, "content top maps to zero");
-        Require(ContentTop.InsideContent, "content top is game content");
-        RequireNear(ContentBottom.Value, 1078.125f, "content bottom maps near logical max");
-        Require(ContentBottom.InsideContent, "content bottom is game content");
-        RequireNear(BottomLetterbox.Value, 1079.0f, "bottom letterbox clamps to content edge");
-        Require(!BottomLetterbox.InsideContent, "bottom letterbox is not game content");
+    {
+        const auto Scale = Core::Platform::ComputeMouseScale(1001, 701, 1502, 1052, 1.5f);
+        RequireNear(Core::Platform::MouseCoordToFramebuffer(
+                        751.0f, Scale.X, Scale.OffsetX, Scale.MaxX),
+                    500.5f,
+                    "fractional DPI odd width does not accumulate horizontal drift");
+        RequireNear(Core::Platform::MouseCoordToFramebuffer(
+                        526.0f, Scale.Y, Scale.OffsetY, Scale.MaxY),
+                    350.5f,
+                    "fractional DPI odd height does not accumulate vertical drift");
     }
 
     std::cout << "MouseCoordinateTest passed\n";

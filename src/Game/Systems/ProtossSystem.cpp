@@ -2,6 +2,7 @@
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Systems/ProductionSystem.h"
 #include "Core/Utils/Logger.h"
 
 namespace Game::Systems
@@ -173,6 +174,9 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
                                   int TemplarAID, int TemplarBID,
                                   bool IsDarkArchon)
 {
+    if (TemplarAID == TemplarBID)
+        return false;
+
     auto* UA = EM.GetComponent<UnitComponent>(TemplarAID);
     auto* UB = EM.GetComponent<UnitComponent>(TemplarBID);
     auto* PA = EM.GetComponent<PlayerComponent>(TemplarAID);
@@ -183,6 +187,16 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     if (UA->HitPoints <= 0 || UB->HitPoints <= 0) return false;
     if (PA->PlayerID != PB->PlayerID) return false;
 
+    const int RequiredTemplarDefID =
+        Game::Races::GetUnitDefID(IsDarkArchon ? "Dark Templar" : "High Templar");
+    const auto RequiredTemplarDef = Game::Races::GetUnitDefByID(RequiredTemplarDefID);
+    if (RequiredTemplarDef.Name == "Unknown" ||
+        UA->ChkUnitID != RequiredTemplarDef.ChkUnitID ||
+        UB->ChkUnitID != RequiredTemplarDef.ChkUnitID)
+    {
+        return false;
+    }
+
     const int ArchonDefID = Game::Races::GetUnitDefID(IsDarkArchon ? "Dark Archon" : "Archon");
     const auto ArchonDef = Game::Races::GetUnitDefByID(ArchonDefID);
     if (ArchonDef.Name == "Unknown")
@@ -190,49 +204,16 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
 
     Core::Math::Vec2 CenterPos = {(TA->Position.X + TB->Position.X) * 0.5f,
                                    (TA->Position.Y + TB->Position.Y) * 0.5f};
+    const int PlayerID = PA->PlayerID;
 
-    // Consume both templars
+    const int ArchonID = ProductionSystem::DebugSpawnUnit(
+        EM, ArchonDefID, CenterPos, PlayerID);
+    if (ArchonID < 0)
+        return false;
+
+    // Consume the source units only after the replacement entity is complete.
     EM.DestroyEntity(TemplarAID);
     EM.DestroyEntity(TemplarBID);
-
-    // Spawn Archon
-    int ArchonID = EM.CreateEntity();
-    auto& ATrans = EM.AddComponent<TransformComponent>(ArchonID);
-    auto& AUnit = EM.AddComponent<UnitComponent>(ArchonID);
-    auto& APlayer = EM.AddComponent<PlayerComponent>(ArchonID);
-    auto& ACombat = EM.AddComponent<CombatComponent>(ArchonID);
-    auto& ACmd = EM.AddComponent<CommandComponent>(ArchonID);
-    auto& APath = EM.AddComponent<PathfindingComponent>(ArchonID);
-    auto& ARender = EM.AddComponent<RenderComponent>(ArchonID);
-
-    ATrans.Position = CenterPos;
-    APlayer = *PA;
-
-    AUnit.UnitRace = ArchonDef.RaceType;
-    AUnit.ChkUnitID = ArchonDef.ChkUnitID;
-    AUnit.HitPoints = ArchonDef.HitPoints;
-    AUnit.MaxHitPoints = ArchonDef.HitPoints;
-    AUnit.ShieldPoints = ArchonDef.ShieldPoints;
-    AUnit.MaxShieldPoints = ArchonDef.ShieldPoints;
-    AUnit.EnergyPoints = ArchonDef.EnergyPoints;
-    AUnit.MaxEnergyPoints = ArchonDef.EnergyPoints;
-    AUnit.Armor = ArchonDef.Armor;
-    AUnit.SupplyCost = ArchonDef.SupplyCost;
-    AUnit.Speed = ArchonDef.Speed;
-    AUnit.SightRange = ArchonDef.SightRange;
-    AUnit.SizeType = ArchonDef.SizeType;
-
-    Races::ApplyCombatDefinition(ACombat, ArchonDef, false);
-
-    ACmd.CurrentCommand = CommandType::Stop;
-    APath.NodeTolerance = 8.0f;
-    APath.IsAir = false;
-
-    ARender.ImageID = (uint32_t)ArchonDef.ChkUnitID;
-    ARender.FrameIndex = 0;
-    ARender.TotalFrames = 1;
-    ARender.Tint = Core::Colors::White();
-    ARender.Layer = RenderLayer::Units;
 
     Core::Utils::Logger::Info("ProtossSystem",
         std::string(IsDarkArchon ? "Dark " : "") + "Archon spawned at (" +

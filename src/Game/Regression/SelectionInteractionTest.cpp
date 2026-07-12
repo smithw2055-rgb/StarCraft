@@ -25,6 +25,16 @@ const UnitEntry* GameDataLoader::FindUnitByID(uint32_t) const
     return nullptr;
 }
 
+const SpriteEntry* GameDataLoader::FindSpriteByID(uint32_t) const
+{
+    return nullptr;
+}
+
+uint32_t GameDataLoader::ResolveUnitSpriteID(uint32_t) const
+{
+    return UINT32_MAX;
+}
+
 } // namespace Resource
 
 namespace Core::Platform
@@ -176,6 +186,20 @@ namespace
         Require(Picked.size() == 1 && Picked[0] == Depot,
             "box selection returns a single building when no selectable units are present");
     }
+
+    void TestSpiderMinesCannotBeSelected()
+    {
+        Core::ECS::EntityManager EM;
+        Game::Client::Selection Selection;
+        const int Mine = CreateSelectable(EM, 13, {96.0f, 96.0f}, 0,
+                                          Game::Components::UnitSize::Small);
+        EM.AddComponent<Game::Components::SpiderMineComponent>(Mine).IsPlaced = true;
+
+        Require(Selection.PickEntityAtWorld(EM, 96.0f, 96.0f) == -1,
+            "placed Spider Mine cannot be selected by clicking");
+        Require(Selection.CollectRectSelection(EM, 64.0f, 64.0f, 64.0f, 64.0f).empty(),
+            "placed Spider Mine cannot be selected by dragging");
+    }
 }
 
 int main()
@@ -185,6 +209,7 @@ int main()
     TestRectSelectionPrefersLocalUnits();
     TestRectSelectionIgnoresDeadVisibleUnits();
     TestRectSelectionReturnsSingleSelectBuildings();
+    TestSpiderMinesCannotBeSelected();
 
     std::printf("SelectionInteractionTest passed\n");
     return 0;

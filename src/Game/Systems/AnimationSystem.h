@@ -4,6 +4,7 @@
 #include "Game/Components.h"
 #include "Game/IScriptVM.h"
 #include <functional>
+#include <optional>
 #include <vector>
 #include <unordered_map>
 
@@ -40,6 +41,9 @@ struct AnimClip
 class AnimationSystem : public Core::ECS::ISystem
 {
 public:
+    using OverlayOffsetResolver = std::function<std::optional<Core::Math::Vec2>(
+        uint32_t, size_t, size_t, size_t, bool)>;
+
     AnimationSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     AnimationSystem(Core::ECS::SystemManager& SysMgr, Core::Audio::AudioSystem* Audio)
         : mSystemMgr(SysMgr), mAudio(Audio) {}
@@ -49,6 +53,7 @@ public:
     std::string_view GetName() const override { return "AnimationSystem"; }
 
     static void RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips);
+    static void SetOverlayOffsetResolver(OverlayOffsetResolver Resolver);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
     static int ResolvePlayableIScriptAnimation(int AnimID,
                                                const std::function<bool(int)>& HasAnim);
@@ -95,6 +100,7 @@ private:
     static std::unordered_map<int, UnitAnimData> sAnimDB;
     static Game::IScriptDatabase sIScriptDB;
     static bool sTriedLoadIScript;
+    static OverlayOffsetResolver sOverlayOffsetResolver;
 
     Core::ECS::SystemManager& mSystemMgr;
     Core::Audio::AudioSystem* mAudio = nullptr;
@@ -109,7 +115,7 @@ private:
                                      bool* OutFlipped = nullptr);
     void UpdateScriptEffects(float DeltaTime);
     void UpdateImageTrees(float DeltaTime);
-    void ClearImageTree(int EntityID);
+    void ClearImageTree(int EntityID, bool PreservePersistentAttachments = false);
     void MarkImageSubtreeHidden(Components::ImageTreeComponent& Tree, int ParentIndex);
     void AddImageTreeNode(int EntityID,
                           int ImageID,
@@ -118,7 +124,9 @@ private:
                           bool DrawAbove,
                           bool Flipped,
                           float Lifetime,
-                          bool UseSpriteID = false);
+                          bool UseSpriteID = false,
+                          bool PersistentSpriteAttachment = false,
+                          bool UseSpecialOffset = false);
     void AddImageTreeNode(int EntityID,
                           int ParentIndex,
                           int ImageID,
@@ -126,8 +134,17 @@ private:
                           bool DrawAbove,
                           bool Flipped,
                           float Lifetime,
-                          bool UseSpriteID = false);
+                          bool UseSpriteID = false,
+                          bool PersistentSpriteAttachment = false,
+                          bool UseSpecialOffset = false);
     void StartImageNodeScript(Components::ImageSubnode& Node);
+    void CreateGasOverlay(int EntityID,
+                          int ParentIndex,
+                          int SourceImageID,
+                          int SourceFrame,
+                          bool SourceFlipped,
+                          int OffsetIndex,
+                          float Lifetime);
     void ConsumeImageNodeEvents(int EntityID,
                                 int NodeIndex,
                                 Core::Math::Vec2 NodeOffset,

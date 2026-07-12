@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Client/ProjectileSystem.h"
 #include "Core/Math/Vec2.h"
 #include "Render/ParticleSystem.h"
 
@@ -31,7 +30,6 @@ public:
     const std::vector<CampaignPing>& GetCampaignPings() const { return CampaignPings_; }
 
 private:
-    std::vector<Projectile> Projectiles_;
     Render::ParticleSystem Particles_;
     std::vector<CampaignPing> CampaignPings_;
 };

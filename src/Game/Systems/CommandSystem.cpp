@@ -87,6 +87,8 @@ static bool CanReceiveMovementOrder(Core::ECS::EntityManager& EM, Core::ECS::Ent
         return false;
     if (Unit->HitPoints <= 0)
         return false;
+    if (Unit->ChkUnitID == 13 || EM.GetComponent<SpiderMineComponent>(EntityID))
+        return false;
 
     if (IsFrozenByStatus(EM, EntityID))
         return false;
@@ -286,7 +288,7 @@ static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
     const Game::Map::GameMap& Map,
     int StartTileX,
     int StartTileY,
-    float MovingRadius,
+    const PathfindingComponent& MovingPath,
     int IgnoreEntityID = -1)
 {
     std::vector<StaticBlockerRect> Blockers;
@@ -297,10 +299,25 @@ static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
         if (EntityID == MovingID || !IsStaticGroundBlocker(EM, EntityID))
             continue;
         auto Rect = StaticBlockerRectForEntity(EM, EntityID);
-        Rect.Left += MovingRadius;
-        Rect.Top += MovingRadius;
-        Rect.Right += MovingRadius;
-        Rect.Bottom += MovingRadius;
+        // Directional Minkowski expansion. A small asymmetric unit only needs
+        // its actual left/right/up/down clearance, not a circle based on its
+        // largest dimension. This keeps valid gaps between bunkers and tanks
+        // open for infantry.
+        if (MovingPath.HasCollisionBounds)
+        {
+            Rect.Left += (float)MovingPath.CollisionRight + 1.0f;
+            Rect.Top += (float)MovingPath.CollisionDown + 1.0f;
+            Rect.Right += (float)MovingPath.CollisionLeft;
+            Rect.Bottom += (float)MovingPath.CollisionUp;
+        }
+        else
+        {
+            const float Radius = (float)std::max(4, MovingPath.CollisionRadius);
+            Rect.Left += Radius;
+            Rect.Top += Radius;
+            Rect.Right += Radius;
+            Rect.Bottom += Radius;
+        }
         Blockers.push_back(Rect);
     }
 
@@ -352,6 +369,7 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         (Path->RecentFailedMoveTarget - InOrder.TargetPosition).LengthSq() > 16.0f * 16.0f)
     {
         Path->HasRecentMoveFailure = false;
+        Path->RecentMoveFailureCooldown = 0.0f;
     }
     Path->NodeTolerance = 8.0f;
     RefreshCollisionRadius(EM, EntityID, *Path);
@@ -386,7 +404,7 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
                 *gCmdMap,
                 StartTileX,
                 StartTileY,
-                (float)std::max(4, Path->CollisionRadius),
+                *Path,
                 InOrder.PathingIgnoreEntityID);
             Core::Math::Vec2 StageTarget = InOrder.TargetPosition;
             const auto RegionPath = sRegionPathfinder.FindRegionPath(
@@ -594,6 +612,10 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
         bool AnyGroundUnit = false;
         bool TargetInsideBounds = false;
         bool PreserveOffsets = false;
+        bool CompressInfantryOffsets = false;
+        float SlotSpacingX = 24.0f;
+        float SlotSpacingY = 24.0f;
+        int SlotColumns = 1;
     } Group;
 
     const bool AdjustGroupPositions =
@@ -626,6 +648,16 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
             Group.Center += Trans->Position;
             ++Group.Count;
             Group.AnyGroundUnit = Group.AnyGroundUnit || !ShouldMoveAsAir(EM, ID);
+            if (auto* Path = EM.GetComponent<PathfindingComponent>(ID);
+                Path && Path->HasCollisionBounds)
+            {
+                const float Width =
+                    (float)(Path->CollisionLeft + Path->CollisionRight + 1);
+                const float Height =
+                    (float)(Path->CollisionUp + Path->CollisionDown + 1);
+                Group.SlotSpacingX = std::max(Group.SlotSpacingX, Width + 4.0f);
+                Group.SlotSpacingY = std::max(Group.SlotSpacingY, Height + 4.0f);
+            }
         }
 
         if (Group.Count >= 2)
@@ -641,13 +673,20 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                 !Group.TargetInsideBounds &&
                 Group.Max.X - Group.Min.X <= MaxSpan &&
                 Group.Max.Y - Group.Min.Y <= MaxSpan;
+            Group.CompressInfantryOffsets =
+                Group.PreserveOffsets &&
+                Group.SlotSpacingX <= 24.0f &&
+                Group.SlotSpacingY <= 24.0f;
+            while (Group.SlotColumns * Group.SlotColumns < Group.Count)
+                ++Group.SlotColumns;
         }
     }
 
+    int FormationSlot = 0;
     for (Core::ECS::EntityID ID : Entities)
     {
         Order EntityOrder = InOrder;
-        if (AdjustGroupPositions && Group.Count >= 2)
+        if (AdjustGroupPositions && Group.Count >= 2 && CanReceiveMovementOrder(EM, ID))
         {
             if (auto* Trans = EM.GetComponent<TransformComponent>(ID))
             {
@@ -664,9 +703,29 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                 }
                 else if (Group.PreserveOffsets)
                 {
+                    constexpr float kInfantryFormationCompression = 0.80f;
+                    const float Scale = Group.CompressInfantryOffsets
+                        ? kInfantryFormationCompression
+                        : 1.0f;
                     EntityOrder.TargetPosition =
-                        Trans->Position + (InOrder.TargetPosition - Group.Center);
+                        InOrder.TargetPosition + (Trans->Position - Group.Center) * Scale;
                 }
+                else
+                {
+                    const int Row = FormationSlot / Group.SlotColumns;
+                    const int Column = FormationSlot % Group.SlotColumns;
+                    const int Rows = (Group.Count + Group.SlotColumns - 1) /
+                        Group.SlotColumns;
+                    EntityOrder.TargetPosition = {
+                        InOrder.TargetPosition.X +
+                            ((float)Column - (float)(Group.SlotColumns - 1) * 0.5f) *
+                                Group.SlotSpacingX,
+                        InOrder.TargetPosition.Y +
+                            ((float)Row - (float)(Rows - 1) * 0.5f) *
+                                Group.SlotSpacingY
+                    };
+                }
+                ++FormationSlot;
             }
         }
 

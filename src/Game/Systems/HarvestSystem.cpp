@@ -20,6 +20,17 @@ using namespace Game::Components;
 
 namespace
 {
+    constexpr int TerranScvChkUnitID = 7;
+    constexpr int ZergDroneChkUnitID = 41;
+    constexpr int ProtossProbeChkUnitID = 64;
+
+    bool IsWorkerChkUnitID(int ChkUnitID)
+    {
+        return ChkUnitID == TerranScvChkUnitID ||
+               ChkUnitID == ZergDroneChkUnitID ||
+               ChkUnitID == ProtossProbeChkUnitID;
+    }
+
     void SetReason(std::string* OutReason, const std::string& Reason)
     {
         if (OutReason)
@@ -313,9 +324,9 @@ namespace
         auto* Owner = EM.GetComponent<PlayerComponent>(DepotID);
         auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
         auto* DepotUnit = EM.GetComponent<UnitComponent>(DepotID);
-        if (!Building || !Owner || !DepotTrans || !DepotUnit)
+        if (!Owner || !DepotTrans || !DepotUnit)
             return false;
-        if (Building->UnderConstruction || DepotUnit->HitPoints <= 0)
+        if ((Building && Building->UnderConstruction) || DepotUnit->HitPoints <= 0)
             return false;
         if (Owner->PlayerID != PlayerID)
             return false;
@@ -352,10 +363,16 @@ namespace
         if (auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetResourceID);
             TargetPath && TargetPath->HasCollisionBounds)
         {
-            const float WorkerRadius = CollisionRadiusFromBounds(
-                EM.GetComponent<PathfindingComponent>(HarvesterID), 16.0f);
+            const auto* WorkerPath = EM.GetComponent<PathfindingComponent>(HarvesterID);
+            const float WorkerRadius = CollisionRadiusFromBounds(WorkerPath, 16.0f);
+            // Movement accepts a final approach point within NodeTolerance.
+            // Use the same tolerance for the resource contact test; otherwise
+            // asymmetric DAT bounds can leave a worker parked at a completed
+            // approach waypoint which is a few pixels outside the old range.
+            const float ArrivalTolerance =
+                WorkerPath ? std::max(2.0f, WorkerPath->NodeTolerance + 2.0f) : 2.0f;
             return EntityEdgeDistance(EM, HarvesterTrans->Position, TargetResourceID) <=
-                   WorkerRadius + 2.0f;
+                   WorkerRadius + ArrivalTolerance;
         }
         return HarvesterTrans->Position.DistanceTo(TargetTrans->Position) <=
                HarvestInteractionRange(EM, TargetResourceID);
@@ -418,6 +435,34 @@ namespace
             CommandSystem::IssueMove(EM, {HarvesterID}, MoveTarget, ApproachID);
 
         RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
+    }
+
+    void IssueHarvestWaitMove(Core::ECS::EntityManager& EM,
+                              int HarvesterID,
+                              int TargetResourceID,
+                              size_t QueueIndex)
+    {
+        auto* ResourceTrans = EM.GetComponent<TransformComponent>(TargetResourceID);
+        if (!ResourceTrans)
+            return;
+
+        static const std::array<Core::Math::Vec2, 8> WaitDirections = {{
+            {1.0f, 0.0f}, {0.7071f, 0.7071f}, {0.0f, 1.0f},
+            {-0.7071f, 0.7071f}, {-1.0f, 0.0f}, {-0.7071f, -0.7071f},
+            {0.0f, -1.0f}, {0.7071f, -0.7071f}
+        }};
+        const float ResourceRadius = CollisionRadiusFromBounds(
+            EM.GetComponent<PathfindingComponent>(TargetResourceID), 24.0f);
+        const float WorkerRadius = CollisionRadiusFromBounds(
+            EM.GetComponent<PathfindingComponent>(HarvesterID), 16.0f);
+        const float Ring = ResourceRadius + WorkerRadius + 32.0f;
+        const Core::Math::Vec2 WaitTarget = ResourceTrans->Position +
+            WaitDirections[(QueueIndex - 1) % WaitDirections.size()] * Ring;
+
+        CommandSystem::IssueMoveAndHasPath(
+            EM, HarvesterID, WaitTarget, TargetResourceID);
+        RestoreHarvestCommand(
+            EM, HarvesterID, TargetResourceID, ResourceTrans->Position);
     }
 
     void RemoveQueuedGatherer(ResourceComponent& Resource, int HarvesterID)
@@ -629,10 +674,7 @@ bool HarvestSystem::CanHarvest(const Core::ECS::EntityManager& EM,
         return false;
     }
 
-    // Support SCV (0x07), Drone (0x29), Probe (0x2D)
-    bool IsWorker = (Unit->ChkUnitID == 0x07 || Unit->ChkUnitID == 0x29 ||
-                     Unit->ChkUnitID == 0x2D);
-    if (!IsWorker)
+    if (!IsWorkerChkUnitID(Unit->ChkUnitID))
     {
         SetReason(OutReason, "only worker units can harvest (SCV/Drone/Probe)");
         return false;
@@ -699,7 +741,27 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         if (ResTarget)
         {
             QueueGathererForResource(EM, TargetResourceID, ID);
-            IssueHarvestMove(EM, ID, TargetResourceID, ResTarget->Position);
+            auto* Resource = EM.GetComponent<ResourceComponent>(TargetResourceID);
+            size_t QueueIndex = 0;
+            if (Resource)
+            {
+                const auto QueueIt = std::find(
+                    Resource->QueuedGatherers.begin(),
+                    Resource->QueuedGatherers.end(), ID);
+                if (QueueIt != Resource->QueuedGatherers.end())
+                {
+                    QueueIndex = (size_t)std::distance(
+                        Resource->QueuedGatherers.begin(), QueueIt);
+                }
+            }
+            if (QueueIndex == 0)
+                IssueHarvestMove(EM, ID, TargetResourceID, ResTarget->Position);
+            else
+                IssueHarvestWaitMove(EM, ID, TargetResourceID, QueueIndex);
+            DebugHarvestLog(
+                "issue worker=" + std::to_string(ID) +
+                " resource=" + std::to_string(TargetResourceID) +
+                " queue=" + std::to_string(QueueIndex));
         }
 
         IssuedAny = true;
@@ -732,7 +794,10 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
     int BestID = -1;
     float BestDist = std::numeric_limits<float>::max();
 
-    auto Depots = EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>();
+    // Real CHK maps and synthesized starts do not always carry identical
+    // building metadata. Enumerate owned unit entities, then identify town
+    // halls from their canonical unit definition in IsValidDepotForReturn.
+    auto Depots = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
     for (int DepotID : Depots)
     {
         auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
@@ -804,6 +869,19 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
 
             auto* Path = EM.GetComponent<PathfindingComponent>(ID);
             QueueGathererForResource(EM, Harvest->TargetResourceID, ID);
+            PruneQueuedGatherers(EM, Harvest->TargetResourceID, *ResComp);
+            const bool HasGatherTurn =
+                ResComp->ActiveGathererEntityID == ID ||
+                (ResComp->ActiveGathererEntityID < 0 &&
+                 !ResComp->QueuedGatherers.empty() &&
+                 ResComp->QueuedGatherers.front() == ID);
+            if (!HasGatherTurn)
+            {
+                Harvest->State = HarvestState::QueuedAtResource;
+                Harvest->QueuedAtResource = true;
+                break;
+            }
+
             if (IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID))
             {
                 if (CanClaimResource(EM, Harvest->TargetResourceID, ID))
@@ -813,6 +891,9 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     Harvest->QueuedAtResource = false;
                     Harvest->MineTimer = 0.0f;
                     ClearMotion(EM, ID);
+                    DebugHarvestLog(
+                        "mining worker=" + std::to_string(ID) +
+                        " resource=" + std::to_string(Harvest->TargetResourceID));
                 }
                 else
                 {
@@ -821,6 +902,14 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     ClearMotion(EM, ID);
                 }
                 break;
+            }
+
+            if (Harvest->State == HarvestState::QueuedAtResource)
+            {
+                Harvest->State = HarvestState::MovingToResource;
+                Harvest->QueuedAtResource = false;
+                IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
+                return;
             }
 
             if (IsMoveSettled(Path))
@@ -948,7 +1037,13 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 break;
             }
 
-            const float DepositRange = WorkerContactRange(EM, ID, Path, 2.0f);
+            // Approach goals are accepted using the pathfinder's node tolerance.
+            // Include that same tolerance here so a worker which has legitimately
+            // reached the depot edge cannot remain in an endless return/repath loop.
+            const float ArrivalTolerance =
+                Path ? std::max(2.0f, Path->NodeTolerance + 2.0f) : 2.0f;
+            const float DepositRange =
+                WorkerContactRange(EM, ID, Path, ArrivalTolerance);
             const float Dist = EntityEdgeDistance(
                 EM, Trans->Position, Harvest->ReturnBuildingID);
             DebugHarvestLog(

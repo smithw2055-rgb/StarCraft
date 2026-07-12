@@ -19,9 +19,9 @@ void WorldEffects::UpdateFromCombat(Core::ECS::EntityManager& Entities,
                                     Core::Audio::AudioSystem& Audio,
                                     float DeltaSeconds)
 {
-    SpawnProjectilesFromCombat(Entities, Projectiles_, Particles_, Audio);
+    (void)Entities;
+    (void)Audio;
     Particles_.Update(DeltaSeconds);
-    UpdateProjectiles(Projectiles_, DeltaSeconds);
 
     for (auto& Ping : CampaignPings_)
         Ping.TimeRemaining -= DeltaSeconds;
@@ -33,7 +33,6 @@ void WorldEffects::UpdateFromCombat(Core::ECS::EntityManager& Entities,
 void WorldEffects::Render(Render::Draw2D& Draw2D)
 {
     Particles_.Render();
-    RenderProjectiles(Projectiles_, Draw2D);
 
     for (const auto& Ping : CampaignPings_)
     {
