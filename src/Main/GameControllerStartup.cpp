@@ -39,6 +39,7 @@ void LogMouseDebugBootstrapSnapshot(GameSession& Session, ClientRuntime& Client)
             std::to_string(Layout.MinimapRect.H));
 
     auto& EM = Session.Entities();
+    const int LocalPlayerID = Session.GetLocalPlayerID();
     int Logged = 0;
     for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
                                            Game::Components::UnitComponent,
@@ -47,7 +48,7 @@ void LogMouseDebugBootstrapSnapshot(GameSession& Session, ClientRuntime& Client)
         auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
         auto* Transform = EM.GetComponent<Game::Components::TransformComponent>(EntityID);
-        if (!Player || !Unit || !Transform || Player->PlayerID != 0)
+        if (!Player || !Unit || !Transform || Player->PlayerID != LocalPlayerID)
             continue;
 
         const auto Screen = Client.WorldToScreen(Transform->Position.X, Transform->Position.Y);
@@ -117,6 +118,7 @@ void GameController::InitGameSystems()
         mRuntime.App.Runtime,
         mRuntime.Client.Hud,
         mRuntime.Client.Runtime,
+        mRuntime.Session.Game.GetLocalPlayerID(),
         [this]() {
             InitializeLoadedMapGameplayRuntime(
                 mRuntime.Session.Game,

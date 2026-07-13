@@ -60,6 +60,7 @@ class BuildingSystem : public Core::ECS::ISystem
 public:
     using ImageIDResolver = std::function<uint32_t(int)>;
     using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
+    using AddonOffsetResolver = std::function<Core::Math::Vec2(int, int)>;
 
     BuildingSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
@@ -69,6 +70,7 @@ public:
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetConstructionImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
+    static void SetAddonOffsetResolver(AddonOffsetResolver Resolver);
 
     static bool CanBuild(const Core::ECS::EntityManager& EM,
                          int BuilderID,
@@ -124,6 +126,8 @@ public:
     static bool LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingID);
     static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
                              Core::Math::Vec2 Position);
+    static void RestoreSpawnedAddonLinks(Core::ECS::EntityManager& EM);
+    static void ProcessFlightTransition(Core::ECS::EntityManager& EM, int EntityID);
 
 private:
     void ProcessConstruction(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);

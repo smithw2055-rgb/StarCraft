@@ -30,6 +30,7 @@ public:
     void CancelPointerGesture();
     void Init(Resource::Graphics::DataAssetCacheView DataAssets) { mDataAssets = DataAssets; }
     void SetLocalPlayerId(int PlayerId) { mLocalPlayerId = PlayerId; }
+    int GetLocalPlayerId() const { return mLocalPlayerId; }
 
     bool IsDragging() const { return mPhase == Phase::Dragging; }
     void GetDragRectWorld(float& X, float& Y, float& W, float& H) const;

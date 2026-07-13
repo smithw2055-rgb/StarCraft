@@ -1,4 +1,5 @@
 #include "Game/Systems/ZergSystem.h"
+#include "Game/Systems/BurrowState.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
@@ -23,6 +24,7 @@ namespace
 {
     ZergSystem::ImageIDResolver gImageResolver;
     ZergSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+    ZergSystem::BurrowCapabilityResolver gBurrowCapabilityResolver;
 
     uint32_t ResolveImageID(int ChkUnitID)
     {
@@ -137,6 +139,33 @@ void ZergSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
 void ZergSystem::SetImageResolver(ImageIDResolver Resolver)
 {
     gImageResolver = std::move(Resolver);
+}
+
+void ZergSystem::SetBurrowCapabilityResolver(BurrowCapabilityResolver Resolver)
+{
+    gBurrowCapabilityResolver = std::move(Resolver);
+}
+
+bool ZergSystem::CanUnitBurrow(int ChkUnitID, uint32_t ImageID)
+{
+    if (gBurrowCapabilityResolver)
+        return gBurrowCapabilityResolver(ChkUnitID, ImageID);
+
+    switch (ChkUnitID)
+    {
+        case 37:  // Zergling
+        case 38:  // Hydralisk
+        case 41:  // Drone
+        case 46:  // Defiler
+        case 50:  // Infested Kerrigan
+        case 51:  // Unclean One
+        case 53:  // Hunter Killer
+        case 54:  // Devouring One
+        case 103: // Lurker
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool ZergSystem::HasCreep(int TileX, int TileY)
@@ -868,10 +897,9 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
                 NCombat, TargetDef, Game::Data::IsAirUnitType(TargetDef.ChkUnitID));
         }
 
-        // Add burrow component for units that can burrow
-        if (TargetDef.Name == "Zergling" || TargetDef.Name == "Hydralisk" ||
-            TargetDef.Name == "Drone" || TargetDef.Name == "Defiler" ||
-            TargetDef.Name == "Lurker" || TargetDef.Name == "Ultralisk")
+        // The project assets are authoritative for whether this unit exposes
+        // both Burrow and UnBurrow iscript entry points.
+        if (CanUnitBurrow(NUnit.ChkUnitID, NRender.ImageID))
         {
             auto& NBurrow = EM.AddComponent<BurrowComponent>(NewUnitID);
             NBurrow.CanBurrow = true;
@@ -886,29 +914,21 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
     }
 }
 
-void ZergSystem::BurrowUnit(Core::ECS::EntityManager& EM, int EntityID)
+bool ZergSystem::BurrowUnit(Core::ECS::EntityManager& EM, int EntityID)
 {
     auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-    if (!Burrow || !Unit || !Burrow->CanBurrow) return;
+    if (!Burrow || !Unit || !Burrow->CanBurrow || Unit->HitPoints <= 0)
+        return false;
+    if (Burrow->IsTransitioning())
+        return false;
 
-    if (Burrow->IsBurrowed)
-    {
-        Burrow->IsBurrowed = false;
-        Burrow->BurrowTransitionTime = 1.0f;
-        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
-        if (Cloak) Cloak->IsBurrowed = false;
-    }
-    else
-    {
-        Burrow->IsBurrowed = true;
-        Burrow->BurrowTransitionTime = 1.0f;
-        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
-        if (!Cloak)
-            Cloak = &EM.AddComponent<CloakComponent>(EntityID);
-        Cloak->IsBurrowed = true;
-        Cloak->IsCloaked = true;
-    }
+    if (auto* Command = EM.GetComponent<CommandComponent>(EntityID))
+        Command->CancelAll();
+
+    const bool FullyBurrowed =
+        Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed;
+    return BurrowState::BeginTransition(EM, EntityID, !FullyBurrowed);
 }
 
 void ZergSystem::ProcessZergRegeneration(Core::ECS::EntityManager& EM, float DeltaTime)

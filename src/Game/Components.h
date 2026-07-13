@@ -236,8 +236,14 @@ struct ImageSubnode
     // updates every directional image (including air-unit shadows) when the
     // sprite heading changes.
     bool InheritSpriteDirection = false;
+    // Set after this image executes followmaingraphic. Its VM periodically
+    // copies the main image frame, whose flip state is already absolute.
+    bool FollowsMainGraphic = false;
     bool PersistentSpriteAttachment = false;
     bool UseSpecialOffset = false;
+    bool IsDamageOverlay = false;
+    int OverlayOffsetType = -1;
+    int OverlayOffsetIndex = 0;
     bool UseSpriteID = false;
     float LifetimeRemaining = -1.0f; // negative means persistent until animation changes.
     int ScriptID = -1;
@@ -424,6 +430,14 @@ struct CombatComponent
     float AutoTargetLockSeconds = 0.0f;
 };
 
+enum class BuildingFlightPhase : uint8_t
+{
+    Grounded,
+    LiftingOff,
+    Airborne,
+    Landing
+};
+
 struct BuildingComponent
 {
     bool IsBuilding = true;
@@ -432,6 +446,8 @@ struct BuildingComponent
     bool IsAddon = false;
     bool CanLiftOff = false;
     bool IsLifted = false;
+    BuildingFlightPhase FlightPhase = BuildingFlightPhase::Grounded;
+    bool FlightAnimationComplete = false;
     bool RequiresCreep = false;
     bool RequiresPylon = false;
     bool HasPylonPower = false;
@@ -581,6 +597,7 @@ struct BulletComponent
     bool HasHit = false;
     int DamageUpgradeBonus = 0;
     bool IsRangedAttack = false;
+    bool PlayImpactAnimation = false;
 };
 
 struct StatusEffectComponent
@@ -658,11 +675,26 @@ struct CloakComponent
     float CloakEnergyCost = 0.0f;
 };
 
+enum class BurrowPhase : uint8_t
+{
+    Surface,
+    Burrowing,
+    Burrowed,
+    Unburrowing
+};
+
 struct BurrowComponent
 {
     bool CanBurrow = false;
     bool IsBurrowed = false;
+    BurrowPhase Phase = BurrowPhase::Surface;
     float BurrowTransitionTime = 0.0f;
+
+    bool IsTransitioning() const
+    {
+        return Phase == BurrowPhase::Burrowing ||
+               Phase == BurrowPhase::Unburrowing;
+    }
 };
 
 struct NukeComponent

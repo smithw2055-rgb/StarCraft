@@ -49,14 +49,7 @@ inline StartRace RaceFromScriptRace(uint8_t Race)
 
 inline size_t ScriptPlayerDataIndex(const GameSession& Session, int PlayerId)
 {
-    const auto& Data = Session.GetScriptData();
-    const bool OneBasedPlayerSlots =
-        Data.Players[0].Owner == 0 &&
-        std::any_of(Data.Players.begin() + 1, Data.Players.begin() + 9,
-            [](const Game::Trigger::SCRPlayerInfo& Info) { return Info.Owner != 0; });
-    if (OneBasedPlayerSlots && PlayerId >= 0 && PlayerId < 8)
-        return (size_t)PlayerId + 1u;
-    if (PlayerId >= 0 && PlayerId < (int)Data.Players.size())
+    if (PlayerId >= 0 && PlayerId < (int)Session.GetScriptData().Players.size())
         return (size_t)PlayerId;
     return 0u;
 }
@@ -171,6 +164,7 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
 
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::UpgradeSystem>(SysMgr));
     auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, &Session.MutableEcsMap());
+    FogSys->SetLocalPlayerID(Session.GetLocalPlayerID());
     Session.SetFogSystem(FogSys.get());
     SysMgr.RegisterSystem(std::move(FogSys));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::ZergSystem>(SysMgr, &Session.MutableEcsMap()));

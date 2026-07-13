@@ -865,6 +865,19 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     if (IsFrozenByStatus(EM, EntityID))
         return;
 
+    if (auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID))
+    {
+        const bool IsLurker = Unit->ChkUnitID == 103;
+        const bool FullyBurrowed =
+            Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed;
+        if (Burrow->IsTransitioning() ||
+            (FullyBurrowed && !IsLurker) ||
+            (!FullyBurrowed && IsLurker))
+        {
+            return;
+        }
+    }
+
     // Reduce cooldown
     if (Combat->CooldownRemaining > 0.0f)
         Combat->CooldownRemaining -= DeltaTime;

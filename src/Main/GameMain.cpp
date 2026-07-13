@@ -111,7 +111,7 @@ sapp_desc sokol_main(int argc, char* argv[])
         }
         else if (std::strcmp(argv[I], "--debug-iscript") == 0)
         {
-            SetRuntimeEnvFlag("STARCRAFT_DEBUG_ISCRIPT");
+            SetRuntimeEnvFlag("STARCRAFT_DEBUG_ISCRIPT_RUNTIME");
         }
         else if (gMapPathOverride.empty())
             gMapPathOverride = argv[I];

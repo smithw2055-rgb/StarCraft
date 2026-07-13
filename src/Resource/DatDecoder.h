@@ -33,6 +33,8 @@ struct UnitEntry
     uint32_t ConstructionImageID = UINT32_MAX;
     int16_t PlacementWidth = 0;
     int16_t PlacementHeight = 0;
+    int16_t AddonPositionX = 0;
+    int16_t AddonPositionY = 0;
     int16_t DimensionLeft = 0;
     int16_t DimensionUp = 0;
     int16_t DimensionRight = 0;

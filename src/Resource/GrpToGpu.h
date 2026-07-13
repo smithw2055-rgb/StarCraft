@@ -38,6 +38,13 @@ struct GrpDecodeOptions
     bool TransparentBlack = false;
     bool UseIndexRemap = false;
     bool GenerateTeamColorMask = true;
+    // Modifier 9 GRPs store light-table row indices rather than palette
+    // colors. Decode those indices as a graded RGBA glow mask so the modern
+    // renderer does not display the whole source frame as a white disc.
+    bool DecodeLightTableMask = false;
+    uint8_t LightTableIndexCount = 63;
+    uint8_t LightTableMaxAlpha = 192;
+    RawColor LightTableTint = RawColor(255, 160, 64, 255);
     uint8_t TeamColorIndexStart = 8;
     uint8_t TeamColorIndexCount = 8;
     int16_t IndexRemap[256] = {};
@@ -49,6 +56,19 @@ struct GrpDecodeOptions
             IndexRemap[I] = -1;
     }
 };
+
+constexpr uint8_t DecodeLightTableMaskAlpha(uint8_t Index,
+                                             uint8_t IndexCount,
+                                             uint8_t MaxAlpha)
+{
+    if (Index == 0 || IndexCount == 0 || Index > IndexCount)
+        return 0;
+    if (IndexCount == 1)
+        return MaxAlpha;
+    return static_cast<uint8_t>(
+        (static_cast<unsigned>(Index - 1) * MaxAlpha) /
+        static_cast<unsigned>(IndexCount - 1));
+}
 
 std::optional<DecodedSprite> DecodeGrpToRgba(
     const std::vector<uint8_t>& GrpData,

@@ -27,6 +27,7 @@ namespace
     BuildingSystem::ImageIDResolver gImageResolver;
     BuildingSystem::ImageIDResolver gConstructionImageResolver;
     BuildingSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+    BuildingSystem::AddonOffsetResolver gAddonOffsetResolver;
 
     struct BuildingFootprintTiles
     {
@@ -582,8 +583,28 @@ namespace
                 continue;
 
             auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
-            if (Building && Building->IsLifted)
+            if (Building && Building->IsLifted &&
+                Building->FlightPhase != BuildingFlightPhase::Landing)
                 continue;
+            if (Building && Building->IsAddon)
+            {
+                const int ExistingAddonDefID = ResolveDefID(EM, EntityID);
+                auto* ExistingPlayer = EM.GetComponent<PlayerComponent>(EntityID);
+                if (ExistingAddonDefID >= 0 && ExistingPlayer)
+                {
+                    const auto ExistingAddonDef = Races::GetUnitDefByID(ExistingAddonDefID);
+                    const Core::Math::Vec2 AddonOffset = gAddonOffsetResolver
+                        ? gAddonOffsetResolver(BuildingDefID, ExistingAddonDefID)
+                        : Core::Math::Vec2{96.0f, 16.0f};
+                    const Core::Math::Vec2 ExpectedAddonPosition = Position + AddonOffset;
+                    if (ExistingPlayer->PlayerID == 11 &&
+                        ExistingAddonDef.AddonOnBuildingDefID == BuildingDefID &&
+                        (Transform->Position - ExpectedAddonPosition).LengthSq() <= 16.0f * 16.0f)
+                    {
+                        continue;
+                    }
+                }
+            }
             if (!Building && Game::Data::IsAirUnitType(Unit->ChkUnitID))
                 continue;
 
@@ -629,16 +650,108 @@ namespace
         return true;
     }
 
-    Core::Math::Vec2 ComputeAddonPosition(const Core::ECS::EntityManager& EM, int ParentBuildingID)
+    Core::Math::Vec2 ComputeAddonPosition(const Core::ECS::EntityManager& EM,
+                                          int ParentBuildingID,
+                                          int AddonDefID)
     {
         auto* Transform =
             const_cast<Core::ECS::EntityManager&>(EM).GetComponent<TransformComponent>(ParentBuildingID);
         if (!Transform)
             return {};
         Core::Math::Vec2 Position = Transform->Position;
-        Position.X += 64.0f;
-        Position.Y += 16.0f;
+        const int ParentDefID = ResolveDefID(EM, ParentBuildingID);
+        const Core::Math::Vec2 Offset = gAddonOffsetResolver
+            ? gAddonOffsetResolver(ParentDefID, AddonDefID)
+            : Core::Math::Vec2{96.0f, 16.0f};
+        Position += Offset;
         return Position;
+    }
+
+    bool IsCompatibleAddon(const Core::ECS::EntityManager& EM,
+                           int ParentBuildingID,
+                           int AddonID)
+    {
+        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+        const auto* Parent = MutableEM.GetComponent<BuildingComponent>(ParentBuildingID);
+        const auto* Addon = MutableEM.GetComponent<BuildingComponent>(AddonID);
+        if (!Parent || !Addon || Parent->IsAddon || !Addon->IsAddon || Addon->UnderConstruction)
+            return false;
+
+        const int ParentDefID = ResolveDefID(EM, ParentBuildingID);
+        const int AddonDefID = ResolveDefID(EM, AddonID);
+        if (ParentDefID < 0 || AddonDefID < 0)
+            return false;
+        return Races::GetUnitDefByID(AddonDefID).AddonOnBuildingDefID == ParentDefID;
+    }
+
+    int FindCompatibleAddonAtLanding(Core::ECS::EntityManager& EM,
+                                     int ParentBuildingID,
+                                     int RequiredOwner)
+    {
+        int BestAddonID = -1;
+        float BestDistanceSq = 16.0f * 16.0f;
+        for (int AddonID : EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>())
+        {
+            if (AddonID == ParentBuildingID || !IsCompatibleAddon(EM, ParentBuildingID, AddonID))
+                continue;
+            auto* Addon = EM.GetComponent<BuildingComponent>(AddonID);
+            auto* AddonPlayer = EM.GetComponent<PlayerComponent>(AddonID);
+            auto* AddonTransform = EM.GetComponent<TransformComponent>(AddonID);
+            if (!Addon || !AddonPlayer || !AddonTransform ||
+                AddonPlayer->PlayerID != RequiredOwner ||
+                (Addon->BuilderUnitID >= 0 && EM.IsAlive(Addon->BuilderUnitID)))
+            {
+                continue;
+            }
+            const Core::Math::Vec2 ExpectedPosition =
+                ComputeAddonPosition(EM, ParentBuildingID, ResolveDefID(EM, AddonID));
+            const float DistanceSq = (AddonTransform->Position - ExpectedPosition).LengthSq();
+            if (DistanceSq <= BestDistanceSq)
+            {
+                BestDistanceSq = DistanceSq;
+                BestAddonID = AddonID;
+            }
+        }
+        return BestAddonID;
+    }
+
+    void DetachAddon(Core::ECS::EntityManager& EM, int ParentBuildingID)
+    {
+        auto* Parent = EM.GetComponent<BuildingComponent>(ParentBuildingID);
+        if (!Parent || Parent->AddonID < 0)
+            return;
+
+        const int AddonID = Parent->AddonID;
+        Parent->AddonID = -1;
+        if (!EM.IsAlive(AddonID))
+            return;
+        auto* Addon = EM.GetComponent<BuildingComponent>(AddonID);
+        if (!Addon || !Addon->IsAddon)
+            return;
+
+        Addon->BuilderUnitID = -1;
+        Addon->FlightPhase = BuildingFlightPhase::LiftingOff;
+        Addon->FlightAnimationComplete = false;
+        if (auto* AddonPlayer = EM.GetComponent<PlayerComponent>(AddonID))
+            AddonPlayer->PlayerID = 11;
+    }
+
+    void ConnectAddon(Core::ECS::EntityManager& EM,
+                      int ParentBuildingID,
+                      int AddonID)
+    {
+        auto* Parent = EM.GetComponent<BuildingComponent>(ParentBuildingID);
+        auto* Addon = EM.GetComponent<BuildingComponent>(AddonID);
+        auto* ParentPlayer = EM.GetComponent<PlayerComponent>(ParentBuildingID);
+        auto* AddonPlayer = EM.GetComponent<PlayerComponent>(AddonID);
+        if (!Parent || !Addon || !ParentPlayer || !AddonPlayer)
+            return;
+
+        Parent->AddonID = AddonID;
+        Addon->BuilderUnitID = ParentBuildingID;
+        AddonPlayer->PlayerID = ParentPlayer->PlayerID;
+        Addon->FlightPhase = BuildingFlightPhase::Landing;
+        Addon->FlightAnimationComplete = false;
     }
 
     Core::Math::Vec2 ResolveBuildPosition(const Core::ECS::EntityManager& EM,
@@ -648,7 +761,7 @@ namespace
     {
         auto Def = Races::GetUnitDefByID(BuildingDefID);
         if (Def.IsAddon)
-            return ComputeAddonPosition(EM, BuilderID);
+            return ComputeAddonPosition(EM, BuilderID, BuildingDefID);
         if (Target.Type == BuildTargetType::TargetEntity)
         {
             if (auto* Transform =
@@ -681,12 +794,16 @@ namespace
         Render.FrameIndex = 0;
         Render.TotalFrames = 1;
         Render.Layer = RenderLayer::Buildings;
-        Render.Tint = UnderConstruction ? Color{255, 255, 255, 180} : Core::Colors::White();
+        // Construction GRPs already encode their skeletal/warp transparency.
+        // Applying entity-wide alpha makes the whole building look ghosted.
+        Render.Tint = Core::Colors::White();
 
         auto& Building = EM.AddComponent<BuildingComponent>(EntityID);
         Building.IsBuilding = true;
         Building.UnderConstruction = UnderConstruction;
-        Building.BuilderUnitID = BuilderID;
+        Building.BuilderUnitID = Def.IsAddon && ParentBuildingID > 0
+            ? ParentBuildingID
+            : BuilderID;
         Building.BuildingDefID = BuildingDefID;
         Building.TotalBuildTime = (float)Def.BuildTime;
         Building.CanLiftOff = Def.CanLiftOff;
@@ -748,7 +865,7 @@ namespace
         Render->FrameIndex = 0;
         Render->TotalFrames = 1;
         Render->Layer = RenderLayer::Buildings;
-        Render->Tint = Color{255, 255, 255, 180};
+        Render->Tint = Core::Colors::White();
 
         Building->IsBuilding = true;
         Building->UnderConstruction = true;
@@ -809,6 +926,11 @@ void BuildingSystem::SetConstructionImageResolver(ImageIDResolver Resolver)
 void BuildingSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
 {
     gCollisionBoundsResolver = std::move(Resolver);
+}
+
+void BuildingSystem::SetAddonOffsetResolver(AddonOffsetResolver Resolver)
+{
+    gAddonOffsetResolver = std::move(Resolver);
 }
 
 bool BuildingSystem::IsPlacementValid(Core::ECS::EntityManager& EM,
@@ -1057,7 +1179,63 @@ void BuildingSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr.GetEntityManager();
     auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (auto ID : Entities)
+    {
+        ProcessFlightTransition(EM, ID);
         ProcessConstruction(EM, ID, DeltaTime);
+    }
+}
+
+void BuildingSystem::ProcessFlightTransition(Core::ECS::EntityManager& EM, int EntityID)
+{
+    auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+    if (!Building || !Building->FlightAnimationComplete)
+        return;
+
+    Building->FlightAnimationComplete = false;
+    if (Building->IsAddon)
+    {
+        Building->FlightPhase = BuildingFlightPhase::Grounded;
+        return;
+    }
+
+    if (Building->FlightPhase == BuildingFlightPhase::LiftingOff)
+    {
+        Building->FlightPhase = BuildingFlightPhase::Airborne;
+        if (auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
+            Unit->Speed = 2.0f;
+        Core::Utils::Logger::Info("BuildingSystem",
+            "Building " + std::to_string(EntityID) + " completed lift-off animation");
+        return;
+    }
+
+    if (Building->FlightPhase != BuildingFlightPhase::Landing)
+        return;
+
+    Building->IsLifted = false;
+    Building->FlightPhase = BuildingFlightPhase::Grounded;
+    if (auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
+    {
+        Unit->Speed = 0.0f;
+        Unit->SupplyCost = Races::GetUnitDefByID(Building->BuildingDefID).SupplyCost;
+    }
+    if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
+        Render->Layer = RenderLayer::Buildings;
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+    {
+        Path->IsAir = false;
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->TargetSpeed = 0.0f;
+        Path->CurrentVelocity = {0.0f, 0.0f};
+    }
+
+    const int AddonID = FindCompatibleAddonAtLanding(EM, EntityID, 11);
+    if (AddonID >= 0)
+        ConnectAddon(EM, EntityID, AddonID);
+
+    Core::Utils::Logger::Info("BuildingSystem",
+        "Building " + std::to_string(EntityID) + " completed landing animation");
 }
 
 void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime)
@@ -1108,6 +1286,21 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
                 {
                     BuilderCommand->CurrentCommand = CommandType::Build;
                     BuilderCommand->TargetEntityID = EntityID;
+                }
+                // Reaching the footprint completes the approach order. Leaving
+                // its last waypoint active lets MovementSystem carry the SCV
+                // through the narrow build-distance threshold, producing an
+                // endless 12/13-pixel approach loop with zero build progress.
+                if (auto* BuilderPath =
+                        EM.GetComponent<PathfindingComponent>(Building->BuilderUnitID))
+                {
+                    BuilderPath->Path.clear();
+                    BuilderPath->PathIndex = 0;
+                    BuilderPath->CurrentSpeed = 0.0f;
+                    BuilderPath->TargetSpeed = 0.0f;
+                    BuilderPath->CurrentVelocity = {0.0f, 0.0f};
+                    BuilderPath->RequestedTargetEntityID = EntityID;
+                    BuilderPath->RequestedDestination = Transform->Position;
                 }
             }
             else
@@ -1162,6 +1355,36 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
         Unit->HitPoints = std::max(1, (int)(MaxHP * (Building->BuildProgress / Building->TotalBuildTime)));
     }
 
+    // OpenBW's Terran IncompleteBuilding order replaces the generic
+    // construction GRP with the finished building graphic after 3/5 HP, then
+    // runs AlmostBuilt on that graphic for the remaining construction time.
+    if (Unit->UnitRace == Components::Race::Terran &&
+        Building->TotalBuildTime > 0.0f &&
+        Building->BuildProgress >= Building->TotalBuildTime * 0.6f)
+    {
+        if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
+        {
+            const uint32_t FinishedImageID = ResolveImageID(Unit->ChkUnitID);
+            if (Render->ImageID != FinishedImageID)
+            {
+                Render->ImageID = FinishedImageID;
+                Render->FrameIndex = 0;
+                Render->TotalFrames = 1;
+                if (DebugConstructionEnabled())
+                {
+                    Core::Utils::Logger::Info(
+                        "BuildingSystem",
+                        "construction visual switched building=" +
+                            std::to_string(EntityID) +
+                            " image=" + std::to_string(FinishedImageID) +
+                            " progress=" +
+                            std::to_string((int)Building->BuildProgress));
+                }
+            }
+            Render->Tint = Core::Colors::White();
+        }
+    }
+
     if (Building->BuildProgress < Building->TotalBuildTime)
         return;
 
@@ -1197,11 +1420,18 @@ bool BuildingSystem::LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingI
 {
     auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
     auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
-    if (!Bldg || !Unit || !Bldg->CanLiftOff || Bldg->IsLifted) return false;
+    if (!Bldg || !Unit || !Bldg->CanLiftOff || Bldg->IsLifted ||
+        Bldg->FlightPhase != BuildingFlightPhase::Grounded)
+    {
+        return false;
+    }
     if (Bldg->UnderConstruction) return false;
 
+    DetachAddon(EM, BuildingID);
     Bldg->IsLifted = true;
-    Unit->Speed = 2.0f; // Flying speed
+    Bldg->FlightPhase = BuildingFlightPhase::LiftingOff;
+    Bldg->FlightAnimationComplete = false;
+    Unit->Speed = 0.0f;
     Unit->SupplyCost = 0; // Supply freed during flight
     if (auto* Render = EM.GetComponent<RenderComponent>(BuildingID))
         Render->Layer = RenderLayer::AirUnits;
@@ -1209,7 +1439,11 @@ bool BuildingSystem::LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingI
     auto* PathPtr = EM.GetComponent<PathfindingComponent>(BuildingID);
     auto& Path = PathPtr ? *PathPtr : EM.AddComponent<PathfindingComponent>(BuildingID);
     Path.IsAir = true;
-    Path.CurrentSpeed = 100.0f;
+    Path.Path.clear();
+    Path.PathIndex = 0;
+    Path.CurrentSpeed = 0.0f;
+    Path.TargetSpeed = 0.0f;
+    Path.CurrentVelocity = {0.0f, 0.0f};
 
     Core::Utils::Logger::Info("BuildingSystem",
         "Building " + std::to_string(BuildingID) + " lifted off");
@@ -1221,33 +1455,61 @@ bool BuildingSystem::LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
 {
     auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
     auto* Unit = EM.GetComponent<UnitComponent>(BuildingID);
-    if (!Bldg || !Unit || !Bldg->IsLifted) return false;
+    if (!Bldg || !Unit || !Bldg->IsLifted ||
+        Bldg->FlightPhase != BuildingFlightPhase::Airborne)
+    {
+        return false;
+    }
 
     if (!IsFootprintPlacementValid(EM, Bldg->BuildingDefID, Position, BuildingID))
         return false;
 
-    Bldg->IsLifted = false;
+    Bldg->FlightPhase = BuildingFlightPhase::Landing;
+    Bldg->FlightAnimationComplete = false;
     Unit->Speed = 0.0f;
-    Unit->SupplyCost = Game::Races::GetUnitDefByID(Bldg->BuildingDefID).SupplyCost;
-    if (auto* Render = EM.GetComponent<RenderComponent>(BuildingID))
-        Render->Layer = RenderLayer::Buildings;
 
     auto* Trans = EM.GetComponent<TransformComponent>(BuildingID);
     if (Trans) Trans->Position = Position;
 
     if (auto* Path = EM.GetComponent<PathfindingComponent>(BuildingID))
     {
-        Path->IsAir = false;
         Path->Path.clear();
         Path->PathIndex = 0;
         Path->CurrentSpeed = 0.0f;
+        Path->TargetSpeed = 0.0f;
         Path->CurrentVelocity = {0.0f, 0.0f};
     }
 
     Core::Utils::Logger::Info("BuildingSystem",
-        "Building " + std::to_string(BuildingID) + " landed at (" +
+        "Building " + std::to_string(BuildingID) + " began landing at (" +
         std::to_string((int)Position.X) + "," + std::to_string((int)Position.Y) + ")");
     return true;
+}
+
+void BuildingSystem::RestoreSpawnedAddonLinks(Core::ECS::EntityManager& EM)
+{
+    for (int ParentID : EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>())
+    {
+        auto* Parent = EM.GetComponent<BuildingComponent>(ParentID);
+        auto* ParentPlayer = EM.GetComponent<PlayerComponent>(ParentID);
+        if (!Parent || !ParentPlayer || Parent->IsAddon || Parent->UnderConstruction ||
+            (Parent->AddonID >= 0 && EM.IsAlive(Parent->AddonID)))
+        {
+            continue;
+        }
+
+        const int AddonID = FindCompatibleAddonAtLanding(
+            EM, ParentID, ParentPlayer->PlayerID);
+        if (AddonID < 0)
+            continue;
+        auto* Addon = EM.GetComponent<BuildingComponent>(AddonID);
+        if (!Addon)
+            continue;
+        Parent->AddonID = AddonID;
+        Addon->BuilderUnitID = ParentID;
+        Addon->FlightPhase = BuildingFlightPhase::Grounded;
+        Addon->FlightAnimationComplete = false;
+    }
 }
 
 } // namespace Game::Systems

@@ -36,7 +36,7 @@ inline void UpdateGameplaySimulationRuntime(
 
     Session.Bwapi().OnFrame();
 
-    SyncHudFromPlayerResources(Hud);
+    SyncHudFromPlayerResources(Hud, Session.GetLocalPlayerID());
 
     Client.PruneSelection(Session.Entities());
 

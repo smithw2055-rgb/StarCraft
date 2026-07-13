@@ -18,6 +18,7 @@ class ZergSystem : public Core::ECS::ISystem
 public:
     using ImageIDResolver = std::function<uint32_t(int)>;
     using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
+    using BurrowCapabilityResolver = std::function<bool(int, uint32_t)>;
 
     ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map);
     void Update(float DeltaTime) override;
@@ -27,8 +28,10 @@ public:
     static void SetMap(Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
+    static void SetBurrowCapabilityResolver(BurrowCapabilityResolver Resolver);
+    static bool CanUnitBurrow(int ChkUnitID, uint32_t ImageID);
 
-    static void BurrowUnit(Core::ECS::EntityManager& EM, int EntityID);
+    static bool BurrowUnit(Core::ECS::EntityManager& EM, int EntityID);
 
     static bool CanMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
                                           int DroneID, int BuildingDefID,

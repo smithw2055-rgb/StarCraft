@@ -268,6 +268,16 @@ void ClientRuntime::UpdateSelection(Core::ECS::EntityManager& Entities, bool Blo
     }
 }
 
+void ClientRuntime::SetLocalPlayerId(int PlayerId)
+{
+    Selector->SetLocalPlayerId(PlayerId);
+}
+
+int ClientRuntime::GetLocalPlayerId() const
+{
+    return Selector->GetLocalPlayerId();
+}
+
 void ClientRuntime::CancelPointerGesture()
 {
     Selector->CancelPointerGesture();

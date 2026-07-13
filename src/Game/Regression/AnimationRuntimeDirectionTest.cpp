@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <set>
 #include <utility>
 #include <vector>
@@ -33,6 +34,11 @@ namespace
     constexpr int kDirectionalImage = 234;
     constexpr int kBattlecruiserImage = 218;
     constexpr int kBattlecruiserShadowImage = 219;
+    constexpr int kGaussProjectileImage = 527;
+    constexpr int kScvImage = 247;
+    constexpr int kScvGlowImage = 249;
+    constexpr int kScvSparkImage = 526;
+    constexpr int kScvMiningWeapon = 14;
     constexpr int kGoliathChkUnit = 3;
 
     void Require(bool Value, const char* Message)
@@ -70,6 +76,87 @@ namespace
         }
 
         Require(false, "find directional image with ground attack iscript");
+        return -1;
+    }
+
+    int FindBurrowImage()
+    {
+        Game::IScriptDatabase Database;
+        Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+                "load iscript database for burrow transition test");
+
+        for (int ImageID = 0; ImageID < 999; ++ImageID)
+        {
+            const auto* ImageInfo = Database.FindImageInfo(ImageID);
+            if (!ImageInfo || ImageInfo->IScriptID < 0)
+                continue;
+            const auto* Script = Database.FindScript(ImageInfo->IScriptID);
+            if (!Script)
+                continue;
+            const auto HasAnimation = [Script](int AnimationID) {
+                return AnimationID >= 0 &&
+                       AnimationID < (int)Script->AnimationPC.size() &&
+                       Script->AnimationPC[(size_t)AnimationID] > 0;
+            };
+            if (HasAnimation(Game::IScriptAnims::Anim_Burrow) &&
+                HasAnimation(Game::IScriptAnims::Anim_UnBurrow))
+            {
+                return ImageID;
+            }
+        }
+
+        Require(false, "find project image with Burrow and UnBurrow iscript entries");
+        return -1;
+    }
+
+    bool AnimationEmitsOrderSignal(const Game::IScriptDatabase& Database,
+                                   const Game::IScriptProgram::Script& Script,
+                                   int ImageID,
+                                   int AnimationID,
+                                   int SignalMask)
+    {
+        if (AnimationID < 0 || AnimationID >= (int)Script.AnimationPC.size() ||
+            Script.AnimationPC[(size_t)AnimationID] <= 0)
+        {
+            return false;
+        }
+        Game::IScriptVM VM;
+        VM.LoadScript(AnimationID, &Database.GetProgram().ProgramData,
+                      Script.AnimationPC[(size_t)AnimationID]);
+        VM.GetContext().ImageID = ImageID;
+        for (int Step = 0; Step < 512 && VM.IsRunning(); ++Step)
+        {
+            VM.ExecuteFrame();
+            for (const auto& Event : VM.ConsumeEvents())
+                if (Event.Type == Game::IScriptEventType::OrderSignal &&
+                    (Event.A & SignalMask) != 0)
+                    return true;
+        }
+        return false;
+    }
+
+    int FindFlightTransitionImage()
+    {
+        Game::IScriptDatabase Database;
+        Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+                "load iscript database for building flight transition test");
+        for (int ImageID = 0; ImageID < 999; ++ImageID)
+        {
+            const auto* ImageInfo = Database.FindImageInfo(ImageID);
+            const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+                ? Database.FindScript(ImageInfo->IScriptID)
+                : nullptr;
+            if (!Script)
+                continue;
+            if (AnimationEmitsOrderSignal(Database, *Script, ImageID,
+                    Game::IScriptAnims::Anim_LiftOff, 0x10) &&
+                AnimationEmitsOrderSignal(Database, *Script, ImageID,
+                    Game::IScriptAnims::Anim_Landing, 0x10))
+            {
+                return ImageID;
+            }
+        }
+        Require(false, "find project building image with signal-driven LiftOff and Landing entries");
         return -1;
     }
 
@@ -139,6 +226,15 @@ namespace
 
 int main()
 {
+    const std::filesystem::path RepoRoot = std::filesystem::current_path();
+    std::filesystem::current_path(RepoRoot / "build");
+    const bool LoadedOutsideRepoRoot =
+        Game::Systems::AnimationSystem::InitializeIScriptAssets(
+            (RepoRoot / "assets" / "scripts" / "iscript.bin").string(),
+            (RepoRoot / "assets" / "arr" / "images.dat").string());
+    std::filesystem::current_path(RepoRoot);
+    Require(LoadedOutsideRepoRoot,
+            "absolute iscript asset paths work outside the repository working directory");
     Require(Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
                 kDirectionalImage, Game::IScriptAnims::Anim_Init),
             "goliath image has idle/init iscript");
@@ -150,6 +246,224 @@ int main()
     const int WestIdle = SpawnIdleDirectionalUnit(EM, 3.14159265359f);
 
     Game::Systems::AnimationSystem Anim(SysMgr);
+
+    int ScvWeaponVisualResolves = 0;
+    Game::Systems::AnimationSystem::SetWeaponImageResolver(
+        [&ScvWeaponVisualResolves](int WeaponID) -> std::optional<uint32_t> {
+            Require(WeaponID == kScvMiningWeapon,
+                "mineral mining resolves the Fusion Cutter visual");
+            ++ScvWeaponVisualResolves;
+            return (uint32_t)kScvSparkImage;
+        });
+
+    const int Mineral = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(Mineral)
+        .Position = {160.0f, 128.0f};
+    auto& MineralResource = EM.AddComponent<Game::Components::ResourceComponent>(Mineral);
+    MineralResource.Type = Game::Components::ResourceType::Minerals;
+    MineralResource.Amount = 1500;
+
+    const int MiningScv = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(MiningScv)
+        .Position = {128.0f, 128.0f};
+    auto& MiningScvRender = EM.AddComponent<Game::Components::RenderComponent>(MiningScv);
+    MiningScvRender.ImageID = kScvImage;
+    MiningScvRender.TotalFrames = 51;
+    EM.AddComponent<Game::Components::UnitComponent>(MiningScv).ChkUnitID = 7;
+    EM.AddComponent<Game::Components::PlayerComponent>(MiningScv).PlayerID = 0;
+    EM.AddComponent<Game::Components::PathfindingComponent>(MiningScv).FacingAngle = 3.14159265359f;
+    auto& MiningScvHarvest = EM.AddComponent<Game::Components::HarvestComponent>(MiningScv);
+    MiningScvHarvest.State = Game::Components::HarvestState::Mining;
+    MiningScvHarvest.TargetResourceID = Mineral;
+
+    std::set<int> MiningScvFrames;
+    std::set<int> MiningSparkFrames;
+    bool SawSparkAtContactPoint = false;
+    for (int Step = 0; Step < 96; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        MiningScvFrames.insert(MiningScvRender.FrameIndex);
+        const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(MiningScv);
+        if (!Tree)
+            continue;
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (!Node.Visible || (int)Node.ImageID != kScvSparkImage)
+                continue;
+            MiningSparkFrames.insert(Node.FrameIndex);
+            SawSparkAtContactPoint = SawSparkAtContactPoint ||
+                (std::fabs(Node.CreationOffset.X - 20.0f) < 0.1f &&
+                 std::fabs(Node.CreationOffset.Y) < 0.1f);
+        }
+    }
+    Require(MiningScvFrames.size() > 1,
+        "SCV mineral mining advances the real AlmostBuilt texture phases");
+    Require(ScvWeaponVisualResolves >= 2,
+        "SCV mineral mining repeatedly resolves Fusion Cutter sparks");
+    Require(SawSparkAtContactPoint,
+        "SCV mineral mining creates Fusion Cutter sparks twenty pixels toward the mineral");
+    Require(MiningSparkFrames.size() > 1,
+        "SCV Fusion Cutter spark advances through multiple project GRP frames");
+
+    MiningScvHarvest.State = Game::Components::HarvestState::MovingToDepot;
+    Anim.Update(1.0f / 24.0f);
+    bool HasStaleMiningSpark = false;
+    if (const auto* Tree = EM.GetComponent<Game::Components::ImageTreeComponent>(MiningScv))
+    {
+        for (const auto& Node : Tree->Nodes)
+            HasStaleMiningSpark = HasStaleMiningSpark ||
+                (Node.Visible && (int)Node.ImageID == kScvSparkImage);
+    }
+    Require(!HasStaleMiningSpark,
+        "leaving mineral mining clears the transient Fusion Cutter spark");
+
+    const int ImpactProbe = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ImpactProbe)
+        .Position = {176.0f, 96.0f};
+    auto& ImpactRender = EM.AddComponent<Game::Components::RenderComponent>(ImpactProbe);
+    ImpactRender.ImageID = kGaussProjectileImage;
+    ImpactRender.TotalFrames = 1;
+    ImpactRender.Layer = Game::Components::RenderLayer::Effects;
+    EM.AddComponent<Game::Components::EffectComponent>(ImpactProbe).LifetimeRemaining = 1.0f;
+    auto& ImpactUnit = EM.AddComponent<Game::Components::UnitComponent>(ImpactProbe);
+    ImpactUnit.ChkUnitID = -1;
+    ImpactUnit.HitPoints = 0;
+    ImpactUnit.MaxHitPoints = 1;
+    auto& ImpactPath = EM.AddComponent<Game::Components::PathfindingComponent>(ImpactProbe);
+    ImpactPath.CurrentVelocity = {240.0f, 0.0f};
+    ImpactPath.FacingAngle = 0.0f;
+    std::set<std::pair<int, bool>> ImpactFrames;
+    int ImpactOverlayCount = 0;
+    for (int Step = 0; Step < 16 && EM.IsAlive(ImpactProbe); ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        const auto* CurrentRender =
+            EM.GetComponent<Game::Components::RenderComponent>(ImpactProbe);
+        if (CurrentRender)
+            ImpactFrames.emplace(CurrentRender->FrameIndex, CurrentRender->Flipped);
+        if (const auto* Tree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(ImpactProbe))
+        {
+            for (const auto& Node : Tree->Nodes)
+                if (Node.Visible)
+                    ++ImpactOverlayCount;
+        }
+    }
+    Require(ImpactFrames.size() > 1 || ImpactOverlayCount > 0,
+            "real Gauss projectile Death iscript advances the transient impact visual");
+
+    const int BurrowImageID = FindBurrowImage();
+    const int BurrowProbe = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(BurrowProbe).Position = {192.0f, 192.0f};
+    auto& BurrowProbeRender = EM.AddComponent<Game::Components::RenderComponent>(BurrowProbe);
+    BurrowProbeRender.ImageID = (uint32_t)BurrowImageID;
+    BurrowProbeRender.TotalFrames = 256;
+    EM.AddComponent<Game::Components::UnitComponent>(BurrowProbe).ChkUnitID = 37;
+    auto& BurrowProbeState = EM.AddComponent<Game::Components::BurrowComponent>(BurrowProbe);
+    BurrowProbeState.CanBurrow = true;
+    BurrowProbeState.Phase = Game::Components::BurrowPhase::Burrowing;
+
+    for (int Step = 0;
+         Step < 240 && BurrowProbeState.Phase != Game::Components::BurrowPhase::Burrowed;
+         ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+    }
+    auto* BurrowProbeCloak = EM.GetComponent<Game::Components::CloakComponent>(BurrowProbe);
+    Require(BurrowProbeState.Phase == Game::Components::BurrowPhase::Burrowed &&
+            BurrowProbeState.IsBurrowed && BurrowProbeCloak &&
+            BurrowProbeCloak->IsBurrowed && BurrowProbeCloak->IsCloaked,
+            "real project Burrow iscript signal completes the burrow state transition");
+
+    BurrowProbeState.Phase = Game::Components::BurrowPhase::Unburrowing;
+    for (int Step = 0;
+         Step < 240 && BurrowProbeState.Phase != Game::Components::BurrowPhase::Surface;
+         ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+    }
+    Require(BurrowProbeState.Phase == Game::Components::BurrowPhase::Surface &&
+            !BurrowProbeState.IsBurrowed && BurrowProbeCloak &&
+            !BurrowProbeCloak->IsBurrowed && !BurrowProbeCloak->IsCloaked,
+            "real project UnBurrow iscript signal completes the surface transition");
+
+    const int FlightImageID = FindFlightTransitionImage();
+    const int FlightProbe = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(FlightProbe).Position = {224.0f, 224.0f};
+    auto& FlightRender = EM.AddComponent<Game::Components::RenderComponent>(FlightProbe);
+    FlightRender.ImageID = (uint32_t)FlightImageID;
+    FlightRender.TotalFrames = 256;
+    EM.AddComponent<Game::Components::UnitComponent>(FlightProbe).ChkUnitID = 106;
+    auto& FlightBuilding = EM.AddComponent<Game::Components::BuildingComponent>(FlightProbe);
+    FlightBuilding.UnderConstruction = false;
+    FlightBuilding.CanLiftOff = true;
+    FlightBuilding.IsLifted = true;
+    FlightBuilding.FlightPhase = Game::Components::BuildingFlightPhase::LiftingOff;
+    for (int Step = 0; Step < 360 && !FlightBuilding.FlightAnimationComplete; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    Require(FlightBuilding.FlightAnimationComplete,
+            "real project LiftOff iscript emits the building flight completion signal");
+
+    FlightBuilding.FlightAnimationComplete = false;
+    FlightBuilding.FlightPhase = Game::Components::BuildingFlightPhase::Landing;
+    for (int Step = 0; Step < 360 && !FlightBuilding.FlightAnimationComplete; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    Require(FlightBuilding.FlightAnimationComplete,
+            "real project Landing iscript emits the building flight completion signal");
+
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+        [FlightImageID](uint32_t ImageID, size_t LoType, size_t,
+                        size_t OffsetIndex, bool Flipped)
+            -> std::optional<Core::Math::Vec2> {
+            if ((int)ImageID != FlightImageID || LoType != 1 || OffsetIndex != 0)
+                return std::nullopt;
+            return Core::Math::Vec2{Flipped ? -14.0f : 14.0f, -18.0f};
+        });
+    const int DamageProbe = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(DamageProbe)
+        .Position = {288.0f, 224.0f};
+    auto& DamageRender = EM.AddComponent<Game::Components::RenderComponent>(DamageProbe);
+    DamageRender.ImageID = (uint32_t)FlightImageID;
+    DamageRender.TotalFrames = 256;
+    auto& DamageUnit = EM.AddComponent<Game::Components::UnitComponent>(DamageProbe);
+    DamageUnit.ChkUnitID = 106;
+    DamageUnit.MaxHitPoints = 1500;
+    DamageUnit.HitPoints = 500;
+    auto& DamageBuilding = EM.AddComponent<Game::Components::BuildingComponent>(DamageProbe);
+    DamageBuilding.UnderConstruction = false;
+    Anim.Update(1.0f / 24.0f);
+    auto* DamageTree = EM.GetComponent<Game::Components::ImageTreeComponent>(DamageProbe);
+    Game::Components::ImageSubnode* DamageNode = nullptr;
+    if (DamageTree)
+    {
+        for (auto& Node : DamageTree->Nodes)
+        {
+            if (Node.Visible && Node.IsDamageOverlay)
+            {
+                DamageNode = &Node;
+                break;
+            }
+        }
+    }
+    Require(DamageNode && DamageNode->ImageID == 472u &&
+                DamageNode->OverlayOffsetType == 1 &&
+                DamageNode->OverlayOffsetIndex == 0 &&
+                DamageNode->Offset.X == 14.0f && DamageNode->Offset.Y == -18.0f,
+            "damaged completed building attaches the project large-flame image at its damage LO slot");
+    DamageUnit.HitPoints = DamageUnit.MaxHitPoints;
+    Anim.Update(1.0f / 24.0f);
+    bool HasVisibleDamageNode = false;
+    DamageTree = EM.GetComponent<Game::Components::ImageTreeComponent>(DamageProbe);
+    if (DamageTree)
+    {
+        for (const auto& Node : DamageTree->Nodes)
+            HasVisibleDamageNode = HasVisibleDamageNode ||
+                (Node.Visible && Node.IsDamageOverlay);
+    }
+    Require(!HasVisibleDamageNode,
+            "repairing a building to full health removes its damage overlay");
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
 
     const int BuildingProbe = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(BuildingProbe).Position = {256.0f, 256.0f};
@@ -219,6 +533,14 @@ int main()
     Require(WalkEastRender->FrameIndex != WalkWestRender->FrameIndex ||
                 WalkEastRender->Flipped != WalkWestRender->Flipped,
             "walking units use movement direction for their moving frame");
+    std::set<int> WalkEastAnimationFrames;
+    for (int Step = 0; Step < 48; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        WalkEastAnimationFrames.insert(WalkEastRender->FrameIndex);
+    }
+    Require(WalkEastAnimationFrames.size() > 1,
+            "real Goliath walking iscript advances animation phases at one heading");
 
     const int Battlecruiser = SpawnIdleDirectionalUnit(
         EM, 0.0f, 256, kBattlecruiserImage);
@@ -303,17 +625,73 @@ int main()
         Path->CurrentVelocity = Direction * 64.0f;
         EightWayEntities.push_back(EntityID);
     }
+    bool SawScvWalkingAttachment = false;
     for (int Step = 0; Step < 48; ++Step)
+    {
         Anim.Update(1.0f / 24.0f);
+        const auto* EastTree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(EightWayEntities[0]);
+        if (!EastTree)
+            continue;
+        for (const auto& Node : EastTree->Nodes)
+        {
+            if (Node.Visible && (int)Node.ImageID == kScvGlowImage)
+                SawScvWalkingAttachment = true;
+        }
+    }
+    Require(SawScvWalkingAttachment,
+            "real SCV walking iscript keeps its movement attachment alive");
     std::set<std::pair<int, bool>> EightWaySignatures;
+    std::set<std::pair<int, bool>> EightWayGlowSignatures;
     for (int EntityID : EightWayEntities)
     {
         const auto* Render = EM.GetComponent<Game::Components::RenderComponent>(EntityID);
         Require(Render, "eight-way walking unit keeps its render component");
         EightWaySignatures.emplace(Render->FrameIndex, Render->Flipped);
+        const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(EntityID);
+        Require(Tree, "eight-way walking SCV keeps its image tree");
+        bool FoundFollowingGlow = false;
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (!Node.Visible || (int)Node.ImageID != kScvGlowImage)
+                continue;
+            FoundFollowingGlow = true;
+            Require(Node.InheritSpriteDirection,
+                "SCV walking glow inherits the sprite direction");
+            Require(Node.FrameIndex == Render->FrameIndex &&
+                        Node.Flipped == Render->Flipped,
+                "SCV walking glow keeps the main graphic direction and phase");
+            EightWayGlowSignatures.emplace(Node.FrameIndex, Node.Flipped);
+            break;
+        }
+        Require(FoundFollowingGlow,
+            "each walking direction keeps a visible SCV glow attachment");
     }
     Require(EightWaySignatures.size() == 8,
             "real SCV walking iscript preserves all eight movement directions");
+    Require(EightWayGlowSignatures.size() == 8,
+            "SCV walking dynamic texture follows all eight movement directions");
+
+    auto* ScvStopPath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(EightWayEntities[0]);
+    Require(ScvStopPath, "walking SCV keeps its movement state for stop transition");
+    ScvStopPath->Path.clear();
+    ScvStopPath->PathIndex = 0;
+    ScvStopPath->CurrentSpeed = 0.0f;
+    ScvStopPath->CurrentVelocity = {0.0f, 0.0f};
+    for (int Step = 0; Step < 24; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    bool HasStoppedScvGlow = false;
+    if (const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(EightWayEntities[0]))
+    {
+        for (const auto& Node : Tree->Nodes)
+            HasStoppedScvGlow = HasStoppedScvGlow ||
+                (Node.Visible && (int)Node.ImageID == kScvGlowImage);
+    }
+    Require(!HasStoppedScvGlow,
+        "SCV walking glow is removed after the unit settles to idle");
 
     auto* WalkEastPath = EM.GetComponent<Game::Components::PathfindingComponent>(WalkEast);
     Require(WalkEastPath, "walking unit still has path component");
@@ -380,6 +758,58 @@ int main()
     Anim.Update(1.0f / 24.0f);
     Require(!Tree.Nodes.empty() && !Tree.Nodes.front().Visible,
             "image tree child is hidden when its iscript reaches End");
+
+    const int FollowMainEntity = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(FollowMainEntity)
+        .Position = {240.0f, 160.0f};
+    auto& FollowMainRender =
+        EM.AddComponent<Game::Components::RenderComponent>(FollowMainEntity);
+    FollowMainRender.ImageID = 1000;
+    FollowMainRender.FrameIndex = 37;
+    FollowMainRender.TotalFrames = 128;
+    FollowMainRender.Flipped = true;
+    auto& FollowMainTree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(FollowMainEntity);
+    FollowMainTree.Nodes.emplace_back();
+    auto& FollowMainNode = FollowMainTree.Nodes.back();
+    FollowMainNode.ImageID = 1;
+    FollowMainNode.Visible = true;
+    FollowMainNode.AnimID = Game::IScriptAnims::Anim_Init;
+    static const std::vector<int> FollowMainProgram = {
+        Game::IScriptOpcodes::Opc_FollowMainGraphic,
+        Game::IScriptOpcodes::Opc_Wait, 2,
+        Game::IScriptOpcodes::Opc_End
+    };
+    FollowMainNode.VM.LoadScript(
+        Game::IScriptAnims::Anim_Init, &FollowMainProgram, 0);
+    Anim.Update(1.0f / 24.0f);
+    Require(FollowMainNode.FollowsMainGraphic &&
+                FollowMainNode.FrameIndex == FollowMainRender.FrameIndex &&
+                FollowMainNode.Flipped == FollowMainRender.Flipped,
+        "followmaingraphic child copies the rendered main frame and absolute flip");
+
+    const int CompletedRefinery = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(CompletedRefinery)
+        .Position = {320.0f, 160.0f};
+    auto& RefineryRender =
+        EM.AddComponent<Game::Components::RenderComponent>(CompletedRefinery);
+    RefineryRender.ImageID = 307;
+    RefineryRender.TotalFrames = 5;
+    auto& RefineryUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(CompletedRefinery);
+    RefineryUnit.ChkUnitID = 110;
+    auto& RefineryBuilding =
+        EM.AddComponent<Game::Components::BuildingComponent>(CompletedRefinery);
+    RefineryBuilding.IsBuilding = true;
+    RefineryBuilding.UnderConstruction = false;
+    RefineryBuilding.BuildingDefID = 0;
+    auto& RefineryResource =
+        EM.AddComponent<Game::Components::ResourceComponent>(CompletedRefinery);
+    RefineryResource.Type = Game::Components::ResourceType::VespeneGas;
+    RefineryResource.Amount = 5000;
+    Anim.Update(1.0f / 24.0f);
+    Require(RefineryRender.FrameIndex == 0,
+        "completed Refinery uses its Built frame instead of the fragmented Init frame");
 
     int ResolverCalls = 0;
     Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
@@ -464,6 +894,8 @@ int main()
     Require(std::fabs(FlightPath.FacingAngle) < 0.0001f &&
                 std::fabs(FlightPath.TargetSpeed) < 0.0001f,
             "iscript flight opcodes do not overwrite movement-system direction or speed");
+
+    Game::Systems::AnimationSystem::SetWeaponImageResolver({});
 
     std::printf("AnimationRuntimeDirectionTest passed\n");
     return 0;

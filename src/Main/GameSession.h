@@ -79,6 +79,14 @@ struct GameSession
         return ScrTriggerData;
     }
 
+    int GetLocalPlayerID() const
+    {
+        for (int PlayerID = 0; PlayerID < 8; ++PlayerID)
+            if (ScrTriggerData.Players[(size_t)PlayerID].Owner == 6)
+                return PlayerID;
+        return 0;
+    }
+
     void ConfigureSyntheticSkirmishMap()
     {
         MapData.Width = 64;
@@ -135,9 +143,10 @@ struct GameSession
     {
         float CameraX = (float)(MapData.Width * 32) * 0.5f;
         float CameraY = (float)(MapData.Height * 32) * 0.5f;
+        const int LocalPlayerID = GetLocalPlayerID();
         for (const auto& StartLocation : MapData.StartLocations)
         {
-            if (StartLocation.PlayerId == 0)
+            if (StartLocation.PlayerId == LocalPlayerID)
             {
                 CameraX = (float)(StartLocation.TileX * 32 + 16);
                 CameraY = (float)(StartLocation.TileY * 32 + 16);

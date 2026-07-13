@@ -65,6 +65,7 @@ struct TriggerRuntimeConfig
 {
     std::function<void(int, int, bool)> SetAlliance;
     std::function<int(int, Core::Math::Vec2, int)> ResolveImageID;
+    std::function<bool(int, uint32_t)> CanBurrow;
     std::function<Game::Components::UnitCollisionBounds(int)> ResolveCollisionBounds;
     std::function<void(Core::Math::Vec2)> CenterView;
     std::function<void(Core::Math::Vec2)> MinimapPing;
@@ -124,6 +125,10 @@ private:
         uint32_t ScriptID = 0;
         bool HasLocation = false;
         Core::Math::Vec2 Anchor;
+        Core::Math::Vec2 LastIssuedTarget;
+        bool HasIssuedTarget = false;
+        std::unordered_map<int, Core::Math::Vec2> AssignedTargets;
+        std::unordered_map<int, float> AssignedTolerances;
         float TickAccumulator = 0.0f;
         int WaveCount = 0;
     };

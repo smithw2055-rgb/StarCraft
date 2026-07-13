@@ -210,6 +210,9 @@ public:
         int OrderSignal = 0;
         int CurrentDirection = 0;
         bool HasDirectionalFrames = false;
+        // Transient request raised when followmaingraphic executes. The image
+        // tree consumes it against its sprite's current main-image state.
+        bool FollowMainGraphic = false;
         int TargetRangePixels = 0;
         int TargetArc = 0;
         int RandomSeed = 1;

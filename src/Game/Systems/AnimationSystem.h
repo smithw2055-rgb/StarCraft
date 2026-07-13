@@ -5,6 +5,7 @@
 #include "Game/IScriptVM.h"
 #include <functional>
 #include <optional>
+#include <string>
 #include <vector>
 #include <unordered_map>
 
@@ -23,8 +24,12 @@ enum class AnimState : uint8_t
     Dying,
     Constructing,
     Morphing,
+    Burrowing,
     Burrowed,
+    Unburrowing,
+    LiftingOff,
     Flying,
+    Landing,
     Count
 };
 
@@ -43,6 +48,7 @@ class AnimationSystem : public Core::ECS::ISystem
 public:
     using OverlayOffsetResolver = std::function<std::optional<Core::Math::Vec2>(
         uint32_t, size_t, size_t, size_t, bool)>;
+    using WeaponImageResolver = std::function<std::optional<uint32_t>(int)>;
 
     AnimationSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     AnimationSystem(Core::ECS::SystemManager& SysMgr, Core::Audio::AudioSystem* Audio)
@@ -53,7 +59,13 @@ public:
     std::string_view GetName() const override { return "AnimationSystem"; }
 
     static void RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips);
+    // Configure and eagerly validate the project-owned iscript tables before
+    // entities are spawned. Absolute paths keep menu launches independent of
+    // the process working directory (for example build/Release under VS).
+    static bool InitializeIScriptAssets(const std::string& IScriptPath,
+                                        const std::string& ImagesDatPath);
     static void SetOverlayOffsetResolver(OverlayOffsetResolver Resolver);
+    static void SetWeaponImageResolver(WeaponImageResolver Resolver);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
     static int ResolvePlayableIScriptAnimation(int AnimID,
                                                const std::function<bool(int)>& HasAnim);
@@ -78,6 +90,7 @@ public:
                                                   const Components::UnitComponent* Unit,
                                                   const Components::BuildingComponent* Bldg,
                                                   const Components::MorphComponent* Morph,
+                                                  const Components::BurrowComponent* Burrow,
                                                   const Components::StatusEffectComponent* Status);
 private:
     struct EntityScriptState
@@ -87,6 +100,7 @@ private:
         int ScriptID = -1;
         int AnimID = -1;
         bool WasWorking = false;
+        bool WasMiningMinerals = false;
         bool WasUnderConstruction = false;
         bool WasWalking = false;
         bool HasPlayedBuilt = false;
@@ -100,7 +114,10 @@ private:
     static std::unordered_map<int, UnitAnimData> sAnimDB;
     static Game::IScriptDatabase sIScriptDB;
     static bool sTriedLoadIScript;
+    static std::string sIScriptPath;
+    static std::string sImagesDatPath;
     static OverlayOffsetResolver sOverlayOffsetResolver;
+    static WeaponImageResolver sWeaponImageResolver;
 
     Core::ECS::SystemManager& mSystemMgr;
     Core::Audio::AudioSystem* mAudio = nullptr;
@@ -115,6 +132,10 @@ private:
                                      bool* OutFlipped = nullptr);
     void UpdateScriptEffects(float DeltaTime);
     void UpdateImageTrees(float DeltaTime);
+    void UpdateDamageOverlays(int EntityID,
+                              const Components::RenderComponent& Render,
+                              const Components::UnitComponent* Unit,
+                              const Components::BuildingComponent* Building);
     void ClearImageTree(int EntityID, bool PreservePersistentAttachments = false);
     void MarkImageSubtreeHidden(Components::ImageTreeComponent& Tree, int ParentIndex);
     void AddImageTreeNode(int EntityID,
@@ -163,7 +184,13 @@ private:
                               EntityScriptState& State,
                               const Components::TransformComponent& Trans,
                               const Components::PlayerComponent* Player,
-                              Components::CombatComponent* Combat);
+                              Components::CombatComponent* Combat,
+                              const Components::HarvestComponent* Harvest);
+    bool SpawnHarvestWeaponVisual(int EntityID,
+                                  const Components::TransformComponent& Trans,
+                                  const Components::HarvestComponent* Harvest,
+                                  int WeaponID,
+                                  bool ParentFlipped);
     bool UpdateIScriptAnimation(int EntityID,
                                 float DeltaTime,
                                 AnimState DesiredState,
@@ -172,9 +199,11 @@ private:
                                 const Components::PathfindingComponent* Path,
                                 const Components::PlayerComponent* Player,
                                 Components::CombatComponent* Combat,
-                                const Components::BuildingComponent* Bldg,
+                                Components::BuildingComponent* Bldg,
                                 const Components::StatusEffectComponent* Status,
-                                const Components::ProductionComponent* Prod);
+                                const Components::ProductionComponent* Prod,
+                                const Components::HarvestComponent* Harvest,
+                                const Components::BulletComponent* Bullet);
 };
 
 inline int AnimationSystem::ResolvePlayableIScriptAnimation(
@@ -214,8 +243,30 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
     if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_AirAttkInit))
         return Game::IScriptAnims::Anim_AirAttkInit;
 
+    if (IsBuilding && DesiredState == AnimState::LiftingOff &&
+        HasAnim(Game::IScriptAnims::Anim_LiftOff))
+    {
+        return Game::IScriptAnims::Anim_LiftOff;
+    }
+    if (IsBuilding && DesiredState == AnimState::Landing &&
+        HasAnim(Game::IScriptAnims::Anim_Landing))
+    {
+        return Game::IScriptAnims::Anim_Landing;
+    }
+
     if (!IsBuilding)
     {
+        if ((DesiredState == AnimState::Burrowing ||
+             DesiredState == AnimState::Burrowed) &&
+            HasAnim(Game::IScriptAnims::Anim_Burrow))
+        {
+            return Game::IScriptAnims::Anim_Burrow;
+        }
+        if (DesiredState == AnimState::Unburrowing &&
+            HasAnim(Game::IScriptAnims::Anim_UnBurrow))
+        {
+            return Game::IScriptAnims::Anim_UnBurrow;
+        }
         if (DesiredState == AnimState::Walking && HasAnim(Game::IScriptAnims::Anim_Walking))
             return Game::IScriptAnims::Anim_Walking;
         if (WasWalking && HasAnim(Game::IScriptAnims::Anim_WalkingToIdle))
@@ -227,9 +278,27 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
 
     if (UnderConstruction)
     {
-        if (!WasUnderConstruction && HasAnim(Game::IScriptAnims::Anim_SpecialState1))
+        // Terran construction graphics use Init for the bare foundation,
+        // SpecialState1 after 1/5 HP, SpecialState2 after 2/5 HP, and the
+        // finished graphic's AlmostBuilt sequence after BuildingSystem swaps
+        // it at 3/5 HP. These thresholds also provide useful staged fallbacks
+        // for the Zerg/Protoss construction scripts when entries are present.
+        if (ConstructionProgress < 0.2f &&
+            HasAnim(Game::IScriptAnims::Anim_Init))
+        {
+            return Game::IScriptAnims::Anim_Init;
+        }
+        if (ConstructionProgress < 0.4f &&
+            HasAnim(Game::IScriptAnims::Anim_SpecialState1))
+        {
             return Game::IScriptAnims::Anim_SpecialState1;
-        if (ConstructionProgress >= 0.85f)
+        }
+        if (ConstructionProgress < 0.6f &&
+            HasAnim(Game::IScriptAnims::Anim_SpecialState2))
+        {
+            return Game::IScriptAnims::Anim_SpecialState2;
+        }
+        if (ConstructionProgress >= 0.6f)
         {
             const int AlmostBuilt =
                 ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_AlmostBuilt, HasAnim);
@@ -272,7 +341,9 @@ inline bool AnimationSystem::ShouldClearImageTreeForAnimRestart(
         return true;
 
     if (TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
-        TargetAnim == Game::IScriptAnims::Anim_AirAttkInit)
+        TargetAnim == Game::IScriptAnims::Anim_AirAttkInit ||
+        TargetAnim == Game::IScriptAnims::Anim_LiftOff ||
+        TargetAnim == Game::IScriptAnims::Anim_Landing)
         return true;
 
     if (UnderConstruction)
@@ -288,17 +359,32 @@ inline AnimState AnimationSystem::GetAnimStateFromComponents(
     const Components::UnitComponent* Unit,
     const Components::BuildingComponent* Bldg,
     const Components::MorphComponent* Morph,
+    const Components::BurrowComponent* Burrow,
     const Components::StatusEffectComponent* Status)
 {
     if (Unit && Unit->HitPoints <= 0) return AnimState::Dying;
     if (Morph && Morph->IsMorphing) return AnimState::Morphing;
     if (Bldg && Bldg->UnderConstruction) return AnimState::Constructing;
+    if (Bldg && Bldg->FlightPhase == Components::BuildingFlightPhase::LiftingOff)
+        return AnimState::LiftingOff;
+    if (Bldg && Bldg->FlightPhase == Components::BuildingFlightPhase::Landing)
+        return AnimState::Landing;
+    if (Burrow)
+    {
+        if (Burrow->Phase == Components::BurrowPhase::Burrowing)
+            return AnimState::Burrowing;
+        if (Burrow->Phase == Components::BurrowPhase::Unburrowing)
+            return AnimState::Unburrowing;
+        if (Burrow->IsBurrowed || Burrow->Phase == Components::BurrowPhase::Burrowed)
+            return AnimState::Burrowed;
+    }
     if (Status && (Status->HasEffect(Components::StatusEffect::Stasis) ||
                    Status->HasEffect(Components::StatusEffect::Lockdown) ||
                    Status->HasEffect(Components::StatusEffect::Maelstrom)))
     {
         return AnimState::Idle;
     }
+    if (Bldg && Bldg->IsLifted) return AnimState::Flying;
     if (Path)
     {
         if (!Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())

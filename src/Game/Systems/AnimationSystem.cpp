@@ -16,6 +16,8 @@ using namespace Game::Components;
 
 namespace
 {
+    constexpr int kScvMiningWeaponID = 14;
+
     bool DebugIScriptRuntimeEnabled()
     {
         const char* Value = std::getenv("STARCRAFT_DEBUG_ISCRIPT_RUNTIME");
@@ -157,16 +159,53 @@ namespace
             return QuantizeDirectionToEightWay(ResolveAttackDirection(EM, Trans, Combat));
         return QuantizeDirectionToEightWay(ResolveMovementDirection(Trans, Path));
     }
+
+    const ResourceComponent* ResolveMiningResource(Core::ECS::EntityManager& EM,
+                                                   const HarvestComponent* Harvest)
+    {
+        if (!Harvest || Harvest->State != HarvestState::Mining ||
+            Harvest->TargetResourceID < 0)
+        {
+            return nullptr;
+        }
+        return EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
+    }
 }
 
 std::unordered_map<int, AnimationSystem::UnitAnimData> AnimationSystem::sAnimDB;
 Game::IScriptDatabase AnimationSystem::sIScriptDB;
 bool AnimationSystem::sTriedLoadIScript = false;
+std::string AnimationSystem::sIScriptPath = "assets/scripts/iscript.bin";
+std::string AnimationSystem::sImagesDatPath = "assets/arr/images.dat";
 AnimationSystem::OverlayOffsetResolver AnimationSystem::sOverlayOffsetResolver;
+AnimationSystem::WeaponImageResolver AnimationSystem::sWeaponImageResolver;
+
+bool AnimationSystem::InitializeIScriptAssets(const std::string& IScriptPath,
+                                              const std::string& ImagesDatPath)
+{
+    if (IScriptPath.empty() || ImagesDatPath.empty())
+        return false;
+
+    if (sIScriptPath != IScriptPath || sImagesDatPath != ImagesDatPath ||
+        !sIScriptDB.IsLoaded())
+    {
+        sIScriptPath = IScriptPath;
+        sImagesDatPath = ImagesDatPath;
+        sIScriptDB = {};
+        sTriedLoadIScript = false;
+    }
+    EnsureIScriptLoaded();
+    return sIScriptDB.IsLoaded();
+}
 
 void AnimationSystem::SetOverlayOffsetResolver(OverlayOffsetResolver Resolver)
 {
     sOverlayOffsetResolver = std::move(Resolver);
+}
+
+void AnimationSystem::SetWeaponImageResolver(WeaponImageResolver Resolver)
+{
+    sWeaponImageResolver = std::move(Resolver);
 }
 
 void AnimationSystem::RegisterUnitAnim(int ChkUnitID, const std::vector<AnimClip>& Clips)
@@ -179,7 +218,7 @@ void AnimationSystem::EnsureIScriptLoaded()
     if (sTriedLoadIScript)
         return;
     sTriedLoadIScript = true;
-    sIScriptDB.Load("assets/scripts/iscript.bin", "assets/arr/images.dat");
+    sIScriptDB.Load(sIScriptPath, sImagesDatPath);
 }
 
 bool AnimationSystem::HasIScriptAnimationForImage(int ImageID, int AnimID)
@@ -264,11 +303,19 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
         for (size_t I = 0; I < InitialCount && I < Tree->Nodes.size(); ++I)
         {
             auto& Node = Tree->Nodes[I];
-            if (Node.Visible && Node.UseSpecialOffset && RootRender && sOverlayOffsetResolver)
+            if (Node.Visible && RootRender && sOverlayOffsetResolver &&
+                (Node.UseSpecialOffset || Node.OverlayOffsetType >= 0))
             {
+                const size_t LoType = Node.OverlayOffsetType >= 0
+                    ? (size_t)Node.OverlayOffsetType
+                    : 2u;
+                const size_t OffsetIndex = Node.OverlayOffsetType >= 0
+                    ? (size_t)std::max(0, Node.OverlayOffsetIndex)
+                    : 0u;
                 const auto Offset = sOverlayOffsetResolver(
-                    RootRender->ImageID, 2, (size_t)std::max(0, RootRender->FrameIndex),
-                    0, RootRender->Flipped);
+                    RootRender->ImageID, LoType,
+                    (size_t)std::max(0, RootRender->FrameIndex),
+                    OffsetIndex, RootRender->Flipped);
                 if (Offset)
                     Node.Offset = *Offset;
             }
@@ -317,7 +364,23 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
                     NodeContext.FlDirect = RootContext.FlDirect;
                     Node.VM.RefreshDirectionalFrame();
                 }
-                const auto& NodeContext = Node.VM.GetContext();
+                auto& NodeContext = Node.VM.GetContext();
+                if (NodeContext.FollowMainGraphic && RootRender)
+                {
+                    Node.FollowsMainGraphic = true;
+                    if (RootState != mScriptStates.end())
+                    {
+                        NodeContext.BaseFrameIndex =
+                            RootState->second.VM.GetContext().BaseFrameIndex;
+                    }
+                    else
+                    {
+                        NodeContext.BaseFrameIndex = RootRender->FrameIndex;
+                    }
+                    NodeContext.FrameIndex = RootRender->FrameIndex;
+                    NodeContext.FlipState = RootRender->Flipped;
+                }
+                NodeContext.FollowMainGraphic = false;
                 if (NodeContext.HorPosSet)
                     Node.Offset.X = (float)NodeContext.HorPos;
                 if (NodeContext.VertPosSet)
@@ -340,6 +403,97 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
         }
         // ParentIndex stores vector indices, so keep node slots stable even after
         // a temporary overlay expires. AddImageTreeNode can reuse hidden slots.
+    }
+}
+
+void AnimationSystem::UpdateDamageOverlays(int EntityID,
+                                           const RenderComponent& Render,
+                                           const UnitComponent* Unit,
+                                           const BuildingComponent* Building)
+{
+    auto& EM = mSystemMgr.GetEntityManager();
+    auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+    auto HideExisting = [&]()
+    {
+        if (!Tree)
+            return;
+        for (size_t I = 0; I < Tree->Nodes.size(); ++I)
+        {
+            if (!Tree->Nodes[I].IsDamageOverlay)
+                continue;
+            Tree->Nodes[I].Visible = false;
+            MarkImageSubtreeHidden(*Tree, (int)I);
+        }
+    };
+
+    HideExisting();
+    if (!Unit || Unit->MaxHitPoints <= 0 || Unit->HitPoints <= 0 ||
+        Unit->HitPoints >= Unit->MaxHitPoints ||
+        (Building && Building->UnderConstruction) ||
+        EM.GetComponent<EffectComponent>(EntityID) || !sOverlayOffsetResolver)
+    {
+        return;
+    }
+
+    struct DamageSlot
+    {
+        int Index = 0;
+        Core::Math::Vec2 Offset;
+    };
+    std::vector<DamageSlot> Slots;
+    constexpr int kDamageOverlaySlots = 22;
+    for (int Index = 0; Index < kDamageOverlaySlots; ++Index)
+    {
+        const auto Offset = sOverlayOffsetResolver(
+            Render.ImageID, 1, (size_t)std::max(0, Render.FrameIndex),
+            (size_t)Index, Render.Flipped);
+        if (Offset)
+            Slots.push_back({Index, *Offset});
+    }
+    if (Slots.empty())
+        return;
+
+    const float MissingFraction = std::clamp(
+        (float)(Unit->MaxHitPoints - Unit->HitPoints) /
+            ((float)Unit->MaxHitPoints * (2.0f / 3.0f)),
+        0.0f, 1.0f);
+    const int DamageSteps = std::clamp(
+        (int)std::ceil(MissingFraction * (float)(Slots.size() * 2)),
+        0, (int)Slots.size() * 2);
+    const int LargeCount = DamageSteps / 2;
+    const bool HasSmallRemainder = (DamageSteps & 1) != 0;
+
+    constexpr int kSmallDamageImageBase = 450;
+    constexpr int kLargeDamageImageBase = 472;
+    auto AddDamageNode = [&](const DamageSlot& Slot, int ImageID)
+    {
+        AddImageTreeNode(EntityID, -1, ImageID, Slot.Offset,
+                         true, false, -1.0f, false, true, false);
+        Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+        if (!Tree)
+            return;
+        for (auto& Node : Tree->Nodes)
+        {
+            if (!Node.Visible || (int)Node.ImageID != ImageID ||
+                Node.ParentIndex != -1 ||
+                Node.CreationOffset.X != Slot.Offset.X ||
+                Node.CreationOffset.Y != Slot.Offset.Y)
+            {
+                continue;
+            }
+            Node.IsDamageOverlay = true;
+            Node.OverlayOffsetType = 1;
+            Node.OverlayOffsetIndex = Slot.Index;
+            break;
+        }
+    };
+
+    for (int I = 0; I < LargeCount; ++I)
+        AddDamageNode(Slots[(size_t)I], kLargeDamageImageBase + Slots[(size_t)I].Index);
+    if (HasSmallRemainder && LargeCount < (int)Slots.size())
+    {
+        const auto& Slot = Slots[(size_t)LargeCount];
+        AddDamageNode(Slot, kSmallDamageImageBase + Slot.Index);
     }
 }
 
@@ -635,11 +789,65 @@ void AnimationSystem::SpawnIScriptOverlay(int ParentEntityID,
     Render.ZOrder = 1;
 }
 
+bool AnimationSystem::SpawnHarvestWeaponVisual(int EntityID,
+                                               const TransformComponent& Trans,
+                                               const HarvestComponent* Harvest,
+                                               int WeaponID,
+                                               bool ParentFlipped)
+{
+    auto& EM = mSystemMgr.GetEntityManager();
+    const auto* Resource = ResolveMiningResource(EM, Harvest);
+    if (!Resource || Resource->Type != ResourceType::Minerals ||
+        WeaponID != kScvMiningWeaponID ||
+        !sWeaponImageResolver)
+    {
+        return false;
+    }
+
+    const auto ImageID = sWeaponImageResolver(WeaponID);
+    const auto* TargetTrans = Harvest && Harvest->TargetResourceID >= 0
+        ? EM.GetComponent<TransformComponent>(Harvest->TargetResourceID)
+        : nullptr;
+    if (!ImageID || !TargetTrans)
+        return false;
+
+    Core::Math::Vec2 ContactOffset = TargetTrans->Position - Trans.Position;
+    if (ContactOffset.Length() > 0.001f)
+        ContactOffset = ContactOffset.Normalized() * 20.0f;
+    else
+        ContactOffset = {20.0f, 0.0f};
+    if (ParentFlipped)
+        ContactOffset.X = -ContactOffset.X;
+
+    // OpenBW drives the worker's AlmostBuilt animation toward a point twenty
+    // pixels in front of it. The project DAT chain maps Fusion Cutter to image
+    // 526 (unit/bullet/scvspark.grp), whose Init script owns the spark frames.
+    AddImageTreeNode(EntityID, (int)*ImageID,
+                     (int)std::lround(ContactOffset.X),
+                     (int)std::lround(ContactOffset.Y),
+                     true, false, 0.35f);
+    static int DebugMiningSparkLogs = 24;
+    if (DebugIScriptRuntimeEnabled() && DebugMiningSparkLogs > 0)
+    {
+        --DebugMiningSparkLogs;
+        Core::Utils::Logger::Info(
+            "IScriptRuntime",
+            "mining-spark entity=" + std::to_string(EntityID) +
+                " resource=" + std::to_string(Harvest->TargetResourceID) +
+                " weapon=" + std::to_string(WeaponID) +
+                " image=" + std::to_string(*ImageID) +
+                " offset=" + std::to_string((int)std::lround(ContactOffset.X)) +
+                "," + std::to_string((int)std::lround(ContactOffset.Y)));
+    }
+    return true;
+}
+
 void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                                            EntityScriptState& State,
                                            const TransformComponent& Trans,
                                            const PlayerComponent* Player,
-                                           CombatComponent* Combat)
+                                           CombatComponent* Combat,
+                                           const HarvestComponent* Harvest)
 {
     auto Events = State.VM.ConsumeEvents();
     const bool TransientOverlay = Combat && Combat->PendingAttackFrame;
@@ -704,10 +912,60 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
             case Game::IScriptEventType::DoMissileDamage:
             case Game::IScriptEventType::DoGroundDamage:
             case Game::IScriptEventType::CastSpell:
+                if (Event.Type == Game::IScriptEventType::UseWeapon &&
+                    SpawnHarvestWeaponVisual(EntityID, Trans, Harvest, Event.A,
+                                             State.VM.GetContext().FlipState))
+                {
+                    break;
+                }
                 if (Combat && Combat->PendingAttackFrame && mBulletSystem)
                     CombatSystem::ResolvePendingAttackFrame(mSystemMgr.GetEntityManager(), *mBulletSystem, EntityID);
                 break;
             case Game::IScriptEventType::OrderSignal:
+                if ((Event.A & 4) != 0)
+                {
+                    auto& EM = mSystemMgr.GetEntityManager();
+                    if (auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID))
+                    {
+                        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
+                        if (Burrow->Phase == BurrowPhase::Burrowing)
+                        {
+                            Burrow->Phase = BurrowPhase::Burrowed;
+                            Burrow->IsBurrowed = true;
+                            Burrow->BurrowTransitionTime = 0.0f;
+                            if (!Cloak)
+                                Cloak = &EM.AddComponent<CloakComponent>(EntityID);
+                            Cloak->IsBurrowed = true;
+                            Cloak->IsCloaked = true;
+                        }
+                        else if (Burrow->Phase == BurrowPhase::Unburrowing)
+                        {
+                            Burrow->Phase = BurrowPhase::Surface;
+                            Burrow->IsBurrowed = false;
+                            Burrow->BurrowTransitionTime = 0.0f;
+                            if (Cloak)
+                            {
+                                Cloak->IsBurrowed = false;
+                                if (!Cloak->IsPassiveCloak)
+                                    Cloak->IsCloaked = false;
+                            }
+                        }
+                    }
+                }
+                if ((Event.A & 0x10) != 0)
+                {
+                    auto& EM = mSystemMgr.GetEntityManager();
+                    if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
+                    {
+                        if (!Building->IsAddon &&
+                            (Building->FlightPhase == BuildingFlightPhase::LiftingOff ||
+                             Building->FlightPhase == BuildingFlightPhase::Landing))
+                        {
+                            Building->FlightAnimationComplete = true;
+                        }
+                    }
+                }
+                break;
             case Game::IScriptEventType::OrderDone:
             case Game::IScriptEventType::SpawnFrame:
             case Game::IScriptEventType::TemporaryGraphicState:
@@ -726,15 +984,19 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
                                              const PathfindingComponent* Path,
                                              const PlayerComponent* Player,
                                              CombatComponent* Combat,
-                                             const BuildingComponent* Bldg,
+                                             BuildingComponent* Bldg,
                                              const StatusEffectComponent* Status,
-                                             const ProductionComponent* Prod)
+                                             const ProductionComponent* Prod,
+                                             const HarvestComponent* Harvest,
+                                             const BulletComponent* Bullet)
 {
     auto& State = mScriptStates[EntityID];
 
     const bool IsEffect = mSystemMgr.GetEntityManager().GetComponent<EffectComponent>(EntityID) != nullptr;
     if (IsEffect && !mSystemMgr.GetEntityManager().GetComponent<UnitComponent>(EntityID))
         return false;
+    const bool IsResource =
+        mSystemMgr.GetEntityManager().GetComponent<ResourceComponent>(EntityID) != nullptr;
 
     const bool IsBuilding = Bldg != nullptr;
     const bool UnderConstruction = Bldg && Bldg->UnderConstruction;
@@ -744,6 +1006,10 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
             : 0.0f;
     const bool IsWorking =
         Prod && (Prod->CurrentTrainingUnitDefID >= 0 || !Prod->Queue.empty());
+    const auto* MiningResource =
+        ResolveMiningResource(mSystemMgr.GetEntityManager(), Harvest);
+    const bool IsMiningMinerals =
+        MiningResource && MiningResource->Type == ResourceType::Minerals;
     const bool IsFrozen = IsFrozenByStatus(Status);
     const bool IsPendingAttack =
         Combat && Combat->PendingAttackFrame && !IsFrozen;
@@ -773,6 +1039,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.HasPlayedBuilt = false;
     const bool NeedsInitialBuilt =
         IsBuilding &&
+        (!IsResource || (Bldg && Bldg->BuildingDefID >= 0)) &&
         !UnderConstruction &&
         !State.HasPlayedBuilt &&
         HasAnim(Game::IScriptAnims::Anim_Built);
@@ -788,6 +1055,27 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.WasWalking,
         IsPendingAttack,
         HasAnim);
+    if (IsMiningMinerals && HasAnim(Game::IScriptAnims::Anim_AlmostBuilt))
+    {
+        TargetAnim = Game::IScriptAnims::Anim_AlmostBuilt;
+    }
+    else if (State.WasMiningMinerals &&
+             HasAnim(Game::IScriptAnims::Anim_GndAttkToIdle))
+    {
+        TargetAnim = Game::IScriptAnims::Anim_GndAttkToIdle;
+    }
+    if (Bullet)
+    {
+        if (Bullet->Behavior == WeaponBehavior::Persist &&
+            HasAnim(Game::IScriptAnims::Anim_SpecialState2))
+        {
+            TargetAnim = Game::IScriptAnims::Anim_SpecialState2;
+        }
+        else if (HasAnim(Game::IScriptAnims::Anim_GndAttkInit))
+        {
+            TargetAnim = Game::IScriptAnims::Anim_GndAttkInit;
+        }
+    }
     if (TargetAnim < 0)
         return false;
 
@@ -795,7 +1083,14 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         IsPendingAttack ||
         UnderConstruction ||
         IsWorking ||
+        IsMiningMinerals ||
+        DesiredState == AnimState::Burrowing ||
+        DesiredState == AnimState::Unburrowing ||
+        DesiredState == AnimState::LiftingOff ||
+        DesiredState == AnimState::Landing ||
         State.WasWorking ||
+        State.WasMiningMinerals ||
+        Bullet != nullptr ||
         (State.WasUnderConstruction && TargetAnim == Game::IScriptAnims::Anim_Built) ||
         TargetAnim == Game::IScriptAnims::Anim_WalkingToIdle;
     if (State.ImageID == (int)Render.ImageID &&
@@ -842,13 +1137,22 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     Ctx.LiftOffState = Bldg && Bldg->IsLifted;
     if (!IsBuilding)
     {
-        const Core::Math::Vec2 AnimDirection =
-            ResolveAnimationDirection(
-                mSystemMgr.GetEntityManager(),
-                DesiredState,
-                Trans,
-                Path,
+        Core::Math::Vec2 AnimDirection;
+        if (IsMiningMinerals && Harvest && Harvest->TargetResourceID >= 0)
+        {
+            const auto* TargetTrans = mSystemMgr.GetEntityManager()
+                .GetComponent<TransformComponent>(Harvest->TargetResourceID);
+            AnimDirection = TargetTrans
+                ? QuantizeDirectionToEightWay(TargetTrans->Position - Trans.Position)
+                : ResolveAnimationDirection(mSystemMgr.GetEntityManager(), DesiredState,
+                                            Trans, Path, IsFrozen ? nullptr : Combat);
+        }
+        else
+        {
+            AnimDirection = ResolveAnimationDirection(
+                mSystemMgr.GetEntityManager(), DesiredState, Trans, Path,
                 IsFrozen ? nullptr : Combat);
+        }
         Ctx.CurrentDirection = DirectionToIScriptDirection(AnimDirection);
         Ctx.FlDirect = Ctx.CurrentDirection;
         if (Ctx.HasDirectionalFrames)
@@ -883,7 +1187,15 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     if (!IsBuilding && Ctx.HasDirectionalFrames)
         State.VM.RefreshDirectionalFrame();
 
-    ConsumeIScriptEvents(EntityID, State, Trans, Player, Combat);
+    ConsumeIScriptEvents(EntityID, State, Trans, Player, Combat, Harvest);
+
+    if (Bldg && Bldg->IsAddon && !State.VM.IsRunning() &&
+        (Bldg->FlightPhase == BuildingFlightPhase::LiftingOff ||
+         Bldg->FlightPhase == BuildingFlightPhase::Landing))
+    {
+        Bldg->FlightPhase = BuildingFlightPhase::Grounded;
+        Bldg->FlightAnimationComplete = false;
+    }
 
     const int ScriptFrame = std::max(0, State.VM.GetCurrentFrame());
     Render.TotalFrames = std::max(Render.TotalFrames, ScriptFrame + 1);
@@ -894,6 +1206,13 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.AnimID == Game::IScriptAnims::Anim_WorkingToIdle)
     {
         State.WasWorking = false;
+        State.AnimID = -1;
+    }
+    else if (!State.VM.IsRunning() &&
+             State.AnimID == Game::IScriptAnims::Anim_GndAttkToIdle &&
+             State.WasMiningMinerals)
+    {
+        State.WasMiningMinerals = false;
         State.AnimID = -1;
     }
     else if (!State.VM.IsRunning() &&
@@ -912,6 +1231,10 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     else
     {
         State.WasWorking = IsWorking;
+        if (IsMiningMinerals)
+            State.WasMiningMinerals = true;
+        else if (State.AnimID != Game::IScriptAnims::Anim_GndAttkToIdle)
+            State.WasMiningMinerals = false;
         State.WasWalking = DesiredState == AnimState::Walking;
         if (UnderConstruction ||
             (State.AnimID == Game::IScriptAnims::Anim_Built && State.VM.IsRunning()))
@@ -964,13 +1287,21 @@ void AnimationSystem::Update(float DeltaTime)
         auto* Path = EM.GetComponent<PathfindingComponent>(Eid);
         auto* Bldg = EM.GetComponent<BuildingComponent>(Eid);
         auto* Morph = EM.GetComponent<MorphComponent>(Eid);
+        auto* Burrow = EM.GetComponent<BurrowComponent>(Eid);
         auto* Status = EM.GetComponent<StatusEffectComponent>(Eid);
         auto* Prod = EM.GetComponent<ProductionComponent>(Eid);
+        auto* Harvest = EM.GetComponent<HarvestComponent>(Eid);
         auto* Player = EM.GetComponent<PlayerComponent>(Eid);
+        auto* Bullet = EM.GetComponent<BulletComponent>(Eid);
 
-        AnimState State = GetAnimStateFromComponents(Cmd, Combat, Path, Unit, Bldg, Morph, Status);
+        AnimState State = GetAnimStateFromComponents(
+            Cmd, Combat, Path, Unit, Bldg, Morph, Burrow, Status);
 
-        if (UpdateIScriptAnimation(Eid, DeltaTime, State, *Render, *Trans, Path, Player, Combat, Bldg, Status, Prod))
+        const bool UsedIScript = UpdateIScriptAnimation(
+            Eid, DeltaTime, State, *Render, *Trans, Path, Player,
+            Combat, Bldg, Status, Prod, Harvest, Bullet);
+        UpdateDamageOverlays(Eid, *Render, Unit, Bldg);
+        if (UsedIScript)
             continue;
 
         // Look up animation clip

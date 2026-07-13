@@ -124,6 +124,9 @@ inline void ExecuteHudCommandSlot(
             SetAllCommand(EntityManager, EntityIDs, Game::Components::CommandType::Stop);
         else if (CommandDef.CommandId == UI::HudCommandId::Hold)
             SetAllCommand(EntityManager, EntityIDs, Game::Components::CommandType::HoldPosition);
+        else if (CommandDef.CommandId == UI::HudCommandId::LiftOff)
+            for (int EntityID : EntityIDs)
+                Game::Systems::BuildingSystem::LiftOffBuilding(EntityManager, EntityID);
         break;
     default:
         break;
@@ -262,6 +265,14 @@ inline bool ExecutePendingTargetCommand(
             return false;
         IssueFollowCommand(EntityManager, EntityIDs, ClickTarget.AnyEntityID);
         return true;
+    case UI::PendingTargetMode::Land:
+    {
+        bool LandedAny = false;
+        for (int EntityID : EntityIDs)
+            LandedAny = Game::Systems::BuildingSystem::LandBuilding(
+                EntityManager, EntityID, Target) || LandedAny;
+        return LandedAny;
+    }
     default:
         return false;
     }

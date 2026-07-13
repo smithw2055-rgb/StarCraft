@@ -38,7 +38,8 @@ namespace
         if (EM.GetComponent<ResourceComponent>(ID))
             return false;
         if (auto* Building = EM.GetComponent<BuildingComponent>(ID))
-            return Building->IsLifted;
+            return Building->IsLifted &&
+                   Building->FlightPhase == BuildingFlightPhase::Airborne;
         if (IsSiegedTankUnit(Unit->ChkUnitID))
             return false;
         return Unit->Speed > 0.0f;
@@ -57,7 +58,8 @@ namespace
     static bool IsStaticGroundBlocker(Core::ECS::EntityManager& EM, Core::ECS::EntityID ID)
     {
         if (auto* Building = EM.GetComponent<BuildingComponent>(ID))
-            return !Building->IsLifted;
+            return !Building->IsLifted ||
+                   Building->FlightPhase == BuildingFlightPhase::Landing;
         return EM.GetComponent<ResourceComponent>(ID) != nullptr;
     }
 
@@ -686,15 +688,13 @@ namespace
         int StartTileX = 0;
         int StartTileY = 0;
         Map->WorldToTile(Trans->Position, StartTileX, StartTileY);
+        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(EntityID);
         std::vector<StaticBlockerRect> Blockers;
         for (auto BlockerID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
         {
             if (BlockerID == IgnoreEntityID)
                 continue;
-            const bool IsRequestedDynamicAvoid =
-                BlockerID == AvoidDynamicEntityID;
-            if (BlockerID == EntityID ||
-                (!IsStaticGroundBlocker(EM, BlockerID) && !IsRequestedDynamicAvoid))
+            if (BlockerID == EntityID)
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -704,6 +704,27 @@ namespace
             auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
             if (!BlockerTrans || !BlockerUnit)
                 continue;
+
+            const bool IsStaticBlocker =
+                IsStaticGroundBlocker(EM, BlockerID);
+            const bool IsRequestedDynamicAvoid =
+                BlockerID == AvoidDynamicEntityID;
+            const auto* BlockerPlayer =
+                EM.GetComponent<PlayerComponent>(BlockerID);
+            const bool IsStoppedFriendlyDynamicAvoid =
+                AvoidDynamicEntityID >= 0 &&
+                !IsStaticBlocker &&
+                MovingPlayer &&
+                BlockerPlayer &&
+                MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
+                BlockerPath &&
+                BlockerPath->CurrentVelocity.LengthSq() <= 0.01f;
+            if (!IsStaticBlocker &&
+                !IsRequestedDynamicAvoid &&
+                !IsStoppedFriendlyDynamicAvoid)
+            {
+                continue;
+            }
 
             auto Rect = StaticBlockerRectForEntity(
                 BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
@@ -931,7 +952,8 @@ void MovementSystem::Update(float DeltaTime)
             PathComp->RepulseVector = {0.0f, 0.0f};
             continue;
         }
-        PathComp->HasFriendlyYieldAnchor = false;
+        if (!Cmd || Cmd->CurrentCommand != CommandType::Stop)
+            PathComp->HasFriendlyYieldAnchor = false;
 
         // Set defaults from unit data if not yet initialized
         if (PathComp->TargetSpeed <= 0.0f && Unit)
@@ -1062,12 +1084,16 @@ void MovementSystem::Update(float DeltaTime)
         {
             constexpr float kFriendlyYieldSpeed = 24.0f;
             constexpr float kFriendlyYieldMaxDistance = 24.0f;
-            const Core::Math::Vec2 YieldDir = FriendlyYield.Normalized();
             if (!PathComp->HasFriendlyYieldAnchor)
             {
                 PathComp->FriendlyYieldAnchor = Trans->Position;
                 PathComp->HasFriendlyYieldAnchor = true;
             }
+            const Core::Math::Vec2 ExistingYield =
+                Trans->Position - PathComp->FriendlyYieldAnchor;
+            const Core::Math::Vec2 YieldDir = ExistingYield.LengthSq() > 1.0f
+                ? ExistingYield.Normalized()
+                : FriendlyYield.Normalized();
             Core::Math::Vec2 Yielded =
                 Trans->Position + YieldDir * (kFriendlyYieldSpeed * Dt);
             const Core::Math::Vec2 FromAnchor =
@@ -1293,7 +1319,7 @@ void MovementSystem::Update(float DeltaTime)
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
                     AppliedMove.Normalized() * TargetSpd :
-                    MoveDir * TargetSpd;
+                    Core::Math::Vec2{};
             }
             else
             {
@@ -1353,7 +1379,7 @@ void MovementSystem::Update(float DeltaTime)
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
                     AppliedMove.Normalized() * CurSpd :
-                    ActualMove * CurSpd;
+                    Core::Math::Vec2{};
             }
             break;
         }

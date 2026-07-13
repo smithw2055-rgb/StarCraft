@@ -70,6 +70,8 @@ struct ClientRuntime
                                                            const std::vector<Core::ECS::EntityID>& SelectedIds,
                                                            const Core::Math::Vec2& WorldPosition);
     void UpdateSelection(Core::ECS::EntityManager& Entities, bool BlockSelection);
+    void SetLocalPlayerId(int PlayerId);
+    int GetLocalPlayerId() const;
     void CancelPointerGesture();
     void PruneSelection(Core::ECS::EntityManager& Entities);
     void HandleControlGroupHotkeys(Core::ECS::EntityManager& Entities);

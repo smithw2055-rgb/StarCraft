@@ -23,6 +23,7 @@
 #include <array>
 #include <cstdlib>
 #include <limits>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -843,6 +844,181 @@ namespace InteractionSmoke
             }
         }
         (void)MoveTarget;
+        return true;
+    }
+
+    inline bool FindEightWayAnimationProbeCenter(
+        const GameSession& Session,
+        Core::ECS::EntityManager& EM,
+        int MoverID,
+        Core::Math::Vec2& Out)
+    {
+        const auto& Map = Session.GetEcsMap();
+        constexpr int MarginTiles = 4;
+        constexpr float EntityClearance = 192.0f;
+        const auto Entities = EM.GetEntitiesWith<Game::Components::TransformComponent>();
+
+        for (int Y = MarginTiles; Y < Map.GetHeight() - MarginTiles; ++Y)
+        {
+            for (int X = MarginTiles; X < Map.GetWidth() - MarginTiles; ++X)
+            {
+                bool Open = true;
+                for (int DY = -3; DY <= 3 && Open; ++DY)
+                    for (int DX = -3; DX <= 3; ++DX)
+                        if (!Map.IsWalkable(X + DX, Y + DY))
+                        {
+                            Open = false;
+                            break;
+                        }
+                if (!Open)
+                    continue;
+
+                const Core::Math::Vec2 Candidate = Map.TileToWorld(X, Y);
+                for (int EntityID : Entities)
+                {
+                    if (EntityID == MoverID)
+                        continue;
+                    const auto* Trans =
+                        EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+                    if (Trans && Trans->Position.DistanceTo(Candidate) < EntityClearance)
+                    {
+                        Open = false;
+                        break;
+                    }
+                }
+                if (Open)
+                {
+                    Out = Candidate;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    inline bool VerifyEightWayMovementAnimation(
+        GameSession& Session,
+        Core::ECS::EntityManager& EM,
+        ClientRuntime& Client,
+        int MoverID,
+        std::string& Error)
+    {
+        auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(MoverID);
+        auto* Render = EM.GetComponent<Game::Components::RenderComponent>(MoverID);
+        auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(MoverID);
+        auto* Command = EM.GetComponent<Game::Components::CommandComponent>(MoverID);
+        if (!Trans || !Render || !Path || !Command)
+        {
+            Fail(Error, "eight-way animation probe is missing movement/render components");
+            return false;
+        }
+
+        Core::Math::Vec2 ProbeCenter;
+        if (!FindEightWayAnimationProbeCenter(Session, EM, MoverID, ProbeCenter))
+        {
+            Fail(Error, "could not find an open map area for eight-way animation probe");
+            return false;
+        }
+
+        const auto* SpriteFrames =
+            Client.GetSpriteAssets().GetDatImageFrames(Render->ImageID);
+        if (!SpriteFrames || SpriteFrames->size() < 17)
+        {
+            Fail(Error, "current HD worker asset does not expose directional frames; image=" +
+                            std::to_string(Render->ImageID));
+            return false;
+        }
+
+        static const std::array<Core::Math::Vec2, 8> Directions = {{
+            {1.0f, 0.0f}, {0.70710678f, 0.70710678f},
+            {0.0f, 1.0f}, {-0.70710678f, 0.70710678f},
+            {-1.0f, 0.0f}, {-0.70710678f, -0.70710678f},
+            {0.0f, -1.0f}, {0.70710678f, -0.70710678f}
+        }};
+
+        const Core::Math::Vec2 OriginalPosition = Trans->Position;
+        std::set<std::pair<int, bool>> DirectionalSignatures;
+        bool SawMovementAttachment = false;
+        for (const auto& Direction : Directions)
+        {
+            const Core::Math::Vec2 Target = ProbeCenter + Direction * 96.0f;
+            Trans->Position = ProbeCenter;
+            Command->CancelAll();
+            Command->CurrentCommand = Game::Components::CommandType::Move;
+            Command->TargetEntityID = -1;
+            Command->TargetPosition = Target;
+
+            Path->Path = {Target};
+            Path->PathIndex = 0;
+            Path->NodeTolerance = 4.0f;
+            Path->RequestedDestination = Target;
+            Path->RequestedTargetEntityID = -1;
+            Path->RequestedIgnoreEntityID = -1;
+            Path->CurrentSpeed = 0.0f;
+            Path->CurrentVelocity = {};
+            Path->TargetSpeed = 0.0f;
+            Path->HasRecentMoveFailure = false;
+            Path->HasLastWaypointDistance = false;
+            Path->HasLastDestinationDistance = false;
+            Path->StallTimer = 0.0f;
+            Path->DestinationStallTimer = 0.0f;
+
+            TickSystems(Session, 4, 0.1f);
+            const Core::Math::Vec2 Applied = Trans->Position - ProbeCenter;
+            if (Applied.Dot(Direction) <= 0.5f)
+            {
+                Fail(Error, "eight-way animation probe did not move in requested direction");
+                return false;
+            }
+
+            const int FrameIndex = Render->FrameIndex;
+            if (FrameIndex < 0 || FrameIndex >= (int)SpriteFrames->size() ||
+                !(*SpriteFrames)[(size_t)FrameIndex].Valid())
+            {
+                Fail(Error, "eight-way animation selected an invalid HD frame; frame=" +
+                                std::to_string(FrameIndex));
+                return false;
+            }
+            DirectionalSignatures.emplace(FrameIndex, Render->Flipped);
+
+            if (const auto* Tree =
+                    EM.GetComponent<Game::Components::ImageTreeComponent>(MoverID))
+            {
+                for (const auto& Node : Tree->Nodes)
+                    if (Node.Visible)
+                        SawMovementAttachment = true;
+            }
+        }
+
+        Trans->Position = OriginalPosition;
+        Command->CancelAll();
+        Command->TargetEntityID = -1;
+        Command->TargetPosition = {};
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->CurrentVelocity = {};
+        Path->TargetSpeed = 0.0f;
+        TickSystems(Session, 2, 1.0f / 24.0f);
+
+        if (DirectionalSignatures.size() != Directions.size())
+        {
+            Fail(Error, "real movement/render pipeline collapsed eight directions to " +
+                            std::to_string(DirectionalSignatures.size()));
+            return false;
+        }
+        if (!SawMovementAttachment)
+        {
+            Fail(Error, "real worker walking animation lost its IScript image attachment");
+            return false;
+        }
+
+        Core::Utils::Logger::Info(
+            "InteractionSmoke",
+            "Interaction smoke eight-way HD movement passed: image=" +
+                std::to_string(Render->ImageID) +
+                " asset_frames=" + std::to_string(SpriteFrames->size()) +
+                " directions=" + std::to_string(DirectionalSignatures.size()));
         return true;
     }
 
@@ -1843,8 +2019,13 @@ namespace InteractionSmoke
         const int RaynorID = FindNewestUnitByChk(EM, 19);
         if (RaynorID < 0)
         {
-            Fail(Error, "loaded mission has no Raynor unit for victory closure");
-            return false;
+            // The default interaction smoke runs on a melee map. It has no
+            // campaign-specific Raynor/Marine objective, so its closure is
+            // remaining playable after the complete interaction sequence.
+            Core::Utils::Logger::Info(
+                "InteractionSmoke",
+                "Interaction smoke non-campaign scene remained playable through closure");
+            return Controller.GetState() == Game::Campaign::CampaignState::Playing;
         }
         auto* RaynorPlayer = EM.GetComponent<Game::Components::PlayerComponent>(RaynorID);
         auto* RaynorTrans = EM.GetComponent<Game::Components::TransformComponent>(RaynorID);
@@ -2438,6 +2619,29 @@ namespace InteractionSmoke
                     std::string& Error)
     {
         auto& EM = Session.Entities();
+        const int LocalPlayerID = Session.GetLocalPlayerID();
+        if (Client.GetLocalPlayerId() != LocalPlayerID)
+        {
+            Fail(Error, "client selection local player does not match the loaded CHK human slot");
+            return false;
+        }
+        if (Campaign.IsActive() &&
+            Campaign.Controller().GetLocalPlayerID() != LocalPlayerID)
+        {
+            Fail(Error, "campaign outcome local player does not match the loaded CHK human slot");
+            return false;
+        }
+        if (Campaign.IsActive() &&
+            Campaign.Controller().GetState() != Game::Campaign::CampaignState::Playing)
+        {
+            Fail(Error, "loaded scene entered an outcome before gameplay interaction");
+            return false;
+        }
+        Core::Utils::Logger::Info(
+            "InteractionSmoke",
+            "Interaction smoke initial scene remained playable after load: local_player=" +
+                std::to_string(LocalPlayerID));
+
         const int ResourceID = FindResource(EM);
         if (ResourceID < 0)
         {
@@ -2481,6 +2685,8 @@ namespace InteractionSmoke
         if (!VerifyRenderableEntity(EM, Client, WorkerID, "selected worker", Error))
             return false;
         if (!VerifyMove(Session, EM, Gui, Hud, WorkerID, Error))
+            return false;
+        if (!VerifyEightWayMovementAnimation(Session, EM, Client, WorkerID, Error))
             return false;
         int DepotID = -1;
         if (!VerifyHarvest(Session, EM, Client, Gui, Hud, WorkerID, ResourceID, DepotID, Error))

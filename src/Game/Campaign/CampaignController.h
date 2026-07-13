@@ -65,6 +65,7 @@ public:
 
     bool IsActive() const { return mActive; }
     CampaignState GetState() const { return mState; }
+    int GetLocalPlayerID() const { return mLocalPlayerID; }
     const std::vector<Objective>& GetObjectives() const { return mObjectives; }
     const std::vector<CampaignMessage>& GetMessages() const { return mMessages; }
     const CampaignLeaderboard& GetLeaderboard() const { return mLeaderboard; }
@@ -85,6 +86,7 @@ private:
 
     bool mActive = false;
     CampaignState mState = CampaignState::Playing;
+    int mLocalPlayerID = 0;
     std::string mMissionName = "StarCraft Scenario";
     std::vector<Objective> mObjectives;
     std::vector<CampaignMessage> mMessages;

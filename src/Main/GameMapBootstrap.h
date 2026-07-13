@@ -40,6 +40,7 @@ inline void InitializeClientWorldViewFromSession(ClientRuntime& Client, GameSess
         "InitializeClientWorldViewFromSession viewport=" +
             std::to_string(Core::Platform::GetWindowWidth()) + "x" +
             std::to_string(Core::Platform::GetWindowHeight()));
+    Client.SetLocalPlayerId(Session.GetLocalPlayerID());
     const auto Camera = Session.GetInitialCameraPosition();
     const std::string TilesetName = Session.GetTilesetNameOrDefault();
     Client.InitializeWorldView(

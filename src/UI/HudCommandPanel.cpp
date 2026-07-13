@@ -305,6 +305,21 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                       TerranResearchId::None, IconBack, true);
     };
 
+    auto SelectedBuilding = [&]() -> Game::Components::BuildingComponent*
+    {
+        return EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId)
+            : nullptr;
+    };
+
+    auto CanLiftOffSelected = [&]() -> bool
+    {
+        const auto* Building = SelectedBuilding();
+        return Building && Building->CanLiftOff && !Building->UnderConstruction &&
+               !Building->IsLifted &&
+               Building->FlightPhase == Game::Components::BuildingFlightPhase::Grounded;
+    };
+
     auto ResearchButton = [&](int Slot,
                               TerranResearchId ResearchId,
                               const std::string& BaseLabel,
@@ -368,6 +383,17 @@ void Hud::BuildTerranPage(int SelectedEntityId,
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
         EffectivePage = GetDefaultTerranPageForDef(SelectedTerranDefId);
+
+    if (const auto* Building = SelectedBuilding(); Building && Building->IsLifted)
+    {
+        const bool Airborne =
+            Building->FlightPhase == Game::Components::BuildingFlightPhase::Airborne;
+        SetCommandButton(0, "Move", HudCommandId::Move, Airborne);
+        SetCommandButton(2, "Stop", HudCommandId::Stop, Airborne);
+        SetCommandButton(4, "Patrol", HudCommandId::Patrol, Airborne);
+        SetCommandButton(8, "Land", HudCommandId::Land, Airborne);
+        return;
+    }
 
     switch (EffectivePage)
     {
@@ -545,7 +571,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(0, SCV);
             BuildButtonForDef(1, ComsatStation);
             BuildButtonForDef(2, NuclearSilo);
-            DisabledAbilityButtonForDef(8, "Lift Off", CommandCenter);
+            SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
 
@@ -554,7 +580,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(1, Firebat);
             TrainButtonForDef(2, Medic);
             TrainButtonForDef(3, Ghost);
-            DisabledAbilityButtonForDef(8, "Lift Off", Barracks);
+            SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
 
@@ -563,7 +589,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(1, SiegeTank);
             TrainButtonForDef(2, Goliath);
             BuildButtonForDef(3, MachineShop);
-            DisabledAbilityButtonForDef(8, "Lift Off", Factory);
+            SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
 
@@ -574,7 +600,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(3, Battlecruiser);
             TrainButtonForDef(4, Valkyrie);
             BuildButtonForDef(5, ControlTower);
-            DisabledAbilityButtonForDef(8, "Lift Off", Starport);
+            SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
 
@@ -601,7 +627,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
         case PageTerranScienceFacility:
             BuildButtonForDef(0, CovertOps);
             BuildButtonForDef(1, PhysicsLab);
-            DisabledAbilityButtonForDef(8, "Lift Off", ScienceFacility);
+            SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             break;
 
         case PageTerranMachineShop:

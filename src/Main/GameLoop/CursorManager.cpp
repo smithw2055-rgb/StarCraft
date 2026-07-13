@@ -219,6 +219,9 @@ CursorRenderState CursorManager::ResolveCursorState(int MouseX, int MouseY,
                 Legal = TargetContext.AnyEntityID >= 0;
                 State.Kind = Legal ? GameCursorKind::TargetNeutral : GameCursorKind::Illegal;
                 break;
+            case Game::Client::UI::PendingTargetMode::Land:
+                State.Kind = GameCursorKind::TargetYellow;
+                break;
             default:
                 break;
         }

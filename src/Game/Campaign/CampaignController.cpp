@@ -118,6 +118,7 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
 
     mActive = false;
     mState = CampaignState::Playing;
+    mLocalPlayerID = 0;
     mStateTimer = 0.0f;
     mActivePortraitUnitID = kNoPortraitUnitID;
     mSyncedObjectiveSourceCount = 0;
@@ -131,6 +132,15 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
     {
         Logger::Info("CampaignController", "No CHK TRIG data; campaign scripting inactive");
         return false;
+    }
+
+    for (int PlayerID = 0; PlayerID < 8; ++PlayerID)
+    {
+        if (ScriptData->Players[(size_t)PlayerID].Owner == 6)
+        {
+            mLocalPlayerID = PlayerID;
+            break;
+        }
     }
 
     std::string Name = ScriptData->GetString(ScriptData->ScenarioNameStringID);
@@ -151,7 +161,7 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
         CampaignMessage Message;
         Message.Text = mMissionName.empty() ? "Mission started" : mMissionName;
         Message.ActionID = 0;
-        Message.PlayerID = 0;
+        Message.PlayerID = mLocalPlayerID;
         Message.TimeRemaining = 3600.0f;
         mMessages.push_back(std::move(Message));
     }
@@ -160,7 +170,7 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
     mActive = true;
     Logger::Info("CampaignController",
         "Campaign scripting initialized: " + std::to_string(mTriggerVM->GetTriggerCount()) +
-        " triggers");
+        " triggers, local_player=" + std::to_string(mLocalPlayerID));
     return true;
 }
 
@@ -201,7 +211,7 @@ void CampaignController::SyncStateFromTriggerVM()
         return;
 
     const CampaignState OldState = mState;
-    auto Outcome = mTriggerVM->GetPlayerOutcome(0);
+    auto Outcome = mTriggerVM->GetPlayerOutcome(mLocalPlayerID);
     switch (Outcome)
     {
         case Trigger::TriggerOutcome::Victory:

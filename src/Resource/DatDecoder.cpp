@@ -110,7 +110,8 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
     // These offsets are validated against real Brood War assets below and in
     // SpriteImageDataTest. Keep them explicit because several preceding sound
     // table columns have version-specific lengths in extracted assets.
-    constexpr size_t PlacementOffset = 0x2D94;
+    constexpr size_t PlacementOffset = 0x2C14;
+    constexpr size_t AddonPositionOffset = 0x2FA4;
     constexpr size_t DimensionOffset = 0x3124;
     Offset = DimensionOffset + Count * 8;
     const size_t PortraitOffset = Offset; Offset += Count * 2;
@@ -161,6 +162,17 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
         {
             E.PlacementWidth = ReadI16(Data.data(), PlacementOffset + I * 4 + 0);
             E.PlacementHeight = ReadI16(Data.data(), PlacementOffset + I * 4 + 2);
+        }
+        if (I >= UnitsCount && I < UnitsCount + BuildingsCount)
+        {
+            const size_t BuildingIndex = I - UnitsCount;
+            if (AddonPositionOffset + BuildingIndex * 4 + 4 <= Data.size())
+            {
+                E.AddonPositionX =
+                    ReadI16(Data.data(), AddonPositionOffset + BuildingIndex * 4 + 0);
+                E.AddonPositionY =
+                    ReadI16(Data.data(), AddonPositionOffset + BuildingIndex * 4 + 2);
+            }
         }
         if (DimensionOffset + I * 8 + 8 <= Data.size())
         {

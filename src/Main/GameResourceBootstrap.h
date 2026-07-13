@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
@@ -19,6 +20,18 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
     if (!Client.InitializeResources(InstallPath))
     {
         Core::Utils::Logger::Error("GameMain", "ResourceCache init failed");
+        return false;
+    }
+
+    const std::filesystem::path AssetRoot =
+        std::filesystem::path(InstallPath) / "assets";
+    if (!Game::Systems::AnimationSystem::InitializeIScriptAssets(
+            (AssetRoot / "scripts" / "iscript.bin").string(),
+            (AssetRoot / "arr" / "images.dat").string()))
+    {
+        Core::Utils::Logger::Error(
+            "GameMain", "Project iscript assets failed to initialize from: " +
+                AssetRoot.string());
         return false;
     }
 
@@ -49,6 +62,39 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
             Bounds.Right = UnitData->DimensionRight;
             Bounds.Down = UnitData->DimensionDown;
             return Bounds;
+        });
+    ConfigureBuildingAddonOffsetResolver(
+        [&Client](int ParentDefID, int AddonDefID) {
+            if (ParentDefID < 0 || AddonDefID < 0)
+                return Core::Math::Vec2{96.0f, 16.0f};
+            const auto ParentDef = Game::Races::GetUnitDefByID(ParentDefID);
+            const auto AddonDef = Game::Races::GetUnitDefByID(AddonDefID);
+            const auto* DataLoader = Client.GetDataAssets().GetDataLoader();
+            const auto* Parent = DataLoader && ParentDef.ChkUnitID >= 0
+                ? DataLoader->FindUnitByID((uint32_t)ParentDef.ChkUnitID)
+                : nullptr;
+            const auto* Addon = DataLoader && AddonDef.ChkUnitID >= 0
+                ? DataLoader->FindUnitByID((uint32_t)AddonDef.ChkUnitID)
+                : nullptr;
+            if (!Parent || !Addon || Parent->PlacementWidth <= 0 ||
+                Parent->PlacementHeight <= 0 || Addon->PlacementWidth <= 0 ||
+                Addon->PlacementHeight <= 0)
+            {
+                return Core::Math::Vec2{96.0f, 16.0f};
+            }
+            return Core::Math::Vec2{
+                (float)(-Parent->PlacementWidth / 2 + Addon->AddonPositionX +
+                        Addon->PlacementWidth / 2),
+                (float)(-Parent->PlacementHeight / 2 + Addon->AddonPositionY +
+                        Addon->PlacementHeight / 2)};
+        });
+    ConfigureZergBurrowCapabilityResolver(
+        [](int, uint32_t ImageID) {
+            return ImageID != std::numeric_limits<uint32_t>::max() &&
+                   Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
+                       (int)ImageID, Game::IScriptAnims::Anim_Burrow) &&
+                   Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
+                       (int)ImageID, Game::IScriptAnims::Anim_UnBurrow);
         });
     auto OverlayTables = std::make_shared<std::unordered_map<std::string, Resource::ImageOffsetTable>>();
     ConfigureAnimationOverlayOffsetResolver(
@@ -83,8 +129,24 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
             }
 
             const auto& Offset = It->second.Frames[Frame][OffsetIndex];
+            if (Offset.X == 127 && Offset.Y == 127)
+                return std::nullopt;
             const float X = (float)(Flipped ? -Offset.X : Offset.X);
             return Core::Math::Vec2{X, (float)Offset.Y};
+        });
+    ConfigureAnimationWeaponImageResolver(
+        [&Client](int WeaponID) -> std::optional<uint32_t> {
+            const auto* Loader = Client.GetDataAssets().GetDataLoader();
+            if (!Loader || WeaponID < 0)
+                return std::nullopt;
+            const auto* Weapon = Loader->FindWeaponByID((uint32_t)WeaponID);
+            if (!Weapon || Weapon->FlingyID >= 209)
+                return std::nullopt;
+            const auto* Flingy = Loader->FindFlingyByID(Weapon->FlingyID);
+            const auto* Sprite = Flingy ? Loader->FindSpriteByID(Flingy->SpriteID) : nullptr;
+            if (!Sprite || Loader->ResolveImageGrpPath(Sprite->ImageID).empty())
+                return std::nullopt;
+            return Sprite->ImageID;
         });
     ConfigureBulletVisualResolver(
         [&Client](int ChkUnitID, bool TargetIsAir)
@@ -109,6 +171,9 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
             Game::Systems::BulletSystem::VisualSpec Spec;
             Spec.ImageID = Sprite->ImageID;
             Spec.Speed = (float)Flingy->TopSpeed * 24.0f / 256.0f;
+            Spec.HasImpactAnimation =
+                Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
+                    (int)Sprite->ImageID, Game::IScriptAnims::Anim_Death);
             return Spec;
         });
     return true;

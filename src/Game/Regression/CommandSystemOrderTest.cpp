@@ -77,6 +77,27 @@ int main()
     Require(!EM.GetComponent<Game::Components::CommandComponent>(CommandCenter),
         "landed buildings do not receive a move command component");
 
+    int FlightBuilding = CreateUnit(EM, 111, 0.0f, {64.0f, 160.0f});
+    auto& FlightBuildingState =
+        EM.AddComponent<Game::Components::BuildingComponent>(FlightBuilding);
+    FlightBuildingState.IsBuilding = true;
+    FlightBuildingState.IsLifted = true;
+    FlightBuildingState.FlightPhase =
+        Game::Components::BuildingFlightPhase::LiftingOff;
+    auto& FlightPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(FlightBuilding);
+    Game::Systems::CommandSystem::IssueMove(EM, {FlightBuilding}, {192.0f, 160.0f});
+    Require(FlightPath.Path.empty() &&
+            !EM.GetComponent<Game::Components::CommandComponent>(FlightBuilding),
+        "building rejects movement while the LiftOff script transition is active");
+    FlightBuildingState.FlightPhase =
+        Game::Components::BuildingFlightPhase::Airborne;
+    EM.GetComponent<Game::Components::UnitComponent>(FlightBuilding)->Speed = 2.0f;
+    Game::Systems::CommandSystem::IssueMove(EM, {FlightBuilding}, {192.0f, 160.0f});
+    Require(!FlightPath.Path.empty() &&
+            EM.GetComponent<Game::Components::CommandComponent>(FlightBuilding),
+        "building accepts movement after LiftOff animation completion");
+
     Game::Components::Order AttackMoveOrder;
     AttackMoveOrder.Type = Game::Components::OrderType::AttackMove;
     AttackMoveOrder.TargetPosition = {192.0f, 96.0f};
@@ -197,6 +218,52 @@ int main()
                         400.0f),
         "widely scattered selections converge into distinct centered formation slots");
 
+    const std::vector<int> DispersedGroup{
+        CreateUnit(EM, 0, 4.0f, {0.0f, 0.0f}),
+        CreateUnit(EM, 0, 4.0f, {800.0f, 0.0f}),
+        CreateUnit(EM, 0, 4.0f, {0.0f, 800.0f}),
+        CreateUnit(EM, 0, 4.0f, {800.0f, 800.0f})
+    };
+    Game::Systems::CommandSystem::IssueAttackMove(
+        EM, DispersedGroup, {400.0f, 400.0f});
+    Core::Math::Vec2 DispersedTargetCenter;
+    for (size_t I = 0; I < DispersedGroup.size(); ++I)
+    {
+        const auto* CommandI =
+            EM.GetComponent<Game::Components::CommandComponent>(DispersedGroup[I]);
+        Require(CommandI, "dispersed attack group receives commands");
+        DispersedTargetCenter += CommandI->TargetPosition;
+        for (size_t J = 0; J < I; ++J)
+        {
+            const auto* CommandJ =
+                EM.GetComponent<Game::Components::CommandComponent>(DispersedGroup[J]);
+            Require(CommandI->TargetPosition.DistanceTo(CommandJ->TargetPosition) >= 47.9f,
+                "dispersed group target inside its broad bounds still gets unique slots");
+        }
+    }
+    DispersedTargetCenter =
+        DispersedTargetCenter / (float)DispersedGroup.size();
+    Require(NearlyEqual(DispersedTargetCenter.X, 400.0f) &&
+            NearlyEqual(DispersedTargetCenter.Y, 400.0f),
+        "dispersed group formation remains centered on its interior destination");
+
+    std::vector<int> MassiveAttackGroup;
+    for (int I = 0; I < 64; ++I)
+    {
+        MassiveAttackGroup.push_back(CreateUnit(
+            EM, 0, 4.0f,
+            {(float)((I % 8) * 128), (float)((I / 8) * 128)}));
+    }
+    Game::Systems::CommandSystem::IssueAttackMove(
+        EM, MassiveAttackGroup, {448.0f, 448.0f});
+    for (int ID : MassiveAttackGroup)
+    {
+        const auto* MassivePath =
+            EM.GetComponent<Game::Components::PathfindingComponent>(ID);
+        Require(MassivePath && MassivePath->NodeTolerance >= 127.9f,
+            "massive attack formations accept a stable crowd arrival envelope");
+    }
+
     const int SpiderMine = CreateUnit(EM, 13, 10.0f, {96.0f, 224.0f});
     auto& SpiderMinePath =
         EM.AddComponent<Game::Components::PathfindingComponent>(SpiderMine);
@@ -206,6 +273,102 @@ int main()
     Require(SpiderMinePath.Path.empty() &&
             !EM.GetComponent<Game::Components::CommandComponent>(SpiderMine),
         "placed Spider Mine rejects player movement orders");
+
+    const int BurrowedZergling = CreateUnit(EM, 37, 3.4f, {144.0f, 224.0f});
+    auto& BurrowedPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(BurrowedZergling);
+    BurrowedPath.Path.push_back({176.0f, 224.0f});
+    auto& BurrowedState =
+        EM.AddComponent<Game::Components::BurrowComponent>(BurrowedZergling);
+    BurrowedState.CanBurrow = true;
+    BurrowedState.IsBurrowed = true;
+    BurrowedState.Phase = Game::Components::BurrowPhase::Burrowed;
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {BurrowedZergling}, {320.0f, 224.0f});
+    Require(BurrowedPath.Path.empty() &&
+            !EM.GetComponent<Game::Components::CommandComponent>(BurrowedZergling),
+        "burrowed units reject movement until an UnBurrow transition completes");
+
+    const int BurrowingHydralisk = CreateUnit(EM, 38, 2.5f, {192.0f, 224.0f});
+    auto& BurrowingPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(BurrowingHydralisk);
+    BurrowingPath.Path.push_back({224.0f, 224.0f});
+    auto& BurrowingState =
+        EM.AddComponent<Game::Components::BurrowComponent>(BurrowingHydralisk);
+    BurrowingState.CanBurrow = true;
+    BurrowingState.Phase = Game::Components::BurrowPhase::Burrowing;
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {BurrowingHydralisk}, {320.0f, 224.0f});
+    Require(BurrowingPath.Path.empty() &&
+            !EM.GetComponent<Game::Components::CommandComponent>(BurrowingHydralisk),
+        "units cannot move while the Burrow iscript transition is active");
+
+    Core::ECS::SystemManager TriggerBurrowSysMgr;
+    auto& TriggerBurrowEM = TriggerBurrowSysMgr.GetEntityManager();
+    Game::Map::GameMap TriggerBurrowMap;
+    TriggerBurrowMap.Generate(16, 16);
+    for (int Y = 0; Y < TriggerBurrowMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < TriggerBurrowMap.GetWidth(); ++X)
+        {
+            auto Tile = TriggerBurrowMap.GetTile(X, Y);
+            Tile.Walkable = true;
+            Tile.Buildable = true;
+            TriggerBurrowMap.SetTile(X, Y, Tile);
+        }
+    }
+    Game::Systems::CommandSystem::SetMap(&TriggerBurrowMap);
+    Game::Systems::CommandSystem TriggerBurrowCommands;
+    TriggerBurrowCommands.Init(&TriggerBurrowSysMgr);
+
+    const int TriggerBurrowedZergling = CreateUnit(
+        TriggerBurrowEM, 37, 3.4f, {64.0f, 64.0f});
+    auto& TriggerBurrowedPath =
+        TriggerBurrowEM.AddComponent<Game::Components::PathfindingComponent>(
+            TriggerBurrowedZergling);
+    auto& TriggerBurrowedState =
+        TriggerBurrowEM.AddComponent<Game::Components::BurrowComponent>(
+            TriggerBurrowedZergling);
+    TriggerBurrowedState.CanBurrow = true;
+    TriggerBurrowedState.IsBurrowed = true;
+    TriggerBurrowedState.Phase = Game::Components::BurrowPhase::Burrowed;
+
+    Game::Components::Order TriggerUnburrowOrder;
+    TriggerUnburrowOrder.Type = Game::Components::OrderType::Unburrow;
+    Game::Systems::CommandSystem::IssueOrder(
+        TriggerBurrowEM, TriggerBurrowedZergling, TriggerUnburrowOrder, false);
+    Game::Components::Order TriggerMoveOrder;
+    TriggerMoveOrder.Type = Game::Components::OrderType::AttackMove;
+    TriggerMoveOrder.TargetPosition = {256.0f, 64.0f};
+    Game::Systems::CommandSystem::IssueOrder(
+        TriggerBurrowEM, TriggerBurrowedZergling, TriggerMoveOrder, true);
+
+    auto* TriggerBurrowedCommand =
+        TriggerBurrowEM.GetComponent<Game::Components::CommandComponent>(
+            TriggerBurrowedZergling);
+    Require(TriggerBurrowedCommand && TriggerBurrowedCommand->Orders.size() == 2 &&
+            TriggerBurrowedCommand->GetCurrentOrder() &&
+            TriggerBurrowedCommand->GetCurrentOrder()->Type ==
+                Game::Components::OrderType::Unburrow,
+        "campaign movement queues behind an Unburrow order");
+    TriggerBurrowCommands.Update(0.05f);
+    Require(TriggerBurrowedState.Phase ==
+                Game::Components::BurrowPhase::Unburrowing &&
+            TriggerBurrowedPath.Path.empty(),
+        "queued campaign movement waits while UnBurrow iscript is active");
+
+    TriggerBurrowedState.IsBurrowed = false;
+    TriggerBurrowedState.Phase = Game::Components::BurrowPhase::Surface;
+    TriggerBurrowCommands.Update(0.05f);
+    Require(TriggerBurrowedCommand->CurrentCommand ==
+                Game::Components::CommandType::AttackMove,
+        "campaign attack-move becomes current after the UnBurrow signal completes");
+    Require(TriggerBurrowedPath.RequestedDestination.X == 256.0f &&
+            TriggerBurrowedPath.RequestedDestination.Y == 64.0f,
+        "campaign movement restores its requested destination after UnBurrow");
+    Require(!TriggerBurrowedPath.Path.empty(),
+        "campaign movement resumes pathing after the UnBurrow signal completes");
+    Game::Systems::CommandSystem::SetMap(nullptr);
 
     int DeadScv = CreateUnit(
         EM,

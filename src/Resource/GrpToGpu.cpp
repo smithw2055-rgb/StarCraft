@@ -50,8 +50,9 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
         int Px = Info.Width * Info.Height;
         for (int P = 0; P < Px; ++P)
         {
-            uint8_t Idx = Sprite.RawFrameData[Info.Offset + P];
-            const bool TeamColorPixel = IsTeamColorIndex(Idx, Options);
+            const uint8_t SourceIndex = Sprite.RawFrameData[Info.Offset + P];
+            uint8_t Idx = SourceIndex;
+            const bool TeamColorPixel = IsTeamColorIndex(SourceIndex, Options);
             if (Options.UseIndexRemap && Options.IndexRemap[Idx] >= 0)
                 Idx = static_cast<uint8_t>(Options.IndexRemap[Idx]);
 
@@ -69,10 +70,36 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
                 continue;
 
             const size_t OutOffset = ((size_t)OutY * (size_t)F.Width + (size_t)OutX) * 4u;
-            F.Rgba[OutOffset + 0] = C.R;
-            F.Rgba[OutOffset + 1] = C.G;
-            F.Rgba[OutOffset + 2] = C.B;
-            F.Rgba[OutOffset + 3] = (TransparentByIndex || TransparentByBlack) ? 0 : C.A;
+            if (Options.DecodeLightTableMask)
+            {
+                const uint8_t Alpha = DecodeLightTableMaskAlpha(
+                    SourceIndex, Options.LightTableIndexCount,
+                    Options.LightTableMaxAlpha);
+                const unsigned Strength = Options.LightTableIndexCount > 1
+                    ? (static_cast<unsigned>(std::min<uint8_t>(
+                           SourceIndex, Options.LightTableIndexCount) -
+                       (SourceIndex > 0 ? 1u : 0u)) * 255u) /
+                          static_cast<unsigned>(Options.LightTableIndexCount - 1)
+                    : 0u;
+                F.Rgba[OutOffset + 0] = static_cast<uint8_t>(
+                    Options.LightTableTint.R +
+                    ((255u - Options.LightTableTint.R) * Strength) / 255u);
+                F.Rgba[OutOffset + 1] = static_cast<uint8_t>(
+                    Options.LightTableTint.G +
+                    ((255u - Options.LightTableTint.G) * Strength) / 255u);
+                F.Rgba[OutOffset + 2] = static_cast<uint8_t>(
+                    Options.LightTableTint.B +
+                    ((255u - Options.LightTableTint.B) * Strength) / 255u);
+                F.Rgba[OutOffset + 3] = Alpha;
+            }
+            else
+            {
+                F.Rgba[OutOffset + 0] = C.R;
+                F.Rgba[OutOffset + 1] = C.G;
+                F.Rgba[OutOffset + 2] = C.B;
+                F.Rgba[OutOffset + 3] =
+                    (TransparentByIndex || TransparentByBlack) ? 0 : C.A;
+            }
 
             if (TeamColorPixel && F.Rgba[OutOffset + 3] != 0)
             {

@@ -1,8 +1,10 @@
 #include "Resource/GameDataLoader.h"
 #include "Resource/DatDecoder.h"
 #include "Resource/GrpDecoder.h"
+#include "Resource/GrpToGpu.h"
 
 #include "Game/DataEnums.h"
+#include "Game/IScriptVM.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -126,6 +128,129 @@ namespace
         Require(HasTeamColorPixels(*Sprite), "team-color unit GRP contains palette remap indices");
     }
 
+    void RequireUnitIScriptAnimations(Resource::GameDataLoader& Loader,
+                                      const Game::IScriptDatabase& Scripts,
+                                      uint32_t ChkUnitID,
+                                      std::initializer_list<int> AnimationIDs,
+                                      const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitImageID(ChkUnitID);
+        Require(ImageID != UINT32_MAX, Name);
+
+        const auto* ImageInfo = Scripts.FindImageInfo((int)ImageID);
+        Require(ImageInfo && ImageInfo->IScriptID >= 0,
+            "unit main image resolves to an iscript entry");
+        const auto* Script = ImageInfo ? Scripts.FindScript(ImageInfo->IScriptID) : nullptr;
+        Require(Script, "unit main image resolves to an iscript program");
+
+        for (int AnimationID : AnimationIDs)
+        {
+            if (AnimationID < 0 ||
+                AnimationID >= (int)Script->AnimationPC.size() ||
+                Script->AnimationPC[(size_t)AnimationID] <= 0)
+            {
+                std::fprintf(stderr,
+                    "Missing project iscript animation: chk=%u image=%u script=%d anim=%d\n",
+                    ChkUnitID, ImageID, ImageInfo->IScriptID, AnimationID);
+            }
+            Require(AnimationID >= 0 &&
+                    AnimationID < (int)Script->AnimationPC.size() &&
+                    Script->AnimationPC[(size_t)AnimationID] > 0,
+                Name);
+        }
+    }
+
+    void RequireUnitLacksIScriptAnimation(Resource::GameDataLoader& Loader,
+                                          const Game::IScriptDatabase& Scripts,
+                                          uint32_t ChkUnitID,
+                                          int AnimationID,
+                                          const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitImageID(ChkUnitID);
+        const auto* ImageInfo = Scripts.FindImageInfo((int)ImageID);
+        const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+            ? Scripts.FindScript(ImageInfo->IScriptID)
+            : nullptr;
+        Require(Script, "unit main image resolves to an iscript program");
+        Require(AnimationID < 0 ||
+                AnimationID >= (int)Script->AnimationPC.size() ||
+                Script->AnimationPC[(size_t)AnimationID] <= 0,
+            Name);
+    }
+
+    void RequireUnitIScriptOrderSignal(Resource::GameDataLoader& Loader,
+                                       const Game::IScriptDatabase& Scripts,
+                                       uint32_t ChkUnitID,
+                                       int AnimationID,
+                                       int SignalMask,
+                                       const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitImageID(ChkUnitID);
+        const auto* ImageInfo = Scripts.FindImageInfo((int)ImageID);
+        const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+            ? Scripts.FindScript(ImageInfo->IScriptID)
+            : nullptr;
+        Require(Script && AnimationID >= 0 &&
+                AnimationID < (int)Script->AnimationPC.size() &&
+                Script->AnimationPC[(size_t)AnimationID] > 0,
+            Name);
+
+        Game::IScriptVM VM;
+        VM.LoadScript(AnimationID,
+                      &Scripts.GetProgram().ProgramData,
+                      Script->AnimationPC[(size_t)AnimationID]);
+        VM.GetContext().ImageID = (int)ImageID;
+        bool FoundSignal = false;
+        for (int Step = 0; Step < 512 && VM.IsRunning() && !FoundSignal; ++Step)
+        {
+            VM.ExecuteFrame();
+            for (const auto& Event : VM.ConsumeEvents())
+            {
+                if (Event.Type == Game::IScriptEventType::OrderSignal &&
+                    (Event.A & SignalMask) != 0)
+                {
+                    FoundSignal = true;
+                    break;
+                }
+            }
+        }
+        if (!FoundSignal)
+        {
+            std::fprintf(stderr,
+                "Missing project iscript order signal: chk=%u image=%u script=%d anim=%d mask=0x%x\n",
+                ChkUnitID, ImageID, ImageInfo ? ImageInfo->IScriptID : -1,
+                AnimationID, SignalMask);
+        }
+        Require(FoundSignal, Name);
+    }
+
+    void RequireWeaponIScriptAnimations(Resource::GameDataLoader& Loader,
+                                        const Game::IScriptDatabase& Scripts,
+                                        uint32_t ChkUnitID,
+                                        bool TargetIsAir,
+                                        std::initializer_list<int> AnimationIDs,
+                                        const char* Name)
+    {
+        const auto* Unit = Loader.FindUnitByID(ChkUnitID);
+        Require(Unit, Name);
+        const uint32_t WeaponID = TargetIsAir ? Unit->AirWeapon : Unit->GroundWeapon;
+        const auto* Weapon = Unit ? Loader.FindWeaponByID(WeaponID) : nullptr;
+        const auto* Flingy = Weapon ? Loader.FindFlingyByID(Weapon->FlingyID) : nullptr;
+        const auto* Sprite = Flingy ? Loader.FindSpriteByID(Flingy->SpriteID) : nullptr;
+        const auto* ImageInfo = Sprite ? Scripts.FindImageInfo((int)Sprite->ImageID) : nullptr;
+        const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+            ? Scripts.FindScript(ImageInfo->IScriptID)
+            : nullptr;
+        Require(Script, Name);
+        for (int AnimationID : AnimationIDs)
+        {
+            Require(AnimationID >= 0 &&
+                    AnimationID < (int)Script->AnimationPC.size() &&
+                    Script->AnimationPC[(size_t)AnimationID] > 0,
+                Name);
+        }
+    }
+
     void RequireSelectionCircleImage(Resource::GameDataLoader& Loader,
                                      uint32_t CircleIndex,
                                      int ExpectedPixels)
@@ -159,6 +284,10 @@ int main()
         "load images.tbl");
     Require(Loader.LoadImageRelationDataRaw(ReadAll("assets/images.rel")),
         "load images.rel");
+
+    Game::IScriptDatabase Scripts;
+    Require(Scripts.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+        "load project iscript data");
 
     const auto Flingy = Resource::DatDecoder::DecodeFlingy(ReadAll("assets/arr/flingy.dat"));
     Require(Flingy.size() == 209, "flingy.dat decodes all entries");
@@ -242,14 +371,56 @@ int main()
             CommandCenter->Armor == 1 &&
             CommandCenter->SightRange == 10,
         "Command Center balance fields decode from column-major units.dat");
-    Require(CommandCenter->PlacementWidth == 160 &&
-            CommandCenter->PlacementHeight == 160,
-        "Command Center placement size decodes");
+    Require(CommandCenter->PlacementWidth == 128 &&
+            CommandCenter->PlacementHeight == 96,
+        "Command Center placement size decodes from the project units.dat table");
     Require(CommandCenter->DimensionLeft == 58 &&
             CommandCenter->DimensionUp == 41 &&
             CommandCenter->DimensionRight == 58 &&
             CommandCenter->DimensionDown == 41,
         "Command Center dimensions decode to 117x83");
+    const uint32_t CommandCenterImageID = Loader.ResolveUnitImageID(106);
+    const std::string CommandCenterDamageLoPath =
+        Loader.ResolveImageOverlayPath(CommandCenterImageID, 1);
+    Require(!CommandCenterDamageLoPath.empty(),
+        "project Command Center image exposes a damage-overlay LO table");
+    const auto CommandCenterDamageOffsets = Resource::DatDecoder::DecodeImageOffsets(
+        ReadSpriteAsset(CommandCenterDamageLoPath));
+    Require(CommandCenterDamageOffsets && !CommandCenterDamageOffsets->Frames.empty(),
+        "project Command Center damage-overlay offsets decode");
+    const auto& CommandCenterDamageFrame = CommandCenterDamageOffsets->Frames.front();
+    const size_t CommandCenterDamageSlots = (size_t)std::count_if(
+        CommandCenterDamageFrame.begin(), CommandCenterDamageFrame.end(),
+        [](const Resource::ImageOffset& Offset) {
+            return Offset.X != 127 || Offset.Y != 127;
+        });
+    Require(CommandCenterDamageSlots > 0 && CommandCenterDamageSlots <= 22,
+        "project Command Center damage LO table contains usable flame slots");
+    for (uint32_t DamageImageID : {450u, 472u})
+    {
+        Require(!Loader.ResolveImageGrpPath(DamageImageID).empty(),
+            "project damage flame image resolves to a renderable GRP");
+        const auto* DamageImageInfo = Scripts.FindImageInfo((int)DamageImageID);
+        const auto* DamageScript = DamageImageInfo && DamageImageInfo->IScriptID >= 0
+            ? Scripts.FindScript(DamageImageInfo->IScriptID)
+            : nullptr;
+        Require(DamageScript &&
+                Game::IScriptAnims::Anim_Init < (int)DamageScript->AnimationPC.size() &&
+                DamageScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init] > 0,
+            "project damage flame image exposes its own Init animation");
+    }
+    const auto* ComsatStation = Loader.FindUnitByID(107);
+    Require(ComsatStation &&
+            ComsatStation->PlacementWidth == 64 &&
+            ComsatStation->PlacementHeight == 64 &&
+            ComsatStation->AddonPositionX == 128 &&
+            ComsatStation->AddonPositionY == 32,
+        "project units.dat exposes the Terran add-on placement offset");
+    Require(-CommandCenter->PlacementWidth / 2 + ComsatStation->AddonPositionX +
+                ComsatStation->PlacementWidth / 2 == 96 &&
+            -CommandCenter->PlacementHeight / 2 + ComsatStation->AddonPositionY +
+                ComsatStation->PlacementHeight / 2 == 16,
+        "Command Center and Comsat resolve the authored +96,+16 center anchor");
 
     const auto* MarineSprite = Loader.FindSpriteByID(235);
     Require(MarineSprite, "Marine sprites.dat entry");
@@ -292,6 +463,55 @@ int main()
     const auto GaussFrames = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(GaussImagePath));
     Require(GaussFrames && !GaussFrames->Frames.empty(),
         "Gauss Rifle projectile GRP decodes to renderable weapon frames");
+    RequireWeaponIScriptAnimations(
+        Loader, Scripts, 0, false,
+        {Game::IScriptAnims::Anim_Init,
+         Game::IScriptAnims::Anim_GndAttkInit,
+         Game::IScriptAnims::Anim_Death},
+        "project Gauss Rifle projectile exposes flight and impact animations");
+
+    constexpr uint32_t ScvMiningWeaponID = 14;
+    const auto* ScvWeapon = Loader.FindWeaponByID(ScvMiningWeaponID);
+    const auto* ScvFlingy = ScvWeapon ? Loader.FindFlingyByID(ScvWeapon->FlingyID) : nullptr;
+    const auto* ScvSprite = ScvFlingy ? Loader.FindSpriteByID(ScvFlingy->SpriteID) : nullptr;
+    Require(ScvWeapon && ScvFlingy && ScvSprite &&
+            ScvWeapon->FlingyID == 141 && ScvFlingy->SpriteID == 340 &&
+            ScvSprite->ImageID == 526,
+        "Fusion Cutter follows the project DAT chain to SCV spark image 526");
+    const std::string ScvSparkPath = Loader.ResolveImageGrpPath(ScvSprite->ImageID);
+    Require(ScvSparkPath == "bullet/scvspark.grp",
+        "Fusion Cutter resolves to the project unit/bullet/scvspark.grp material");
+    const auto ScvSparkFrames = Resource::GrpDecoder::DecodeGrp(ReadSpriteAsset(ScvSparkPath));
+    Require(ScvSparkFrames && ScvSparkFrames->Frames.size() > 1,
+        "project SCV spark GRP decodes to animated frames");
+    const auto* ScvBaseImage = Loader.FindImageByID(247);
+    const auto* ScvShadowImage = Loader.FindImageByID(248);
+    const auto* ScvGlowImage = Loader.FindImageByID(249);
+    const auto* ScvShadowRelation = Loader.FindImageRelationByID(248);
+    const auto* ScvGlowRelation = Loader.FindImageRelationByID(249);
+    Require(ScvBaseImage && ScvBaseImage->Modifier == 0 &&
+            Loader.ResolveImageGrpPath(247) == "terran/SCV.grp",
+        "project SCV base image uses its classic GRP without a blend modifier");
+    Require(ScvShadowImage && ScvShadowImage->Modifier == 10 &&
+            ScvShadowRelation && ScvShadowRelation->IsShadow() &&
+            ScvShadowRelation->ParentImageID == 247,
+        "project SCV shadow keeps its shadow modifier and base-image relation");
+    Require(ScvGlowImage && ScvGlowImage->Modifier == 9 &&
+            ScvGlowImage->ColorShift == 1 &&
+            Loader.ResolveImageGrpPath(249) == "thingy/tscGlow.grp" &&
+            ScvGlowRelation && ScvGlowRelation->IsGlowOverlay() &&
+            ScvGlowRelation->ParentImageID == 247,
+        "project SCV walking glow keeps its light-table modifier and base-image relation");
+    const auto ScvGlowFrames = Resource::GrpDecoder::DecodeGrp(
+        ReadSpriteAsset(Loader.ResolveImageGrpPath(249)));
+    Require(ScvGlowFrames && !ScvGlowFrames->Frames.empty(),
+        "project SCV walking glow GRP decodes to a renderable dynamic overlay");
+    Require(Resource::Graphics::DecodeLightTableMaskAlpha(1, 63, 192) == 0 &&
+            Resource::Graphics::DecodeLightTableMaskAlpha(10, 63, 192) <
+                Resource::Graphics::DecodeLightTableMaskAlpha(46, 63, 192) &&
+            Resource::Graphics::DecodeLightTableMaskAlpha(46, 63, 192) < 192 &&
+            Resource::Graphics::DecodeLightTableMaskAlpha(1, 1, 192) == 192,
+        "modifier 9 light-table indices decode as a graded mask instead of uniform white alpha");
 
     const auto Upgrades = Resource::DatDecoder::DecodeUpgrades(ReadAll("assets/arr/upgrades.dat"));
     Require(Upgrades.size() > 0, "upgrades.dat decodes");
@@ -324,8 +544,55 @@ int main()
     RequireUnitMainImage(Loader, 12, "Battlecruiser image");
     RequireUnitMainImage(Loader, 124, "Missile Turret image");
     RequireUnitConstructionImage(Loader, 109, 330, "Supply Depot construction image");
+    const auto* SupplyDepotConstruction = Loader.FindImageByID(330);
+    Require(SupplyDepotConstruction && SupplyDepotConstruction->Modifier == 0 &&
+            SupplyDepotConstruction->IScriptID == 140 &&
+            Loader.ResolveImageGrpPath(330) == "terran/TBldSml.grp",
+        "Supply Depot construction resolves the project TBldSml GRP and iscript");
     RequireUnitTeamColorMaskSource(Loader, 0, "Marine team-color source");
     RequireUnitTeamColorMaskSource(Loader, 7, "SCV team-color source");
+
+    for (uint32_t ChkUnitID : {37u, 38u, 41u, 46u, 50u, 51u, 53u, 54u, 103u})
+    {
+        RequireUnitIScriptAnimations(
+            Loader, Scripts, ChkUnitID,
+            {Game::IScriptAnims::Anim_Burrow, Game::IScriptAnims::Anim_UnBurrow},
+            "burrow-capable project unit has Burrow and UnBurrow animations");
+        RequireUnitIScriptOrderSignal(
+            Loader, Scripts, ChkUnitID, Game::IScriptAnims::Anim_Burrow, 0x04,
+            "project Burrow animation emits the completion signal");
+        RequireUnitIScriptOrderSignal(
+            Loader, Scripts, ChkUnitID, Game::IScriptAnims::Anim_UnBurrow, 0x04,
+            "project UnBurrow animation emits the completion signal");
+    }
+    RequireUnitIScriptAnimations(
+        Loader, Scripts, 39u,
+        {Game::IScriptAnims::Anim_Init},
+        "Ultralisk project image resolves without assuming a Burrow animation");
+    RequireUnitLacksIScriptAnimation(
+        Loader, Scripts, 39u, Game::IScriptAnims::Anim_Burrow,
+        "Ultralisk project image does not expose a Burrow animation");
+
+    for (uint32_t ChkUnitID : {106u, 111u, 113u, 114u, 116u})
+    {
+        RequireUnitIScriptAnimations(
+            Loader, Scripts, ChkUnitID,
+            {Game::IScriptAnims::Anim_LiftOff, Game::IScriptAnims::Anim_Landing},
+            "liftable project building has LiftOff and Landing animations");
+        RequireUnitIScriptOrderSignal(
+            Loader, Scripts, ChkUnitID, Game::IScriptAnims::Anim_LiftOff, 0x10,
+            "project LiftOff animation emits the flight completion signal");
+        RequireUnitIScriptOrderSignal(
+            Loader, Scripts, ChkUnitID, Game::IScriptAnims::Anim_Landing, 0x10,
+            "project Landing animation emits the flight completion signal");
+    }
+    for (uint32_t ChkUnitID : {107u, 108u, 115u, 117u, 118u, 120u})
+    {
+        RequireUnitIScriptAnimations(
+            Loader, Scripts, ChkUnitID,
+            {Game::IScriptAnims::Anim_LiftOff, Game::IScriptAnims::Anim_Landing},
+            "project Terran add-on has detach and reconnect animations");
+    }
 
     Require(Game::Data::IsAirUnitType(11), "Dropship is treated as air");
     Require(Game::Data::IsAirUnitType(12), "Battlecruiser is treated as air");

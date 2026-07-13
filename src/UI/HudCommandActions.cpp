@@ -89,6 +89,10 @@ void Hud::OnButtonInvoked(int ButtonIndex)
                 mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Harvest;
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
+            case HudCommandId::Land:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Land;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
             default: break;
         }
     }

@@ -56,31 +56,11 @@ namespace
         return Game::Races::GetRaceByChkUnitID(ChkUnitID, Race::Terran);
     }
 
-    int NormalizeTriggerPlayerID(uint32_t PlayerID)
-    {
-        if (PlayerID >= 1 && PlayerID <= 8)
-            return (int)PlayerID - 1;
-        return (int)PlayerID;
-    }
-
-    size_t RuntimePlayerDataIndex(const SCRTriggerData& Data, int PlayerID)
-    {
-        const bool OneBasedPlayerSlots =
-            Data.Players[0].Owner == 0 &&
-            std::any_of(Data.Players.begin() + 1, Data.Players.begin() + 9,
-                [](const SCRPlayerInfo& Info) { return Info.Owner != 0; });
-        if (OneBasedPlayerSlots && PlayerID >= 0 && PlayerID < 8)
-            return (size_t)PlayerID + 1u;
-        if (PlayerID >= 0 && PlayerID < (int)Data.Players.size())
-            return (size_t)PlayerID;
-        return 0u;
-    }
-
     bool RuntimePlayerHasOwner(const SCRTriggerData& Data, int PlayerID, uint8_t Owner)
     {
-        if (PlayerID < 0 || PlayerID >= 8)
+        if (PlayerID < 0 || PlayerID >= (int)Data.Players.size())
             return false;
-        return Data.Players[RuntimePlayerDataIndex(Data, PlayerID)].Owner == Owner;
+        return Data.Players[(size_t)PlayerID].Owner == Owner;
     }
 
     int ClampPlayer(int PlayerID)
@@ -157,9 +137,18 @@ bool TriggerVM::LoadScript(const SCRTriggerData& Data)
         const auto& Trigger = mTriggers[Index];
         for (int Owner = 0; Owner < 8; ++Owner)
         {
+            // CHK player slots are zero based. Real scenarios execute their
+            // trigger lists for occupied (human) slots; synthetic fixtures
+            // without parsed OWNR data may still opt into any explicit slot.
+            if (!mData.RawData.empty() &&
+                mData.Players[(size_t)Owner].Owner != kChkOwnerHuman)
+            {
+                continue;
+            }
+
             const uint32_t ForceGroup =
-                18u + (uint32_t)mData.Players[RuntimePlayerDataIndex(mData, Owner)].Force;
-            const size_t TriggerOwnerIndex = (size_t)Owner + 1u;
+                18u + (uint32_t)mData.Players[(size_t)Owner].Force;
+            const size_t TriggerOwnerIndex = (size_t)Owner;
             if ((TriggerOwnerIndex >= Trigger.Owners.size() || !Trigger.Owners[TriggerOwnerIndex]) &&
                 !Trigger.Owners[17] &&
                 (ForceGroup >= Trigger.Owners.size() || !Trigger.Owners[ForceGroup]))
@@ -404,8 +393,7 @@ bool TriggerVM::IsPlayerActive(int PlayerID) const
         return false;
     if (PlayerID >= 8)
         return mData.Players[(size_t)PlayerID].Owner != 0;
-    return mData.Players[RuntimePlayerDataIndex(mData, PlayerID)].Owner != 0 ||
-        mData.RawData.empty();
+    return mData.Players[(size_t)PlayerID].Owner != 0 || mData.RawData.empty();
 }
 
 bool TriggerVM::AreAllied(int PlayerA, int PlayerB) const
@@ -442,7 +430,7 @@ bool TriggerVM::MatchPlayerGroup(int Owner, uint32_t PlayerGroup, int CandidateP
     if (!IsPlayerActive(CandidatePlayer))
         return false;
     if (PlayerGroup < 12)
-        return CandidatePlayer == NormalizeTriggerPlayerID(PlayerGroup);
+        return CandidatePlayer == (int)PlayerGroup;
     switch (PlayerGroup)
     {
         case 12: return false;
@@ -453,7 +441,7 @@ bool TriggerVM::MatchPlayerGroup(int Owner, uint32_t PlayerGroup, int CandidateP
         case 17: return CandidatePlayer < 8;
         case 18: case 19: case 20: case 21:
             return CandidatePlayer < 8 &&
-                mData.Players[RuntimePlayerDataIndex(mData, CandidatePlayer)].Force ==
+                mData.Players[(size_t)CandidatePlayer].Force ==
                     (uint8_t)(PlayerGroup - 18);
         case 26:
             return CandidatePlayer != Owner && !AreAllied(Owner, CandidatePlayer);
@@ -883,7 +871,23 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                 MoveOrder.TargetEntityID = -1;
                 MoveOrder.Type = Modifier == 1 ? OrderType::Patrol :
                     (Modifier == 2 ? OrderType::AttackMove : OrderType::Move);
-                Game::Systems::CommandSystem::IssueOrder(EM, ID, MoveOrder, false);
+                auto* Burrow = EM.GetComponent<BurrowComponent>(ID);
+                const bool FullyBurrowed = Burrow &&
+                    (Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed);
+                if (FullyBurrowed)
+                {
+                    Order UnburrowOrder;
+                    UnburrowOrder.Type = OrderType::Unburrow;
+                    Game::Systems::CommandSystem::IssueOrder(
+                        EM, ID, UnburrowOrder, false);
+                    Game::Systems::CommandSystem::IssueOrder(
+                        EM, ID, MoveOrder, true);
+                }
+                else
+                {
+                    Game::Systems::CommandSystem::IssueOrder(
+                        EM, ID, MoveOrder, false);
+                }
             }
             return true;
         }
@@ -896,7 +900,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             {
                 if (Limit > 0 && Done >= Limit) break;
                 if (auto* Player = EM.GetComponent<PlayerComponent>(ID))
-                    Player->PlayerID = NormalizeTriggerPlayerID(Action.Secondary);
+                    Player->PlayerID = ClampPlayer((int)Action.Secondary);
                 ++Done;
             }
             return true;
@@ -992,6 +996,14 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
     Player.PlayerID = Owner;
     Render.ImageID = mConfig.ResolveImageID ? (uint32_t)mConfig.ResolveImageID(ChkUnitID, Pos, Owner) : (uint32_t)ChkUnitID;
 
+    const bool CanBurrow = mConfig.CanBurrow &&
+        mConfig.CanBurrow(ChkUnitID, Render.ImageID);
+    if (CanBurrow)
+    {
+        auto& Burrow = EM.AddComponent<BurrowComponent>(Eid);
+        Burrow.CanBurrow = true;
+    }
+
     int UnitDefID = Game::Races::GetUnitDefIDByChkUnitID(ChkUnitID);
     if (UnitDefID >= 0)
     {
@@ -1080,14 +1092,31 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         if (Props->ValidFieldFlags & 0x04) Unit.ShieldPoints = Unit.MaxShieldPoints * Props->ShieldPercent / 100;
         if (Props->ValidFieldFlags & 0x08) Unit.EnergyPoints = Unit.MaxEnergyPoints * Props->EnergyPercent / 100;
         if (Props->ValidFieldFlags & 0x20) Unit.HangarCount = std::max(0, (int)Props->HangarCount);
-        if (Props->ValidSpecialFlags & 0x10) Unit.IsInvincible = (Props->StateFlags & 0x10) != 0;
+        if (Props->ValidSpecialFlags & 0x10)
+            Unit.IsInvincible = (Props->StateFlags & 0x10) != 0;
         if ((Props->ValidFieldFlags & 0x10) && EM.GetComponent<ResourceComponent>(Eid))
             EM.GetComponent<ResourceComponent>(Eid)->Amount = (int)Props->ResourceAmount;
-        if (Props->ValidSpecialFlags & 0x13)
+        if ((Props->ValidSpecialFlags & 0x08) &&
+            (Props->StateFlags & 0x08))
+        {
+            auto& Status = EM.AddComponent<StatusEffectComponent>(Eid);
+            Status.AddEffect(StatusEffect::Hallucination, 1000000.0f, -1);
+        }
+        if (Props->ValidSpecialFlags & 0x03)
         {
             auto& Status = EM.AddComponent<CloakComponent>(Eid);
-            Status.IsCloaked = (Props->StateFlags & 0x01) != 0;
-            Status.IsBurrowed = (Props->StateFlags & 0x02) != 0;
+            Status.IsCloaked = (Props->ValidSpecialFlags & 0x01) &&
+                               (Props->StateFlags & 0x01);
+            Status.IsBurrowed = CanBurrow &&
+                                (Props->ValidSpecialFlags & 0x02) &&
+                                (Props->StateFlags & 0x02);
+            if (Status.IsBurrowed)
+            {
+                auto* Burrow = EM.GetComponent<BurrowComponent>(Eid);
+                Burrow->IsBurrowed = true;
+                Burrow->Phase = BurrowPhase::Burrowed;
+                Status.IsCloaked = true;
+            }
         }
     }
 
@@ -1233,6 +1262,9 @@ void TriggerVM::StartAIScript(Core::ECS::EntityManager& EM, int Owner, uint32_t 
     Script.PlayerID = Owner;
     Script.ScriptID = ScriptID;
     Script.HasLocation = HasLocation;
+    Script.HasIssuedTarget = false;
+    Script.AssignedTargets.clear();
+    Script.AssignedTolerances.clear();
     Script.TickAccumulator = 0.0f;
     Script.WaveCount = 0;
     Script.Anchor = NewAnchor;
@@ -1313,47 +1345,142 @@ Core::Math::Vec2 TriggerVM::ResolveAIScriptTarget(Core::ECS::EntityManager& EM, 
 
 int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript& Script, const Core::Math::Vec2& Target)
 {
-    int Issued = 0;
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
-    for (int ID : Units)
+    std::vector<int> Attackers;
+    for (int ID : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
-        auto* Trans = EM.GetComponent<TransformComponent>(ID);
-        if (!Unit || !Player || !Trans || Unit->HitPoints <= 0)
+        if (!Unit || !Player || Unit->HitPoints <= 0)
             continue;
         if (Player->PlayerID != Script.PlayerID)
             continue;
         if (!EM.GetComponent<CombatComponent>(ID))
             continue;
+        Attackers.push_back(ID);
+    }
+
+    std::sort(Attackers.begin(), Attackers.end());
+    const bool TargetChanged =
+        !Script.HasIssuedTarget ||
+        Script.LastIssuedTarget.DistanceTo(Target) > kAIScriptRetargetPixels;
+    if (TargetChanged)
+    {
+        Script.AssignedTargets.clear();
+        Script.AssignedTolerances.clear();
+    }
+
+    struct AssignedRetry
+    {
+        int EntityID = -1;
+        Core::Math::Vec2 Target;
+        float Tolerance = kAIScriptRetargetPixels;
+    };
+    std::vector<AssignedRetry> AssignedRetries;
+    std::vector<int> NewAttackers;
+    AssignedRetries.reserve(Attackers.size());
+    NewAttackers.reserve(Attackers.size());
+    for (int ID : Attackers)
+    {
+        auto* Trans = EM.GetComponent<TransformComponent>(ID);
+        if (!Trans)
+            continue;
 
         auto* Path = EM.GetComponent<PathfindingComponent>(ID);
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
+        const auto AssignedTargetIt = Script.AssignedTargets.find(ID);
+        const bool HasAssignedTarget =
+            AssignedTargetIt != Script.AssignedTargets.end();
+        const Core::Math::Vec2 AssignedTarget = HasAssignedTarget
+            ? AssignedTargetIt->second
+            : (Cmd ? Cmd->TargetPosition : Target);
+        const auto AssignedToleranceIt = Script.AssignedTolerances.find(ID);
+        const float AssignedTolerance = AssignedToleranceIt !=
+            Script.AssignedTolerances.end()
+            ? AssignedToleranceIt->second
+            : (Path ? Path->NodeTolerance : kAIScriptRetargetPixels);
         const bool SameAttackMove =
             Cmd &&
             Cmd->CurrentCommand == CommandType::AttackMove &&
             Cmd->TargetEntityID < 0 &&
-            Cmd->TargetPosition.DistanceTo(Target) <= kAIScriptRetargetPixels;
+            Cmd->TargetPosition.DistanceTo(AssignedTarget) <=
+                kAIScriptRetargetPixels;
         const bool HasActivePath = Path && Path->PathIndex < (int)Path->Path.size();
-        const bool RecentlyFailedSameTarget =
+        const bool RecentlyFailedAssignedTarget =
+            SameAttackMove &&
             Path &&
             Path->HasRecentMoveFailure &&
-            Path->RecentFailedMoveTarget.DistanceTo(Target) <= kAIScriptRetargetPixels;
-        const float NodeTolerance = Path ? Path->NodeTolerance : 0.0f;
-        const bool IsAtTarget = Trans->Position.DistanceTo(Target) <= std::max(NodeTolerance, kAIScriptRetargetPixels);
-        if ((SameAttackMove && (HasActivePath || IsAtTarget)) || RecentlyFailedSameTarget)
+            Path->RecentFailedMoveTarget.DistanceTo(AssignedTarget) <=
+                kAIScriptRetargetPixels;
+        const float NodeTolerance = std::max(
+            Path ? Path->NodeTolerance : 0.0f, AssignedTolerance);
+        const bool IsAtAssignedTarget = SameAttackMove &&
+            Trans->Position.DistanceTo(AssignedTarget) <=
+            std::max(NodeTolerance, kAIScriptRetargetPixels);
+        const bool CompletedAssignedOrder =
+            !TargetChanged &&
+            Cmd &&
+            Cmd->CurrentCommand == CommandType::Stop &&
+            Cmd->TargetEntityID < 0 &&
+            HasAssignedTarget;
+        if (!TargetChanged &&
+            ((SameAttackMove && (HasActivePath || IsAtAssignedTarget)) ||
+             RecentlyFailedAssignedTarget ||
+             CompletedAssignedOrder))
             continue;
 
+        if (HasAssignedTarget)
+            AssignedRetries.push_back({ID, AssignedTarget, AssignedTolerance});
+        else
+            NewAttackers.push_back(ID);
+    }
+
+    Script.LastIssuedTarget = Target;
+    Script.HasIssuedTarget = true;
+    if (AssignedRetries.empty() && NewAttackers.empty())
+        return 0;
+
+    int Issued = 0;
+    for (const auto& Retry : AssignedRetries)
+    {
+        Order AttackOrder;
+        AttackOrder.Type = OrderType::AttackMove;
+        AttackOrder.TargetPosition = Retry.Target;
+        AttackOrder.TargetEntityID = -1;
+        Game::Systems::CommandSystem::IssueOrder(
+            EM, Retry.EntityID, AttackOrder, false);
+        if (auto* IssuedPath =
+                EM.GetComponent<PathfindingComponent>(Retry.EntityID))
+        {
+            IssuedPath->NodeTolerance = std::max(
+                IssuedPath->NodeTolerance, Retry.Tolerance);
+        }
+        if (auto* IssuedCmd = EM.GetComponent<CommandComponent>(Retry.EntityID);
+            IssuedCmd && IssuedCmd->CurrentCommand == CommandType::AttackMove)
+        {
+            ++Issued;
+        }
+    }
+
+    if (!NewAttackers.empty())
+    {
         Order AttackOrder;
         AttackOrder.Type = OrderType::AttackMove;
         AttackOrder.TargetPosition = Target;
         AttackOrder.TargetEntityID = -1;
-        Game::Systems::CommandSystem::IssueOrder(EM, ID, AttackOrder, false);
+        Game::Systems::CommandSystem::IssueOrder(
+            EM, NewAttackers, AttackOrder, false);
+    }
+    for (int ID : NewAttackers)
+    {
         if (auto* IssuedCmd = EM.GetComponent<CommandComponent>(ID);
             IssuedCmd && IssuedCmd->CurrentCommand == CommandType::AttackMove)
         {
             if (auto* IssuedPath = EM.GetComponent<PathfindingComponent>(ID))
+            {
                 IssuedPath->NodeTolerance = std::max(IssuedPath->NodeTolerance, kAIScriptRetargetPixels);
+                Script.AssignedTolerances[ID] = IssuedPath->NodeTolerance;
+            }
+            Script.AssignedTargets[ID] = IssuedCmd->TargetPosition;
             ++Issued;
         }
     }

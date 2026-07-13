@@ -37,10 +37,28 @@ inline void ConfigureGameplayCollisionBoundsResolvers(
     Game::Systems::ZergSystem::SetCollisionBoundsResolver(std::move(Resolver));
 }
 
+inline void ConfigureBuildingAddonOffsetResolver(
+    Game::Systems::BuildingSystem::AddonOffsetResolver Resolver)
+{
+    Game::Systems::BuildingSystem::SetAddonOffsetResolver(std::move(Resolver));
+}
+
 inline void ConfigureAnimationOverlayOffsetResolver(
     Game::Systems::AnimationSystem::OverlayOffsetResolver Resolver)
 {
     Game::Systems::AnimationSystem::SetOverlayOffsetResolver(std::move(Resolver));
+}
+
+inline void ConfigureAnimationWeaponImageResolver(
+    Game::Systems::AnimationSystem::WeaponImageResolver Resolver)
+{
+    Game::Systems::AnimationSystem::SetWeaponImageResolver(std::move(Resolver));
+}
+
+inline void ConfigureZergBurrowCapabilityResolver(
+    Game::Systems::ZergSystem::BurrowCapabilityResolver Resolver)
+{
+    Game::Systems::ZergSystem::SetBurrowCapabilityResolver(std::move(Resolver));
 }
 
 inline void ConfigureBulletVisualResolver(

@@ -64,6 +64,69 @@ int main()
     Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
         "load iscript database");
 
+    const auto* ShieldInfo = Database.FindImageInfo(1);
+    const auto* ShieldScript = ShieldInfo && ShieldInfo->IScriptID >= 0
+        ? Database.FindScript(ShieldInfo->IScriptID)
+        : nullptr;
+    Require(ShieldScript && !ShieldScript->AnimationPC.empty(),
+        "Protoss shield mask has a real Init iscript");
+    Game::IScriptVM ShieldVM;
+    ShieldVM.LoadScript(Game::IScriptAnims::Anim_Init,
+        &Database.GetProgram().ProgramData,
+        ShieldScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init]);
+    int ShieldFollowCount = 0;
+    for (int Frame = 0; Frame < 16 && ShieldVM.IsRunning(); ++Frame)
+    {
+        ShieldVM.ExecuteFrame();
+        if (ShieldVM.GetContext().FollowMainGraphic)
+            ++ShieldFollowCount;
+    }
+    Require(ShieldFollowCount >= 2,
+        "real Protoss shield mask repeatedly executes followmaingraphic");
+
+    const auto* RefineryInfo = Database.FindImageInfo(307);
+    const auto* RefineryScript = RefineryInfo && RefineryInfo->IScriptID >= 0
+        ? Database.FindScript(RefineryInfo->IScriptID)
+        : nullptr;
+    Require(RefineryScript, "Terran Refinery has a real iscript");
+    auto RunRefineryAnimation = [&](int Anim, bool& SawShadow) -> int
+    {
+        Require(Anim < (int)RefineryScript->AnimationPC.size() &&
+                RefineryScript->AnimationPC[(size_t)Anim] > 0,
+            "Terran Refinery exposes the requested real animation");
+        Game::IScriptVM RefineryVM;
+        RefineryVM.LoadScript(Anim, &Database.GetProgram().ProgramData,
+            RefineryScript->AnimationPC[(size_t)Anim]);
+        RefineryVM.ExecuteFrame();
+        for (const auto& Event : RefineryVM.ConsumeEvents())
+        {
+            SawShadow = SawShadow ||
+                (Event.Type == Game::IScriptEventType::CreateImageOverlay &&
+                 Event.A == 308 && Event.B == 0 && Event.C == 0 && Event.D == 0);
+        }
+        return RefineryVM.GetCurrentFrame();
+    };
+    bool SawRefineryShadow = false;
+    Require(RunRefineryAnimation(Game::IScriptAnims::Anim_Init, SawRefineryShadow) == 1,
+        "Refinery Init selects its fragmented construction frame");
+    Require(SawRefineryShadow,
+        "Refinery Init attaches its project shadow at the sprite origin");
+    bool BuiltCreatedShadow = false;
+    Require(RunRefineryAnimation(Game::IScriptAnims::Anim_Built, BuiltCreatedShadow) == 0,
+        "Refinery Built selects the complete project frame");
+
+    std::vector<int> FollowMainProgram = {
+        Game::IScriptOpcodes::Opc_FollowMainGraphic,
+        Game::IScriptOpcodes::Opc_PlayFram, 9,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM FollowMainVM;
+    FollowMainVM.LoadScript(0, &FollowMainProgram, 0);
+    FollowMainVM.ExecuteFrame();
+    Require(FollowMainVM.GetContext().FollowMainGraphic &&
+            FollowMainVM.GetContext().BaseFrameIndex == 9,
+        "followmaingraphic raises a frame request and preserves the next opcode boundary");
+
     constexpr int kMissileTurretBaseImage = 296;
     constexpr int kMissileTurretTurretImage = 297;
     const auto* ImageInfo = Database.FindImageInfo(kMissileTurretBaseImage);
@@ -304,6 +367,101 @@ int main()
     GoliathVM.RefreshDirectionalFrame();
     Require(GoliathVM.GetCurrentFrame() != FirstDirectionFrame,
         "directional walking frame refreshes even while the script is waiting");
+
+    const auto* ScvImage = Database.FindImageInfo(247);
+    const auto* ScvScript = ScvImage && ScvImage->IScriptID >= 0
+        ? Database.FindScript(ScvImage->IScriptID)
+        : nullptr;
+    Require(ScvScript, "SCV image script exists");
+    const auto HasScvAnim = [ScvScript](int Anim) {
+        return Anim >= 0 && Anim < (int)ScvScript->AnimationPC.size() &&
+               ScvScript->AnimationPC[(size_t)Anim] > 0;
+    };
+    Require(HasScvAnim(Game::IScriptAnims::Anim_AlmostBuilt),
+        "project SCV exposes AlmostBuilt for mineral mining");
+    Require(HasScvAnim(Game::IScriptAnims::Anim_GndAttkToIdle),
+        "project SCV exposes GndAttkToIdle for leaving mineral mining");
+    Require(!HasScvAnim(Game::IScriptAnims::Anim_IsWorking),
+        "project SCV does not use the production-building IsWorking entry");
+
+    Game::IScriptVM ScvMiningVM;
+    ScvMiningVM.LoadScript(Game::IScriptAnims::Anim_AlmostBuilt,
+                           &Database.GetProgram().ProgramData,
+                           ScvScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_AlmostBuilt]);
+    ScvMiningVM.GetContext().ImageID = 247;
+    ScvMiningVM.GetContext().HasDirectionalFrames = ScvImage->HasDirectionalFrames;
+    ScvMiningVM.GetContext().CurrentDirection = 64;
+    int FusionCutterEvents = 0;
+    for (int Step = 0; Step < 96 && ScvMiningVM.IsRunning(); ++Step)
+    {
+        ScvMiningVM.ExecuteFrame();
+        for (const auto& Event : ScvMiningVM.ConsumeEvents())
+        {
+            if (Event.Type == Game::IScriptEventType::UseWeapon && Event.A == 14)
+                ++FusionCutterEvents;
+        }
+    }
+    Require(FusionCutterEvents >= 2,
+        "SCV AlmostBuilt periodically emits Fusion Cutter weapon 14 while mining");
+
+    Game::IScriptVM ScvWalkingVM;
+    ScvWalkingVM.LoadScript(Game::IScriptAnims::Anim_Walking,
+        &Database.GetProgram().ProgramData,
+        ScvScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Walking]);
+    ScvWalkingVM.GetContext().ImageID = 247;
+    ScvWalkingVM.GetContext().HasDirectionalFrames = ScvImage->HasDirectionalFrames;
+    ScvWalkingVM.GetContext().CurrentDirection = 64;
+    bool SawWalkingGlow = false;
+    for (int Step = 0; Step < 48 && ScvWalkingVM.IsRunning(); ++Step)
+    {
+        ScvWalkingVM.ExecuteFrame();
+        for (const auto& Event : ScvWalkingVM.ConsumeEvents())
+        {
+            SawWalkingGlow = SawWalkingGlow ||
+                (Event.Type == Game::IScriptEventType::CreateImageOverlay &&
+                 Event.A == 249);
+        }
+    }
+    Require(SawWalkingGlow,
+        "project SCV Walking attaches the tscGlow dynamic image");
+
+    const auto* ScvSparkImage = Database.FindImageInfo(526);
+    const auto* ScvSparkScript = ScvSparkImage && ScvSparkImage->IScriptID >= 0
+        ? Database.FindScript(ScvSparkImage->IScriptID)
+        : nullptr;
+    Require(ScvSparkScript, "SCV spark image script exists");
+    Require(Game::IScriptAnims::Anim_Init < (int)ScvSparkScript->AnimationPC.size() &&
+            ScvSparkScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init] > 0,
+        "project SCV spark image exposes its own Init animation");
+
+    const auto* GeyserImage = Database.FindImageInfo(344);
+    const auto* GeyserScript = GeyserImage && GeyserImage->IScriptID >= 0
+        ? Database.FindScript(GeyserImage->IScriptID)
+        : nullptr;
+    Require(GeyserScript &&
+            Game::IScriptAnims::Anim_Init < (int)GeyserScript->AnimationPC.size() &&
+            GeyserScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init] > 0,
+        "Vespene geyser exposes the Init script that creates smoke layers");
+    Game::IScriptVM GeyserVM;
+    GeyserVM.LoadScript(Game::IScriptAnims::Anim_Init,
+        &Database.GetProgram().ProgramData,
+        GeyserScript->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init]);
+    GeyserVM.GetContext().ImageID = 344;
+    bool GeyserSmokeSlots[3] = {};
+    for (int Step = 0; Step < 192 && GeyserVM.IsRunning(); ++Step)
+    {
+        GeyserVM.ExecuteFrame();
+        for (const auto& Event : GeyserVM.ConsumeEvents())
+        {
+            if (Event.Type == Game::IScriptEventType::CreateGasOverlays &&
+                Event.A >= 0 && Event.A < 3)
+            {
+                GeyserSmokeSlots[Event.A] = true;
+            }
+        }
+    }
+    Require(GeyserSmokeSlots[0] && GeyserSmokeSlots[1] && GeyserSmokeSlots[2],
+        "Vespene geyser Init emits all three animated smoke channels used by the project script");
 
     std::printf("IScriptOverlayTest passed\n");
     return 0;

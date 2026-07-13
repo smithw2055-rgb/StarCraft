@@ -6,6 +6,7 @@
 #include "Main/CampaignRuntime.h"
 #include "Main/GameAudioRuntime.h"
 #include "Main/GameSession.h"
+#include "Game/Systems/ZergSystem.h"
 #include "Resource/GameDataLoader.h"
 
 namespace Game::Client::GameLoop
@@ -39,6 +40,10 @@ inline void InitializeCampaignRuntimeForSession(
         },
         [&Client](int ChkUnitID, auto, int) {
             return (int)Client.GetSpriteAssets().ResolveImageID(ChkUnitID);
+        },
+        [](int ChkUnitID, uint32_t ImageID) {
+            return Game::Systems::ZergSystem::CanUnitBurrow(
+                ChkUnitID, ImageID);
         },
         [&Client](int ChkUnitID) {
             Game::Components::UnitCollisionBounds Bounds;

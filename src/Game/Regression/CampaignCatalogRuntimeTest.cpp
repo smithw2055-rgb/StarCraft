@@ -6,6 +6,7 @@
 #include "Game/Campaign/CampaignMissionCatalog.h"
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
+#include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/CombatSystem.h"
@@ -45,99 +46,10 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager&,
     return false;
 }
 
-void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
-                              const std::vector<Core::ECS::EntityID>& Entities,
-                              const Core::Math::Vec2& Target)
+void CombatSystem::IssueAttack(Core::ECS::EntityManager&,
+                               const std::vector<int>&,
+                               int)
 {
-    for (Core::ECS::EntityID EntityID : Entities)
-    {
-        auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID);
-        if (!Cmd)
-            Cmd = &EM.AddComponent<Components::CommandComponent>(EntityID);
-        Cmd->CurrentCommand = Components::CommandType::Move;
-        Cmd->TargetPosition = Target;
-
-        auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID);
-        if (!Path)
-            Path = &EM.AddComponent<Components::PathfindingComponent>(EntityID);
-        Path->Path.clear();
-        Path->Path.push_back(Target);
-        Path->PathIndex = 0;
-        Path->RequestedDestination = Target;
-        Path->RequestedTargetEntityID = -1;
-        Path->RequestedIgnoreEntityID = -1;
-        Path->DestinationStallTimer = 0.0f;
-        Path->HasLastDestinationDistance = false;
-    }
-}
-
-void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
-                              const std::vector<Core::ECS::EntityID>& Entities,
-                              const Core::Math::Vec2& Target,
-                              int PathingIgnoreEntityID)
-{
-    IssueMove(EM, Entities, Target);
-    for (Core::ECS::EntityID EntityID : Entities)
-    {
-        if (auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID))
-            Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
-    }
-}
-
-bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
-                                        Core::ECS::EntityID EntityID,
-                                        const Core::Math::Vec2& Target,
-                                        int PathingIgnoreEntityID)
-{
-    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
-    if (auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID))
-        return !Path->Path.empty();
-    return false;
-}
-
-void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
-                               Core::ECS::EntityID EntityID,
-                               const Components::Order& InOrder,
-                               bool)
-{
-    auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID);
-    if (!Cmd)
-        Cmd = &EM.AddComponent<Components::CommandComponent>(EntityID);
-    Cmd->Orders.clear();
-    Cmd->CurrentOrderIndex = -1;
-    Cmd->QueueOrder(InOrder);
-
-    auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID);
-    if (!Path)
-        Path = &EM.AddComponent<Components::PathfindingComponent>(EntityID);
-    Path->Path.clear();
-    Path->Path.push_back(InOrder.TargetPosition);
-    Path->PathIndex = 0;
-    Path->RequestedDestination = InOrder.TargetPosition;
-    Path->RequestedTargetEntityID = InOrder.TargetEntityID;
-    Path->RequestedIgnoreEntityID = InOrder.PathingIgnoreEntityID;
-    Path->DestinationStallTimer = 0.0f;
-    Path->HasLastDestinationDistance = false;
-}
-
-void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
-                               const std::vector<Core::ECS::EntityID>& Entities,
-                               const Components::Order& InOrder,
-                               bool Queued)
-{
-    for (Core::ECS::EntityID EntityID : Entities)
-        IssueOrder(EM, EntityID, InOrder, Queued);
-}
-
-void CommandSystem::AdvanceQueue(Core::ECS::EntityManager& EM,
-                                 Core::ECS::EntityID EntityID)
-{
-    auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID);
-    if (!Cmd)
-        return;
-    Cmd->AdvanceQueue();
-    if (!Cmd->HasPendingOrders())
-        Cmd->CurrentCommand = Components::CommandType::Stop;
 }
 
 } // namespace Game::Systems
@@ -354,6 +266,29 @@ namespace
         }
     }
 
+    Game::Map::GameMap BuildPathingMap(
+        const Game::Client::MapLoader::Result& Result)
+    {
+        Game::Map::GameMap Map;
+        Map.Generate(Result.Map.Width, Result.Map.Height);
+        for (int Y = 0; Y < Result.Map.Height; ++Y)
+        {
+            for (int X = 0; X < Result.Map.Width; ++X)
+            {
+                const size_t Index = (size_t)Y * (size_t)Result.Map.Width +
+                    (size_t)X;
+                auto Tile = Map.GetTile(X, Y);
+                Tile.Walkable = Index >= Result.Map.Walkable.size() ||
+                    Result.Map.Walkable[Index] != 0;
+                Tile.Buildable = Tile.Walkable;
+                if (Index < Result.Map.MegaTileIds.size())
+                    Tile.MegaTileID = Result.Map.MegaTileIds[Index];
+                Map.SetTile(X, Y, Tile);
+            }
+        }
+        return Map;
+    }
+
     struct AuditTotals
     {
         int MissionSlots = 0;
@@ -381,10 +316,10 @@ namespace
     }
 
     bool HasMovingIntent(const Game::Components::CommandComponent* Command,
-                         const Game::Components::PathfindingComponent* Path)
+                         const Game::Components::PathfindingComponent* Path,
+                         const Game::Components::TransformComponent* Transform)
     {
         if (Path && (Path->PathIndex < (int)Path->Path.size() ||
-                     Path->CurrentSpeed > 0.01f ||
                      Path->CurrentVelocity.LengthSq() > 0.01f))
         {
             return true;
@@ -395,8 +330,15 @@ namespace
         {
             case Game::Components::CommandType::Move:
             case Game::Components::CommandType::AttackMove:
-            case Game::Components::CommandType::Attack:
             case Game::Components::CommandType::Patrol:
+            {
+                const float ArrivalTolerance = std::max(
+                    Path ? Path->NodeTolerance : 0.0f, 8.0f);
+                return Transform &&
+                    Transform->Position.DistanceTo(Command->TargetPosition) >
+                        ArrivalTolerance;
+            }
+            case Game::Components::CommandType::Attack:
             case Game::Components::CommandType::Harvest:
             case Game::Components::CommandType::Build:
             case Game::Components::CommandType::Follow:
@@ -530,7 +472,7 @@ namespace
             const bool ExpectedAir = ExpectedAirState(Unit, Building);
             if (Path)
             {
-                const bool HasMotionIntent = HasMovingIntent(Command, Path);
+                const bool HasMotionIntent = HasMovingIntent(Command, Path, Trans);
                 if (Path->IsAir != ExpectedAir)
                     ++Trace.AirMismatchSamples;
                 if (!ExpectedAir && Path->IsAir)
@@ -682,7 +624,7 @@ namespace
             const auto* ImageTree = EM.GetComponent<Game::Components::ImageTreeComponent>(EntityID);
             const bool HasValidPlayer = Player && Player->PlayerID >= 0 && Player->PlayerID < 12;
             const bool Active = Unit->HitPoints > 0 && HasValidPlayer;
-            const bool MovingIntent = HasMovingIntent(Command, Path);
+            const bool MovingIntent = HasMovingIntent(Command, Path, Trans);
 
             float ScreenX = 0.0f;
             float ScreenY = 0.0f;
@@ -872,6 +814,13 @@ namespace
                     [](const Game::Map::PlacedUnit& Unit) { return Unit.UnitID == 214; }),
             "campaign spawn units exclude Special_Start_Location markers: " + Ref.Path);
 
+        const float LongRunSeconds = ReadEnvFloat(
+            "STARCRAFT_CAMPAIGN_LONG_AUDIT_SECONDS", 180.0f, 0.0f, 900.0f);
+        const float SampleSeconds = ReadEnvFloat(
+            "STARCRAFT_CAMPAIGN_LONG_AUDIT_SAMPLE_SECONDS", 5.0f, 0.5f, 60.0f);
+        const float StepSeconds = ReadEnvFloat(
+            "STARCRAFT_CAMPAIGN_LONG_AUDIT_STEP_SECONDS", 0.25f, 1.0f / 24.0f, 1.0f);
+
         Game::Trigger::SCRTriggerParser Parser;
         Game::Trigger::SCRTriggerData Data;
         Require(Parser.Parse(Result.RawChkData, Data),
@@ -881,13 +830,26 @@ namespace
         Core::ECS::SystemManager SysMgr;
         auto& EM = SysMgr.GetEntityManager();
         SeedCampaignUnits(EM, Result);
+        auto PathingMap = BuildPathingMap(Result);
+        const auto* ActivePathingMap = LongRunSeconds > 0.0f ? &PathingMap : nullptr;
+        Game::Systems::CommandSystem::SetMap(ActivePathingMap);
 
         AuditMissionEntities(Ref, Result, EM, "loaded", 0.0f, AuditLog, Totals);
 
         Game::Campaign::CampaignController Controller;
         Require(Controller.Init(EM, &Data), "campaign controller initializes: " + Ref.Path);
+        const auto HumanPlayer = std::find_if(
+            Data.Players.begin(), Data.Players.begin() + 8,
+            [](const Game::Trigger::SCRPlayerInfo& Player) { return Player.Owner == 6; });
+        Require(HumanPlayer != Data.Players.begin() + 8,
+            "campaign declares an occupied human player: " + Ref.Path);
+        Require(Controller.GetLocalPlayerID() ==
+                    (int)std::distance(Data.Players.begin(), HumanPlayer),
+            "campaign preserves the CHK human player slot: " + Ref.Path);
         for (int Tick = 0; Tick < 8; ++Tick)
             Controller.Update(EM, 1.0f);
+        Require(Controller.GetState() == Game::Campaign::CampaignState::Playing,
+                "campaign remains playable after initial trigger ticks: " + Ref.Path);
 
         auto* VM = Controller.GetTriggerVM();
         Require(VM != nullptr && VM->HasScript(), "campaign has runnable trigger VM: " + Ref.Path);
@@ -903,7 +865,7 @@ namespace
 
         AuditMissionEntities(Ref, Result, EM, "after_trigger_ticks", 8.0f, AuditLog, Totals);
 
-        Game::Systems::MovementSystem Movement(SysMgr);
+        Game::Systems::MovementSystem Movement(SysMgr, ActivePathingMap);
         Game::Systems::AnimationSystem Animation(SysMgr);
         for (int Step = 0; Step < 2; ++Step)
             Movement.Update(0.25f);
@@ -912,13 +874,6 @@ namespace
         for (int Step = 0; Step < 4; ++Step)
             Animation.Update(1.0f / 24.0f);
         AuditMissionEntities(Ref, Result, EM, "after_animation_step", 8.6667f, AuditLog, Totals);
-
-        const float LongRunSeconds = ReadEnvFloat(
-            "STARCRAFT_CAMPAIGN_LONG_AUDIT_SECONDS", 180.0f, 0.0f, 900.0f);
-        const float SampleSeconds = ReadEnvFloat(
-            "STARCRAFT_CAMPAIGN_LONG_AUDIT_SAMPLE_SECONDS", 5.0f, 0.5f, 60.0f);
-        const float StepSeconds = ReadEnvFloat(
-            "STARCRAFT_CAMPAIGN_LONG_AUDIT_STEP_SECONDS", 0.25f, 1.0f / 24.0f, 1.0f);
 
         std::unordered_map<int, LongEntityTrace> LongTraces;
         float SimTime = 8.6667f;
@@ -961,6 +916,7 @@ namespace
             Controller.GetObjectives().size(),
             Controller.GetMessages().size(),
             VM->GetActiveAIScriptCount());
+        Game::Systems::CommandSystem::SetMap(nullptr);
     }
 }
 

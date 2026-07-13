@@ -109,7 +109,9 @@ enum class HudCommandId : uint8_t
     Hold,
     Patrol,
     Follow,
-    Harvest
+    Harvest,
+    LiftOff,
+    Land
 };
 
 enum class PendingTargetMode : uint8_t
@@ -121,7 +123,8 @@ enum class PendingTargetMode : uint8_t
     Move,
     AttackMove,
     Patrol,
-    Follow
+    Follow,
+    Land
 };
 
 enum class HudVisualId : uint8_t

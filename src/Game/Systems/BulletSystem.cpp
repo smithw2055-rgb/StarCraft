@@ -137,6 +137,8 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
     }
     if (Visual && Visual->Speed > 0.0f)
         BulletComp.Speed = Visual->Speed;
+    if (Visual)
+        BulletComp.PlayImpactAnimation = Visual->HasImpactAnimation;
 
     switch (BulletComp.Behavior)
     {
@@ -301,6 +303,8 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
         if (TTarget) ImpactPos = TTarget->Position;
     }
 
+    SpawnImpactVisual(EM, BulletID, ImpactPos);
+
     const bool HasSplash = Bullet->Splash != SplashType::None && Bullet->SplashRadius > 0.0f;
 
     if (DirectHitID >= 0 && !HasSplash)
@@ -332,6 +336,45 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
     }
 
     EM.DestroyEntity(BulletID);
+}
+
+void BulletSystem::SpawnImpactVisual(Core::ECS::EntityManager& EM,
+                                     int BulletID,
+                                     const Core::Math::Vec2& ImpactPosition)
+{
+    const auto* Bullet = EM.GetComponent<BulletComponent>(BulletID);
+    const auto* BulletRender = EM.GetComponent<RenderComponent>(BulletID);
+    if (!Bullet || !BulletRender || !Bullet->PlayImpactAnimation)
+        return;
+
+    const int EffectID = EM.CreateEntity();
+    auto& EffectTrans = EM.AddComponent<TransformComponent>(EffectID);
+    EffectTrans.Position = ImpactPosition;
+
+    auto& EffectRender = EM.AddComponent<RenderComponent>(EffectID);
+    EffectRender = *BulletRender;
+    EffectRender.Layer = RenderLayer::Effects;
+    EffectRender.FrameIndex = 0;
+    EffectRender.Visible = true;
+
+    auto& Effect = EM.AddComponent<EffectComponent>(EffectID);
+    Effect.LifetimeRemaining = 1.0f;
+    Effect.ParentEntityID = -1;
+    Effect.FollowParent = false;
+
+    // AnimationSystem selects the projectile image's real Death entry from
+    // Render.ImageID.  The unit payload only supplies the generic dying state;
+    // it is not a selectable gameplay unit because the entity is an effect.
+    auto& EffectUnit = EM.AddComponent<UnitComponent>(EffectID);
+    EffectUnit.ChkUnitID = -1;
+    EffectUnit.HitPoints = 0;
+    EffectUnit.MaxHitPoints = 1;
+    EffectUnit.SupplyCost = 0;
+
+    if (const auto* BulletPlayer = EM.GetComponent<PlayerComponent>(BulletID))
+        EM.AddComponent<PlayerComponent>(EffectID) = *BulletPlayer;
+    if (const auto* BulletDirection = EM.GetComponent<PathfindingComponent>(BulletID))
+        EM.AddComponent<PathfindingComponent>(EffectID) = *BulletDirection;
 }
 
 void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,

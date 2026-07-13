@@ -54,6 +54,39 @@ namespace
         return false;
     }
 
+    RawColor LightTableTint(uint8_t ColorShift)
+    {
+        // images.dat color_shift selects ofire/gfire/bfire/bexpl/trans50/red/
+        // green. Alpha still comes from the GRP's light-table row index.
+        switch (ColorShift)
+        {
+            case 1: return RawColor(255, 128, 32, 255);
+            case 2: return RawColor(80, 255, 96, 255);
+            case 3: return RawColor(64, 144, 255, 255);
+            case 4: return RawColor(128, 192, 255, 255);
+            case 6: return RawColor(255, 72, 72, 255);
+            case 7: return RawColor(72, 255, 96, 255);
+            default: return RawColor(255, 255, 255, 255);
+        }
+    }
+
+    uint8_t LightTableIndexCount(uint8_t ColorShift)
+    {
+        // All extracted tilesets use the same row counts for these lookup
+        // tables: ofire, gfire, bfire, bexpl, trans50, red, green.
+        switch (ColorShift)
+        {
+            case 1: return 63;
+            case 2: return 32;
+            case 3: return 40;
+            case 4: return 63;
+            case 5: return 255;
+            case 6:
+            case 7: return 1;
+            default: return 63;
+        }
+    }
+
     std::string DescribeRgba(const std::vector<uint8_t>& Rgba)
     {
         int Visible = 0;
@@ -129,11 +162,22 @@ const std::vector<GpuImage>* ResourceCache::GetDatImageFrames(uint32_t ImageID)
 
     const auto* Relation = mData.Loader.FindImageRelationByID(ImageID);
     const bool IsShadowSprite = Relation && Relation->IsShadow();
+    GrpDecodeOptions DecodeOptions;
+    if (const auto* Image = mData.Loader.FindImageByID(ImageID);
+        Image && Image->Modifier == 9)
+    {
+        DecodeOptions.DecodeLightTableMask = true;
+        DecodeOptions.GenerateTeamColorMask = false;
+        DecodeOptions.LightTableTint = LightTableTint(Image->ColorShift);
+        DecodeOptions.LightTableIndexCount =
+            LightTableIndexCount(Image->ColorShift);
+    }
 
     std::string GrpPath = mData.Loader.ResolveImageGrpPath(ImageID);
     if (GrpPath.empty()) return nullptr;
 
-    const std::vector<GpuImage>* Frames = LoadSpriteFramesForPath(CacheKey, GrpPath, "DAT image");
+    const std::vector<GpuImage>* Frames = LoadSpriteFramesForPath(
+        CacheKey, GrpPath, "DAT image", DecodeOptions);
     if (IsShadowSprite && Frames)
     {
         auto CacheIt = mSprites.FramesByImageId.find(CacheKey);
@@ -154,7 +198,8 @@ const std::vector<GpuImage>* ResourceCache::GetSpriteOverlayFrames(uint32_t Spri
 
 const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t CacheKey,
                                                                     const std::string& GrpPath,
-                                                                    const char* DebugLabel)
+                                                                    const char* DebugLabel,
+                                                                    const GrpDecodeOptions& Options)
 {
     auto ReadClassicGrpData = [&]() -> std::optional<std::vector<uint8_t>>
     {
@@ -211,7 +256,8 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
                 {
                 std::optional<DecodedSprite> ClassicSprite;
                 if (auto ClassicGrpData = ReadClassicGrpData())
-                    ClassicSprite = DecodeGrpToRgba(*ClassicGrpData, mData.ActivePalette);
+                    ClassicSprite = DecodeGrpToRgba(
+                        *ClassicGrpData, mData.ActivePalette, Options);
 
                 auto& Out = mSprites.FramesByImageId[CacheKey];
                 Out.reserve(HdFrames->size());
@@ -253,7 +299,7 @@ const std::vector<GpuImage>* ResourceCache::LoadSpriteFramesForPath(uint32_t Cac
         return nullptr;
     }
 
-    auto SpriteOpt = DecodeGrpToRgba(*GrpData, mData.ActivePalette);
+    auto SpriteOpt = DecodeGrpToRgba(*GrpData, mData.ActivePalette, Options);
     if (!SpriteOpt)
     {
         Core::Utils::Logger::Warning("ResourceCache",

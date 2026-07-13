@@ -363,6 +363,7 @@ bool IScriptVM::ExecuteFrame()
 {
     if (!mProgramData)
         return false;
+    mSprite.FollowMainGraphic = false;
     if (mWaitRemaining > 0)
     {
         --mWaitRemaining;
@@ -493,6 +494,11 @@ void IScriptVM::RegisterDefaultOpcodes()
     };
     mOpcodeHandlers[Opc_Goto] = [](IScriptVM& VM) { VM.mSprite.PC = VM.PeekArg(); return false; };
     mOpcodeHandlers[Opc_End] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
+    mOpcodeHandlers[Opc_FollowMainGraphic] = [](IScriptVM& VM) {
+        VM.mSprite.FollowMainGraphic = true;
+        VM.AdvanceArgs(0);
+        return false;
+    };
     mOpcodeHandlers[Opc_Call] = [](IScriptVM& VM) {
         int Target = VM.PeekArg();
         VM.mCallStack.push_back(VM.mSprite.PC + 2);
@@ -537,7 +543,7 @@ void IScriptVM::RegisterDefaultOpcodes()
     auto SkipVector = [](IScriptVM& VM) { VM.SkipVectorArgs(); return false; };
     auto Branch1 = [](IScriptVM& VM) { VM.AdvanceArgs(2); return false; };
 
-    for (int Op : {Opc_Unknown0C, Opc_FollowMainGraphic, Opc_Turn1CWise,
+    for (int Op : {Opc_Unknown0C, Opc_Turn1CWise,
                    Opc_GotoRepeatAttk, Opc_Unknown2D,
                    Opc_NoBrkCodeStart, Opc_NoBrkCodeEnd, Opc_IgnoreRest,
                    Opc_TmpRmGraphicStart, Opc_TmpRmGraphicEnd, Opc_Return,

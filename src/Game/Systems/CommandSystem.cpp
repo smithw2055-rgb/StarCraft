@@ -6,6 +6,7 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BuildingSystem.h"
+#include "Game/Systems/BurrowState.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
@@ -96,13 +97,28 @@ static bool CanReceiveMovementOrder(Core::ECS::EntityManager& EM, Core::ECS::Ent
     if (EM.GetComponent<ResourceComponent>(EntityID))
         return false;
 
+    if (auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID))
+        if (Burrow->IsBurrowed || Burrow->Phase != BurrowPhase::Surface)
+            return false;
+
     if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
-        return Building->IsLifted;
+        return Building->IsLifted &&
+               Building->FlightPhase == BuildingFlightPhase::Airborne;
 
     if (IsSiegedTankUnit(Unit->ChkUnitID))
         return false;
 
     return Unit->Speed > 0.0f;
+}
+
+static bool CanQueueMovementAfterUnburrow(Core::ECS::EntityManager& EM,
+                                          Core::ECS::EntityID EntityID)
+{
+    auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+    auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+    const Order* CurrentOrder = Command ? Command->GetCurrentOrder() : nullptr;
+    return Burrow && Burrow->CanBurrow && CurrentOrder &&
+           CurrentOrder->Type == OrderType::Unburrow;
 }
 
 static bool IsStimTarget(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
@@ -217,7 +233,8 @@ struct StaticBlockerRect
 static bool IsStaticGroundBlocker(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
 {
     if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
-        return !Building->IsLifted;
+        return !Building->IsLifted ||
+               Building->FlightPhase == BuildingFlightPhase::Landing;
     return EM.GetComponent<ResourceComponent>(EntityID) != nullptr;
 }
 
@@ -463,6 +480,29 @@ void CommandSystem::Update(float DeltaTime)
 
         switch (Order->Type)
         {
+            case OrderType::Burrow:
+            case OrderType::Unburrow:
+            {
+                auto* Burrow = EM.GetComponent<BurrowComponent>(ID);
+                if (!Burrow || !Burrow->CanBurrow)
+                {
+                    AdvanceQueue(EM, ID);
+                    break;
+                }
+
+                const bool ToBurrowed = Order->Type == OrderType::Burrow;
+                const bool FullyBurrowed =
+                    Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed;
+                if (!Burrow->IsTransitioning() && ToBurrowed == FullyBurrowed)
+                {
+                    AdvanceQueue(EM, ID);
+                    break;
+                }
+                if (!Burrow->IsTransitioning())
+                    BurrowState::BeginTransition(EM, ID, ToBurrowed);
+                break;
+            }
+
             case OrderType::Guard:
             {
                 auto* Combat = EM.GetComponent<CombatComponent>(ID);
@@ -573,6 +613,11 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
 {
     if (IsMovementOrder(InOrder.Type) && !CanReceiveMovementOrder(EM, EntityID))
     {
+        if (Queued && CanQueueMovementAfterUnburrow(EM, EntityID))
+        {
+            EM.GetComponent<CommandComponent>(EntityID)->Orders.push_back(InOrder);
+            return;
+        }
         if (!IsFrozenByStatus(EM, EntityID))
             ClearMovementPath(EM, EntityID);
         return;
@@ -616,6 +661,7 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
         float SlotSpacingX = 24.0f;
         float SlotSpacingY = 24.0f;
         int SlotColumns = 1;
+        float ArrivalTolerance = 0.0f;
     } Group;
 
     const bool AdjustGroupPositions =
@@ -663,22 +709,33 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
         if (Group.Count >= 2)
         {
             Group.Center = Group.Center / (float)Group.Count;
+            const float MaxSpan = Group.AnyGroundUnit ? 192.0f : 256.0f;
+            const bool CompactSelection =
+                Group.Max.X - Group.Min.X <= MaxSpan &&
+                Group.Max.Y - Group.Min.Y <= MaxSpan;
             Group.TargetInsideBounds =
+                CompactSelection &&
                 InOrder.TargetPosition.X >= Group.Min.X &&
                 InOrder.TargetPosition.X <= Group.Max.X &&
                 InOrder.TargetPosition.Y >= Group.Min.Y &&
                 InOrder.TargetPosition.Y <= Group.Max.Y;
-            const float MaxSpan = Group.AnyGroundUnit ? 192.0f : 256.0f;
             Group.PreserveOffsets =
-                !Group.TargetInsideBounds &&
-                Group.Max.X - Group.Min.X <= MaxSpan &&
-                Group.Max.Y - Group.Min.Y <= MaxSpan;
+                CompactSelection && !Group.TargetInsideBounds;
             Group.CompressInfantryOffsets =
                 Group.PreserveOffsets &&
                 Group.SlotSpacingX <= 24.0f &&
                 Group.SlotSpacingY <= 24.0f;
             while (Group.SlotColumns * Group.SlotColumns < Group.Count)
                 ++Group.SlotColumns;
+            if (!Group.TargetInsideBounds &&
+                !Group.PreserveOffsets &&
+                InOrder.Type == OrderType::AttackMove &&
+                Group.Count >= 64)
+            {
+                const float CrowdGridSpacing = std::max(
+                    {Group.SlotSpacingX, Group.SlotSpacingY, 64.0f});
+                Group.ArrivalTolerance = CrowdGridSpacing * 2.0f;
+            }
         }
     }
 
@@ -712,6 +769,12 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                 }
                 else
                 {
+                    const float CrowdGridSpacing =
+                        Group.Count >= 64 ? 64.0f : 48.0f;
+                    const float GridSpacingX =
+                        std::max(Group.SlotSpacingX, CrowdGridSpacing);
+                    const float GridSpacingY =
+                        std::max(Group.SlotSpacingY, CrowdGridSpacing);
                     const int Row = FormationSlot / Group.SlotColumns;
                     const int Column = FormationSlot % Group.SlotColumns;
                     const int Rows = (Group.Count + Group.SlotColumns - 1) /
@@ -719,10 +782,10 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                     EntityOrder.TargetPosition = {
                         InOrder.TargetPosition.X +
                             ((float)Column - (float)(Group.SlotColumns - 1) * 0.5f) *
-                                Group.SlotSpacingX,
+                                GridSpacingX,
                         InOrder.TargetPosition.Y +
                             ((float)Row - (float)(Rows - 1) * 0.5f) *
-                                Group.SlotSpacingY
+                                GridSpacingY
                     };
                 }
                 ++FormationSlot;
@@ -753,6 +816,12 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
         }
 
         IssueOrder(EM, ID, EntityOrder, Queued);
+        if (Group.ArrivalTolerance > 0.0f)
+        {
+            if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                Path->NodeTolerance = std::max(
+                    Path->NodeTolerance, Group.ArrivalTolerance);
+        }
     }
 }
 

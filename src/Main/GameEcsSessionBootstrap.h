@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <ctime>
+#include <string>
 
 #include "Client/ClientRuntime.h"
 #include "Core/Utils/Logger.h"
@@ -17,20 +20,6 @@
 
 namespace Game::Client::GameLoop
 {
-inline bool HasExistingOwnedUnits(GameSession& Session, int PlayerId)
-{
-    auto& EM = Session.Entities();
-    for (int EntityId : EM.GetEntitiesWith<Game::Components::UnitComponent,
-                                          Game::Components::PlayerComponent>())
-    {
-        auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityId);
-        auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityId);
-        if (Player && Player->PlayerID == PlayerId && !Resource)
-            return true;
-    }
-    return false;
-}
-
 inline void InitializeEcsMapAndGameplaySystems(
     GameSession& Session,
     ClientRuntime& Client,
@@ -47,7 +36,8 @@ inline void InitializeEcsMapAndGameplaySystems(
 inline void InitializeGameplayEntitiesAndRuntimeState(
     GameSession& Session,
     ClientRuntime& Client,
-    UI::Hud& Hud)
+    UI::Hud& Hud,
+    bool AddPlayableStarts)
 {
     auto ResolveChkImageID = [&Client](int ChkUnitID) {
         return Client.GetSpriteAssets().ResolveImageID(ChkUnitID);
@@ -88,18 +78,17 @@ inline void InitializeGameplayEntitiesAndRuntimeState(
     };
     auto IsMineralStartUnit = [](int ChkUnitId) { return IsMineralUnit(ChkUnitId); };
     auto IsGeyserStartUnit = [](int ChkUnitId) { return IsGeyserUnit(ChkUnitId); };
-    GameSessionBootstrap::EnsurePlayableStart(
-        Session, 0, SpawnResourceForStart, IsMineralStartUnit, IsGeyserStartUnit);
-    if (Session.GetChkUnits().empty() || HasExistingOwnedUnits(Session, 1))
+    if (AddPlayableStarts)
     {
-        GameSessionBootstrap::EnsurePlayableStart(
-            Session, 1, SpawnResourceForStart, IsMineralStartUnit, IsGeyserStartUnit);
+        for (int PlayerID = 0; PlayerID < 8; ++PlayerID)
+            GameSessionBootstrap::EnsurePlayableStart(
+                Session, PlayerID, SpawnResourceForStart, IsMineralStartUnit, IsGeyserStartUnit);
     }
 
     GameSessionBootstrap::RebuildPlayerSupplyAndRegisterAi(Session);
 
     Session.MarkEcsInitialized();
-    SyncHudFromPlayerResources(Hud);
+    SyncHudFromPlayerResources(Hud, Session.GetLocalPlayerID());
 
     Session.RebuildRegionsFromEcsMap();
     Session.StartDefaultReplayRecording((uint32_t)std::time(nullptr));
@@ -119,7 +108,13 @@ inline void InitializeLoadedMapGameplayRuntime(
         return;
 
     InitializeEcsMapAndGameplaySystems(Session, Client, Audio);
-    InitializeGameplayEntitiesAndRuntimeState(Session, Client, Hud);
+    std::string NormalizedMapPath = MapPath;
+    std::replace(NormalizedMapPath.begin(), NormalizedMapPath.end(), '\\', '/');
+    std::transform(NormalizedMapPath.begin(), NormalizedMapPath.end(), NormalizedMapPath.begin(),
+        [](unsigned char C) { return (char)std::tolower(C); });
+    const bool IsCampaignMission =
+        NormalizedMapPath.find("/campaign/") != std::string::npos;
+    InitializeGameplayEntitiesAndRuntimeState(Session, Client, Hud, !IsCampaignMission);
     if (EnableCampaignRuntime)
     {
         InitializeCampaignRuntimeForSession(

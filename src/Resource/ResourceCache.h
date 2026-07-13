@@ -163,7 +163,8 @@ private:
     bool BuildTilesetAtlas(const std::string& TilesetName);
     const std::vector<GpuImage>* LoadSpriteFramesForPath(uint32_t CacheKey,
                                                          const std::string& GrpPath,
-                                                         const char* DebugLabel = nullptr);
+                                                         const char* DebugLabel = nullptr,
+                                                         const GrpDecodeOptions& Options = {});
     std::optional<std::vector<uint8_t>> ReadExtractedAsset(const std::string& Path);
     std::vector<std::string> BuildExtractedAssetCandidates(const std::string& Path) const;
     bool LoadPortraitClip(const std::string& PortraitKey, PortraitClip& OutClip);

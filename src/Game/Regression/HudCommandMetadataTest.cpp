@@ -87,6 +87,8 @@ namespace
             Building.IsBuilding = true;
             Building.BuildingDefID = DefID;
             Building.UnderConstruction = false;
+            Building.CanLiftOff = Def.CanLiftOff;
+            Building.IsAddon = Def.IsAddon;
         }
 
         return EntityID;
@@ -276,6 +278,129 @@ int main()
     Hud.UpdateContext(EM, {CommandCenter});
     Require(Hud.GetButtonDefs()[8].Label != "Cancel",
         "training cancel button disappears after the queue is empty");
+
+    for (const char* LiftableName :
+         {"CommandCenter", "Barracks", "Factory", "Starport", "ScienceFacility"})
+    {
+        Require(Game::Races::GetUnitDefByName(LiftableName).CanLiftOff,
+            "all project buildings with LiftOff and Landing assets are gameplay-liftable");
+    }
+    const int FlightCommandCenter = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, CommandCenterDef, Map.TileToWorld(26, 4), 0);
+    Hud.UpdateContext(EM, {FlightCommandCenter});
+    const auto& LiftOffButton = RequireButton(Hud, 8, "Lift Off");
+    Require(LiftOffButton.Kind == Game::Client::UI::ActionKind::Command &&
+            LiftOffButton.CommandId == Game::Client::UI::HudCommandId::LiftOff &&
+            LiftOffButton.Enabled,
+        "grounded liftable building exposes an enabled Lift Off command");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {FlightCommandCenter}, Hud, 8),
+        "Lift Off command dispatch starts the building flight transition");
+    auto* FlightBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(FlightCommandCenter);
+    auto* FlightUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(FlightCommandCenter);
+    Require(FlightBuilding && FlightUnit && FlightBuilding->IsLifted &&
+            FlightBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::LiftingOff &&
+            FlightUnit->Speed == 0.0f,
+        "HUD lift-off remains immobile until the real animation signal");
+
+    Hud.UpdateContext(EM, {FlightCommandCenter});
+    const auto& TransitionLandButton = RequireButton(Hud, 8, "Land");
+    Require(!TransitionLandButton.Enabled,
+        "Land command remains disabled while LiftOff animation is in progress");
+    FlightBuilding->FlightAnimationComplete = true;
+    Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FlightCommandCenter);
+    Require(FlightBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::Airborne &&
+            FlightUnit->Speed > 0.0f,
+        "LiftOff animation signal completes the physical airborne transition");
+    Hud.UpdateContext(EM, {FlightCommandCenter});
+    const auto& FlyingMoveButton = RequireButton(Hud, 0, "Move");
+    const auto& LandButton = RequireButton(Hud, 8, "Land");
+    Require(FlyingMoveButton.Enabled && LandButton.Enabled &&
+            LandButton.CommandId == Game::Client::UI::HudCommandId::Land,
+        "airborne building exposes movement and targeted landing commands");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {FlightCommandCenter}, Hud, 8) &&
+            Hud.GetPendingTargetMode() ==
+                Game::Client::UI::PendingTargetMode::Land,
+        "Land command enters world-target mode");
+    Game::Client::GameLoop::ClickTargetContext EmptyFlightTarget;
+    Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {FlightCommandCenter}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), EmptyFlightTarget,
+                Map.TileToWorld(26, 9)),
+        "valid Land target starts the Landing animation transition");
+    Require(FlightBuilding->IsLifted &&
+            FlightBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Landing,
+        "HUD landing keeps flight state until the project Landing animation signals completion");
+    FlightBuilding->FlightAnimationComplete = true;
+    Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FlightCommandCenter);
+    auto* FlightPath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(FlightCommandCenter);
+    auto* FlightRender =
+        EM.GetComponent<Game::Components::RenderComponent>(FlightCommandCenter);
+    Require(!FlightBuilding->IsLifted &&
+            FlightBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Grounded &&
+            FlightPath && !FlightPath->IsAir &&
+            (!FlightRender || FlightRender->Layer == Game::Components::RenderLayer::Buildings),
+        "Landing animation signal restores ground pathing and rendering state");
+    Hud.CancelPendingTarget();
+
+    const int FactoryDef = Game::Races::GetUnitDefID("Factory");
+    const int MachineShopDef = Game::Races::GetUnitDefID("MachineShop");
+    const Core::Math::Vec2 FactoryPosition = Map.TileToWorld(18, 4);
+    const int FactoryWithAddon = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, FactoryDef, FactoryPosition, 0);
+    const int MachineShop = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, MachineShopDef, FactoryPosition + Core::Math::Vec2{96.0f, 16.0f},
+        0, FactoryWithAddon);
+    auto* FactoryBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(FactoryWithAddon);
+    auto* MachineShopBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(MachineShop);
+    auto* MachineShopPlayer =
+        EM.GetComponent<Game::Components::PlayerComponent>(MachineShop);
+    Require(FactoryBuilding && MachineShopBuilding && MachineShopPlayer &&
+            FactoryBuilding->AddonID == MachineShop &&
+            MachineShopBuilding->BuilderUnitID == FactoryWithAddon,
+        "completed project add-on is linked to its parent");
+    Require(Game::Systems::BuildingSystem::LiftOffBuilding(EM, FactoryWithAddon) &&
+            FactoryBuilding->AddonID == -1 &&
+            MachineShopBuilding->BuilderUnitID == -1 &&
+            MachineShopPlayer->PlayerID == 11 &&
+            MachineShopBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::LiftingOff,
+        "parent lift-off makes the add-on neutral and starts its detach animation");
+    FactoryBuilding->FlightAnimationComplete = true;
+    Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FactoryWithAddon);
+    MachineShopBuilding->FlightPhase = Game::Components::BuildingFlightPhase::Grounded;
+    Require(Game::Systems::BuildingSystem::LandBuilding(
+                EM, FactoryWithAddon, FactoryPosition),
+        "airborne parent can land at the asset-derived add-on position");
+    FactoryBuilding->FlightAnimationComplete = true;
+    Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FactoryWithAddon);
+    Require(FactoryBuilding->AddonID == MachineShop &&
+            MachineShopBuilding->BuilderUnitID == FactoryWithAddon &&
+            MachineShopPlayer->PlayerID == 0 &&
+            MachineShopBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::Landing,
+        "landing reconnects a compatible neutral add-on and starts its Landing animation");
+
+    const Core::Math::Vec2 RestoredFactoryPosition = Map.TileToWorld(10, 4);
+    const int RestoredFactory = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, FactoryDef, RestoredFactoryPosition, 0);
+    const int RestoredMachineShop = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, MachineShopDef,
+        RestoredFactoryPosition + Core::Math::Vec2{96.0f, 16.0f}, 0);
+    Game::Systems::BuildingSystem::RestoreSpawnedAddonLinks(EM);
+    Require(EM.GetComponent<Game::Components::BuildingComponent>(RestoredFactory)->AddonID ==
+                RestoredMachineShop &&
+            EM.GetComponent<Game::Components::BuildingComponent>(RestoredMachineShop)->BuilderUnitID ==
+                RestoredFactory,
+        "campaign map spawn reconstructs parent/add-on links from current asset geometry");
 
     const int EngineeringBayDef = Game::Races::GetUnitDefID("EngineeringBay");
     const int EngineeringBay = CreateTerranUnit(EM, EngineeringBayDef, 0);

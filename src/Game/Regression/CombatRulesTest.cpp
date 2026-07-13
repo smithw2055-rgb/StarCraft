@@ -228,7 +228,7 @@ int main()
             [&](int ChkUnitID, bool TargetIsAir)
                 -> std::optional<Game::Systems::BulletSystem::VisualSpec> {
                 ResolverCalled = ChkUnitID == 7 && !TargetIsAir;
-                return Game::Systems::BulletSystem::VisualSpec{321u, 240.0f};
+                return Game::Systems::BulletSystem::VisualSpec{321u, 240.0f, true};
             });
 
         Game::Components::CombatComponent Weapon;
@@ -245,6 +245,37 @@ int main()
             "ranged bullet carries the resolved images.dat visual instead of a placeholder");
         Require(Direction && Direction->CurrentVelocity.Length() > 0.0f,
             "rendered bullet exposes flight direction to eight-way animation");
+
+        VisualBullet.Update(1.0f);
+        Require(!VisualEM.IsAlive(BulletID),
+            "projectile is removed after resolving its impact");
+        int ImpactVisualCount = 0;
+        for (int EffectID : VisualEM.GetEntitiesWith<
+                 Game::Components::EffectComponent,
+                 Game::Components::RenderComponent,
+                 Game::Components::UnitComponent>())
+        {
+            const auto* EffectRender =
+                VisualEM.GetComponent<Game::Components::RenderComponent>(EffectID);
+            const auto* EffectUnit =
+                VisualEM.GetComponent<Game::Components::UnitComponent>(EffectID);
+            const auto* EffectTrans =
+                VisualEM.GetComponent<Game::Components::TransformComponent>(EffectID);
+            const auto* EffectDirection =
+                VisualEM.GetComponent<Game::Components::PathfindingComponent>(EffectID);
+            if (!EffectRender || EffectRender->ImageID != 321u)
+                continue;
+            Require(EffectUnit && EffectUnit->HitPoints == 0,
+                "impact visual selects the projectile Death animation state");
+            Require(EffectTrans && EffectTrans->Position.X == 176.0f &&
+                    EffectTrans->Position.Y == 20.0f,
+                "impact visual is anchored at the resolved target position");
+            Require(EffectDirection && EffectDirection->CurrentVelocity.Length() > 0.0f,
+                "impact visual preserves the projectile heading for directional death frames");
+            ++ImpactVisualCount;
+        }
+        Require(ImpactVisualCount == 1,
+            "resolved projectile Death animation creates one transient impact visual");
 
         Game::Systems::BulletSystem::SetVisualResolver({});
     }
@@ -1003,6 +1034,50 @@ int main()
     Require(Game::Systems::UpgradeSystem::GetSightRangeBonusTiles(
                 UpgradeEffectEM, UpgradedScout) == 3,
         "Apial Sensors increases Scout sight to eleven tiles");
+
+    Core::ECS::SystemManager BurrowCombatSysMgr;
+    auto& BurrowCombatEM = BurrowCombatSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem BurrowCombatBullet(BurrowCombatSysMgr);
+    Game::Systems::CombatSystem BurrowCombat(BurrowCombatSysMgr, BurrowCombatBullet);
+
+    const int BurrowedHydralisk =
+        SpawnDefUnit(BurrowCombatEM, "Hydralisk", {0.0f, 0.0f}, 0);
+    AddGroundOnlyWeapon(BurrowCombatEM, BurrowedHydralisk);
+    auto& HydraliskBurrow =
+        BurrowCombatEM.AddComponent<Game::Components::BurrowComponent>(BurrowedHydralisk);
+    HydraliskBurrow.CanBurrow = true;
+    HydraliskBurrow.IsBurrowed = true;
+    HydraliskBurrow.Phase = Game::Components::BurrowPhase::Burrowed;
+    const int HydraliskTarget =
+        SpawnDefUnit(BurrowCombatEM, "Marine", {32.0f, 0.0f}, 1);
+    const int HydraliskTargetHP =
+        BurrowCombatEM.GetComponent<Game::Components::UnitComponent>(HydraliskTarget)->HitPoints;
+    Game::Systems::CombatSystem::IssueAttack(
+        BurrowCombatEM, {BurrowedHydralisk}, HydraliskTarget);
+    BurrowCombat.Update(0.2f);
+    Require(BurrowCombatEM.GetComponent<Game::Components::UnitComponent>(HydraliskTarget)->HitPoints ==
+                HydraliskTargetHP,
+        "ordinary burrowed Zerg units cannot attack while underground");
+
+    const int Lurker = SpawnDefUnit(BurrowCombatEM, "Lurker", {0.0f, 64.0f}, 0);
+    AddGroundOnlyWeapon(BurrowCombatEM, Lurker);
+    auto& LurkerBurrow =
+        BurrowCombatEM.AddComponent<Game::Components::BurrowComponent>(Lurker);
+    LurkerBurrow.CanBurrow = true;
+    const int LurkerTarget =
+        SpawnDefUnit(BurrowCombatEM, "Marine", {32.0f, 64.0f}, 1);
+    auto* LurkerTargetUnit =
+        BurrowCombatEM.GetComponent<Game::Components::UnitComponent>(LurkerTarget);
+    const int LurkerTargetHP = LurkerTargetUnit->HitPoints;
+    Game::Systems::CombatSystem::IssueAttack(BurrowCombatEM, {Lurker}, LurkerTarget);
+    BurrowCombat.Update(0.2f);
+    Require(LurkerTargetUnit->HitPoints == LurkerTargetHP,
+        "Lurker cannot attack before completing its Burrow transition");
+    LurkerBurrow.IsBurrowed = true;
+    LurkerBurrow.Phase = Game::Components::BurrowPhase::Burrowed;
+    BurrowCombat.Update(0.2f);
+    Require(LurkerTargetUnit->HitPoints < LurkerTargetHP,
+        "Lurker attacks after its project Burrow state is complete");
 
     Core::ECS::SystemManager SupplyDeathSysMgr;
     auto& SupplyDeathEM = SupplyDeathSysMgr.GetEntityManager();

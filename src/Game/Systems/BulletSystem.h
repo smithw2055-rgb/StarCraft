@@ -17,6 +17,7 @@ public:
     {
         uint32_t ImageID = UINT32_MAX;
         float Speed = 0.0f;
+        bool HasImpactAnimation = false;
     };
     using VisualResolver = std::function<std::optional<VisualSpec>(int, bool)>;
 
@@ -39,6 +40,9 @@ public:
 private:
     void UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, float DeltaTime);
     void BulletHit(Core::ECS::EntityManager& EM, int BulletID);
+    void SpawnImpactVisual(Core::ECS::EntityManager& EM,
+                           int BulletID,
+                           const Core::Math::Vec2& ImpactPosition);
     void ApplySplashDamage(Core::ECS::EntityManager& EM,
                            const Core::Math::Vec2& Center,
                            float Radius,

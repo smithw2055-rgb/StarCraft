@@ -12,6 +12,7 @@
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Game/Systems/ZergSystem.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "Main/GameSession.h"
 
@@ -99,6 +100,39 @@ inline void SpawnChkEntities(GameSession& Session,
             Game::Components::RenderLayer::Buildings :
             Game::Components::RenderLayer::Units;
 
+        const bool CanBurrow = Game::Systems::ZergSystem::CanUnitBurrow(
+            UnitPlacement.UnitID, RenderComp.ImageID);
+        if (CanBurrow)
+        {
+            auto& Burrow = EM.AddComponent<Game::Components::BurrowComponent>(EntityID);
+            Burrow.CanBurrow = true;
+        }
+
+        if ((UnitPlacement.ValidFlags & 0x10) != 0)
+            Unit.IsInvincible = (UnitPlacement.StateFlags & 0x10) != 0;
+        if ((UnitPlacement.ValidFlags & 0x08) != 0 &&
+            (UnitPlacement.StateFlags & 0x08) != 0)
+        {
+            auto& Status = EM.AddComponent<Game::Components::StatusEffectComponent>(EntityID);
+            Status.AddEffect(Game::Components::StatusEffect::Hallucination, 1000000.0f, -1);
+        }
+        if ((UnitPlacement.ValidFlags & 0x03) != 0)
+        {
+            auto& Cloak = EM.AddComponent<Game::Components::CloakComponent>(EntityID);
+            Cloak.IsCloaked = (UnitPlacement.ValidFlags & 0x01) != 0 &&
+                              (UnitPlacement.StateFlags & 0x01) != 0;
+            Cloak.IsBurrowed = CanBurrow &&
+                               (UnitPlacement.ValidFlags & 0x02) != 0 &&
+                               (UnitPlacement.StateFlags & 0x02) != 0;
+            if (Cloak.IsBurrowed)
+            {
+                auto* Burrow = EM.GetComponent<Game::Components::BurrowComponent>(EntityID);
+                Burrow->IsBurrowed = true;
+                Burrow->Phase = Game::Components::BurrowPhase::Burrowed;
+                Cloak.IsCloaked = true;
+            }
+        }
+
         if (UnitDefID >= 0)
         {
             const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
@@ -142,7 +176,11 @@ inline void SpawnChkEntities(GameSession& Session,
             Build.BuildProgress = Build.TotalBuildTime;
             Build.BuildingDefID = UnitDefID;
             if (UnitDefID >= 0)
-                Build.CanLiftOff = Game::Races::GetUnitDefByID(UnitDefID).CanLiftOff;
+            {
+                const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
+                Build.CanLiftOff = Def.CanLiftOff;
+                Build.IsAddon = Def.IsAddon;
+            }
             if (UnitDefID == Game::Races::GetUnitDefID("Refinery"))
             {
                 auto& Res = EM.AddComponent<Game::Components::ResourceComponent>(EntityID);
@@ -163,6 +201,7 @@ inline void SpawnChkEntities(GameSession& Session,
             Game::Components::ApplyCollisionBounds(Path, ResolveCollisionBounds(UnitPlacement.UnitID));
         }
     }
+    Game::Systems::BuildingSystem::RestoreSpawnedAddonLinks(EM);
 }
 
 template <typename ResolveImageIdT, typename ResolveCollisionBoundsT>

@@ -169,12 +169,12 @@ void FogOfWarSystem::UpdateLastSeen(Core::ECS::EntityManager& EM)
         int TileX = (int)(Trans->Position.X / 32.0f);
         int TileY = (int)(Trans->Position.Y / 32.0f);
 
-        // Only snapshot for player 0 (local player) for now
-        if (!IsVisible(TileX, TileY, 0)) continue;
+        if (!IsVisible(TileX, TileY, mLocalPlayerID)) continue;
 
         // Check cloak
         auto* Cloak = EM.GetComponent<Components::CloakComponent>(ID);
-        if (Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed) && !IsDetected(TileX, TileY, 0))
+        if (Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed) &&
+            !IsDetected(TileX, TileY, mLocalPlayerID))
             continue;
 
         LastSeenSnapshot Snap;

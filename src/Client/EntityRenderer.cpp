@@ -453,7 +453,11 @@ namespace
         return Status && Status->HasEffect(Effect);
     }
 
-    SpriteVisualEffect ResolveSpriteVisualEffect(Core::ECS::EntityManager& Entities, int EntityId)
+    SpriteVisualEffect ResolveSpriteVisualEffect(
+        Core::ECS::EntityManager& Entities,
+        int EntityId,
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        uint32_t ImageID)
     {
         SpriteVisualEffect Effect;
         if (auto* Cloak = Entities.GetComponent<Game::Components::CloakComponent>(EntityId);
@@ -464,6 +468,17 @@ namespace
 
         if (HasStatusEffect(Entities, EntityId, Game::Components::StatusEffect::Hallucination))
             Effect.Hallucination = 1.0f;
+
+        if (const auto* Loader = DataLoader(DataAssets))
+        {
+            if (const auto* Image = Loader->FindImageByID(ImageID))
+            {
+                if (Image->Modifier == 10)
+                {
+                    Effect.Shadow = 1.0f;
+                }
+            }
+        }
 
         return Effect;
     }
@@ -858,7 +873,11 @@ void EntityRenderer::AccumulateImageNodeVisualRadius(
 
     const float NodeOffsetX = ParentOffsetX + Node.Offset.X;
     const float NodeOffsetY = ParentOffsetY + Node.Offset.Y;
-    const float DrawOffsetX = RenderComp.Flipped ? -NodeOffsetX : NodeOffsetX;
+    const bool OffsetAlreadyMirrored =
+        Node.UseSpecialOffset || Node.OverlayOffsetType >= 0;
+    const float DrawOffsetX = OffsetAlreadyMirrored
+        ? NodeOffsetX
+        : (RenderComp.Flipped ? -NodeOffsetX : NodeOffsetX);
 
     const auto* Frames = Node.UseSpriteID ?
         mSpriteAssets.GetSpriteOverlayFrames(Node.ImageID) :
@@ -915,21 +934,29 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
 
     const float HW = Img.Width * 0.5f;
     const float HH = Img.Height * 0.5f;
-    // IScript image offsets are sprite-space values. Special LO offsets have
-    // already been resolved for the current flipped frame, so mirroring again
-    // would put engine flames on the wrong side of the aircraft.
-    // Node.Flipped is the image VM's absolute directional flip state. Combining
-    // it with the root flip reverses directional shadows a second time.
-    const bool Flipped = Node.Flipped;
+    // Normal IScript offsets are root-sprite-space values and follow the root
+    // mirror. LO offsets are resolved for the current flipped root frame by the
+    // animation system, so applying that mirror twice moves flames/sparks to
+    // the wrong side. Directional child VMs already expose an absolute flip;
+    // non-directional overlays inherit the root flip here.
+    const bool OffsetAlreadyMirrored =
+        Node.UseSpecialOffset || Node.OverlayOffsetType >= 0;
+    const float DrawOffsetX = OffsetAlreadyMirrored
+        ? OffsetX
+        : (RenderComp->Flipped ? -OffsetX : OffsetX);
+    const bool Flipped = (Node.InheritSpriteDirection || Node.FollowsMainGraphic)
+        ? Node.Flipped
+        : (RenderComp->Flipped != Node.Flipped);
     DrawSpriteWithEffect(Render::g_Draw2D,
                          Img,
-                         Trans->Position.X + OffsetX - HW,
+                         Trans->Position.X + DrawOffsetX - HW,
                          Trans->Position.Y + OffsetY - HH,
                          (float)Img.Width,
                          (float)Img.Height,
                          Render::Colors::White(),
                          Flipped,
-                         ResolveSpriteVisualEffect(Entities, EntityId),
+                         ResolveSpriteVisualEffect(
+                             Entities, EntityId, mDataAssets, Node.ImageID),
                          Player);
 }
 
@@ -1069,7 +1096,8 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
         const bool ShowHealthBar = !IsResource && Unit->MaxHitPoints > 0 && IsSelected;
-        const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(Entities, EntityId);
+        const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(
+            Entities, EntityId, mDataAssets, RenderComp->ImageID);
 
         if (IsSelected)
             DrawSelectionVisual(Draw, GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding));
@@ -1275,7 +1303,8 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     Trans->Position.X - HW, Trans->Position.Y - HH,
                     (float)Img.Width, (float)Img.Height,
                     RenderComp->Tint, RenderComp->Flipped,
-                    ResolveSpriteVisualEffect(Entities, EntityId),
+                    ResolveSpriteVisualEffect(
+                        Entities, EntityId, mDataAssets, RenderComp->ImageID),
                     Entities.GetComponent<Game::Components::PlayerComponent>(EntityId));
                 ++DebugSpriteCount;
             }

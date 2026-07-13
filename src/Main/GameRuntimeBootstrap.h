@@ -15,11 +15,12 @@ template <typename InitializeEcsT>
 void InitializeGameplayRuntime(AppRuntime& App,
                                UI::Hud& Hud,
                                Game::Client::ClientRuntime& Client,
+                               int LocalPlayerID,
                                InitializeEcsT&& InitializeEcs)
 {
     InitializeHudRuntime(Hud, Client);
     InitializeEcs();
-    SyncHudFromPlayerResources(Hud);
+    SyncHudFromPlayerResources(Hud, LocalPlayerID);
     App.Initialized = true;
 }
 

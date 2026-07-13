@@ -147,6 +147,11 @@ static void InitDefs()
     SetTerranMeta(BunkerID, 0x7D, 29);
     SetTerranMeta(MissileTurretID, 0x7C, 30);
 
+    // These are the five Terran structures whose project images expose both
+    // LiftOff and Landing iscript entry points.
+    for (int DefID : {CommandCenterID, BarracksID, FactoryID, StarportID, ScienceFacilityID})
+        T[(size_t)DefID].CanLiftOff = true;
+
     auto ApplyDefaultWeaponMetadata = [](std::vector<UnitDef>& Defs)
     {
         for (auto& Def : Defs)
