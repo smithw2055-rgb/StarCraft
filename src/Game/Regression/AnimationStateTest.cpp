@@ -110,10 +110,22 @@ int main()
             "working building uses IsWorking iscript");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
+                AnimState::Idle, true, false, 1.0f, true,
+                true, false, false, false,
+                HasOnly({Anim_Init, Anim_Built, Anim_IsWorking})) == Anim_IsWorking,
+            "production working state takes priority over a looping initial Built script");
+
+    Require(AnimationSystem::SelectIScriptAnimationForState(
                 AnimState::Idle, true, false, 1.0f, false,
                 false, true, false, false,
                 HasOnly({Anim_Init, Anim_WorkingToIdle})) == Anim_WorkingToIdle,
             "building transitions from working to idle");
+
+    Require(AnimationSystem::SelectIScriptAnimationForState(
+                AnimState::Idle, true, false, 1.0f, true,
+                false, true, false, false,
+                HasOnly({Anim_Init, Anim_Built, Anim_WorkingToIdle})) == Anim_WorkingToIdle,
+            "working-to-idle transition takes priority over initial Built playback");
 
     Require(AnimationSystem::SelectIScriptAnimationForState(
                 AnimState::Walking, false, false, 0.0f, false,
@@ -167,19 +179,38 @@ int main()
 
     Require(!AnimationSystem::ShouldClearImageTreeForAnimRestart(
                 true, false, Anim_Built, Anim_IsWorking, false),
-            "building animation restart keeps persistent building overlays");
+            "building state changes preserve the sprite image subtree");
 
     Require(AnimationSystem::ShouldClearImageTreeForAnimRestart(
                 true, true, Anim_Built, Anim_IsWorking, false),
             "image changes clear building image tree");
-    Require(AnimationSystem::ShouldClearImageTreeForAnimRestart(
+    Require(!AnimationSystem::ShouldClearImageTreeForAnimRestart(
                 true, false, Anim_Init, Anim_LiftOff, false),
-            "lift-off transition clears stale non-persistent building overlays");
+            "lift-off propagates to existing building child images");
 
     Game::Components::CommandComponent MoveCmd;
     MoveCmd.CurrentCommand = Game::Components::CommandType::Move;
     Game::Components::PathfindingComponent EmptyPath;
     Game::Components::UnitComponent Unit;
+
+    Game::Components::BuildingComponent ZergUpgrade;
+    ZergUpgrade.BuildingDefID = 1;
+    ZergUpgrade.UnderConstruction = true;
+    Game::Components::MorphComponent BuildingMorph;
+    BuildingMorph.IsMorphing = true;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                nullptr, nullptr, nullptr, &Unit, &ZergUpgrade, &BuildingMorph,
+                nullptr, nullptr) == AnimState::Constructing,
+            "Zerg building upgrades use the same animation state as construction");
+
+    Game::Components::BuildingComponent Egg;
+    Egg.BuildingDefID = -1;
+    Egg.UnderConstruction = true;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                nullptr, nullptr, nullptr, &Unit, &Egg, &BuildingMorph,
+                nullptr, nullptr) == AnimState::Morphing,
+            "Zerg eggs keep the unit morph animation state");
+
     Require(AnimationSystem::GetAnimStateFromComponents(
                 &MoveCmd, nullptr, &EmptyPath, &Unit, nullptr, nullptr, nullptr,
                 nullptr) == AnimState::Idle,

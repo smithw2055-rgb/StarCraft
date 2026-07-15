@@ -109,6 +109,7 @@ enum class CommandType : uint8_t
     Stop,
     Harvest,
     Build,
+    Repair,
     Train,
     Upgrade,
     UseAbility,
@@ -204,6 +205,19 @@ struct RenderComponent
 {
     uint32_t ImageID = 0;
     uint32_t SubunitImageID = UINT32_MAX;
+    // Modifier 12 is only active during the short Protoss materialization
+    // phase. The building GRP supplies the silhouette while texture.grp
+    // supplies the indexed color surface selected by the warp IScript.
+    bool UseProtossWarpTexture = false;
+    int ProtossWarpTextureFrame = 0;
+    // A completed Terran add-on owns a separate bridge sprite.  It is not a
+    // units.dat subunit (turrets use SubunitImageID), so keep its lifecycle
+    // independent and render it underneath the add-on body.
+    uint32_t AddonConnectorImageID = UINT32_MAX;
+    // Root-image offset authored by IScript sethorpos/setvertpos. This is a
+    // presentation-only displacement: airborne building shadows remain at
+    // the logical ground position while the body and landing gear move.
+    Core::Math::Vec2 VisualOffset;
     int FrameIndex = 0;
     Core::Color Tint = Core::Colors::White();
     int TotalFrames = 1;
@@ -245,6 +259,24 @@ struct ImageSubnode
     int OverlayOffsetType = -1;
     int OverlayOffsetIndex = 0;
     bool UseSpriteID = false;
+    // Runtime-only modulation for authored child images.  The Command Center's
+    // canonical production control image is a single static frame, so a
+    // subtle alpha pulse supplies the continuous activity cue without cycling
+    // into unrelated GRP frames.
+    float Opacity = 1.0f;
+    float RuntimeVisualPhase = 0.0f;
+    // OpenBW attaches carried mineral/gas graphics to the worker sprite as a
+    // persistent image with a special LO offset. Mark that runtime-owned node
+    // so it can be updated or removed without disturbing IScript overlays.
+    bool IsCarriedResourceOverlay = false;
+    // units.dat Subunit1 (Goliath head, Tank turret, Siege Tank turret) is a
+    // real independently-scripted image, not a copy of the body frame.
+    bool IsUnitSubunit = false;
+    // Terran add-on bridges are real sprite images with their own Init,
+    // Working, LiftOff, and Landing scripts. Keep the runtime-owned bridge in
+    // the image tree so animation state changes reach it like every other
+    // image attached to the sprite.
+    bool IsAddonConnectorOverlay = false;
     float LifetimeRemaining = -1.0f; // negative means persistent until animation changes.
     int ScriptID = -1;
     int AnimID = -1;
@@ -289,6 +321,10 @@ struct PlayerComponent
 {
     int PlayerID = 0;
     Color PlayerColor = Core::Colors::Blue();
+    // Rescue Passive is a scenario ownership mode, not a hostile faction.
+    // Keep it on the entity so gameplay systems can preserve campaign allies
+    // without needing to reach back into the CHK parser at runtime.
+    bool IsRescuePassive = false;
 };
 
 struct DeathRecordComponent
@@ -391,6 +427,7 @@ private:
                                          CurrentCommand = CommandType::Harvest;     break;
             case OrderType::Build: case OrderType::PlaceBuilding: case OrderType::BuildAddon:
                                          CurrentCommand = CommandType::Build;       break;
+            case OrderType::Repair:      CurrentCommand = CommandType::Repair;      break;
             case OrderType::Train:       CurrentCommand = CommandType::Train;       break;
             case OrderType::Research: case OrderType::Upgrade:
                                          CurrentCommand = CommandType::Upgrade;     break;
@@ -430,12 +467,37 @@ struct CombatComponent
     float AutoTargetLockSeconds = 0.0f;
 };
 
+struct SiegeTransitionComponent
+{
+    bool Active = false;
+    bool TargetSieged = false;
+    // Stage 0 aligns/starts the authored transition. Stage 1 is the sieged
+    // hull Init animation, which lowers the tank and emits sigorder 1.
+    int Stage = 0;
+    float Elapsed = 0.0f;
+    bool AnimationComplete = false;
+    int TargetChkUnitID = -1;
+    float TargetSpeed = 0.0f;
+    uint32_t TargetImageID = UINT32_MAX;
+    uint32_t TargetSubunitImageID = UINT32_MAX;
+    CombatComponent TargetCombat;
+};
+
 enum class BuildingFlightPhase : uint8_t
 {
     Grounded,
     LiftingOff,
     Airborne,
     Landing
+};
+
+enum class ProtossConstructionPhase : uint8_t
+{
+    None,
+    Rift,
+    RiftClosing,
+    Materializing,
+    WarpIn
 };
 
 struct BuildingComponent
@@ -448,12 +510,22 @@ struct BuildingComponent
     bool IsLifted = false;
     BuildingFlightPhase FlightPhase = BuildingFlightPhase::Grounded;
     bool FlightAnimationComplete = false;
+    // Lift/land has two authored visual stages. The IScript retracts/deploys
+    // the landing gear; this runtime stage moves only the building body while
+    // its ground shadow remains anchored at the logical position.
+    bool FlightHeightTransitionActive = false;
+    float FlightHeightTransitionElapsed = 0.0f;
+    float FlightVisualHeight = 0.0f;
     bool RequiresCreep = false;
     bool RequiresPylon = false;
     bool HasPylonPower = false;
     bool UnderConstruction = true;
+    ProtossConstructionPhase ProtossPhase = ProtossConstructionPhase::None;
+    bool ProtossPhaseSignal = false;
+    float ProtossPhaseElapsed = 0.0f;
     bool IsOrganic = false;      // Zerg organic building (spreads creep)
     int BuilderUnitID = -1;
+    std::vector<int> AssistantBuilderUnitIDs;
     int AddonID = -1;
     int BuildingDefID = -1;
     int LarvaCount = 0;          // Zerg Hatchery larvae count
@@ -462,6 +534,14 @@ struct BuildingComponent
     int ResearchingID = -1;          // ResearchId being researched (-1 = none)
     bool IsResearching = false;      // true if currently researching
     int ResearchPlayer = -1;         // player conducting the research
+
+    bool HasBuilderUnit(int EntityID) const
+    {
+        return BuilderUnitID == EntityID ||
+               std::find(AssistantBuilderUnitIDs.begin(),
+                         AssistantBuilderUnitIDs.end(), EntityID) !=
+                   AssistantBuilderUnitIDs.end();
+    }
 };
 
 struct ResourceComponent
@@ -486,6 +566,11 @@ struct HarvestComponent
     int DesiredResourceID = -1;
     int ReturnBuildingID = -1;
     bool QueuedAtResource = false;
+    // OpenBW hides a worker while HarvestGas is active, then restores it at a
+    // refinery edge facing the nearest depot. Keep the exit point so an
+    // interrupted order can also release the worker safely.
+    bool InsideGasBuilding = false;
+    Core::Math::Vec2 GasExitPosition;
 };
 
 struct PathfindingComponent
@@ -532,6 +617,21 @@ struct PathfindingComponent
     float DestinationStallTimer = 0.0f;
     float LastDestinationDistance = 0.0f;
     bool HasLastDestinationDistance = false;
+};
+
+// Gas buildings reuse the neutral geyser entity. Preserve its original ECS
+// presentation so destroying a Refinery/Extractor/Assimilator can reveal the
+// same geyser again instead of deleting the resource or leaving the building
+// permanently invulnerable.
+struct ClaimedGeyserComponent
+{
+    bool IsClaimed = false;
+    UnitComponent OriginalUnit;
+    PlayerComponent OriginalPlayer;
+    RenderComponent OriginalRender;
+    BuildingComponent OriginalBuilding;
+    PathfindingComponent OriginalPathfinding;
+    bool HadPathfinding = false;
 };
 
 struct UnitCollisionBounds
@@ -744,6 +844,33 @@ struct SpellCooldown
 struct LoadedUnitsComponent
 {
     std::vector<int> PassengerIDs;
+};
+
+struct PendingTransportLoadComponent
+{
+    int PassengerID = -1;
+    Core::Math::Vec2 LastIssuedTarget;
+    float RepathTimer = 0.0f;
+};
+
+struct PendingTransportBoardingComponent
+{
+    std::vector<int> PassengerIDs;
+    int CurrentIndex = 0;
+};
+
+struct PendingBoardTransportComponent
+{
+    int TransportID = -1;
+    Core::Math::Vec2 LastIssuedTarget;
+    float RepathTimer = 0.0f;
+};
+
+struct PendingTransportUnloadComponent
+{
+    float TimeUntilNextPassenger = 0.0f;
+    int SequenceIndex = 0;
+    bool Active = false;
 };
 
 } // namespace Game::Components

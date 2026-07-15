@@ -12,6 +12,9 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/ProtossSystem.h"
+#include "Game/Systems/SpellSystem.h"
+#include "Game/Systems/TransportSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"
 #include "Main/GameLoop/CursorTypes.h"
@@ -99,6 +102,10 @@ inline void ExecuteHudCommandSlot(
         Game::Systems::ProductionSystem::StartTrain(
             EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
         break;
+    case UI::ActionKind::MorphBuilding:
+        Game::Systems::ZergSystem::StartMorphBuilding(
+            EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
+        break;
     case UI::ActionKind::Research:
     case UI::ActionKind::Upgrade:
         Game::Systems::UpgradeSystem::StartResearch(
@@ -127,6 +134,21 @@ inline void ExecuteHudCommandSlot(
         else if (CommandDef.CommandId == UI::HudCommandId::LiftOff)
             for (int EntityID : EntityIDs)
                 Game::Systems::BuildingSystem::LiftOffBuilding(EntityManager, EntityID);
+        else if (CommandDef.CommandId == UI::HudCommandId::Land)
+            for (int EntityID : EntityIDs)
+                Game::Systems::BuildingSystem::LandBuilding(EntityManager, EntityID);
+        else if (CommandDef.CommandId == UI::HudCommandId::UnloadAll)
+            for (int EntityID : EntityIDs)
+                Game::Systems::TransportSystem::UnloadAll(EntityManager, EntityID);
+        else if (CommandDef.CommandId == UI::HudCommandId::Siege ||
+                 CommandDef.CommandId == UI::HudCommandId::Unsiege)
+            for (int EntityID : EntityIDs)
+                Game::Systems::CommandSystem::SetSiegeMode(
+                    EntityManager, EntityID,
+                    CommandDef.CommandId == UI::HudCommandId::Siege);
+        else if (CommandDef.CommandId == UI::HudCommandId::Burrow)
+            for (int EntityID : EntityIDs)
+                Game::Systems::ZergSystem::BurrowUnit(EntityManager, EntityID);
         break;
     default:
         break;
@@ -273,6 +295,84 @@ inline bool ExecutePendingTargetCommand(
                 EntityManager, EntityID, Target) || LandedAny;
         return LandedAny;
     }
+    case UI::PendingTargetMode::Rally:
+    {
+        bool SetAny = false;
+        for (int EntityID : EntityIDs)
+        {
+            if (!CanUseRallyPoint(EntityManager, EntityID))
+                continue;
+            Game::Systems::CommandSystem::SetRallyPoint(EntityManager, EntityID, Target);
+            SetAny = true;
+        }
+        return SetAny;
+    }
+    case UI::PendingTargetMode::Scan:
+    {
+        for (int EntityID : EntityIDs)
+        {
+            if (Game::Systems::SpellSystem::CastSpell(
+                    EntityManager, EntityID,
+                    Game::Systems::SpellType::ScannerSweep, -1, Target))
+                return true;
+        }
+        return false;
+    }
+    case UI::PendingTargetMode::Load:
+        if (ClickTarget.AnyEntityID < 0)
+            return false;
+        for (int EntityID : EntityIDs)
+            if (Game::Systems::TransportSystem::IssueLoad(
+                    EntityManager, EntityID, ClickTarget.AnyEntityID))
+                return true;
+        return false;
+    case UI::PendingTargetMode::RechargeShields:
+        if (ClickTarget.AnyEntityID < 0)
+            return false;
+        for (int EntityID : EntityIDs)
+            if (Game::Systems::ProtossSystem::RechargeShieldsTarget(
+                    EntityManager, EntityID, ClickTarget.AnyEntityID))
+                return true;
+        return false;
+    case UI::PendingTargetMode::PsionicStorm:
+    case UI::PendingTargetMode::YamatoGun:
+    case UI::PendingTargetMode::Lockdown:
+    case UI::PendingTargetMode::EMPShockwave:
+    case UI::PendingTargetMode::Hallucination:
+    case UI::PendingTargetMode::StasisField:
+    case UI::PendingTargetMode::Recall:
+    case UI::PendingTargetMode::DarkSwarm:
+    case UI::PendingTargetMode::Plague:
+    case UI::PendingTargetMode::Ensnare:
+    case UI::PendingTargetMode::SpawnBroodling:
+    case UI::PendingTargetMode::Parasite:
+    case UI::PendingTargetMode::Consume:
+    {
+        Game::Systems::SpellType Spell = Game::Systems::SpellType::None;
+        switch (Mode)
+        {
+            case UI::PendingTargetMode::PsionicStorm: Spell = Game::Systems::SpellType::PsionicStorm; break;
+            case UI::PendingTargetMode::YamatoGun: Spell = Game::Systems::SpellType::YamatoGun; break;
+            case UI::PendingTargetMode::Lockdown: Spell = Game::Systems::SpellType::Lockdown; break;
+            case UI::PendingTargetMode::EMPShockwave: Spell = Game::Systems::SpellType::EMPShockwave; break;
+            case UI::PendingTargetMode::Hallucination: Spell = Game::Systems::SpellType::Hallucination; break;
+            case UI::PendingTargetMode::StasisField: Spell = Game::Systems::SpellType::StasisField; break;
+            case UI::PendingTargetMode::Recall: Spell = Game::Systems::SpellType::Recall; break;
+            case UI::PendingTargetMode::DarkSwarm: Spell = Game::Systems::SpellType::DarkSwarm; break;
+            case UI::PendingTargetMode::Plague: Spell = Game::Systems::SpellType::Plague; break;
+            case UI::PendingTargetMode::Ensnare: Spell = Game::Systems::SpellType::Ensnare; break;
+            case UI::PendingTargetMode::SpawnBroodling: Spell = Game::Systems::SpellType::SpawnBroodling; break;
+            case UI::PendingTargetMode::Parasite: Spell = Game::Systems::SpellType::Parasite; break;
+            case UI::PendingTargetMode::Consume: Spell = Game::Systems::SpellType::Consume; break;
+            default: break;
+        }
+        for (int EntityID : EntityIDs)
+            if (Game::Systems::SpellSystem::CastSpell(
+                    EntityManager, EntityID, Spell,
+                    ClickTarget.AnyEntityID, Target))
+                return true;
+        return false;
+    }
     default:
         return false;
     }
@@ -289,6 +389,54 @@ inline void ExecuteAttackMoveCommand(
     Game::Systems::CombatSystem::IssueAttackMove(EntityManager, EntityIDs, Target);
 }
 
+inline bool TryIssueScvRepairCommand(
+    Core::ECS::EntityManager& EntityManager,
+    const std::vector<int>& EntityIDs,
+    int TargetEntityID)
+{
+    auto* TargetBuilding =
+        EntityManager.GetComponent<Game::Components::BuildingComponent>(TargetEntityID);
+    auto* TargetUnit =
+        EntityManager.GetComponent<Game::Components::UnitComponent>(TargetEntityID);
+    auto* TargetPlayer =
+        EntityManager.GetComponent<Game::Components::PlayerComponent>(TargetEntityID);
+    auto* TargetTransform =
+        EntityManager.GetComponent<Game::Components::TransformComponent>(TargetEntityID);
+    if (!TargetBuilding || !TargetUnit || !TargetPlayer || !TargetTransform ||
+        TargetBuilding->UnderConstruction ||
+        TargetUnit->UnitRace != Game::Components::Race::Terran ||
+        TargetUnit->HitPoints <= 0 ||
+        TargetUnit->HitPoints >= TargetUnit->MaxHitPoints)
+    {
+        return false;
+    }
+
+    bool IssuedAny = false;
+    for (int EntityID : EntityIDs)
+    {
+        const auto* Unit =
+            EntityManager.GetComponent<Game::Components::UnitComponent>(EntityID);
+        const auto* Player =
+            EntityManager.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (!Unit || !Player || Unit->ChkUnitID != 7 || Unit->HitPoints <= 0 ||
+            Player->PlayerID != TargetPlayer->PlayerID)
+        {
+            continue;
+        }
+
+        Game::Systems::CommandSystem::InterruptHarvest(EntityManager, EntityID);
+        Game::Components::Order RepairOrder;
+        RepairOrder.Type = Game::Components::OrderType::Repair;
+        RepairOrder.TargetEntityID = TargetEntityID;
+        RepairOrder.TargetPosition = TargetTransform->Position;
+        RepairOrder.PathingIgnoreEntityID = TargetEntityID;
+        Game::Systems::CommandSystem::IssueOrder(
+            EntityManager, EntityID, RepairOrder, false);
+        IssuedAny = true;
+    }
+    return IssuedAny;
+}
+
 inline void ExecuteSmartClickCommand(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
@@ -302,6 +450,29 @@ inline void ExecuteSmartClickCommand(
         ApplyRallyPointDefaultOrder(EntityManager, EntityIDs, Target);
     if (ActingEntityIDs.empty())
         return;
+
+    if (ClickTarget.AnyEntityID >= 0 &&
+        Game::Systems::TransportSystem::IsTransport(
+            EntityManager, ClickTarget.AnyEntityID) &&
+        Game::Systems::TransportSystem::IssueBoard(
+            EntityManager, ActingEntityIDs, ClickTarget.AnyEntityID))
+    {
+        return;
+    }
+
+    if (ClickTarget.AnyEntityID >= 0 &&
+        Game::Systems::BuildingSystem::AssistConstruction(
+            EntityManager, ActingEntityIDs, ClickTarget.AnyEntityID))
+    {
+        return;
+    }
+
+    if (ClickTarget.AnyEntityID >= 0 &&
+        TryIssueScvRepairCommand(
+            EntityManager, ActingEntityIDs, ClickTarget.AnyEntityID))
+    {
+        return;
+    }
 
     if (ClickTarget.EnemyEntityID >= 0)
     {

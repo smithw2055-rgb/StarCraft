@@ -37,7 +37,8 @@ inline void InitializeGameplayEntitiesAndRuntimeState(
     GameSession& Session,
     ClientRuntime& Client,
     UI::Hud& Hud,
-    bool AddPlayableStarts)
+    bool AddPlayableStarts,
+    bool RegisterGenericAi)
 {
     auto ResolveChkImageID = [&Client](int ChkUnitID) {
         return Client.GetSpriteAssets().ResolveImageID(ChkUnitID);
@@ -85,7 +86,8 @@ inline void InitializeGameplayEntitiesAndRuntimeState(
                 Session, PlayerID, SpawnResourceForStart, IsMineralStartUnit, IsGeyserStartUnit);
     }
 
-    GameSessionBootstrap::RebuildPlayerSupplyAndRegisterAi(Session);
+    GameSessionBootstrap::RebuildPlayerSupplyAndRegisterAi(
+        Session, RegisterGenericAi);
 
     Session.MarkEcsInitialized();
     SyncHudFromPlayerResources(Hud, Session.GetLocalPlayerID());
@@ -108,13 +110,14 @@ inline void InitializeLoadedMapGameplayRuntime(
         return;
 
     InitializeEcsMapAndGameplaySystems(Session, Client, Audio);
-    std::string NormalizedMapPath = MapPath;
-    std::replace(NormalizedMapPath.begin(), NormalizedMapPath.end(), '\\', '/');
-    std::transform(NormalizedMapPath.begin(), NormalizedMapPath.end(), NormalizedMapPath.begin(),
-        [](unsigned char C) { return (char)std::tolower(C); });
     const bool IsCampaignMission =
-        NormalizedMapPath.find("/campaign/") != std::string::npos;
-    InitializeGameplayEntitiesAndRuntimeState(Session, Client, Hud, !IsCampaignMission);
+        GameSessionBootstrap::Detail::IsCampaignMissionPath(MapPath);
+    const char* ShowcaseValue = std::getenv("STARCRAFT_AI_SHOWCASE");
+    const bool RunShowcase = ShowcaseValue && ShowcaseValue[0] != '\0' &&
+                             ShowcaseValue[0] != '0';
+    InitializeGameplayEntitiesAndRuntimeState(
+        Session, Client, Hud, !IsCampaignMission || RunShowcase,
+        !IsCampaignMission && !RunShowcase);
     if (EnableCampaignRuntime)
     {
         InitializeCampaignRuntimeForSession(

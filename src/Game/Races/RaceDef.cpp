@@ -20,18 +20,18 @@ static void InitDefs()
         auto& T = TerranDefs;
 
     T.push_back({"SCV",             Race::Terran, UnitSize::Small,  60,  0,  0, 0,  1,  50,   0,  17,  5,  0, 0, 1, 2.8f, 8,  false});
-    T.push_back({"Marine",          Race::Terran, UnitSize::Small,  40,  0,  0, 0,  1,  50,   0,  24,  6,  0, 4, 1, 2.5f, 7,  false});
-    T.push_back({"Firebat",         Race::Terran, UnitSize::Small,  50,  0,  0, 1,  1,  50,  25,  24,  8,  0, 2, 1, 2.5f, 7,  false});
+    T.push_back({"Marine",          Race::Terran, UnitSize::Small,  40,  0,  0, 0,  1,  50,   0,  24,  6,  6, 4, 1, 2.5f, 7,  false});
+    T.push_back({"Firebat",         Race::Terran, UnitSize::Small,  50,  0,  0, 1,  1,  50,  25,  24,  8,  0, 1, 1, 2.5f, 7,  false});
     T.push_back({"Medic",           Race::Terran, UnitSize::Small,  60,  0, 50, 1,  1,  50,  25,  24,  0,  0, 0, 0, 2.5f, 8,  false});
-    T.push_back({"Ghost",           Race::Terran, UnitSize::Small,  45,  0, 50, 0,  1,  25,  75,  30, 10,  0, 6, 1, 2.5f, 9,  false});
+    T.push_back({"Ghost",           Race::Terran, UnitSize::Small,  45,  0, 50, 0,  1,  25,  75,  30, 10, 10, 7, 1, 2.5f, 9,  false});
     T.push_back({"Vulture",         Race::Terran, UnitSize::Medium, 80,  0,  0, 0,  2,  75,   0,  30, 20,  0, 5, 1, 3.0f, 8,  false});
-    T.push_back({"Goliath",         Race::Terran, UnitSize::Large, 125,  0,  0, 1,  2, 100,  50,  37, 12, 10, 6, 1, 2.6f, 8,  false});
+    T.push_back({"Goliath",         Race::Terran, UnitSize::Large, 125,  0,  0, 1,  2, 100,  50,  37, 12, 20, 6, 1, 2.6f, 8,  false});
     T.push_back({"SiegeTank",       Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 150, 100,  45, 30,  0, 7, 1, 2.3f, 10, false});
-    T.push_back({"Wraith",          Race::Terran, UnitSize::Medium,120,  0,  0, 0,  2, 150, 100,  60,  8,  8, 5, 1, 3.2f, 9,  false});
+    T.push_back({"Wraith",          Race::Terran, UnitSize::Medium,120,  0,  0, 0,  2, 150, 100,  60,  8, 20, 5, 1, 3.2f, 9,  false});
     T.push_back({"Dropship",        Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 100, 100,  50,  0,  0, 0, 0, 3.0f, 8,  false});
     T.push_back({"ScienceVessel",   Race::Terran, UnitSize::Large, 200,  0,200, 1,  2, 100, 225,  80,  0,  0, 0, 0, 2.8f, 11, false});
     T.push_back({"Battlecruiser",   Race::Terran, UnitSize::Large, 500,  0,200, 3,  6, 400, 300,  90, 25, 25, 6, 1, 2.1f, 11, false});
-    T.push_back({"Valkyrie",        Race::Terran, UnitSize::Large, 200,  0,  0, 2,  3, 250, 125,  60,  6, 16, 6, 1, 3.0f, 9,  false});
+    T.push_back({"Valkyrie",        Race::Terran, UnitSize::Large, 200,  0,  0, 2,  3, 250, 125,  60,  0, 12, 6, 1, 3.0f, 9,  false});
 
     int CommandCenterID = (int)T.size();
     T.push_back({"CommandCenter",   Race::Terran, UnitSize::Large, 1500, 0,  0, 1, 10, 400,   0, 120,  0,  0, 0, 0, 0.0f, 11, true, true});
@@ -68,7 +68,7 @@ static void InitDefs()
     int BunkerID = (int)T.size();
     T.push_back({"Bunker",          Race::Terran, UnitSize::Large,  350, 0,  0, 1,  0, 100,   0,  30,  0,  0, 0, 0, 0.0f, 11, true});
     int MissileTurretID = (int)T.size();
-    T.push_back({"MissileTurret",   Race::Terran, UnitSize::Large,  200, 0,  0, 1,  0,  75,   0,  20, 20, 20, 7, 1, 0.0f, 11, true});
+    T.push_back({"MissileTurret",   Race::Terran, UnitSize::Large,  200, 0,  0, 1,  0,  75,   0,  20,  0, 20, 7, 1, 0.0f, 11, true});
 
     T[0].ProducedBy = CommandCenterID;
     T[1].ProducedBy = BarracksID;
@@ -172,37 +172,39 @@ static void InitDefs()
     int ZOverlordID = (int)Z.size();
     Z.push_back({"Overlord",         Race::Zerg, UnitSize::Large, 200,  0,  0, 0,  0,  100, 0,  25,  0,  0,  0, 0,  0.7f, 9,  false});
     int ZZerglingID = (int)Z.size();
-    Z.push_back({"Zergling",         Race::Zerg, UnitSize::Small,  35,  0,  0, 0,  0,  50,  0,  24,  5,  0,  1, 1,  3.4f, 7,  false});
+    // The current production flow morphs one Zergling at a time, so it must
+    // reserve supply instead of bypassing the population cap.
+    Z.push_back({"Zergling",         Race::Zerg, UnitSize::Small,  35,  0,  0, 0,  1,  50,  0,  24,  5,  0,  1, 1,  3.4f, 7,  false});
     int ZHydraliskID = (int)Z.size();
-    Z.push_back({"Hydralisk",        Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  1,  75,  25, 24,  10, 0,  4, 1,  2.5f, 6,  false});
+    Z.push_back({"Hydralisk",        Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  1,  75,  25, 24,  10, 10, 4, 1,  2.5f, 6,  false});
     int ZMutaliskID = (int)Z.size();
-    Z.push_back({"Mutalisk",         Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  9,  0,  3, 1,  3.5f, 8,  false});
+    Z.push_back({"Mutalisk",         Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  9,  9,  3, 1,  3.5f, 8,  false});
     int ZScourgeID = (int)Z.size();
-    Z.push_back({"Scourge",          Race::Zerg, UnitSize::Small,  25,  0,  0, 0,  0,  25,  75, 20,  5,  0,  1, 1,  4.5f, 5,  false});
+    Z.push_back({"Scourge",          Race::Zerg, UnitSize::Small,  25,  0,  0, 0,  1,  25,  75, 20,  0,110, 1, 1,  4.5f, 5,  false});
     int ZQueenID = (int)Z.size();
-    Z.push_back({"Queen",            Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  2,  100, 100,30,  0,  0,  0, 0,  2.0f, 9,  false});
+    Z.push_back({"Queen",            Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  0,  0,  0, 0,  2.0f,10,  false});
     int ZUltraliskID = (int)Z.size();
-    Z.push_back({"Ultralisk",        Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  4,  200, 200,39,  20, 0,  7, 1,  2.9f, 8,  false});
+    Z.push_back({"Ultralisk",        Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  4,  200, 200,39,  20, 0,  1, 1,  2.9f, 7,  false});
     int ZDefilerID = (int)Z.size();
     Z.push_back({"Defiler",          Race::Zerg, UnitSize::Medium, 80,  0,  0, 1,  2,  50,  150,30,  0,  0,  0, 0,  2.0f, 9,  false});
     int ZLurkerID = (int)Z.size();
     Z.push_back({"Lurker",           Race::Zerg, UnitSize::Medium,125,  0,  0, 1,  2,  50,  100,28,  20, 0,  6, 1,  2.5f, 8,  false});
     int ZBroodlingID = (int)Z.size();
-    Z.push_back({"Broodling",        Race::Zerg, UnitSize::Small,  15,  0,  0, 0,  0,  0,   0,  1,   5,  0,  0, 1,  2.5f, 5,  false});
+    Z.push_back({"Broodling",        Race::Zerg, UnitSize::Small,  30,  0,  0, 0,  0,  0,   0,  1,   4,  0,  1, 1,  2.5f, 5,  false});
     int ZInfestedID = (int)Z.size();
     Z.push_back({"Infested Terran",  Race::Zerg, UnitSize::Medium, 60,  0,  0, 0,  1,  0,   0,  20,  12, 0,  5, 1,  2.5f, 8,  false});
     int ZGuardianID = (int)Z.size();
     Z.push_back({"Guardian",         Race::Zerg, UnitSize::Medium,150,  0,  0, 2,  2,  50,  100,33,  20, 0,  8, 1,  2.5f, 10, false});
     int ZDevourerID = (int)Z.size();
-    Z.push_back({"Devourer",         Race::Zerg, UnitSize::Medium,150,  0,  0, 0,  2,  100, 50, 33,  15, 0,  6, 1,  3.5f, 9,  false});
+    Z.push_back({"Devourer",         Race::Zerg, UnitSize::Medium,150,  0,  0, 0,  2,  100, 50, 33,  0, 25, 6, 1,  3.5f, 9,  false});
 
     // Zerg buildings
     int ZHatcheryID = (int)Z.size();
-    Z.push_back({"Hatchery",         Race::Zerg, UnitSize::Large, 1500, 0,  0, 1,  0, 300, 0,  120, 0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Hatchery",         Race::Zerg, UnitSize::Large, 1500, 0,  0, 1,  0, 300, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false});
     int ZLairID = (int)Z.size();
-    Z.push_back({"Lair",             Race::Zerg, UnitSize::Large, 1800, 0,  0, 1,  0, 150, 100,80,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Lair",             Race::Zerg, UnitSize::Large, 1800, 0,  0, 1,  0, 150, 100,80,  0,  0,  0, 0,  0,   11, true, false, false});
     int ZHiveID = (int)Z.size();
-    Z.push_back({"Hive",             Race::Zerg, UnitSize::Large, 2000, 0,  0, 1,  0, 200, 150,80,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Hive",             Race::Zerg, UnitSize::Large, 2000, 0,  0, 1,  0, 200, 150,80,  0,  0,  0, 0,  0,   11, true, false, false});
     int ZExtractorID = (int)Z.size();
     Z.push_back({"Extractor",        Race::Zerg, UnitSize::Large, 500,  0,  0, 1,  0, 50,  0,  40,  0,  0,  0, 0,  0,   11, true});
     int ZSpawningPoolID = (int)Z.size();
@@ -214,7 +216,7 @@ static void InitDefs()
     int ZSpireID = (int)Z.size();
     Z.push_back({"Spire",            Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 100, 100,60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZNydusCanalID = (int)Z.size();
-    Z.push_back({"Nydus Canal",      Race::Zerg, UnitSize::Large, 250,  0,  0, 1,  0, 150, 0,  40,  0,  0,  0, 0,  0,   11, true});
+    Z.push_back({"Nydus Canal",      Race::Zerg, UnitSize::Large, 250,  0,  0, 1,  0, 150, 0,  40,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZQueensNestID = (int)Z.size();
     Z.push_back({"Queen's Nest",     Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 75,  100,50,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZGreaterSpireID = (int)Z.size();
@@ -223,6 +225,12 @@ static void InitDefs()
     Z.push_back({"Ultralisk Cavern", Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 150, 200,60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZDefilerMoundID = (int)Z.size();
     Z.push_back({"Defiler Mound",    Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 100, 150,50,  0,  0,  0, 0,  0,   11, true, false, true});
+    int ZCreepColonyID = (int)Z.size();
+    Z.push_back({"Creep Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  0, 75,  0,  20,  0,  0,  0, 0,  0,   11, true, false, true});
+    int ZSporeColonyID = (int)Z.size();
+    Z.push_back({"Spore Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  0, 50,  0,  20,  15, 0,  7, 0,  0,   11, true, false, true});
+    int ZSunkenColonyID = (int)Z.size();
+    Z.push_back({"Sunken Colony",    Race::Zerg, UnitSize::Large, 300,  0,  0, 1,  0, 50,  0,  20,  40, 0,  7, 0,  0,   11, true, false, true});
 
     // Assign production & requirements for Zerg
     Z[ZDroneID].ProducedBy = ZHatcheryID;       // Drone from Hatchery
@@ -239,55 +247,61 @@ static void InitDefs()
     Z[ZDroneID].RequiredBuildings = {ZHatcheryID};
     Z[ZOverlordID].RequiredBuildings = {ZHatcheryID};
     Z[ZZerglingID].RequiredBuildings = {ZSpawningPoolID};
-    Z[ZHydraliskID].RequiredBuildings = {ZSpawningPoolID};
-    Z[ZMutaliskID].RequiredBuildings = {ZSpawningPoolID, ZHydraliskDenID, ZSpireID, ZLairID};
-    Z[ZScourgeID].RequiredBuildings = {ZSpawningPoolID, ZSpireID};
-    Z[ZQueenID].RequiredBuildings = {ZSpawningPoolID, ZQueensNestID, ZLairID};
-    Z[ZUltraliskID].RequiredBuildings = {ZSpawningPoolID, ZUltraliskCavernID, ZHiveID};
-    Z[ZDefilerID].RequiredBuildings = {ZSpawningPoolID, ZDefilerMoundID, ZHiveID};
-    Z[ZLurkerID].RequiredBuildings = {ZSpawningPoolID, ZHydraliskDenID, ZLairID};
+    Z[ZHydraliskID].RequiredBuildings = {ZHydraliskDenID};
+    Z[ZMutaliskID].RequiredBuildings = {ZSpireID};
+    Z[ZScourgeID].RequiredBuildings = {ZSpireID};
+    Z[ZQueenID].RequiredBuildings = {ZQueensNestID};
+    Z[ZUltraliskID].RequiredBuildings = {ZUltraliskCavernID};
+    Z[ZDefilerID].RequiredBuildings = {ZDefilerMoundID};
+    Z[ZLurkerID].RequiredBuildings = {ZHydraliskDenID, ZLairID};
 
     // Zerg building requirements
     Z[ZLairID].RequiredBuildings = {ZHatcheryID, ZSpawningPoolID};
-    Z[ZHiveID].RequiredBuildings = {ZLairID, ZQueensNestID, ZSpireID, ZUltraliskCavernID};
+    // Brood War progression is Lair + Queen's Nest -> Hive. Requiring an
+    // Ultralisk Cavern here creates an impossible cycle because that building
+    // itself requires Hive.
+    Z[ZHiveID].RequiredBuildings = {ZLairID, ZQueensNestID};
     Z[ZSpawningPoolID].RequiredBuildings = {ZHatcheryID};
     Z[ZEvolutionChamberID].RequiredBuildings = {ZHatcheryID};
-    Z[ZHydraliskDenID].RequiredBuildings = {ZSpawningPoolID, ZLairID};
+    Z[ZHydraliskDenID].RequiredBuildings = {ZSpawningPoolID};
     Z[ZSpireID].RequiredBuildings = {ZLairID};
     Z[ZQueensNestID].RequiredBuildings = {ZLairID};
     Z[ZGreaterSpireID].RequiredBuildings = {ZSpireID, ZHiveID};
     Z[ZUltraliskCavernID].RequiredBuildings = {ZHiveID};
     Z[ZDefilerMoundID].RequiredBuildings = {ZHiveID};
+    Z[ZCreepColonyID].RequiredBuildings = {ZHatcheryID};
+    Z[ZSporeColonyID].RequiredBuildings = {ZEvolutionChamberID};
+    Z[ZSunkenColonyID].RequiredBuildings = {ZSpawningPoolID};
 
         auto& P = ProtossDefs;
     int PProbeID = (int)P.size();
     P.push_back({"Probe",      Race::Protoss, UnitSize::Small,  20, 20, 0, 0,  1,  50,  0,  17,  5,  0,  0, 1,  2.8f, 9,  false});
     int PZealotID = (int)P.size();
-    P.push_back({"Zealot",     Race::Protoss, UnitSize::Small,  80, 60, 0, 1,  2, 100,  0,  27,  8,  0,  1, 1,  2.5f, 7,  false});
+    P.push_back({"Zealot",     Race::Protoss, UnitSize::Small, 100, 60, 0, 1,  2, 100,  0,  27,  8,  0,  1, 1,  2.5f, 7,  false});
     int PDragoonID = (int)P.size();
-    P.push_back({"Dragoon",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 125, 50, 30,  20,  0,  4, 1,  2.4f, 8,  false});
+    P.push_back({"Dragoon",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 125, 50, 30,  20, 20, 4, 1,  2.4f, 8,  false});
     int PHighTemplarID = (int)P.size();
     P.push_back({"High Templar",Race::Protoss, UnitSize::Small, 40, 40, 0, 0,  2,  50, 150,30,  0,  0,  0, 0,  2.0f, 8,  false});
     int PDarkTemplarID = (int)P.size();
     P.push_back({"Dark Templar",Race::Protoss, UnitSize::Small, 80, 40, 0, 1,  2, 125, 125,30,  40,  0,  1, 1,  2.5f, 7,  false});
     int PArchonID = (int)P.size();
-    P.push_back({"Archon",     Race::Protoss, UnitSize::Medium,300,300, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
+    P.push_back({"Archon",     Race::Protoss, UnitSize::Medium, 10,350, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
     int PDarkArchonID = (int)P.size();
-    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Medium,250,250, 0, 0,  4,  0,   0,  1,  0,   0,  0, 0,  2.0f, 8,  false});
+    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Medium, 25,200, 0, 0,  4,  0,   0,  1,  0,  0,  0, 0,  2.0f,10,  false});
     int PReaverID = (int)P.size();
     P.push_back({"Reaver",     Race::Protoss, UnitSize::Large, 100, 80, 0, 0,  4, 200, 100,35,  20,  0,  8, 1,  2.0f, 9,  false});
     int PShuttleID = (int)P.size();
-    P.push_back({"Shuttle",    Race::Protoss, UnitSize::Medium, 60, 60, 0, 0,  2, 100,  0,  30,  0,  0,  0, 0,  3.0f, 8,  false});
+    P.push_back({"Shuttle",    Race::Protoss, UnitSize::Medium, 80, 60, 0, 0,  2, 100,  0,  30,  0,  0,  0, 0,  3.0f, 8,  false});
     int PScoutID = (int)P.size();
-    P.push_back({"Scout",      Race::Protoss, UnitSize::Medium,100, 80, 0, 0,  3, 275, 125,40,  8,   0,  4, 1,  3.5f, 8,  false});
+    P.push_back({"Scout",      Race::Protoss, UnitSize::Medium,150,100, 0, 0,  3, 275, 125,40,  8,  28, 4, 1,  3.5f, 8,  false});
     int PCorsairID = (int)P.size();
-    P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium, 80, 80, 0, 1,  2, 150, 100,30,  5,   0,  3, 1,  3.5f, 9,  false});
+    P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 150, 100,30,  0,   5, 5, 1,  3.5f, 9,  false});
     int PCarrierID = (int)P.size();
-    P.push_back({"Carrier",    Race::Protoss, UnitSize::Large, 200,150, 0, 2,  6, 350, 250,60,  6,   0,  6, 1,  2.5f, 11, false});
+    P.push_back({"Carrier",    Race::Protoss, UnitSize::Large, 300,150, 0, 2,  6, 350, 250,60,  6,   0, 6, 1,  2.5f,11, false});
     int PArbiterID = (int)P.size();
-    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 200, 150,50,  10,  0,  5, 1,  2.5f, 10, false});
+    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 200, 150,50,  10, 10, 5, 1,  2.5f, 9, false});
     int PObserverID = (int)P.size();
-    P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  20, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 9,  false});
+    P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  40, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 9,  false});
 
     // Protoss buildings
     int PNexusID = (int)P.size();
@@ -392,6 +406,9 @@ static void InitDefs()
     Z[ZGreaterSpireID].ChkUnitID = 137;
     Z[ZUltraliskCavernID].ChkUnitID = 140;
     Z[ZDefilerMoundID].ChkUnitID = 136;
+    Z[ZCreepColonyID].ChkUnitID = 143;
+    Z[ZSporeColonyID].ChkUnitID = 144;
+    Z[ZSunkenColonyID].ChkUnitID = 146;
 
     P[PProbeID].ChkUnitID = 64;
     P[PZealotID].ChkUnitID = 65;
@@ -619,9 +636,15 @@ int GetSupplyProvidedByDefID(int ID)
     const UnitDef Def = GetUnitDefByID(ID);
     if (Def.Name == "Unknown")
         return 0;
-    if (Def.Name == "Overlord")
+    if (Def.Name == "Overlord" || Def.Name == "SupplyDepot" ||
+        Def.Name == "Pylon")
         return 8;
-    return Def.IsBuilding ? Def.SupplyCost : 0;
+    if (Def.Name == "CommandCenter" || Def.Name == "Nexus" ||
+        Def.Name == "Hatchery" || Def.Name == "Lair" || Def.Name == "Hive")
+    {
+        return 10;
+    }
+    return 0;
 }
 
 bool IsDetectorChkUnitID(int ChkUnitID)
@@ -639,6 +662,25 @@ bool IsDetectorChkUnitID(int ChkUnitID)
         default:
             return false;
     }
+}
+
+bool BuildingDefSatisfiesRequirement(int ActualDefID, int RequiredDefID)
+{
+    if (ActualDefID == RequiredDefID)
+        return true;
+
+    const auto Actual = GetUnitDefByID(ActualDefID);
+    const auto Required = GetUnitDefByID(RequiredDefID);
+    if (Actual.RaceType != Race::Zerg || Required.RaceType != Race::Zerg)
+        return false;
+
+    if (Required.Name == "Hatchery")
+        return Actual.Name == "Lair" || Actual.Name == "Hive";
+    if (Required.Name == "Lair")
+        return Actual.Name == "Hive";
+    if (Required.Name == "Spire")
+        return Actual.Name == "Greater Spire";
+    return false;
 }
 
 int GetUnitDefID(const std::string& Name)

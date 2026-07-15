@@ -5,10 +5,19 @@
 #include "Client/Entity.h"
 #include "Resource/DataAssetCacheView.h"
 #include "Resource/SpriteAssetCacheView.h"
+#include <algorithm>
 #include <vector>
 
 namespace Game::Client
 {
+
+inline float BuildingFlightBodyOffsetY(
+    const Game::Components::BuildingComponent* Building)
+{
+    if (!Building || !Building->IsLifted)
+        return 0.0f;
+    return -std::max(0.0f, Building->FlightVisualHeight);
+}
 
 class EntityRenderer
 {

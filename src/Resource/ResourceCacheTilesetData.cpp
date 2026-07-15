@@ -12,7 +12,12 @@ namespace Resource::Graphics
 
 bool ResourceCache::SetTilesetPalette(const std::string& TilesetName)
 {
-    (void)TilesetName;
+    if (!mTilesets.ActiveName.empty() && mTilesets.ActiveName != TilesetName)
+    {
+        DestroySpriteCache();
+        mTilesets.LightTableRgbaByColorShift.clear();
+    }
+    mTilesets.ActiveName = TilesetName;
     Core::Utils::Logger::Info("ResourceCache", "HD tilesets use RGBA megatile textures; skipping WPE palette load");
     return true;
 }

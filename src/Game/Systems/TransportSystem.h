@@ -15,13 +15,20 @@ public:
     std::string_view GetName() const override { return "TransportSystem"; }
 
     static bool CanLoad(Core::ECS::EntityManager& EM, int TransportID, int PassengerID,
-                        std::string* OutReason = nullptr);
+                         std::string* OutReason = nullptr);
+    static bool IssueLoad(Core::ECS::EntityManager& EM, int TransportID, int PassengerID,
+                          std::string* OutReason = nullptr);
+    static bool IsTransport(Core::ECS::EntityManager& EM, int EntityID);
+    static bool IssueBoard(Core::ECS::EntityManager& EM,
+                           const std::vector<int>& PassengerIDs,
+                           int TransportID);
     static bool LoadUnit(Core::ECS::EntityManager& EM, int TransportID, int PassengerID);
     static bool CanUnload(Core::ECS::EntityManager& EM, int TransportID,
                           int PassengerIndex, std::string* OutReason = nullptr);
     static bool UnloadUnit(Core::ECS::EntityManager& EM, int TransportID, int PassengerIndex,
                            const Core::Math::Vec2& Position = {});
     static bool UnloadAll(Core::ECS::EntityManager& EM, int TransportID);
+    static void UpdateOrders(Core::ECS::EntityManager& EM, float DeltaTime);
     static bool IsNydusCanal(Core::ECS::EntityManager& EM, int EntityID);
     static bool EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, int NydusID);
 

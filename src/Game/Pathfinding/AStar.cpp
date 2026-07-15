@@ -57,7 +57,8 @@ static bool IsWalkableWithClearance(const Map::GameMap& Map,
         int SY = 0;
         Map.WorldToTile(Sample, SX, SY);
         if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY) ||
-            (ExtraBlockedTile && ExtraBlockedTile(SX, SY)))
+            (ExtraBlockedTile && ExtraBlockedTile(SX, SY)) ||
+            !Map.CanTraverseGround(X, Y, SX, SY))
         {
             return false;
         }
@@ -87,11 +88,15 @@ static bool HasLineOfSight(const Map::GameMap& Map,
     int CX = X0, CY = Y0;
     while (CX != X1 || CY != Y1)
     {
+        const int PreviousX = CX;
+        const int PreviousY = CY;
         int E2 = Err * 2;
         if (E2 > -DY) { Err -= DY; CX += SX; }
         if (E2 < DX) { Err += DX; CY += SY; }
-        if ((CX != X1 || CY != Y1) &&
-            !IsWalkableWithClearance(Map, CX, CY, ClearanceRadiusPixels, ExtraBlockedTile))
+        if (!Map.CanTraverseGround(PreviousX, PreviousY, CX, CY) ||
+            ((CX != X1 || CY != Y1) &&
+             !IsWalkableWithClearance(
+                 Map, CX, CY, ClearanceRadiusPixels, ExtraBlockedTile)))
         {
             return false;
         }
@@ -107,11 +112,18 @@ static bool CanStepDiagonal(const Map::GameMap& Map,
                             int ClearanceRadiusPixels,
                             const std::function<bool(int, int)>& ExtraBlockedTile)
 {
+    if (!Map.CanTraverseGround(FromX, FromY,
+                               FromX + StepX, FromY + StepY))
+    {
+        return false;
+    }
     if (StepX == 0 || StepY == 0)
         return true;
     if (AStar::GetConfig().CutCorners)
         return true;
-    return IsWalkableWithClearance(Map, FromX + StepX, FromY,
+    return Map.CanTraverseGround(FromX, FromY, FromX + StepX, FromY) &&
+           Map.CanTraverseGround(FromX, FromY, FromX, FromY + StepY) &&
+           IsWalkableWithClearance(Map, FromX + StepX, FromY,
                                    ClearanceRadiusPixels, ExtraBlockedTile) &&
            IsWalkableWithClearance(Map, FromX, FromY + StepY,
                                    ClearanceRadiusPixels, ExtraBlockedTile);
@@ -132,7 +144,12 @@ static bool ResolveReachableGoalTile(const Map::GameMap& Map,
     if (Width <= 0 || Height <= 0)
         return false;
 
-    if (!IsWalkableWithClearance(Map, StartX, StartY, ClearanceRadiusPixels, ExtraBlockedTile))
+    // A unit can be pushed across a terrain-cell boundary or be spawned in an
+    // old map position whose center is no longer marked walkable. Rejecting
+    // that occupied start tile makes even a nearby recovery order fail. Permit
+    // the start cell itself and require full terrain/blocker clearance from the
+    // first step on; a sealed start still fails below because it cannot leave.
+    if (!Map.IsInBounds(StartX, StartY))
         return false;
 
     const int DirX[] = {1, -1, 0, 0, 1, -1, 1, -1};
@@ -148,18 +165,25 @@ static bool ResolveReachableGoalTile(const Map::GameMap& Map,
     int BestY = StartY;
     int BestDistSq = std::numeric_limits<int>::max();
     int BestStartDistSq = 0;
+    int BestHeightDifference = std::numeric_limits<int>::max();
+    const int DesiredHeight = Map.GetGroundHeight(DesiredEndX, DesiredEndY);
 
     auto Consider = [&](int X, int Y)
     {
+        const int HeightDifference =
+            std::abs(Map.GetGroundHeight(X, Y) - DesiredHeight);
         const int ToEndX = X - DesiredEndX;
         const int ToEndY = Y - DesiredEndY;
         const int DistSq = ToEndX * ToEndX + ToEndY * ToEndY;
         const int FromStartX = X - StartX;
         const int FromStartY = Y - StartY;
         const int StartDistSq = FromStartX * FromStartX + FromStartY * FromStartY;
-        if (DistSq < BestDistSq ||
-            (DistSq == BestDistSq && StartDistSq < BestStartDistSq))
+        if (HeightDifference < BestHeightDifference ||
+            (HeightDifference == BestHeightDifference &&
+             (DistSq < BestDistSq ||
+              (DistSq == BestDistSq && StartDistSq < BestStartDistSq))))
         {
+            BestHeightDifference = HeightDifference;
             BestDistSq = DistSq;
             BestStartDistSq = StartDistSq;
             BestX = X;
@@ -188,6 +212,8 @@ static bool ResolveReachableGoalTile(const Map::GameMap& Map,
             const size_t NI = (size_t)NY * (size_t)Width + (size_t)NX;
             if (Visited[NI])
                 continue;
+            if (!Map.CanTraverseGround(CurX, CurY, NX, NY))
+                continue;
             if (!IsWalkableWithClearance(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile))
                 continue;
             if (!CanStepDiagonal(Map, CurX, CurY, DirX[D], DirY[D],
@@ -201,7 +227,11 @@ static bool ResolveReachableGoalTile(const Map::GameMap& Map,
 
     OutEndX = BestX;
     OutEndY = BestY;
-    return BestDistSq != std::numeric_limits<int>::max();
+    const bool StayedAtStart = BestX == StartX && BestY == StartY;
+    const bool RequestedStart = DesiredEndX == StartX && DesiredEndY == StartY;
+    return BestDistSq != std::numeric_limits<int>::max() &&
+           BestHeightDifference == 0 &&
+           (!StayedAtStart || RequestedStart);
 }
 
 PathResult AStar::FindPath(const Map::GameMap& Map,
@@ -389,6 +419,7 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
             int NY = Cur.Y + DY[D];
 
             if (!IsWalkable(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile)) continue;
+            if (!Map.CanTraverseGround(Cur.X, Cur.Y, NX, NY)) continue;
 
             if (D >= DiagStart &&
                 !CanStepDiagonal(Map, Cur.X, Cur.Y, DX[D], DY[D],

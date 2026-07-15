@@ -1,5 +1,6 @@
 #include "Main/GameLoop/CursorTargeting.h"
 #include "Main/GameLoop/CursorTypes.h"
+#include "Game/Systems/GeyserState.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -105,6 +106,21 @@ int main()
             "anti-air capable units can attack air targets");
     Require(!Game::Client::GameLoop::CanEntityAttackTarget(EM, AntiAir, ResourceTarget),
             "resources are not attack targets for smart-click");
+
+    const auto EnemyRefinery =
+        CreateCombatEntity(EM, 0, 0, false, false, false);
+    EM.AddComponent<Game::Components::ResourceComponent>(EnemyRefinery).Type =
+        Game::Components::ResourceType::VespeneGas;
+    auto& EnemyRefineryBuilding =
+        EM.AddComponent<Game::Components::BuildingComponent>(EnemyRefinery);
+    EnemyRefineryBuilding.BuildingDefID = 1;
+    auto& EnemyRefineryClaim =
+        EM.AddComponent<Game::Components::ClaimedGeyserComponent>(EnemyRefinery);
+    EnemyRefineryClaim.IsClaimed = true;
+    Require(Game::Systems::IsAttackableClaimedGeyser(EM, EnemyRefinery) &&
+            Game::Client::GameLoop::CanEntityAttackTarget(
+                EM, GroundOnly, EnemyRefinery),
+        "claimed enemy refinery remains a smart-click combat target despite carrying resource data");
 
     auto AirAttackers =
         Game::Client::GameLoop::FilterAttackersForTarget(EM, Selection, AirTarget);

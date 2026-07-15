@@ -128,7 +128,7 @@ public:
 private:
     static constexpr int kHudHeight = 280;
     static constexpr int kMinimapSize = 236;
-    static constexpr int kMaxMinimapDotVisuals = 32;
+    static constexpr int kMaxMinimapDotVisuals = 128;
     static constexpr int kMaxCampaignPingVisuals = 4;
 
     void CacheElements();

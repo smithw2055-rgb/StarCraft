@@ -25,7 +25,12 @@ void ResourceCache::DestroyTilesetCache()
     for (auto& [Name, Atlas] : mTilesets.AtlasesByName)
         DestroyImage(Atlas.Image);
     mTilesets.AtlasesByName.clear();
+    for (auto& [Name, Frames] : mTilesets.CreepFramesByName)
+        for (auto& Frame : Frames) DestroyImage(Frame.Image);
+    mTilesets.CreepFramesByName.clear();
     mTilesets.DataByName.clear();
+    mTilesets.LightTableRgbaByColorShift.clear();
+    mTilesets.ActiveName.clear();
 }
 
 void ResourceCache::DestroyUICache()

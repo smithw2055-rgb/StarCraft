@@ -222,6 +222,7 @@ public:
         bool OrderDone = false;
         bool LiftOffState = false;
         bool HasWarpOverlay = false;
+        int WarpOverlayFrame = 0;
         bool SpawnFrameSet = false;
         int SpawnFrame = -1;
         int PC = 0;
@@ -231,6 +232,7 @@ public:
 
     void LoadScript(int AnimationID, const std::vector<int>* ProgramData, int EntryPC);
     void Reset();
+    void PauseAtCurrentFrame() { mSprite.PC = -1; }
     bool ExecuteFrame();
     void RefreshDirectionalFrame();
 

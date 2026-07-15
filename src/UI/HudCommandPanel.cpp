@@ -8,7 +8,9 @@
 #include "Render/Draw2D.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/BuildingSystem.h"
+#include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/SpellSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"
 #include "UI/HudText.h"
@@ -32,6 +34,7 @@ namespace
     constexpr int ZergUltraliskCavern = 140;
     constexpr int ZergSpire = 141;
     constexpr int ZergSpawningPool = 142;
+    constexpr int ZergCreepColony = 143;
 
     constexpr int ProtoProbe = 64;
     constexpr int ProtoNexus = 154;
@@ -46,6 +49,7 @@ namespace
     constexpr int ProtoFleetBeacon = 169;
     constexpr int ProtoArbiterTribunal = 170;
     constexpr int ProtoRoboticsSupportBay = 171;
+    constexpr int ProtoShieldBattery = 172;
 
     constexpr int IconBuild = 0;
     constexpr int IconBack = 1;
@@ -71,6 +75,7 @@ int Hud::GetDefaultPageForSelection(int SelectedChkUnitId) const
         case ZergGreaterSpire: return PageZergGreaterSpire;
         case ZergUltraliskCavern: return PageZergUltraliskCavern;
         case ZergDefilerMound: return PageZergDefilerMound;
+        case ZergCreepColony: return PageZergCreepColony;
         case ProtoProbe: return PageProtossProbeMain;
         case ProtoNexus: return PageProtossNexus;
         case ProtoGateway: return PageProtossGateway;
@@ -84,6 +89,7 @@ int Hud::GetDefaultPageForSelection(int SelectedChkUnitId) const
         case ProtoFleetBeacon: return PageProtossFleetBeacon;
         case ProtoArbiterTribunal: return PageProtossArbiterTribunal;
         case ProtoObservatory: return PageProtossObservatory;
+        case ProtoShieldBattery: return PageProtossShieldBattery;
         default: return PageNone;
     }
 }
@@ -198,7 +204,9 @@ int Hud::ResolveSelectedTerranDefId(int SelectedEntityId,
             }
         }
     }
-    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+    const int DefID = SelectedChkUnitId == 30
+        ? Game::Races::GetUnitDefID("SiegeTank")
+        : Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
     const auto Def = Game::Races::GetUnitDefByID(DefID);
     return Def.RaceType == Game::Components::Race::Terran ? DefID : -1;
 }
@@ -236,6 +244,27 @@ void Hud::BuildTerranPage(int SelectedEntityId,
     {
         SetButton(Slot, Label, ActionKind::Command, -1, CommandId,
                   TerranResearchId::None, IconCommand, Enabled);
+    };
+
+    auto SpellButton = [&](int Slot,
+                           const std::string& Label,
+                           HudCommandId CommandId,
+                           Game::Systems::SpellType Spell,
+                           TerranResearchId ResearchId,
+                           bool RequiresResearch)
+    {
+        const auto* Unit = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::UnitComponent>(SelectedEntityId)
+            : nullptr;
+        const auto* Cooldown = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::SpellCooldown>(SelectedEntityId)
+            : nullptr;
+        const bool Researched = !RequiresResearch || UpgradeSystem::HasResearch(
+            PlayerIdForSelection(), ToResearchId(ResearchId));
+        const bool Enabled = Unit && Researched &&
+            Unit->EnergyPoints >= Game::Systems::SpellSystem::GetSpellEnergyCost(Spell) &&
+            (!Cooldown || Cooldown->CooldownRemaining <= 0.0f);
+        SetCommandButton(Slot, Label, CommandId, Enabled);
     };
 
     auto DisabledAbilityButtonForDef = [&](int Slot, const std::string& Label, int IconDefId)
@@ -302,7 +331,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
     {
         if (HasCancelableWork())
             SetButton(8, "Cancel", ActionKind::Cancel, -1, HudCommandId::None,
-                      TerranResearchId::None, IconBack, true);
+                      TerranResearchId::None, IconBack, true, 0, HudVisualId::Cancel);
     };
 
     auto SelectedBuilding = [&]() -> Game::Components::BuildingComponent*
@@ -318,6 +347,21 @@ void Hud::BuildTerranPage(int SelectedEntityId,
         return Building && Building->CanLiftOff && !Building->UnderConstruction &&
                !Building->IsLifted &&
                Building->FlightPhase == Game::Components::BuildingFlightPhase::Grounded;
+    };
+
+    auto CanRallySelected = [&]() -> bool
+    {
+        const auto* Building = SelectedBuilding();
+        return Building && !Building->UnderConstruction && !Building->IsLifted;
+    };
+
+    auto HasLoadedPassengers = [&]() -> bool
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return false;
+        const auto* Loaded =
+            EcsEntities->GetComponent<Game::Components::LoadedUnitsComponent>(SelectedEntityId);
+        return Loaded && !Loaded->PassengerIDs.empty();
     };
 
     auto ResearchButton = [&](int Slot,
@@ -474,7 +518,9 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            TechAbilityButton(6, TerranResearchId::Lockdown, "Lockdown", Ghost);
+            SpellButton(6, "Lockdown", HudCommandId::Lockdown,
+                        Game::Systems::SpellType::Lockdown,
+                        TerranResearchId::Lockdown, true);
             DisabledAbilityButtonForDef(7, "Cloak", Ghost);
             DisabledAbilityButtonForDef(8, "Nuke", NuclearSilo);
             break;
@@ -498,13 +544,24 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             break;
 
         case PageTerranSiegeTank:
-            SetCommandButton(0, "Move", HudCommandId::Move, true);
+        {
+            const auto* SelectedUnit = EcsEntities && SelectedEntityId > 0
+                ? EcsEntities->GetComponent<Game::Components::UnitComponent>(SelectedEntityId)
+                : nullptr;
+            const bool IsSieged = SelectedUnit && SelectedUnit->ChkUnitID == 30;
+            SetCommandButton(0, "Move", HudCommandId::Move, !IsSieged);
             SetCommandButton(1, "Attack", HudCommandId::AttackMove, true);
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
-            SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            TechAbilityButton(6, TerranResearchId::SiegeMode, "Siege", SiegeTank);
+            SetCommandButton(4, "Patrol", HudCommandId::Patrol, !IsSieged);
+            SetCommandButton(6,
+                             IsSieged ? "Unsiege" : "Siege",
+                             IsSieged ? HudCommandId::Unsiege : HudCommandId::Siege,
+                             EcsEntities && SelectedEntityId > 0 &&
+                                 Game::Systems::CommandSystem::CanSetSiegeMode(
+                                     *EcsEntities, SelectedEntityId, !IsSieged));
             break;
+        }
 
         case PageTerranWraith:
             SetCommandButton(0, "Move", HudCommandId::Move, true);
@@ -520,8 +577,8 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(1, "Stop", HudCommandId::Stop, true);
             SetCommandButton(2, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(3, "Follow", HudCommandId::Follow, true);
-            DisabledAbilityButtonForDef(6, "Load", Dropship);
-            DisabledAbilityButtonForDef(7, "Unload", Dropship);
+            SetCommandButton(6, "Load", HudCommandId::Load, true);
+            SetCommandButton(7, "Unload", HudCommandId::UnloadAll, HasLoadedPassengers());
             break;
 
         case PageTerranScienceVessel:
@@ -530,7 +587,9 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(3, "Follow", HudCommandId::Follow, true);
             DisabledAbilityButtonForDef(6, "Matrix", ScienceVessel);
-            DisabledAbilityButtonForDef(7, "EMP", ScienceVessel);
+            SpellButton(7, "EMP", HudCommandId::EMPShockwave,
+                        Game::Systems::SpellType::EMPShockwave,
+                        TerranResearchId::None, false);
             DisabledAbilityButtonForDef(8, "Irradiate", ScienceVessel);
             break;
 
@@ -540,7 +599,9 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(4, "Follow", HudCommandId::Follow, true);
-            TechAbilityButton(6, TerranResearchId::YamatoGun, "Yamato", Battlecruiser);
+            SpellButton(6, "Yamato", HudCommandId::YamatoGun,
+                        Game::Systems::SpellType::YamatoGun,
+                        TerranResearchId::YamatoGun, true);
             break;
 
         case PageTerranValkyrie:
@@ -555,7 +616,12 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             break;
 
         case PageTerranComsatStation:
-            DisabledAbilityButtonForDef(0, "Scan", ComsatStation);
+            SetCommandButton(
+                0, "Scan", HudCommandId::Scan,
+                EcsEntities && SelectedEntityId > 0 &&
+                    Game::Systems::SpellSystem::CanCastSpell(
+                        *EcsEntities, SelectedEntityId,
+                        Game::Systems::SpellType::ScannerSweep));
             break;
 
         case PageTerranNuclearSilo:
@@ -563,14 +629,15 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             break;
 
         case PageTerranBunker:
-            DisabledAbilityButtonForDef(0, "Load", Bunker);
-            DisabledAbilityButtonForDef(1, "Unload", Bunker);
+            SetCommandButton(0, "Load", HudCommandId::Load, true);
+            SetCommandButton(1, "Unload", HudCommandId::UnloadAll, HasLoadedPassengers());
             break;
 
         case PageTerranCommandCenter:
             TrainButtonForDef(0, SCV);
             BuildButtonForDef(1, ComsatStation);
             BuildButtonForDef(2, NuclearSilo);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
@@ -580,6 +647,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(1, Firebat);
             TrainButtonForDef(2, Medic);
             TrainButtonForDef(3, Ghost);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
@@ -589,6 +657,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(1, SiegeTank);
             TrainButtonForDef(2, Goliath);
             BuildButtonForDef(3, MachineShop);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
@@ -600,6 +669,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             TrainButtonForDef(3, Battlecruiser);
             TrainButtonForDef(4, Valkyrie);
             BuildButtonForDef(5, ControlTower);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
             CancelButtonIfBusy();
             break;
@@ -693,6 +763,27 @@ void Hud::BuildZergPage(int SelectedEntityId,
                   TerranResearchId::None, IconCommand, Enabled);
     };
 
+    auto SpellButton = [&](int Slot,
+                           const std::string& Label,
+                           HudCommandId CommandId,
+                           Game::Systems::SpellType Spell,
+                           TerranResearchId ResearchId,
+                           bool RequiresResearch)
+    {
+        const auto* Unit = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::UnitComponent>(SelectedEntityId)
+            : nullptr;
+        const auto* Cooldown = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::SpellCooldown>(SelectedEntityId)
+            : nullptr;
+        const bool Researched = !RequiresResearch || UpgradeSystem::HasResearch(
+            PlayerIdForSelection(), ToResearchId(ResearchId));
+        const bool Enabled = Unit && Researched &&
+            Unit->EnergyPoints >= Game::Systems::SpellSystem::GetSpellEnergyCost(Spell) &&
+            (!Cooldown || Cooldown->CooldownRemaining <= 0.0f);
+        SetCommandButton(Slot, Label, CommandId, Enabled);
+    };
+
     auto TrainButtonForDef = [&](int Slot, int DefId)
     {
         const auto Def = Game::Races::GetUnitDefByID(DefId);
@@ -708,6 +799,18 @@ void Hud::BuildZergPage(int SelectedEntityId,
         SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::Build,
                   DefId, HudCommandId::None, TerranResearchId::None,
                   IconForDef(DefId), BuildEnabled(DefId), 0, HudVisualId::None,
+                  Def.MineralCost, Def.GasCost, Def.SupplyCost);
+    };
+
+    auto MorphButtonForDef = [&](int Slot, int DefId)
+    {
+        const auto Def = Game::Races::GetUnitDefByID(DefId);
+        const bool Enabled = EcsEntities && SelectedEntityId > 0 &&
+            Game::Systems::ZergSystem::CanMorphBuilding(
+                *EcsEntities, SelectedEntityId, DefId);
+        SetButton(Slot, DisplayLabelForDef(DefId), ActionKind::MorphBuilding,
+                  DefId, HudCommandId::None, TerranResearchId::None,
+                  IconForDef(DefId), Enabled, 0, HudVisualId::None,
                   Def.MineralCost, Def.GasCost, Def.SupplyCost);
     };
 
@@ -759,22 +862,56 @@ void Hud::BuildZergPage(int SelectedEntityId,
     const int Queen = Game::Races::GetUnitDefID("Queen");
     const int Ultralisk = Game::Races::GetUnitDefID("Ultralisk");
     const int Defiler = Game::Races::GetUnitDefID("Defiler");
+    const int Lurker = Game::Races::GetUnitDefID("Lurker");
+    const int InfestedTerran = Game::Races::GetUnitDefID("Infested Terran");
+    const int Lair = Game::Races::GetUnitDefID("Lair");
+    const int Hive = Game::Races::GetUnitDefID("Hive");
+    const int CreepColony = Game::Races::GetUnitDefID("Creep Colony");
+    const int SporeColony = Game::Races::GetUnitDefID("Spore Colony");
+    const int SunkenColony = Game::Races::GetUnitDefID("Sunken Colony");
+
+    int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+    if (EcsEntities && SelectedEntityId > 0)
+    {
+        if (auto* Building =
+                EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
+        {
+            if (Building->BuildingDefID >= 0)
+                SelectedDefId = Building->BuildingDefID;
+        }
+    }
+
+    auto CanRallySelected = [&]() -> bool
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return false;
+        const auto* Building =
+            EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId);
+        return Building && !Building->UnderConstruction && !Building->IsLifted &&
+               (SelectedDefId == Hatchery || SelectedDefId == Lair || SelectedDefId == Hive);
+    };
+
+    auto CancelButtonIfBusy = [&]()
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return;
+        const auto* Production =
+            EcsEntities->GetComponent<Game::Components::ProductionComponent>(SelectedEntityId);
+        const auto* Building =
+            EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId);
+        if ((Production && !Production->Queue.empty()) ||
+            (Building && Building->IsResearching))
+        {
+            SetButton(8, "Cancel", ActionKind::Cancel, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, 0, HudVisualId::Cancel);
+        }
+    };
 
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
         EffectivePage = GetDefaultPageForSelection(SelectedChkUnitId);
     if (EffectivePage == PageNone)
     {
-        int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
-        if (EcsEntities && SelectedEntityId > 0)
-        {
-            if (auto* Building =
-                    EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
-            {
-                if (Building->BuildingDefID >= 0)
-                    SelectedDefId = Building->BuildingDefID;
-            }
-        }
         const auto SelectedDef = Game::Races::GetUnitDefByID(SelectedDefId);
         EffectivePage = SelectedDef.IsBuilding ? PageNone : PageZergUnitCommands;
     }
@@ -789,6 +926,12 @@ void Hud::BuildZergPage(int SelectedEntityId,
             SetCommandButton(5, "Patrol", HudCommandId::Patrol, true);
             SetButton(6, "Build", ActionKind::OpenSubmenu, -1, HudCommandId::None,
                       TerranResearchId::None, IconBuild, true, PageZergDroneBuild);
+            if (const auto* Burrow = EcsEntities->GetComponent<Game::Components::BurrowComponent>(SelectedEntityId))
+                SetCommandButton(3, Burrow->IsBurrowed ? "Unburrow" : "Burrow",
+                                 HudCommandId::Burrow,
+                                 UpgradeSystem::HasResearch(PlayerIdForSelection(),
+                                     ToResearchId(TerranResearchId::ZergBurrow)) &&
+                                     !Burrow->IsTransitioning());
             break;
 
         case PageZergDroneBuild:
@@ -798,7 +941,7 @@ void Hud::BuildZergPage(int SelectedEntityId,
             BuildButtonForDef(3, EvolutionChamber);
             BuildButtonForDef(4, HydraliskDen);
             BuildButtonForDef(5, Spire);
-            BuildButtonForDef(6, NydusCanal);
+            BuildButtonForDef(6, CreepColony);
             SetButton(7, "Advanced", ActionKind::OpenSubmenu, -1, HudCommandId::None,
                       TerranResearchId::None, IconMore, true, PageZergDroneBuild2);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
@@ -807,7 +950,7 @@ void Hud::BuildZergPage(int SelectedEntityId,
 
         case PageZergDroneBuild2:
             BuildButtonForDef(0, QueensNest);
-            BuildButtonForDef(1, GreaterSpire);
+            BuildButtonForDef(1, NydusCanal);
             BuildButtonForDef(2, UltraliskCavern);
             BuildButtonForDef(3, DefilerMound);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
@@ -821,6 +964,50 @@ void Hud::BuildZergPage(int SelectedEntityId,
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(5, "Follow", HudCommandId::Follow, true);
+            if (SelectedDefId == Overlord && UpgradeSystem::HasResearch(
+                    PlayerIdForSelection(), ToResearchId(TerranResearchId::ZergVentralSacs)))
+            {
+                const auto* Loaded = EcsEntities->GetComponent<Game::Components::LoadedUnitsComponent>(SelectedEntityId);
+                SetCommandButton(6, "Load", HudCommandId::Load, true);
+                SetCommandButton(7, "Unload", HudCommandId::UnloadAll,
+                                 Loaded && !Loaded->PassengerIDs.empty());
+            }
+            if (const auto* Burrow = EcsEntities->GetComponent<Game::Components::BurrowComponent>(SelectedEntityId))
+            {
+                const bool Innate = SelectedDefId == Lurker;
+                const bool Researched = Innate || UpgradeSystem::HasResearch(
+                    PlayerIdForSelection(), ToResearchId(TerranResearchId::ZergBurrow));
+                if (SelectedDefId == Drone || SelectedDefId == Zergling ||
+                    SelectedDefId == Hydralisk || SelectedDefId == Defiler ||
+                    SelectedDefId == InfestedTerran || Innate)
+                    SetCommandButton(8, Burrow->IsBurrowed ? "Unburrow" : "Burrow",
+                                     HudCommandId::Burrow,
+                                     Researched && !Burrow->IsTransitioning());
+            }
+            if (SelectedDefId == Queen)
+            {
+                SpellButton(6, "Parasite", HudCommandId::Parasite,
+                            Game::Systems::SpellType::Parasite,
+                            TerranResearchId::None, false);
+                SpellButton(7, "Ensnare", HudCommandId::Ensnare,
+                            Game::Systems::SpellType::Ensnare,
+                            TerranResearchId::ZergEnsnare, true);
+                SpellButton(8, "Broodling", HudCommandId::SpawnBroodling,
+                            Game::Systems::SpellType::SpawnBroodling,
+                            TerranResearchId::ZergSpawnBroodling, true);
+            }
+            else if (SelectedDefId == Defiler)
+            {
+                SpellButton(5, "Dark Swarm", HudCommandId::DarkSwarm,
+                            Game::Systems::SpellType::DarkSwarm,
+                            TerranResearchId::None, false);
+                SpellButton(6, "Plague", HudCommandId::Plague,
+                            Game::Systems::SpellType::Plague,
+                            TerranResearchId::ZergPlague, true);
+                SpellButton(7, "Consume", HudCommandId::Consume,
+                            Game::Systems::SpellType::Consume,
+                            TerranResearchId::ZergConsume, true);
+            }
             break;
 
         case PageZergHatchery:
@@ -831,48 +1018,89 @@ void Hud::BuildZergPage(int SelectedEntityId,
             TrainButtonForDef(4, Mutalisk);
             TrainButtonForDef(5, Scourge);
             TrainButtonForDef(6, Queen);
-            TrainButtonForDef(7, Ultralisk);
-            TrainButtonForDef(8, Defiler);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
+            SetButton(8, "More", ActionKind::OpenSubmenu, -1, HudCommandId::None,
+                      TerranResearchId::None, IconMore, true, PageZergHatcheryCommands,
+                      HudVisualId::AdvancedBuild);
+            CancelButtonIfBusy();
+            break;
+
+        case PageZergHatcheryCommands:
+            TrainButtonForDef(0, Ultralisk);
+            TrainButtonForDef(1, Defiler);
+            ResearchButton(2, TerranResearchId::ZergBurrow, "Burrow", Drone);
+            if (SelectedDefId == Hatchery)
+                MorphButtonForDef(3, Lair);
+            else if (SelectedDefId == Lair)
+                MorphButtonForDef(3, Hive);
+            if (SelectedDefId == Lair || SelectedDefId == Hive)
+            {
+                ResearchButton(4, TerranResearchId::ZergVentralSacs, "Ventral Sacs", Overlord);
+                ResearchButton(5, TerranResearchId::ZergAntennae, "Antennae", Overlord);
+                ResearchButton(6, TerranResearchId::ZergPneumatizedCarapace, "Carapace", Overlord);
+            }
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
+            SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, PageZergHatchery,
+                      HudVisualId::Back);
+            CancelButtonIfBusy();
+            break;
+
+        case PageZergCreepColony:
+            MorphButtonForDef(0, SunkenColony);
+            MorphButtonForDef(1, SporeColony);
             break;
 
         case PageZergSpawningPool:
             ResearchButton(0, TerranResearchId::ZergMetabolicBoost, "Metabolic", Zergling);
             ResearchButton(1, TerranResearchId::ZergAdrenalGlands, "Adrenal", Zergling);
+            CancelButtonIfBusy();
             break;
 
         case PageZergEvolutionChamber:
             ResearchButton(0, TerranResearchId::ZergMeleeAttacks, "Melee", Zergling);
             ResearchButton(1, TerranResearchId::ZergMissileAttacks, "Missile", Hydralisk);
             ResearchButton(2, TerranResearchId::ZergCarapace, "Carapace", Ultralisk);
+            CancelButtonIfBusy();
             break;
 
         case PageZergHydraliskDen:
             ResearchButton(0, TerranResearchId::ZergMuscularAugments, "Muscular", Hydralisk);
             ResearchButton(1, TerranResearchId::ZergGroovedSpines, "Spines", Hydralisk);
             ResearchButton(2, TerranResearchId::ZergLurkerMorph, "Lurker", Hydralisk);
+            CancelButtonIfBusy();
             break;
 
         case PageZergSpire:
+            ResearchButton(0, TerranResearchId::ZergFlyerAttacks, "Flyer Wpn", Mutalisk);
+            ResearchButton(1, TerranResearchId::ZergFlyerCarapace, "Flyer Arm", Mutalisk);
+            MorphButtonForDef(2, GreaterSpire);
+            CancelButtonIfBusy();
+            break;
         case PageZergGreaterSpire:
             ResearchButton(0, TerranResearchId::ZergFlyerAttacks, "Flyer Wpn", Mutalisk);
             ResearchButton(1, TerranResearchId::ZergFlyerCarapace, "Flyer Arm", Mutalisk);
+            CancelButtonIfBusy();
             break;
 
         case PageZergQueensNest:
             ResearchButton(0, TerranResearchId::ZergEnsnare, "Ensnare", Queen);
             ResearchButton(1, TerranResearchId::ZergSpawnBroodling, "Broodling", Queen);
             ResearchButton(2, TerranResearchId::ZergQueenEnergy, "Gamete", Queen);
+            CancelButtonIfBusy();
             break;
 
         case PageZergUltraliskCavern:
             ResearchButton(0, TerranResearchId::ZergAnabolicSynthesis, "Anabolic", Ultralisk);
             ResearchButton(1, TerranResearchId::ZergChitinousPlating, "Chitinous", Ultralisk);
+            CancelButtonIfBusy();
             break;
 
         case PageZergDefilerMound:
             ResearchButton(0, TerranResearchId::ZergConsume, "Consume", Defiler);
             ResearchButton(1, TerranResearchId::ZergPlague, "Plague", Defiler);
             ResearchButton(2, TerranResearchId::ZergDefilerEnergy, "Node", Defiler);
+            CancelButtonIfBusy();
             break;
 
         default:
@@ -913,6 +1141,27 @@ void Hud::BuildProtossPage(int SelectedEntityId,
     {
         SetButton(Slot, Label, ActionKind::Command, -1, CommandId,
                   TerranResearchId::None, IconCommand, Enabled);
+    };
+
+    auto SpellButton = [&](int Slot,
+                           const std::string& Label,
+                           HudCommandId CommandId,
+                           Game::Systems::SpellType Spell,
+                           TerranResearchId ResearchId,
+                           bool RequiresResearch)
+    {
+        const auto* Unit = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::UnitComponent>(SelectedEntityId)
+            : nullptr;
+        const auto* Cooldown = EcsEntities && SelectedEntityId > 0
+            ? EcsEntities->GetComponent<Game::Components::SpellCooldown>(SelectedEntityId)
+            : nullptr;
+        const bool Researched = !RequiresResearch || UpgradeSystem::HasResearch(
+            PlayerIdForSelection(), ToResearchId(ResearchId));
+        const bool Enabled = Unit && Researched &&
+            Unit->EnergyPoints >= Game::Systems::SpellSystem::GetSpellEnergyCost(Spell) &&
+            (!Cooldown || Cooldown->CooldownRemaining <= 0.0f);
+        SetCommandButton(Slot, Label, CommandId, Enabled);
     };
 
     auto TrainButtonForDef = [&](int Slot, int DefId)
@@ -990,21 +1239,33 @@ void Hud::BuildProtossPage(int SelectedEntityId,
     const int Carrier = Game::Races::GetUnitDefID("Carrier");
     const int Arbiter = Game::Races::GetUnitDefID("Arbiter");
 
+    int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
+    if (EcsEntities && SelectedEntityId > 0)
+    {
+        if (auto* Building =
+                EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
+            if (Building->BuildingDefID >= 0)
+                SelectedDefId = Building->BuildingDefID;
+    }
+
+    auto CanRallySelected = [&]() -> bool
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return false;
+        const auto* Building =
+            EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId);
+        if (!Building || Building->UnderConstruction || Building->IsLifted)
+            return false;
+        const int DefId = Building->BuildingDefID;
+        return DefId == Nexus || DefId == Gateway ||
+               DefId == RoboticsFacility || DefId == Stargate;
+    };
+
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
         EffectivePage = GetDefaultPageForSelection(SelectedChkUnitId);
     if (EffectivePage == PageNone)
     {
-        int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
-        if (EcsEntities && SelectedEntityId > 0)
-        {
-            if (auto* Building =
-                    EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId))
-            {
-                if (Building->BuildingDefID >= 0)
-                    SelectedDefId = Building->BuildingDefID;
-            }
-        }
         const auto SelectedDef = Game::Races::GetUnitDefByID(SelectedDefId);
         EffectivePage = SelectedDef.IsBuilding ? PageNone : PageProtossUnitCommands;
     }
@@ -1063,10 +1324,36 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
             SetCommandButton(5, "Follow", HudCommandId::Follow, true);
+            if (SelectedDefId == Shuttle)
+            {
+                const auto* Loaded = EcsEntities->GetComponent<Game::Components::LoadedUnitsComponent>(SelectedEntityId);
+                SetCommandButton(6, "Load", HudCommandId::Load, true);
+                SetCommandButton(7, "Unload", HudCommandId::UnloadAll,
+                                 Loaded && !Loaded->PassengerIDs.empty());
+            }
+            else if (SelectedDefId == HighTemplar)
+            {
+                SpellButton(6, "Storm", HudCommandId::PsionicStorm,
+                            Game::Systems::SpellType::PsionicStorm,
+                            TerranResearchId::ProtossPsionicStorm, true);
+                SpellButton(7, "Hallucination", HudCommandId::Hallucination,
+                            Game::Systems::SpellType::Hallucination,
+                            TerranResearchId::ProtossHallucination, true);
+            }
+            else if (SelectedDefId == Arbiter)
+            {
+                SpellButton(6, "Recall", HudCommandId::Recall,
+                            Game::Systems::SpellType::Recall,
+                            TerranResearchId::ProtossRecall, true);
+                SpellButton(7, "Stasis", HudCommandId::StasisField,
+                            Game::Systems::SpellType::StasisField,
+                            TerranResearchId::ProtossStasisField, true);
+            }
             break;
 
         case PageProtossNexus:
             TrainButtonForDef(0, Probe);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             break;
 
         case PageProtossGateway:
@@ -1074,6 +1361,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(1, Dragoon);
             TrainButtonForDef(2, HighTemplar);
             TrainButtonForDef(3, DarkTemplar);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             break;
 
         case PageProtossForge:
@@ -1092,6 +1380,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(0, Shuttle);
             TrainButtonForDef(1, Reaver);
             TrainButtonForDef(2, Observer);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             break;
 
         case PageProtossStargate:
@@ -1099,6 +1388,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(1, Corsair);
             TrainButtonForDef(2, Carrier);
             TrainButtonForDef(3, Arbiter);
+            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
             break;
 
         case PageProtossCitadelOfAdun:
@@ -1135,6 +1425,16 @@ void Hud::BuildProtossPage(int SelectedEntityId,
         case PageProtossObservatory:
             ResearchButton(0, TerranResearchId::ProtossSensorArray, "Sensor", Observer);
             break;
+
+        case PageProtossShieldBattery:
+        {
+            const auto* Unit = EcsEntities && SelectedEntityId > 0
+                ? EcsEntities->GetComponent<Game::Components::UnitComponent>(SelectedEntityId)
+                : nullptr;
+            SetCommandButton(0, "Recharge", HudCommandId::RechargeShields,
+                             Unit && Unit->EnergyPoints > 0);
+            break;
+        }
 
         default:
             break;

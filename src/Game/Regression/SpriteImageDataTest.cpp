@@ -1,12 +1,14 @@
 #include "Resource/GameDataLoader.h"
 #include "Resource/DatDecoder.h"
 #include "Resource/GrpDecoder.h"
+#include "Resource/LightTable.h"
 #include "Resource/GrpToGpu.h"
 
 #include "Game/DataEnums.h"
 #include "Game/IScriptVM.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +20,67 @@
 
 namespace
 {
+    struct AnimationProbe
+    {
+        bool Present = false;
+        bool StillRunning = false;
+        int FrameChanges = 0;
+        int VisualEvents = 0;
+        int FirstVisualImage = -1;
+        std::vector<int> VisualImages;
+    };
+
+    AnimationProbe ProbeAnimation(const Game::IScriptDatabase& Scripts,
+                                  uint32_t ImageID,
+                                  int AnimationID)
+    {
+        AnimationProbe Result;
+        const auto* Image = Scripts.FindImageInfo((int)ImageID);
+        const auto* Script = Image && Image->IScriptID >= 0
+            ? Scripts.FindScript(Image->IScriptID)
+            : nullptr;
+        if (!Script || AnimationID < 0 ||
+            AnimationID >= (int)Script->AnimationPC.size() ||
+            Script->AnimationPC[(size_t)AnimationID] <= 0)
+        {
+            return Result;
+        }
+
+        Result.Present = true;
+        Game::IScriptVM VM;
+        VM.LoadScript(AnimationID, &Scripts.GetProgram().ProgramData,
+                      Script->AnimationPC[(size_t)AnimationID]);
+        VM.GetContext().ImageID = (int)ImageID;
+        int PreviousFrame = VM.GetCurrentFrame();
+        for (int Step = 0; Step < 256 && VM.IsRunning(); ++Step)
+        {
+            VM.ExecuteFrame();
+            if (VM.GetCurrentFrame() != PreviousFrame)
+            {
+                ++Result.FrameChanges;
+                PreviousFrame = VM.GetCurrentFrame();
+            }
+            for (const auto& Event : VM.ConsumeEvents())
+            {
+                if (Event.Type == Game::IScriptEventType::CreateImageOverlay ||
+                    Event.Type == Game::IScriptEventType::CreateImageOverlaySpecialOffset ||
+                    Event.Type == Game::IScriptEventType::CreateSpriteOverlay)
+                {
+                    if (Result.FirstVisualImage < 0)
+                        Result.FirstVisualImage = Event.A;
+                    if (std::find(Result.VisualImages.begin(), Result.VisualImages.end(),
+                                  Event.A) == Result.VisualImages.end())
+                    {
+                        Result.VisualImages.push_back(Event.A);
+                    }
+                    ++Result.VisualEvents;
+                }
+            }
+        }
+        Result.StillRunning = VM.IsRunning();
+        return Result;
+    }
+
     void Require(bool Value, const char* Message)
     {
         if (!Value)
@@ -91,6 +154,16 @@ namespace
 
         const std::string Path = Loader.ResolveImageGrpPath(ImageID);
         Require(!Path.empty(), "unit main image resolves to a GRP path");
+    }
+
+    void RequireUnitSubunitImage(Resource::GameDataLoader& Loader,
+                                 uint32_t ChkUnitID,
+                                 const char* Name)
+    {
+        const uint32_t ImageID = Loader.ResolveUnitSubunitImageID(ChkUnitID);
+        Require(ImageID != UINT32_MAX, Name);
+        Require(!Loader.ResolveImageGrpPath(ImageID).empty(),
+            "unit subunit image resolves to a GRP path");
     }
 
     void RequireUnitConstructionImage(Resource::GameDataLoader& Loader,
@@ -289,6 +362,259 @@ int main()
     Require(Scripts.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
         "load project iscript data");
 
+    const std::array<uint32_t, 16> ProtossBuildings = {{
+        154, 156, 157, 160, 166, 162, 164, 172,
+        155, 167, 163, 165, 171, 169, 170, 159
+    }};
+    for (uint32_t ChkUnitID : ProtossBuildings)
+    {
+        RequireUnitIScriptAnimations(
+            Loader, Scripts, ChkUnitID,
+            {Game::IScriptAnims::Anim_Init, Game::IScriptAnims::Anim_WarpIn},
+            "Protoss building exposes Init and WarpIn construction animations");
+    }
+
+    constexpr uint32_t ProtossWarpAnchorImage = 211;
+    Require(Loader.ResolveImageGrpPath(ProtossWarpAnchorImage) ==
+            "protoss/pb1Glow.grp",
+        "Protoss construction begins with the canonical Warp Anchor image");
+    const auto* WarpAnchorInfo =
+        Scripts.FindImageInfo((int)ProtossWarpAnchorImage);
+    const auto* WarpAnchorScript =
+        WarpAnchorInfo && WarpAnchorInfo->IScriptID >= 0
+            ? Scripts.FindScript(WarpAnchorInfo->IScriptID)
+            : nullptr;
+    Require(WarpAnchorScript &&
+            Game::IScriptAnims::Anim_Init <
+                (int)WarpAnchorScript->AnimationPC.size() &&
+            WarpAnchorScript->AnimationPC[
+                (size_t)Game::IScriptAnims::Anim_Init] > 0 &&
+            Game::IScriptAnims::Anim_SpecialState1 <
+                (int)WarpAnchorScript->AnimationPC.size() &&
+            WarpAnchorScript->AnimationPC[
+                (size_t)Game::IScriptAnims::Anim_SpecialState1] > 0,
+        "Protoss Warp Anchor exposes Init and closing animations");
+
+    const auto RiftInit = ProbeAnimation(
+        Scripts, ProtossWarpAnchorImage, Game::IScriptAnims::Anim_Init);
+    Require(RiftInit.Present,
+        "Protoss Warp Anchor Init is playable");
+    Game::IScriptVM WarpAnchorClosingVM;
+    WarpAnchorClosingVM.LoadScript(
+        Game::IScriptAnims::Anim_SpecialState1,
+        &Scripts.GetProgram().ProgramData,
+        WarpAnchorScript->AnimationPC[
+            (size_t)Game::IScriptAnims::Anim_SpecialState1]);
+    bool WarpAnchorClosingSignaled = false;
+    for (int Step = 0;
+         Step < 512 && WarpAnchorClosingVM.IsRunning() &&
+         !WarpAnchorClosingSignaled;
+         ++Step)
+    {
+        WarpAnchorClosingVM.ExecuteFrame();
+        for (const auto& Event : WarpAnchorClosingVM.ConsumeEvents())
+            if (Event.Type == Game::IScriptEventType::OrderSignal &&
+                (Event.A & 1) != 0)
+                WarpAnchorClosingSignaled = true;
+    }
+    Require(WarpAnchorClosingSignaled,
+        "Protoss Warp Anchor signals the materialization transition");
+
+    const auto* MaterializationScript = Scripts.FindScript(193);
+    Require(MaterializationScript &&
+            Game::IScriptAnims::Anim_Init <
+                (int)MaterializationScript->AnimationPC.size() &&
+            MaterializationScript->AnimationPC[
+                (size_t)Game::IScriptAnims::Anim_Init] > 0,
+        "Protoss materialization script 193 exposes Init");
+    Game::IScriptVM MaterializationVM;
+    MaterializationVM.LoadScript(
+        Game::IScriptAnims::Anim_Init,
+        &Scripts.GetProgram().ProgramData,
+        MaterializationScript->AnimationPC[
+            (size_t)Game::IScriptAnims::Anim_Init]);
+    std::vector<int> MaterializationFrames;
+    bool MaterializationSignaled = false;
+    for (int Step = 0;
+         Step < 1024 && MaterializationVM.IsRunning() && !MaterializationSignaled;
+         ++Step)
+    {
+        MaterializationVM.ExecuteFrame();
+        for (const auto& Event : MaterializationVM.ConsumeEvents())
+        {
+            if (Event.Type == Game::IScriptEventType::WarpOverlay)
+                MaterializationFrames.push_back(Event.A);
+            if (Event.Type == Game::IScriptEventType::OrderSignal &&
+                (Event.A & 1) != 0)
+                MaterializationSignaled = true;
+        }
+    }
+    Require(MaterializationFrames.size() > 8 && MaterializationSignaled,
+        "script 193 advances texture.grp frames before signaling WarpIn");
+    Require(std::is_sorted(MaterializationFrames.begin(), MaterializationFrames.end()),
+        "script 193 materialization frames advance in authored order");
+
+    uint32_t WarpTextureImageID = UINT32_MAX;
+    for (uint32_t ImageID = 0; ImageID < 999; ++ImageID)
+    {
+        std::string Path = Loader.ResolveImageGrpPath(ImageID);
+        std::replace(Path.begin(), Path.end(), '\\', '/');
+        std::transform(Path.begin(), Path.end(), Path.begin(),
+            [](unsigned char C) { return (char)std::tolower(C); });
+        if (Path == "protoss/texture.grp")
+        {
+            WarpTextureImageID = ImageID;
+            break;
+        }
+    }
+    Require(WarpTextureImageID != UINT32_MAX,
+        "Protoss construction resolves the original warp texture image");
+    const auto WarpTexture = Resource::GrpDecoder::DecodeGrp(
+        ReadSpriteAsset(Loader.ResolveImageGrpPath(WarpTextureImageID)));
+    Require(WarpTexture && WarpTexture->Frames.size() > 8,
+        "Protoss warp texture provides an animated frame sequence");
+    std::vector<uint8_t> PreviousWarpFrame;
+    int ChangingFrames = 0;
+    for (const auto& Frame : WarpTexture->Frames)
+    {
+        const int Pixels = Frame.Width * Frame.Height;
+        Require(Frame.Width == WarpTexture->Width &&
+                Frame.Height == WarpTexture->Height,
+            "Protoss warp texture stores full-size replacement frames");
+        std::vector<uint8_t> Current(
+            WarpTexture->RawFrameData.begin() + Frame.Offset,
+            WarpTexture->RawFrameData.begin() + Frame.Offset + Pixels);
+        Require(std::count_if(Current.begin(), Current.end(),
+                    [](uint8_t Index) { return Index != 0; }) == Pixels,
+            "Protoss warp texture frame covers the full modifier surface");
+        if (!PreviousWarpFrame.empty() && Current != PreviousWarpFrame)
+            ++ChangingFrames;
+        PreviousWarpFrame = std::move(Current);
+    }
+    Require(ChangingFrames > 8,
+        "Protoss warp texture continuously rewrites the construction surface");
+
+    const uint32_t CommandCenterMainImage = Loader.ResolveUnitImageID(106);
+    const uint32_t SupplyDepotMainImage = Loader.ResolveUnitImageID(109);
+    Require(CommandCenterMainImage == 275u && SupplyDepotMainImage == 278u,
+        "Terran Command Center and Supply Depot resolve canonical main images");
+    const auto CommandCenterBuilt = ProbeAnimation(
+        Scripts, CommandCenterMainImage, Game::IScriptAnims::Anim_Built);
+    const auto CommandCenterWorking = ProbeAnimation(
+        Scripts, CommandCenterMainImage, Game::IScriptAnims::Anim_IsWorking);
+    const auto SupplyDepotBuilt = ProbeAnimation(
+        Scripts, SupplyDepotMainImage, Game::IScriptAnims::Anim_Built);
+    const auto SupplyDepotWorking = ProbeAnimation(
+        Scripts, SupplyDepotMainImage, Game::IScriptAnims::Anim_IsWorking);
+    Require(CommandCenterBuilt.StillRunning && SupplyDepotBuilt.StillRunning,
+        "Terran Built scripts are looping states and cannot block production state selection");
+    Require(CommandCenterWorking.Present &&
+            CommandCenterWorking.FirstVisualImage == 276,
+        "Command Center IsWorking creates the control-panel image");
+    Require(SupplyDepotWorking.Present && SupplyDepotWorking.VisualEvents == 0,
+        "Supply Depot IsWorking is a real but visually empty script entry");
+    const auto SupplyDepotMachinery = ProbeAnimation(
+        Scripts, 279, Game::IScriptAnims::Anim_Init);
+    Require(SupplyDepotBuilt.FirstVisualImage == 279 &&
+            SupplyDepotMachinery.FrameChanges > 1,
+        "Supply Depot Built child owns the animated completed machinery frames");
+    const uint32_t BarracksMainImage = Loader.ResolveUnitImageID(111);
+    Require(BarracksMainImage == 266u &&
+            ProbeAnimation(Scripts, BarracksMainImage,
+                Game::IScriptAnims::Anim_IsWorking).FrameChanges > 8,
+        "Barracks production uses the canonical animated IsWorking root state");
+    const auto EngineeringBuilt = ProbeAnimation(
+        Scripts, Loader.ResolveUnitImageID(122), Game::IScriptAnims::Anim_Built);
+    const auto EngineeringMachineryWorking = ProbeAnimation(
+        Scripts, 323, Game::IScriptAnims::Anim_IsWorking);
+    Require(EngineeringBuilt.FirstVisualImage == 323 &&
+            EngineeringMachineryWorking.FrameChanges > 8,
+        "Engineering Bay Built child exposes its animated research state");
+    for (uint32_t ConnectorImage : {272u, 313u, 282u, 289u, 302u, 294u})
+    {
+        Require(ProbeAnimation(Scripts, ConnectorImage,
+                    Game::IScriptAnims::Anim_Init).Present &&
+                ProbeAnimation(Scripts, ConnectorImage,
+                    Game::IScriptAnims::Anim_LiftOff).Present &&
+                ProbeAnimation(Scripts, ConnectorImage,
+                    Game::IScriptAnims::Anim_Landing).Present,
+            "Terran add-on bridge exposes independent Init/LiftOff/Landing states");
+    }
+
+    struct TerranBuildingAuditEntry
+    {
+        uint32_t ChkUnitID;
+        const char* Name;
+    };
+    const std::array<TerranBuildingAuditEntry, 18> TerranBuildings = {{
+        {106, "CommandCenter"}, {107, "ComsatStation"},
+        {108, "NuclearSilo"}, {109, "SupplyDepot"},
+        {110, "Refinery"}, {111, "Barracks"}, {112, "Academy"},
+        {113, "Factory"}, {114, "Starport"}, {115, "ControlTower"},
+        {116, "ScienceFacility"}, {117, "CovertOps"},
+        {118, "PhysicsLab"}, {120, "MachineShop"},
+        {122, "EngineeringBay"}, {123, "Armory"},
+        {124, "MissileTurret"}, {125, "Bunker"}
+    }};
+    const std::array<int, 11> AuditedAnimations = {{
+        Game::IScriptAnims::Anim_Init,
+        Game::IScriptAnims::Anim_SpecialState1,
+        Game::IScriptAnims::Anim_SpecialState2,
+        Game::IScriptAnims::Anim_AlmostBuilt,
+        Game::IScriptAnims::Anim_Built,
+        Game::IScriptAnims::Anim_Landing,
+        Game::IScriptAnims::Anim_LiftOff,
+        Game::IScriptAnims::Anim_IsWorking,
+        Game::IScriptAnims::Anim_WorkingToIdle,
+        Game::IScriptAnims::Anim_Disable,
+        Game::IScriptAnims::Anim_Enable
+    }};
+    for (const auto& Building : TerranBuildings)
+    {
+        const uint32_t MainImage = Loader.ResolveUnitImageID(Building.ChkUnitID);
+        const uint32_t ConstructionImage =
+            Loader.ResolveUnitConstructionImageID(Building.ChkUnitID);
+        Require(MainImage != UINT32_MAX,
+            (std::string(Building.Name) + " resolves a main image").c_str());
+        Require(!Loader.ResolveImageGrpPath(MainImage).empty(),
+            (std::string(Building.Name) + " resolves a main GRP").c_str());
+        Require(ConstructionImage != UINT32_MAX,
+            (std::string(Building.Name) + " resolves construction image metadata").c_str());
+        Require(ProbeAnimation(Scripts, MainImage,
+                    Game::IScriptAnims::Anim_Init).Present,
+            (std::string(Building.Name) + " exposes Init").c_str());
+        Require(ProbeAnimation(Scripts, MainImage,
+                    Game::IScriptAnims::Anim_AlmostBuilt).Present,
+            (std::string(Building.Name) + " exposes AlmostBuilt").c_str());
+        for (int AnimationID : AuditedAnimations)
+        {
+            const auto Probe = ProbeAnimation(Scripts, MainImage, AnimationID);
+            for (int VisualImage : Probe.VisualImages)
+            {
+                const uint32_t ChildImage = (uint32_t)VisualImage;
+                Require(!Loader.ResolveImageGrpPath(ChildImage).empty(),
+                    (std::string(Building.Name) + " child image resolves a GRP").c_str());
+                Require(ProbeAnimation(Scripts, ChildImage,
+                            Game::IScriptAnims::Anim_Init).Present,
+                    (std::string(Building.Name) + " child image exposes Init").c_str());
+            }
+        }
+    }
+    const std::array<uint32_t, 37> TerranBuildingChildren = {{
+        276, 277, 272, 273, 274, 313, 314, 315, 279, 280, 308,
+        267, 264, 265, 286, 287, 320, 321, 282, 283, 284, 310,
+        311, 289, 290, 291, 302, 303, 294, 295, 323, 324, 269,
+        270, 297, 298, 305
+    }};
+    for (uint32_t ImageID : TerranBuildingChildren)
+    {
+        Require(!Loader.ResolveImageGrpPath(ImageID).empty(),
+            "Terran building child image resolves a GRP");
+        Require(ProbeAnimation(Scripts, ImageID,
+                    Game::IScriptAnims::Anim_Init).Present,
+            "Terran building child image exposes Init");
+    }
+
     const auto Flingy = Resource::DatDecoder::DecodeFlingy(ReadAll("assets/arr/flingy.dat"));
     Require(Flingy.size() == 209, "flingy.dat decodes all entries");
     Require(Flingy[0].SpriteID == 130 &&
@@ -302,6 +628,34 @@ int main()
 
     const uint32_t GeyserImageID = Loader.ResolveUnitImageID(188);
     Require(GeyserImageID == 344, "Vespene geyser resolves to its main image");
+    for (uint32_t CarryImageID : {397u, 399u, 401u, 403u})
+    {
+        Require(Loader.FindImageByID(CarryImageID) != nullptr,
+            "carried mineral/gas image exists in images.dat");
+        Require(!Loader.ResolveImageGrpPath(CarryImageID).empty(),
+            "carried mineral/gas image resolves to a real GRP resource");
+    }
+    const uint32_t ScvImageID = Loader.ResolveUnitImageID(7);
+    Require(ScvImageID == 247u, "SCV resolves to its canonical main image");
+    const auto* MineralChunkImage = Loader.FindImageByID(397u);
+    Require(MineralChunkImage && MineralChunkImage->HasDirectionalFrames,
+        "carried mineral chunk exposes directional frames");
+    const std::string ScvSpecialLoPath =
+        Loader.ResolveImageOverlayPath(ScvImageID, 2);
+    Require(!ScvSpecialLoPath.empty(),
+        "SCV main image exposes the special LO table used by carried resources");
+    const auto ScvCarryOffsets = Resource::DatDecoder::DecodeImageOffsets(
+        ReadSpriteAsset(ScvSpecialLoPath));
+    Require(ScvCarryOffsets && ScvCarryOffsets->Frames.size() >= 17,
+        "SCV carried-resource LO table covers directional main frames");
+    const size_t ScvCarryUsableFrames = (size_t)std::count_if(
+        ScvCarryOffsets->Frames.begin(), ScvCarryOffsets->Frames.end(),
+        [](const std::vector<Resource::ImageOffset>& Frame) {
+            return !Frame.empty() &&
+                (Frame[0].X != 127 || Frame[0].Y != 127);
+        });
+    Require(ScvCarryUsableFrames >= 17,
+        "SCV special LO slot 0 provides real two-arm carry positions across directions");
     const std::string GeyserLoPath = Loader.ResolveImageOverlayPath(GeyserImageID, 2);
     Require(GeyserLoPath == "neutral/geyser.los",
         "geyser special overlay resolves through images.dat and images.tbl");
@@ -513,6 +867,57 @@ int main()
             Resource::Graphics::DecodeLightTableMaskAlpha(1, 1, 192) == 192,
         "modifier 9 light-table indices decode as a graded mask instead of uniform white alpha");
 
+    Resource::Graphics::ColorPalette SyntheticPalette = {};
+    for (int I = 0; I < 256; ++I)
+    {
+        SyntheticPalette.Colors[I].R = static_cast<uint8_t>(I);
+        SyntheticPalette.Colors[I].G = static_cast<uint8_t>(I);
+        SyntheticPalette.Colors[I].B = static_cast<uint8_t>(I);
+        SyntheticPalette.Colors[I].A = 255;
+    }
+    std::vector<uint8_t> SyntheticLightTable(256 * 3, 0);
+    for (int I = 0; I < 256; ++I)
+    {
+        SyntheticLightTable[I] = static_cast<uint8_t>(I);
+        SyntheticLightTable[256 + I] = 200;
+        SyntheticLightTable[512 + I] = static_cast<uint8_t>((I + 200) / 2);
+    }
+    const auto FittedLightTable = Resource::Graphics::BuildLightTableRgba(
+        SyntheticLightTable, 256, 3, SyntheticPalette);
+    Require(FittedLightTable[1].A == 0,
+        "identity light-table rows remain transparent in the RGBA approximation");
+    Require(FittedLightTable[2].A == 255 &&
+            FittedLightTable[2].R == 200 && FittedLightTable[2].G == 200 &&
+            FittedLightTable[2].B == 200,
+        "constant light-table rows become opaque fitted colors");
+    Require(FittedLightTable[3].A >= 126 && FittedLightTable[3].A <= 130 &&
+            FittedLightTable[3].R >= 198 && FittedLightTable[3].R <= 202,
+        "half-blend light-table rows preserve their source color and alpha");
+
+    const auto JungleOFirePcx = Resource::Graphics::DecodeIndexedPcx(
+        ReadAll("assets/Tileset/jungle/ofire.pcx"));
+    const auto JungleWpeData = ReadAll("assets/Tileset/jungle.wpe");
+    Require(JungleOFirePcx.Valid() && JungleOFirePcx.Width == 256 &&
+            JungleOFirePcx.Height == 63 && JungleWpeData.size() >= 1024,
+        "project jungle orange-fire lookup table and WPE palette decode");
+    Resource::Graphics::ColorPalette JunglePalette = {};
+    for (int I = 0; I < 256; ++I)
+    {
+        JunglePalette.Colors[I].R = JungleWpeData[(size_t)I * 4u + 0u];
+        JunglePalette.Colors[I].G = JungleWpeData[(size_t)I * 4u + 1u];
+        JunglePalette.Colors[I].B = JungleWpeData[(size_t)I * 4u + 2u];
+        JunglePalette.Colors[I].A = 255;
+    }
+    const auto JungleOFire = Resource::Graphics::BuildLightTableRgba(
+        JungleOFirePcx.Pixels, JungleOFirePcx.Width,
+        JungleOFirePcx.Height, JunglePalette);
+    Require(JungleOFire[1].A < 8 && JungleOFire[63].A < 8,
+        "jungle orange-fire endpoint rows stay transparent instead of becoming white discs");
+    Require(JungleOFire[32].A > 128 &&
+            (JungleOFire[32].R < 250 || JungleOFire[32].G < 250 ||
+             JungleOFire[32].B < 250),
+        "jungle orange-fire middle rows produce a colored visible glow");
+
     const auto Upgrades = Resource::DatDecoder::DecodeUpgrades(ReadAll("assets/arr/upgrades.dat"));
     Require(Upgrades.size() > 0, "upgrades.dat decodes");
     Require(Upgrades[0].MineralCostBase == 100 &&
@@ -543,12 +948,26 @@ int main()
     RequireUnitMainImage(Loader, 5, "Tank image");
     RequireUnitMainImage(Loader, 12, "Battlecruiser image");
     RequireUnitMainImage(Loader, 124, "Missile Turret image");
+    RequireUnitSubunitImage(Loader, 3, "Goliath head image");
+    RequireUnitSubunitImage(Loader, 5, "Tank turret image");
+    RequireUnitSubunitImage(Loader, 30, "Sieged Tank turret image");
     RequireUnitConstructionImage(Loader, 109, 330, "Supply Depot construction image");
     const auto* SupplyDepotConstruction = Loader.FindImageByID(330);
     Require(SupplyDepotConstruction && SupplyDepotConstruction->Modifier == 0 &&
             SupplyDepotConstruction->IScriptID == 140 &&
             Loader.ResolveImageGrpPath(330) == "terran/TBldSml.grp",
         "Supply Depot construction resolves the project TBldSml GRP and iscript");
+    const auto* RefineryUnit = Loader.FindUnitByID(110);
+    Require(RefineryUnit && RefineryUnit->ConstructionImageID == 0,
+        "Refinery keeps the canonical zero construction-image sentinel");
+    RequireUnitConstructionImage(
+        Loader, 110, Loader.ResolveUnitImageID(110),
+        "Refinery zero construction-image sentinel falls back to its main image");
+    const auto* AssimilatorUnit = Loader.FindUnitByID(157);
+    Require(AssimilatorUnit && AssimilatorUnit->ConstructionImageID == 0 &&
+            Loader.ResolveUnitConstructionImageID(157) ==
+                Loader.ResolveUnitImageID(157),
+        "Assimilator zero construction-image sentinel also falls back to its main image");
     RequireUnitTeamColorMaskSource(Loader, 0, "Marine team-color source");
     RequireUnitTeamColorMaskSource(Loader, 7, "SCV team-color source");
 

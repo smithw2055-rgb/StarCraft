@@ -1,5 +1,6 @@
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/GeyserState.h"
 
 #include <algorithm>
 #include <cmath>
@@ -311,7 +312,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(DirectHitID);
         if (TargetUnit && TargetUnit->HitPoints > 0 &&
-            !EM.GetComponent<ResourceComponent>(DirectHitID))
+            !IsProtectedResourceNode(EM, DirectHitID))
         {
             if (!IsInvulnerableByStatus(EM, DirectHitID) &&
                 (!Bullet->IsRangedAttack || !IsProtectedByDarkSwarm(EM, DirectHitID)))
@@ -399,7 +400,7 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         auto* UT = EM.GetComponent<TransformComponent>(UID);
         auto* UU = EM.GetComponent<UnitComponent>(UID);
         if (!UP || !UT || !UU || UU->HitPoints <= 0) continue;
-        if (EM.GetComponent<ResourceComponent>(UID)) continue;
+        if (IsProtectedResourceNode(EM, UID)) continue;
         if (UP->PlayerID == SourcePlayerID) continue;
         if (IsInvulnerableByStatus(EM, UID)) continue;
         if (IsRangedAttack && IsProtectedByDarkSwarm(EM, UID)) continue;

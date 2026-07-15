@@ -1,8 +1,10 @@
 #include "Client/Selection.h"
+#include "Game/PlayerColor.h"
 
 #include "Core/ECS/EntityManager.h"
 #include "Resource/GameDataLoader.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -131,6 +133,42 @@ namespace
             "point selection ignores visible entities with no hit points");
     }
 
+    void TestOverlappingPointPickPrioritizesAirGroundBuilding()
+    {
+        Core::ECS::EntityManager EM;
+        Game::Client::Selection Selection;
+        const Core::Math::Vec2 SharedPosition{192.0f, 192.0f};
+        const int Building = CreateSelectable(
+            EM, 106, SharedPosition, 0, Game::Components::UnitSize::Large);
+        EM.AddComponent<Game::Components::BuildingComponent>(Building).IsBuilding = true;
+        const int Ground = CreateSelectable(EM, 0, SharedPosition, 0);
+        const int Air = CreateSelectable(EM, 43, SharedPosition, 0);
+        EM.AddComponent<Game::Components::PathfindingComponent>(Air).IsAir = true;
+
+        Require(Selection.PickEntityAtWorld(EM, 192.0f, 192.0f) == Air,
+            "overlapping point pick prioritizes an air unit");
+        EM.GetComponent<Game::Components::RenderComponent>(Air)->Visible = false;
+        Require(Selection.PickEntityAtWorld(EM, 192.0f, 192.0f) == Ground,
+            "overlapping point pick falls back to a ground unit");
+        EM.GetComponent<Game::Components::RenderComponent>(Ground)->Visible = false;
+        Require(Selection.PickEntityAtWorld(EM, 192.0f, 192.0f) == Building,
+            "overlapping point pick selects a building last");
+    }
+
+    void TestLurkerParticipatesInUnitSelection()
+    {
+        Core::ECS::EntityManager EM;
+        Game::Client::Selection Selection;
+        const int Lurker = CreateSelectable(EM, 103, {96.0f, 96.0f}, 0);
+        const int Hydralisk = CreateSelectable(EM, 38, {128.0f, 96.0f}, 0);
+        const auto Picked =
+            Selection.CollectRectSelection(EM, 64.0f, 64.0f, 96.0f, 64.0f);
+        Require(Picked.size() == 2 &&
+                std::find(Picked.begin(), Picked.end(), Lurker) != Picked.end() &&
+                std::find(Picked.begin(), Picked.end(), Hydralisk) != Picked.end(),
+            "surface Lurker joins a movable multi-unit selection");
+    }
+
     void TestRectSelectionPrefersLocalUnits()
     {
         Core::ECS::EntityManager EM;
@@ -138,7 +176,10 @@ namespace
 
         const int LocalMarine = CreateSelectable(EM, 0, {64.0f, 64.0f}, 0);
         const int LocalScv = CreateSelectable(EM, 7, {96.0f, 64.0f}, 0);
-        const int EnemyZergling = CreateSelectable(EM, 37, {128.0f, 64.0f}, 1);
+        CreateSelectable(EM, 37, {128.0f, 64.0f}, 1);
+        const int EnemyCommandCenter = CreateSelectable(
+            EM, 106, {160.0f, 128.0f}, 1, Game::Components::UnitSize::Large);
+        EM.AddComponent<Game::Components::BuildingComponent>(EnemyCommandCenter).IsBuilding = true;
 
         auto Picked = Selection.CollectRectSelection(EM, 32.0f, 32.0f, 128.0f, 64.0f);
         Require(Picked.size() == 2,
@@ -149,8 +190,12 @@ namespace
         EM.GetComponent<Game::Components::RenderComponent>(LocalMarine)->Visible = false;
         EM.GetComponent<Game::Components::RenderComponent>(LocalScv)->Visible = false;
         Picked = Selection.CollectRectSelection(EM, 32.0f, 32.0f, 128.0f, 64.0f);
-        Require(Picked.size() == 1 && Picked[0] == EnemyZergling,
-            "box selection falls back to enemy units when no local unit is inside");
+        Require(Picked.empty(),
+            "box selection never falls back to enemy units when no local unit is inside");
+        Require(Selection.PickEntityAtWorld(EM, 128.0f, 64.0f) == -1,
+            "point selection never selects an enemy unit");
+        Require(Selection.PickEntityAtWorld(EM, 160.0f, 128.0f) == -1,
+            "point selection never selects an enemy building");
     }
 
     void TestRectSelectionIgnoresDeadVisibleUnits()
@@ -200,16 +245,29 @@ namespace
         Require(Selection.CollectRectSelection(EM, 64.0f, 64.0f, 64.0f, 64.0f).empty(),
             "placed Spider Mine cannot be selected by dragging");
     }
+
+    void TestPlayerColorsDifferentiateEnemyAndFriendly()
+    {
+        Require(Game::PlayerColorForID(0) == Core::Colors::Blue(),
+            "local player slot uses the friendly blue team colour");
+        Require(Game::PlayerColorForID(1) == Core::Colors::Red(),
+            "enemy player slot uses a distinct red team colour");
+        Require(Game::PlayerColorForID(11) == Core::Colors::Gray(),
+            "neutral player slot uses a distinct neutral colour");
+    }
 }
 
 int main()
 {
     TestPointPickingUsesInteractionFootprints();
     TestPointPickingIgnoresDeadVisibleUnits();
+    TestOverlappingPointPickPrioritizesAirGroundBuilding();
+    TestLurkerParticipatesInUnitSelection();
     TestRectSelectionPrefersLocalUnits();
     TestRectSelectionIgnoresDeadVisibleUnits();
     TestRectSelectionReturnsSingleSelectBuildings();
     TestSpiderMinesCannotBeSelected();
+    TestPlayerColorsDifferentiateEnemyAndFriendly();
 
     std::printf("SelectionInteractionTest passed\n");
     return 0;

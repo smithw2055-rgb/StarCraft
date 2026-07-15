@@ -4,6 +4,7 @@
 
 #include "Resource/DdsGrpDecoder.h"
 #include "Resource/GrpToGpu.h"
+#include "Resource/Palette.h"
 
 #include <algorithm>
 #include <cctype>
@@ -226,6 +227,97 @@ const TilesetAtlas* ResourceCache::GetTilesetAtlas(const std::string& TilesetNam
     auto It = mTilesets.AtlasesByName.find(TilesetName);
     if (It != mTilesets.AtlasesByName.end()) return &It->second;
     if (BuildTilesetAtlas(TilesetName)) return &mTilesets.AtlasesByName[TilesetName];
+    return nullptr;
+}
+
+bool ResourceCache::BuildTilesetCreepFrames(const std::string& TilesetName)
+{
+    auto TryRead = [&](const std::string& Base) -> std::optional<std::vector<uint8_t>>
+    {
+        if (auto Data = ReadFile(Base)) return Data;
+        std::string Upper = Base;
+        std::transform(Upper.begin(), Upper.end(), Upper.begin(),
+            [](unsigned char C) { return (char)std::toupper(C); });
+        if (auto Data = ReadFile(Upper)) return Data;
+        std::string Lower = Base;
+        std::transform(Lower.begin(), Lower.end(), Lower.begin(),
+            [](unsigned char C) { return (char)std::tolower(C); });
+        return ReadFile(Lower);
+    };
+
+    auto& Out = mTilesets.CreepFramesByName[TilesetName];
+    Out.clear();
+
+#ifdef _WIN32
+    // Remastered archives store the original tileset creep-edge GRP as DDS
+    // frames. Prefer it so edge pixels match the HD terrain exactly.
+    for (const std::string& Path : {
+            "Tileset/" + TilesetName + ".dds.grp",
+            "Tileset/" + TilesetName + ".grp.dds"})
+    {
+        auto Data = TryRead(Path);
+        if (!Data) continue;
+        auto Frames = LoadDdsGrpRgbaFrames(*Data);
+        if (!Frames || Frames->empty()) continue;
+        for (const auto& Frame : *Frames)
+        {
+            TilesetCreepFrame Uploaded;
+            Uploaded.Image = UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data());
+            // Remastered tileset GRPs are authored at 4x resolution but each
+            // creep edge frame still occupies one logical 32x32 map tile.
+            Uploaded.WorldWidth = 32;
+            Uploaded.WorldHeight = 32;
+            if (Uploaded.Image.Valid()) Out.push_back(std::move(Uploaded));
+        }
+        if (!Out.empty())
+        {
+            Core::Utils::Logger::Info("ResourceCache",
+                "Loaded authentic HD creep edges from " + Path + ": " +
+                std::to_string(Out.size()) + " frames");
+            return true;
+        }
+    }
+#endif
+
+    auto GrpData = TryRead("Tileset/" + TilesetName + ".grp");
+    auto WpeData = TryRead("Tileset/" + TilesetName + ".wpe");
+    if (!GrpData || !WpeData)
+        return false;
+    auto Palette = DecodeWpe(*WpeData);
+    if (!Palette)
+        return false;
+    GrpDecodeOptions Options;
+    Options.PaletteOverride = &*Palette;
+    Options.GenerateTeamColorMask = false;
+    auto Decoded = DecodeGrpToRgba(*GrpData, *Palette, Options);
+    if (!Decoded)
+        return false;
+    for (const auto& Frame : Decoded->Frames)
+    {
+        TilesetCreepFrame Uploaded;
+        Uploaded.Image = UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data());
+        Uploaded.OffsetX = Frame.OriginX;
+        Uploaded.OffsetY = Frame.OriginY;
+        Uploaded.WorldWidth = Frame.Width;
+        Uploaded.WorldHeight = Frame.Height;
+        if (Uploaded.Image.Valid()) Out.push_back(std::move(Uploaded));
+    }
+    if (!Out.empty())
+    {
+        Core::Utils::Logger::Info("ResourceCache",
+            "Loaded authentic classic creep edges from Tileset/" + TilesetName +
+            ".grp: " + std::to_string(Out.size()) + " frames");
+    }
+    return !Out.empty();
+}
+
+const std::vector<TilesetCreepFrame>* ResourceCache::GetTilesetCreepFrames(
+    const std::string& TilesetName)
+{
+    auto It = mTilesets.CreepFramesByName.find(TilesetName);
+    if (It != mTilesets.CreepFramesByName.end()) return &It->second;
+    if (BuildTilesetCreepFrames(TilesetName))
+        return &mTilesets.CreepFramesByName[TilesetName];
     return nullptr;
 }
 

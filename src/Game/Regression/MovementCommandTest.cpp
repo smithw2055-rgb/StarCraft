@@ -178,6 +178,86 @@ int main()
     Require(!LargeCorridorPath.Found,
         "A* rejects one-tile corridors for large units that need terrain clearance");
 
+    Game::Map::GameMap ClearanceRecoveryMap;
+    ClearanceRecoveryMap.Generate(6, 6);
+    for (int Y = 0; Y < ClearanceRecoveryMap.GetHeight(); ++Y)
+        for (int X = 0; X < ClearanceRecoveryMap.GetWidth(); ++X)
+        {
+            auto Tile = ClearanceRecoveryMap.GetTile(X, Y);
+            Tile.Walkable = true;
+            ClearanceRecoveryMap.SetTile(X, Y, Tile);
+        }
+    auto ClearanceBlock = ClearanceRecoveryMap.GetTile(2, 0);
+    ClearanceBlock.Walkable = false;
+    ClearanceRecoveryMap.SetTile(2, 0, ClearanceBlock);
+    auto ClearanceRecoveryPath = Game::Pathfinding::AStar::FindPath(
+        ClearanceRecoveryMap,
+        ClearanceRecoveryMap.TileToWorld(2, 1),
+        ClearanceRecoveryMap.TileToWorld(2, 4),
+        1000, 20);
+    Require(ClearanceRecoveryPath.Found && !ClearanceRecoveryPath.Waypoints.empty(),
+        "A* lets a unit escape a walkable start tile that temporarily fails radius clearance");
+
+    Game::Map::GameMap UnwalkableStartRecoveryMap;
+    UnwalkableStartRecoveryMap.Generate(5, 5);
+    auto UnwalkableStartTile = UnwalkableStartRecoveryMap.GetTile(2, 2);
+    UnwalkableStartTile.Walkable = false;
+    UnwalkableStartRecoveryMap.SetTile(2, 2, UnwalkableStartTile);
+    auto UnwalkableStartRecoveryPath = Game::Pathfinding::AStar::FindPath(
+        UnwalkableStartRecoveryMap,
+        UnwalkableStartRecoveryMap.TileToWorld(2, 2),
+        UnwalkableStartRecoveryMap.TileToWorld(2, 1));
+    Require(UnwalkableStartRecoveryPath.Found &&
+            !UnwalkableStartRecoveryPath.Waypoints.empty(),
+        "A* lets a displaced unit escape an unwalkable occupied start tile");
+
+    Game::Map::GameMap ElevationRampMap;
+    ElevationRampMap.Generate(7, 5);
+    for (int Y = 0; Y < ElevationRampMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < ElevationRampMap.GetWidth(); ++X)
+        {
+            auto Tile = ElevationRampMap.GetTile(X, Y);
+            Tile.Walkable = true;
+            Tile.GroundHeight = X <= 2 ? 1 : 0;
+            Tile.SubtileGroundHeights.fill(Tile.GroundHeight);
+            if (X == 3)
+            {
+                Tile.Walkable = Y == 4;
+                Tile.GroundHeight = Y == 4 ? 1 : 0;
+                Tile.SubtileGroundHeights.fill(Tile.GroundHeight);
+            }
+            ElevationRampMap.SetTile(X, Y, Tile);
+        }
+    }
+    auto ElevationRampPath = Game::Pathfinding::AStar::FindPath(
+        ElevationRampMap,
+        ElevationRampMap.TileToWorld(1, 1),
+        ElevationRampMap.TileToWorld(5, 1));
+    Require(ElevationRampPath.Found && !ElevationRampPath.Waypoints.empty(),
+        "A* reaches low ground from high ground through a legal middle-height ramp");
+    bool UsesElevationRamp = false;
+    for (const auto& Waypoint : ElevationRampPath.Waypoints)
+    {
+        int WX = 0;
+        int WY = 0;
+        ElevationRampMap.WorldToTile(Waypoint, WX, WY);
+        UsesElevationRamp = UsesElevationRamp || (WX == 3 && WY == 4);
+    }
+    Require(UsesElevationRamp,
+        "height-aware smoothing keeps the ramp instead of cutting across a cliff");
+
+    Game::Map::GameMap DisconnectedElevationMap = ElevationRampMap;
+    auto RemovedRamp = DisconnectedElevationMap.GetTile(3, 4);
+    RemovedRamp.Walkable = false;
+    DisconnectedElevationMap.SetTile(3, 4, RemovedRamp);
+    auto DisconnectedElevationPath = Game::Pathfinding::AStar::FindPath(
+        DisconnectedElevationMap,
+        DisconnectedElevationMap.TileToWorld(1, 1),
+        DisconnectedElevationMap.TileToWorld(5, 1));
+    Require(!DisconnectedElevationPath.Found,
+        "A* does not replace an unreachable low-ground click with nearby high ground");
+
     Game::Map::GameMap BlockedGoalMap;
     BlockedGoalMap.Generate(24, 7);
     for (int Y = 0; Y < BlockedGoalMap.GetHeight(); ++Y)
@@ -393,6 +473,36 @@ int main()
     Require(BackTrans->Position.X > -22.0f,
         "rear large unit is not pushed backward by overlap repulsion");
 
+    Core::ECS::SystemManager OverlapEscapeSysMgr;
+    auto& OverlapEscapeEM = OverlapEscapeSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem OverlapEscapeMovement(OverlapEscapeSysMgr);
+    const int OverlapA = CreateMovableUnit(
+        OverlapEscapeEM, {32.0f, 64.0f}, {256.0f, 64.0f},
+        65, Game::Components::UnitSize::Small, 8);
+    const int OverlapB = CreateMovableUnit(
+        OverlapEscapeEM, {32.0f, 64.0f}, {256.0f, 64.0f},
+        65, Game::Components::UnitSize::Small, 8);
+    auto* OverlapAPath =
+        OverlapEscapeEM.GetComponent<Game::Components::PathfindingComponent>(OverlapA);
+    auto* OverlapBPath =
+        OverlapEscapeEM.GetComponent<Game::Components::PathfindingComponent>(OverlapB);
+    auto* OverlapATrans =
+        OverlapEscapeEM.GetComponent<Game::Components::TransformComponent>(OverlapA);
+    auto* OverlapBTrans =
+        OverlapEscapeEM.GetComponent<Game::Components::TransformComponent>(OverlapB);
+    Require(OverlapAPath && OverlapBPath && OverlapATrans && OverlapBTrans,
+        "overlap escape test units have movement state");
+    SetCollisionBounds(*OverlapAPath, 8, 8, 8, 8);
+    SetCollisionBounds(*OverlapBPath, 8, 8, 8, 8);
+    for (int I = 0; I < 80; ++I)
+        OverlapEscapeMovement.Update(0.05f);
+    Require(!CollisionBoundsOverlap(
+                *OverlapATrans, *OverlapAPath, *OverlapBTrans, *OverlapBPath),
+        "already-overlapped group units take separating steps instead of merging");
+    Require(OverlapATrans->Position.X > 48.0f &&
+            OverlapBTrans->Position.X > 48.0f,
+        "overlapped group units both resume forward movement after separating");
+
     Core::ECS::SystemManager DynamicCollisionSysMgr;
     auto& DynamicCollisionEM = DynamicCollisionSysMgr.GetEntityManager();
     Game::Systems::MovementSystem DynamicCollisionMovement(DynamicCollisionSysMgr);
@@ -598,6 +708,57 @@ int main()
     Require(HarvestMoverTrans->Position.X > 96.0f,
         "movement honors the command target ignore id instead of sticking at a resource boundary");
 
+    Core::ECS::SystemManager ConstructionLaneSysMgr;
+    auto& ConstructionLaneEM = ConstructionLaneSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem ConstructionLaneMovement(ConstructionLaneSysMgr);
+    const int ConstructionMover = CreateMovableUnit(
+        ConstructionLaneEM, {0.0f, 32.0f}, {160.0f, 32.0f},
+        7, Game::Components::UnitSize::Small, 10);
+    CreateStationaryCollisionUnit(
+        ConstructionLaneEM, {64.0f, 32.0f}, 12, 12, 12, 12);
+    const int ConstructionTarget = ConstructionLaneEM.CreateEntity();
+    auto& ConstructionBuilding =
+        ConstructionLaneEM.AddComponent<Game::Components::BuildingComponent>(ConstructionTarget);
+    ConstructionBuilding.UnderConstruction = true;
+    ConstructionBuilding.BuilderUnitID = ConstructionMover;
+    auto* ConstructionMoverPath =
+        ConstructionLaneEM.GetComponent<Game::Components::PathfindingComponent>(ConstructionMover);
+    auto* ConstructionMoverTrans =
+        ConstructionLaneEM.GetComponent<Game::Components::TransformComponent>(ConstructionMover);
+    Require(ConstructionMoverPath && ConstructionMoverTrans,
+        "construction lane worker has movement state");
+    ConstructionMoverPath->RequestedIgnoreEntityID = ConstructionTarget;
+    for (int I = 0; I < 45; ++I)
+        ConstructionLaneMovement.Update(0.05f);
+    Require(ConstructionMoverTrans->Position.X > 96.0f,
+        "assigned construction SCV crosses crowded worker lanes instead of deadlocking");
+
+    Core::ECS::SystemManager HarvestLaneSysMgr;
+    auto& HarvestLaneEM = HarvestLaneSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem HarvestLaneMovement(HarvestLaneSysMgr);
+    const int InboundHarvester = CreateMovableUnit(
+        HarvestLaneEM, {32.0f, 32.0f}, {192.0f, 32.0f},
+        7, Game::Components::UnitSize::Small, 10);
+    const int ReturningHarvester = CreateMovableUnit(
+        HarvestLaneEM, {96.0f, 32.0f}, {0.0f, 32.0f},
+        7, Game::Components::UnitSize::Small, 10);
+    auto& InboundHarvest =
+        HarvestLaneEM.AddComponent<Game::Components::HarvestComponent>(InboundHarvester);
+    InboundHarvest.State = Game::Components::HarvestState::MovingToResource;
+    auto& ReturningHarvest =
+        HarvestLaneEM.AddComponent<Game::Components::HarvestComponent>(ReturningHarvester);
+    ReturningHarvest.State = Game::Components::HarvestState::MovingToDepot;
+    for (int I = 0; I < 60; ++I)
+        HarvestLaneMovement.Update(0.05f);
+    const auto* InboundHarvesterTrans =
+        HarvestLaneEM.GetComponent<Game::Components::TransformComponent>(InboundHarvester);
+    const auto* ReturningHarvesterTrans =
+        HarvestLaneEM.GetComponent<Game::Components::TransformComponent>(ReturningHarvester);
+    Require(InboundHarvesterTrans && ReturningHarvesterTrans &&
+            InboundHarvesterTrans->Position.X > 112.0f &&
+            ReturningHarvesterTrans->Position.X < 24.0f,
+        "inbound and returning harvesters use OpenBW-style no-collide lanes instead of deadlocking");
+
     Core::ECS::SystemManager TerrainSysMgr;
     auto& TerrainEM = TerrainSysMgr.GetEntityManager();
     Game::Map::GameMap TerrainMap;
@@ -634,7 +795,7 @@ int main()
         CorridorEM, {48.0f, 48.0f}, {112.0f, 48.0f},
         0, Game::Components::UnitSize::Small, 12);
     int LargeCorridorUnit = CreateMovableUnit(
-        CorridorEM, {48.0f, 48.0f}, {112.0f, 48.0f},
+        CorridorEM, {48.0f, 16.0f}, {112.0f, 16.0f},
         30, Game::Components::UnitSize::Large, 20);
     for (int I = 0; I < 10; ++I)
         CorridorMovement.Update(0.05f);
@@ -709,6 +870,24 @@ int main()
         "rear group unit waits for a moving teammate and continues after the lane clears");
     Require(!FastRearPath->HasRecentMoveFailure,
         "temporary teammate blocking does not blacklist a reachable group destination");
+
+    Core::ECS::SystemManager MovingYieldSysMgr;
+    auto& MovingYieldEM = MovingYieldSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem MovingYieldMovement(MovingYieldSysMgr);
+    const int MovingYieldUnit = CreateMovableUnit(
+        MovingYieldEM, {32.0f, 32.0f}, {192.0f, 32.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* MovingYieldPath =
+        MovingYieldEM.GetComponent<Game::Components::PathfindingComponent>(MovingYieldUnit);
+    auto* MovingYieldTrans =
+        MovingYieldEM.GetComponent<Game::Components::TransformComponent>(MovingYieldUnit);
+    Require(MovingYieldPath && MovingYieldTrans,
+        "moving friendly-yield test has movement state");
+    MovingYieldPath->CurrentVelocity = {20.0f, 0.0f};
+    MovingYieldPath->FriendlyYieldVector = {0.0f, 1.0f};
+    MovingYieldMovement.Update(0.05f);
+    Require(std::fabs(MovingYieldTrans->Position.Y - 32.0f) < 0.1f,
+        "an actively moving unit does not get pushed off its route by a yield request");
 
     Core::ECS::SystemManager FriendlyYieldSysMgr;
     auto& FriendlyYieldEM = FriendlyYieldSysMgr.GetEntityManager();

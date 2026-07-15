@@ -36,6 +36,7 @@ private:
     const Render::Camera2D* mCamera = nullptr;
     int mMegatileCount = 0;
     const Resource::Graphics::TilesetAtlas* mAtlas = nullptr;
+    const std::vector<Resource::Graphics::TilesetCreepFrame>* mCreepFrames = nullptr;
 
     // CV5 lookup: group index -> megatile index (16 entries per group)
     const std::vector<uint16_t>* mCv5 = nullptr;

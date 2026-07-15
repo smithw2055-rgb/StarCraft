@@ -1,5 +1,6 @@
 #include "Client/Selection.h"
 #include "Client/SelectionFootprint.h"
+#include "Game/DataEnums.h"
 #include "Resource/GameDataLoader.h"
 
 #include <algorithm>
@@ -42,6 +43,18 @@ namespace
     bool IsEffect(Core::ECS::EntityManager& Entities, int EntityId)
     {
         return Entities.GetComponent<Game::Components::EffectComponent>(EntityId) != nullptr;
+    }
+
+    int PointPickPriority(Core::ECS::EntityManager& Entities, int EntityId)
+    {
+        if (IsBuilding(Entities, EntityId))
+            return 2;
+        const auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        const auto* Path =
+            Entities.GetComponent<Game::Components::PathfindingComponent>(EntityId);
+        const bool IsAir = (Path && Path->IsAir) ||
+            (Unit && Game::Data::IsAirUnitType(Unit->ChkUnitID));
+        return IsAir ? 0 : 1;
     }
 
     bool IsSelectableUnit(Core::ECS::EntityManager& Entities, int EntityId)
@@ -237,7 +250,7 @@ bool Selection::IsMultiSelectable(Core::ECS::EntityManager& Entities, int Entity
     auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
     if (!Unit)
         return false;
-    return Unit->ChkUnitID != 103 && Unit->ChkUnitID != 188;
+    return Unit->ChkUnitID != 188;
 }
 
 bool Selection::IsOwnedByLocalPlayer(Core::ECS::EntityManager& Entities, int EntityId) const
@@ -331,6 +344,7 @@ void Selection::SetSelectedForDebug(std::vector<int> Selected)
 int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float WorldX, float WorldY) const
 {
     int Best = -1;
+    int BestPriority = 100;
     float BestScore = 1e9f;
     for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
                                                  Game::Components::RenderComponent,
@@ -339,8 +353,16 @@ int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float World
         float Score = 0.0f;
         if (!EntityHitTest(Entities, EntityId, WorldX, WorldY, Score))
             continue;
-        if (Score < BestScore)
+        // Resources are neutral interaction targets. Enemy units and
+        // buildings are deliberately excluded from ordinary selection; the
+        // command cursor resolves them separately as valid attack targets.
+        if (!IsResource(Entities, EntityId) && !IsOwnedByLocalPlayer(Entities, EntityId))
+            continue;
+        const int Priority = PointPickPriority(Entities, EntityId);
+        if (Priority < BestPriority ||
+            (Priority == BestPriority && Score < BestScore))
         {
+            BestPriority = Priority;
             BestScore = Score;
             Best = EntityId;
         }
@@ -356,36 +378,37 @@ std::vector<int> Selection::CollectRectSelection(Core::ECS::EntityManager& Entit
 {
     std::vector<int> PickedUnits;
     std::vector<int> PickedSingles;
-    std::vector<int> FallbackUnits;
-    std::vector<int> FallbackSingles;
     for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
                                                  Game::Components::RenderComponent,
                                                  Game::Components::UnitComponent>())
     {
+        // Drag selection can touch thousands of campaign entities. Reject
+        // non-owned and obviously distant candidates before DAT footprint
+        // lookups, which are the expensive part of the exact hit test.
+        if (!IsOwnedByLocalPlayer(Entities, EntityId))
+            continue;
+        const auto* Trans =
+            Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
+        constexpr float CoarsePadding = 192.0f;
+        if (!Trans ||
+            Trans->Position.X < WorldX - CoarsePadding ||
+            Trans->Position.X > WorldX + WorldW + CoarsePadding ||
+            Trans->Position.Y < WorldY - CoarsePadding ||
+            Trans->Position.Y > WorldY + WorldH + CoarsePadding)
+        {
+            continue;
+        }
         if (!EntityInRect(Entities, EntityId, WorldX, WorldY, WorldW, WorldH))
             continue;
 
-        const bool LocalOwned = IsOwnedByLocalPlayer(Entities, EntityId);
         if (IsMultiSelectable(Entities, EntityId))
         {
-            if (LocalOwned)
-                AppendSelectionEntity(Entities, PickedUnits, EntityId);
-            else
-                AppendSelectionEntity(Entities, FallbackUnits, EntityId);
+            AppendSelectionEntity(Entities, PickedUnits, EntityId);
         }
         else
         {
-            if (LocalOwned)
-                PickedSingles.push_back(EntityId);
-            else
-                FallbackSingles.push_back(EntityId);
+            PickedSingles.push_back(EntityId);
         }
-    }
-
-    if (PickedUnits.empty() && PickedSingles.empty())
-    {
-        PickedUnits = std::move(FallbackUnits);
-        PickedSingles = std::move(FallbackSingles);
     }
 
     if (!PickedUnits.empty())
@@ -401,7 +424,7 @@ void Selection::PruneAgainst(Core::ECS::EntityManager& Entities)
     Pruned.reserve(mSelected.size());
     for (int Id : mSelected)
     {
-        if (IsVisible(Entities, Id))
+        if (IsVisible(Entities, Id) && IsOwnedByLocalPlayer(Entities, Id))
             Pruned.push_back(Id);
     }
     mSelected = std::move(Pruned);

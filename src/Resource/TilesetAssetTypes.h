@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Resource/GpuImage.h"
+#include "Resource/RawColor.h"
 
 namespace Resource::Graphics
 {
@@ -29,11 +31,23 @@ struct TilesetAtlas
     int FrameCount = 0;
 };
 
+struct TilesetCreepFrame
+{
+    GpuImage Image;
+    int OffsetX = 0;
+    int OffsetY = 0;
+    int WorldWidth = 0;
+    int WorldHeight = 0;
+};
+
 struct TilesetAssetCacheState
 {
+    std::string ActiveName;
+    std::unordered_map<uint8_t, std::array<RawColor, 256>> LightTableRgbaByColorShift;
     std::unordered_map<std::string, TilesetData> DataByName;
     std::unordered_map<std::string, std::vector<GpuImage>> ImagesByName;
     std::unordered_map<std::string, TilesetAtlas> AtlasesByName;
+    std::unordered_map<std::string, std::vector<TilesetCreepFrame>> CreepFramesByName;
 };
 
 } // namespace Resource::Graphics

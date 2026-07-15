@@ -11,18 +11,113 @@
 #include <NsRender/Texture.h>
 
 #include <algorithm>
+#include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace Game::Client::UI::Glue
 {
+namespace Detail
+{
+struct AsyncWebmLoadResult
+{
+    Resource::Graphics::WebmVideoDecoder Decoder;
+    Resource::Graphics::DecodedVideoFrame FirstFrame;
+    std::filesystem::path Path;
+    int FrameCount = 0;
+    int FrameIndex = 0;
+    double Fps = 12.0;
+    bool Success = false;
+    bool InitialLoad = true;
+};
+
+struct AsyncWebmLoadState
+{
+    std::mutex Mutex;
+    uint64_t Generation = 0;
+    bool InFlight = false;
+    bool Ready = false;
+    AsyncWebmLoadResult Result;
+};
+}
+
 namespace
 {
+class AsyncWebmLoader
+{
+public:
+    AsyncWebmLoader()
+    {
+        constexpr int WorkerCount = 2;
+        for (int I = 0; I < WorkerCount; ++I)
+            mWorkers.emplace_back([this]() { WorkerLoop(); });
+    }
+
+    ~AsyncWebmLoader()
+    {
+        {
+            std::lock_guard<std::mutex> Lock(mMutex);
+            mStopping = true;
+        }
+        mWake.notify_all();
+        for (auto& Worker : mWorkers)
+            if (Worker.joinable())
+                Worker.join();
+    }
+
+    void Submit(std::function<void()> Task)
+    {
+        {
+            std::lock_guard<std::mutex> Lock(mMutex);
+            // Favor the most recent UI request so a newly selected portrait
+            // is not stuck behind every menu animation queued at startup.
+            mTasks.push_front(std::move(Task));
+        }
+        mWake.notify_one();
+    }
+
+private:
+    void WorkerLoop()
+    {
+        for (;;)
+        {
+            std::function<void()> Task;
+            {
+                std::unique_lock<std::mutex> Lock(mMutex);
+                mWake.wait(Lock, [this]() { return mStopping || !mTasks.empty(); });
+                if (mStopping && mTasks.empty())
+                    return;
+                Task = std::move(mTasks.front());
+                mTasks.pop_front();
+            }
+            Task();
+        }
+    }
+
+    std::mutex mMutex;
+    std::condition_variable mWake;
+    std::deque<std::function<void()>> mTasks;
+    std::vector<std::thread> mWorkers;
+    bool mStopping = false;
+};
+
+AsyncWebmLoader& WebmLoader()
+{
+    static AsyncWebmLoader Loader;
+    return Loader;
+}
+
 std::vector<GlueAnimatedImage*>& Instances()
 {
     static std::vector<GlueAnimatedImage*> sInstances;
@@ -99,6 +194,7 @@ void PremultiplyRgba(std::vector<uint8_t>& Rgba)
 }
 
 GlueAnimatedImage::GlueAnimatedImage()
+    : mAsyncWebmLoadState(std::make_shared<Detail::AsyncWebmLoadState>())
 {
     Instances().push_back(this);
     SetStretch(Aero::Stretch_Fill);
@@ -106,6 +202,17 @@ GlueAnimatedImage::GlueAnimatedImage()
 
 GlueAnimatedImage::~GlueAnimatedImage()
 {
+    // Detach the render callback while this object is still fully alive. This
+    // must precede releasing the source and its UI-owned frame storage.
+    SetSource(nullptr);
+    {
+        std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+        mDynamicSource.Reset();
+        mDynamicTexture.Reset();
+        mCurrentWebmFrame = {};
+        mHasCurrentWebmFrame = false;
+    }
+    CancelPendingWebmLoad();
     auto& Items = Instances();
     Items.erase(std::remove(Items.begin(), Items.end(), this), Items.end());
 }
@@ -128,8 +235,6 @@ void GlueAnimatedImage::SetAssetRoot(std::string Root)
 
 bool GlueAnimatedImage::SetWebmSource(const std::string& RelativeOrAbsolutePath, double Fps)
 {
-    ClearVideoSource();
-
     if (RelativeOrAbsolutePath.empty())
         return false;
 
@@ -137,51 +242,140 @@ bool GlueAnimatedImage::SetWebmSource(const std::string& RelativeOrAbsolutePath,
         Fps = 12.0;
 
     const std::filesystem::path Path = ResolveWebmPath(RelativeOrAbsolutePath);
-    if (!mWebmDecoder.Open(Path))
+    const auto State = mAsyncWebmLoadState;
+    uint64_t Generation = 0;
     {
-        std::cout << "[GlueAnimatedImage] Failed to decode WebM: " << Path.string() << std::endl;
-        return false;
+        std::lock_guard<std::mutex> Lock(State->Mutex);
+        Generation = ++State->Generation;
+        State->InFlight = true;
+        State->Ready = false;
+        State->Result = {};
     }
 
-    Resource::Graphics::DecodedVideoFrame FirstFrame;
-    if (!mWebmDecoder.ReadNextFrame(FirstFrame) || FirstFrame.Image.Rgba.empty())
+    WebmLoader().Submit([State, Generation, Path, Fps]() mutable
     {
-        std::cout << "[GlueAnimatedImage] Failed to read first WebM frame: " << Path.string() << std::endl;
-        mWebmDecoder.Close();
-        return false;
-    }
+        {
+            std::lock_guard<std::mutex> Lock(State->Mutex);
+            if (State->Generation != Generation)
+                return;
+        }
 
-    PremultiplyRgba(FirstFrame.Image.Rgba);
-    mCurrentWebmFrame = std::move(FirstFrame);
-    mCurrentWebmFrameIndex = 0;
-    mHasCurrentWebmFrame = true;
-    mFrameCount = (int)std::max<size_t>(1, mWebmDecoder.EncodedFrameCount());
-    mFps = Fps;
-    mMode = Mode::Webm;
-    mTextureDirty = true;
+        Detail::AsyncWebmLoadResult Result;
+        Result.Path = Path;
+        Result.Fps = Fps;
+        if (Result.Decoder.Open(Path) &&
+            Result.Decoder.ReadNextFrame(Result.FirstFrame) &&
+            !Result.FirstFrame.Image.Rgba.empty())
+        {
+            PremultiplyRgba(Result.FirstFrame.Image.Rgba);
+            Result.FrameCount =
+                (int)std::max<size_t>(1, Result.Decoder.EncodedFrameCount());
+            Result.Success = true;
+        }
 
-    const auto& First = mCurrentWebmFrame.Image;
-    mDynamicSource = *new Aero::DynamicTextureSource(
-        (uint32_t)std::max(1, First.Width),
-        (uint32_t)std::max(1, First.Height),
-        &GlueAnimatedImage::RenderDynamicTextureCallback,
-        this);
-    SetSource(mDynamicSource.GetPtr());
+        std::lock_guard<std::mutex> Lock(State->Mutex);
+        if (State->Generation != Generation)
+            return;
+        State->Result = std::move(Result);
+        State->InFlight = false;
+        State->Ready = true;
+    });
 
-    std::cout << "[GlueAnimatedImage] Loaded WebM: " << Path.string()
-              << " frames=" << mFrameCount
-              << " size=" << First.Width << "x" << First.Height << std::endl;
+    // The current portrait remains visible until ApplyPendingWebmLoad swaps
+    // in the decoded first frame on the UI thread.
     mConfigured = true;
     return true;
 }
 
+void GlueAnimatedImage::ApplyPendingWebmLoad()
+{
+    Detail::AsyncWebmLoadResult Result;
+    {
+        std::lock_guard<std::mutex> Lock(mAsyncWebmLoadState->Mutex);
+        if (!mAsyncWebmLoadState->Ready)
+            return;
+        Result = std::move(mAsyncWebmLoadState->Result);
+        mAsyncWebmLoadState->Ready = false;
+    }
+
+    if (!Result.Success)
+    {
+        if (!Result.InitialLoad)
+            mWebmDecoder = std::move(Result.Decoder);
+        std::cout << "[GlueAnimatedImage] Failed to decode WebM asynchronously: "
+                  << Result.Path.string() << std::endl;
+        return;
+    }
+
+    mWebmDecoder = std::move(Result.Decoder);
+    {
+        std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+        mCurrentWebmFrame = std::move(Result.FirstFrame);
+        mCurrentWebmFrameIndex = Result.FrameIndex;
+        mHasCurrentWebmFrame = true;
+        mTextureDirty = true;
+    }
+    mLastFrame = Result.FrameIndex;
+
+    if (!Result.InitialLoad)
+        return;
+
+    mFrameCount = Result.FrameCount;
+    mFps = Result.Fps;
+    mMode = Mode::Webm;
+    mPlaybackStartTime = 0.0;
+
+    const auto& First = mCurrentWebmFrame.Image;
+    // Stop callbacks from the previous selection before replacing the source.
+    SetSource(nullptr);
+    {
+        std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+        mDynamicSource.Reset();
+        mDynamicTexture.Reset();
+    }
+    Aero::Ptr<Aero::DynamicTextureSource> NewSource =
+        *new Aero::DynamicTextureSource(
+        (uint32_t)std::max(1, First.Width),
+        (uint32_t)std::max(1, First.Height),
+        &GlueAnimatedImage::RenderDynamicTextureCallback,
+        this);
+    SetSource(NewSource.GetPtr());
+    {
+        std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+        mDynamicSource = std::move(NewSource);
+    }
+
+    std::cout << "[GlueAnimatedImage] Loaded WebM asynchronously: "
+              << Result.Path.string() << " frames=" << mFrameCount
+              << " size=" << First.Width << "x" << First.Height << std::endl;
+}
+
+void GlueAnimatedImage::CancelPendingWebmLoad()
+{
+    if (!mAsyncWebmLoadState)
+        return;
+    std::lock_guard<std::mutex> Lock(mAsyncWebmLoadState->Mutex);
+    ++mAsyncWebmLoadState->Generation;
+    mAsyncWebmLoadState->InFlight = false;
+    mAsyncWebmLoadState->Ready = false;
+    mAsyncWebmLoadState->Result = {};
+}
+
 void GlueAnimatedImage::ClearVideoSource()
 {
+    CancelPendingWebmLoad();
     mWebmDecoder.Close();
-    mCurrentWebmFrame = {};
-    mDynamicTexture.Reset();
-    mDynamicSource.Reset();
+    // DynamicTextureSource stores a raw callback user pointer. Remove it from
+    // the visual before releasing any state the callback may still read.
     SetSource(nullptr);
+    {
+        std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+        mCurrentWebmFrame = {};
+        mDynamicTexture.Reset();
+        mDynamicSource.Reset();
+        mHasCurrentWebmFrame = false;
+        mTextureDirty = false;
+    }
 
     mMode = Mode::None;
     mConfigured = false;
@@ -257,6 +451,7 @@ void GlueAnimatedImage::SetFrame(int FrameIndex)
 
 void GlueAnimatedImage::UpdatePlayback(double TimeSeconds)
 {
+    ApplyPendingWebmLoad();
     ConfigureFromTag();
     if (!mConfigured || mFrameCount <= 0 || !mPlaybackActive)
         return;
@@ -297,35 +492,69 @@ bool GlueAnimatedImage::DecodeWebmFrame(int FrameIndex)
     if (mHasCurrentWebmFrame && FrameIndex == mCurrentWebmFrameIndex)
         return true;
 
-    if (!mHasCurrentWebmFrame || FrameIndex <= mCurrentWebmFrameIndex)
+    const auto State = mAsyncWebmLoadState;
+    uint64_t Generation = 0;
     {
-        if (!mWebmDecoder.Rewind())
+        std::lock_guard<std::mutex> Lock(State->Mutex);
+        if (State->InFlight || State->Ready)
             return false;
-        mCurrentWebmFrameIndex = -1;
-        mHasCurrentWebmFrame = false;
+        Generation = State->Generation;
+        State->InFlight = true;
     }
 
-    Resource::Graphics::DecodedVideoFrame Frame;
-    while (mCurrentWebmFrameIndex < FrameIndex)
+    const int StartFrameIndex = mCurrentWebmFrameIndex;
+    auto Decoder = std::make_shared<Resource::Graphics::WebmVideoDecoder>(
+        std::move(mWebmDecoder));
+    WebmLoader().Submit(
+        [State, Generation, Decoder, StartFrameIndex, FrameIndex]() mutable
     {
-        if (!mWebmDecoder.ReadNextFrame(Frame))
+        Detail::AsyncWebmLoadResult Result;
+        Result.InitialLoad = false;
+        Result.FrameIndex = FrameIndex;
+        int DecodedIndex = StartFrameIndex;
+        bool Succeeded = true;
+        if (FrameIndex <= DecodedIndex)
         {
-            if (!mWebmDecoder.Rewind() || !mWebmDecoder.ReadNextFrame(Frame))
-                return false;
-            mCurrentWebmFrameIndex = 0;
-        }
-        else
-        {
-            ++mCurrentWebmFrameIndex;
+            if (!Decoder->Rewind())
+                Succeeded = false;
+            else
+                DecodedIndex = -1;
         }
 
-        PremultiplyRgba(Frame.Image.Rgba);
-        mCurrentWebmFrame = std::move(Frame);
-        mHasCurrentWebmFrame = true;
-    }
+        Resource::Graphics::DecodedVideoFrame Frame;
+        while (DecodedIndex < FrameIndex)
+        {
+            if (!Decoder->ReadNextFrame(Frame))
+            {
+                if (!Decoder->Rewind() || !Decoder->ReadNextFrame(Frame))
+                {
+                    Succeeded = false;
+                    break;
+                }
+                DecodedIndex = 0;
+            }
+            else
+            {
+                ++DecodedIndex;
+            }
+        }
 
-    mTextureDirty = true;
-    return true;
+        Result.Decoder = std::move(*Decoder);
+        if (Succeeded && !Frame.Image.Rgba.empty())
+        {
+            PremultiplyRgba(Frame.Image.Rgba);
+            Result.FirstFrame = std::move(Frame);
+            Result.Success = true;
+        }
+
+        std::lock_guard<std::mutex> Lock(State->Mutex);
+        if (State->Generation != Generation)
+            return;
+        State->Result = std::move(Result);
+        State->InFlight = false;
+        State->Ready = true;
+    });
+    return false;
 }
 
 Aero::Texture* GlueAnimatedImage::RenderDynamicTextureCallback(Aero::RenderDevice* Device, void* User)
@@ -336,6 +565,7 @@ Aero::Texture* GlueAnimatedImage::RenderDynamicTextureCallback(Aero::RenderDevic
 
 Aero::Texture* GlueAnimatedImage::RenderDynamicTexture(Aero::RenderDevice* Device)
 {
+    std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
     if (!Device || !mHasCurrentWebmFrame)
         return nullptr;
 

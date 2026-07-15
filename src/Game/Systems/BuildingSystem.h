@@ -48,11 +48,19 @@ struct BuildOrder
 {
     bool Active = false;
     int BuilderID = -1;
+    int PlayerID = -1;
     int BuildingDefID = -1;
     Core::Math::Vec2 Position;
     int PlacedEntityID = -1;
     bool IsAddon = false;
     int ParentBuildingID = -1;
+    BuildTarget Target;
+    int ApproachAttempt = 0;
+    float ApproachSeconds = 0.0f;
+    float NoProgressSeconds = 0.0f;
+    float BestFootprintDistance = 0.0f;
+    bool HasBestFootprintDistance = false;
+    float PlacementBlockedSeconds = 0.0f;
 };
 
 class BuildingSystem : public Core::ECS::ISystem
@@ -68,6 +76,7 @@ public:
 
     static void SetMap(const Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
+    static void SetSubunitImageResolver(ImageIDResolver Resolver);
     static void SetConstructionImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
     static void SetAddonOffsetResolver(AddonOffsetResolver Resolver);
@@ -95,6 +104,12 @@ public:
                            int BuilderID,
                            int BuildingDefID,
                            const BuildTarget& Target);
+    static int CountPendingBuilds(int PlayerID, int BuildingDefID);
+    static bool IsBuilderCommitted(Core::ECS::EntityManager& EM, int BuilderID);
+
+    static bool AssistConstruction(Core::ECS::EntityManager& EM,
+                                   const std::vector<int>& BuilderIDs,
+                                   int BuildingID);
 
     static bool StartBuild(Core::ECS::EntityManager& EM,
                            int BuilderID,
@@ -124,12 +139,17 @@ public:
                                   int BuilderPlayerID = 0);
 
     static bool LiftOffBuilding(Core::ECS::EntityManager& EM, int BuildingID);
+    static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID);
     static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
                              Core::Math::Vec2 Position);
     static void RestoreSpawnedAddonLinks(Core::ECS::EntityManager& EM);
     static void ProcessFlightTransition(Core::ECS::EntityManager& EM, int EntityID);
+    static void AdvanceFlightHeightTransition(Core::ECS::EntityManager& EM,
+                                              int EntityID,
+                                              float DeltaTime);
 
 private:
+    void ProcessPendingBuildOrders(Core::ECS::EntityManager& EM, float DeltaTime);
     void ProcessConstruction(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);
 
     Core::ECS::SystemManager& mSystemMgr;

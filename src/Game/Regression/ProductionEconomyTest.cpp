@@ -158,6 +158,8 @@ int main()
     auto& EM = SysMgr.GetEntityManager();
     Game::Systems::ZergSystem::SetImageResolver(
         [](int ChkUnitID) { return 50000u + (uint32_t)ChkUnitID; });
+    Game::Systems::ProductionSystem::SetSubunitImageResolver(
+        [](int ChkUnitID) { return 60000u + (uint32_t)ChkUnitID; });
 
     constexpr int PlayerID = 0;
     auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
@@ -168,6 +170,26 @@ int main()
 
     const int CommandCenter = CreateCompletedBuilding(EM, "CommandCenter", PlayerID);
     const int ScvDefID = Game::Races::GetUnitDefID("SCV");
+
+    const int SpawnProbeBarracks = CreateCompletedBuilding(
+        EM, "Barracks", 10, {1500.0f, 900.0f});
+    auto& SpawnProbeBarracksPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(SpawnProbeBarracks);
+    SpawnProbeBarracksPath.HasCollisionBounds = true;
+    SpawnProbeBarracksPath.CollisionLeft = 48;
+    SpawnProbeBarracksPath.CollisionRight = 48;
+    SpawnProbeBarracksPath.CollisionUp = 32;
+    SpawnProbeBarracksPath.CollisionDown = 32;
+    const int SpawnExitBlocker =
+        CreateCompletedUnit(EM, "Marine", 10, {1500.0f, 954.0f});
+    const auto MarineSpawn = Game::Systems::ProductionSystem::FindSpawnPosition(
+        EM, SpawnProbeBarracks, Game::Races::GetUnitDefByID(
+            Game::Races::GetUnitDefID("Marine")).ChkUnitID);
+    const auto* SpawnExitBlockerTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(SpawnExitBlocker);
+    Require(SpawnExitBlockerTransform && MarineSpawn.Y > 900.0f &&
+            MarineSpawn.DistanceTo(SpawnExitBlockerTransform->Position) >= 32.0f,
+        "production buildings choose an unoccupied exit below the building");
 
     Require(Game::Systems::ProductionSystem::StartTrain(EM, CommandCenter, ScvDefID),
         "first SCV can be queued when one supply remains");
@@ -534,6 +556,10 @@ int main()
     }
 
     Require(SpawnedGoliath >= 0, "completed production spawns the trained Goliath");
+    auto* GoliathRender = EM.GetComponent<Game::Components::RenderComponent>(SpawnedGoliath);
+    Require(GoliathRender &&
+            GoliathRender->SubunitImageID == 60000u + (uint32_t)GoliathDef.ChkUnitID,
+        "produced Goliath keeps its units.dat head/turret subunit image");
     auto* GoliathCombat = EM.GetComponent<Game::Components::CombatComponent>(SpawnedGoliath);
     Require(GoliathCombat && GoliathCombat->CanTargetGround,
         "produced combat units keep ground targeting capability");
@@ -650,19 +676,70 @@ int main()
         "Zerg building morph records the Lair target def id");
     Require(HatcheryBuilding && HatcheryBuilding->UnderConstruction,
         "Zerg building morph puts the source building into construction state");
+    Require(HatcheryBuilding && HatcheryBuilding->BuildProgress == 0.0f &&
+            HatcheryBuilding->TotalBuildTime == (float)LairDef.BuildTime,
+        "Zerg building morph progress starts empty and uses the target build time");
+    auto* MorphStartRender =
+        EM.GetComponent<Game::Components::RenderComponent>(MorphHatchery);
+    Require(MorphStartRender &&
+            MorphStartRender->ImageID == 50000u + (uint32_t)LairDef.ChkUnitID,
+        "Zerg building morph immediately uses the target construction image");
     Require(ZergBuildingResources.Minerals == 500 - LairDef.MineralCost &&
             ZergBuildingResources.VespeneGas == 300 - LairDef.GasCost,
         "Zerg building morph spends normalized target costs");
 
     Game::Map::GameMap ZergMorphMap;
     Game::Systems::ZergSystem ZergMorphSystem(SysMgr, &ZergMorphMap);
-    ZergMorphSystem.Update((float)LairDef.BuildTime + 0.1f);
+    ZergMorphSystem.Update((float)LairDef.BuildTime * 0.5f);
+    Require(HatcheryBuilding->BuildProgress > 0.0f &&
+            HatcheryBuilding->BuildProgress < HatcheryBuilding->TotalBuildTime &&
+            HatcheryBuilding->BuildTimeRemaining < HatcheryBuilding->TotalBuildTime,
+        "Zerg building morph progress grows while remaining time decreases");
+    const float HalfMorphProgress = HatcheryBuilding->BuildProgress;
+    ZergMorphSystem.Update((float)LairDef.BuildTime * 0.5f + 0.1f);
+    Require(HatcheryBuilding->BuildProgress >= HalfMorphProgress &&
+            HatcheryBuilding->BuildProgress == HatcheryBuilding->TotalBuildTime,
+        "completed Zerg building morph leaves a full forward progress bar");
     auto* MorphedLairUnit = EM.GetComponent<Game::Components::UnitComponent>(MorphHatchery);
     auto* MorphedLairRender = EM.GetComponent<Game::Components::RenderComponent>(MorphHatchery);
     Require(MorphedLairUnit && MorphedLairUnit->ChkUnitID == LairDef.ChkUnitID &&
             MorphedLairRender &&
             MorphedLairRender->ImageID == 50000u + (uint32_t)LairDef.ChkUnitID,
         "completed Zerg building morph switches to the target building image");
+
+    const int LairDroneLarva = CreateCompletedUnit(
+        EM, "Larva", ZergBuildingMorphPlayerID, {912.0f, 552.0f});
+    Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+                EM, LairDroneLarva, Game::Races::GetUnitDefID("Drone")),
+        "completed Lair satisfies the Hatchery prerequisite for larva production");
+
+    CreateCompletedBuilding(
+        EM, "Queen's Nest", ZergBuildingMorphPlayerID, {960.0f, 520.0f});
+    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
+    const auto HiveDef = Game::Races::GetUnitDefByID(HiveDefID);
+    Require(Game::Systems::ZergSystem::StartMorphBuilding(
+                EM, MorphHatchery, HiveDefID),
+        "completed Lair starts its second-tier Hive morph");
+    Require(HatcheryBuilding->BuildProgress == 0.0f &&
+            HatcheryBuilding->TotalBuildTime == (float)HiveDef.BuildTime &&
+            MorphedLairRender->ImageID == 50000u + (uint32_t)HiveDef.ChkUnitID,
+        "second-tier building morph restarts forward progress on the Hive construction image");
+    ZergMorphSystem.Update((float)HiveDef.BuildTime * 0.5f);
+    const float HalfHiveProgress = HatcheryBuilding->BuildProgress;
+    Require(HalfHiveProgress > 0.0f &&
+            HalfHiveProgress < HatcheryBuilding->TotalBuildTime,
+        "Hive morph progress grows from empty at the halfway point");
+    ZergMorphSystem.Update((float)HiveDef.BuildTime * 0.5f + 0.1f);
+    Require(HatcheryBuilding->BuildProgress >= HalfHiveProgress &&
+            HatcheryBuilding->BuildProgress == HatcheryBuilding->TotalBuildTime &&
+            MorphedLairUnit->ChkUnitID == HiveDef.ChkUnitID,
+        "second-tier Hive morph completes with a full forward progress bar");
+
+    const int HiveDroneLarva = CreateCompletedUnit(
+        EM, "Larva", ZergBuildingMorphPlayerID, {944.0f, 552.0f});
+    Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+                EM, HiveDroneLarva, Game::Races::GetUnitDefID("Drone")),
+        "completed Hive satisfies the Hatchery prerequisite for larva production");
 
     constexpr int ZergLarvaEconomyPlayerID = 6;
     auto& ZergLarvaEconomyResources =
@@ -693,6 +770,10 @@ int main()
     const auto DroneDef = Game::Races::GetUnitDefByID(DroneDefID);
     const int DroneLarva =
         CreateCompletedUnit(EM, "Larva", ZergLarvaEconomyPlayerID, {992.0f, 520.0f});
+    EM.AddComponent<Game::Components::LarvaComponent>(DroneLarva)
+        .ParentHatcheryEntityID = EconomyHatchery;
+    const int HatcheryExitBlocker =
+        CreateCompletedUnit(EM, "Marine", 9, {960.0f, 558.0f});
     Require(Game::Systems::ZergSystem::CanMorphLarvaIntoUnit(EM, DroneLarva, DroneDefID),
         "Zerg larva can morph into Drone for worker economy closure");
     Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(EM, DroneLarva, DroneDefID),
@@ -709,6 +790,15 @@ int main()
     Require(CountUnitsByDef(EM, "Drone", ZergLarvaEconomyPlayerID) >= 1,
         "Zerg Drone morph completes into a worker unit");
     const int MorphedDrone = FindUnitByDef(EM, "Drone", ZergLarvaEconomyPlayerID);
+    auto* MorphedDroneTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(MorphedDrone);
+    auto* HatcheryExitBlockerTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(HatcheryExitBlocker);
+    Require(MorphedDroneTransform && HatcheryExitBlockerTransform &&
+            MorphedDroneTransform->Position.Y > 520.0f &&
+            MorphedDroneTransform->Position.DistanceTo(
+                HatcheryExitBlockerTransform->Position) >= 32.0f,
+        "Zerg egg hatches below its parent base at a nearby unoccupied exit");
     auto* MorphedDroneRender = EM.GetComponent<Game::Components::RenderComponent>(MorphedDrone);
     Require(MorphedDroneRender &&
             MorphedDroneRender->ImageID == 50000u + (uint32_t)DroneDef.ChkUnitID,
@@ -754,6 +844,36 @@ int main()
             SupplyMaxBeforeOverlord + Game::Races::GetSupplyProvidedByDefID(OverlordDefID),
         "completed Zerg Overlord increases supply cap");
 
+    ZergLarvaEconomyResources.Minerals = 500;
+    ZergLarvaEconomyResources.VespeneGas = 500;
+    ZergLarvaEconomyResources.SupplyMax = 30;
+    const int LurkerLair = CreateCompletedBuilding(
+        EM, "Lair", ZergLarvaEconomyPlayerID, {1120.0f, 520.0f});
+    CreateCompletedBuilding(
+        EM, "Hydralisk Den", ZergLarvaEconomyPlayerID, {1180.0f, 520.0f});
+    const int LurkerLarva = CreateCompletedUnit(
+        EM, "Larva", ZergLarvaEconomyPlayerID, {1120.0f, 520.0f});
+    EM.AddComponent<Game::Components::LarvaComponent>(LurkerLarva)
+        .ParentHatcheryEntityID = LurkerLair;
+    const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
+    const auto LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
+    Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+                EM, LurkerLarva, LurkerDefID),
+        "Lurker morph starts with its tech prerequisites available");
+    ZergMorphSystem.Update((float)LurkerDef.BuildTime + 0.1f);
+    const int MorphedLurker =
+        FindUnitByDef(EM, "Lurker", ZergLarvaEconomyPlayerID);
+    const auto* LurkerBurrow =
+        EM.GetComponent<Game::Components::BurrowComponent>(MorphedLurker);
+    const auto* LurkerTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(MorphedLurker);
+    Require(LurkerBurrow && LurkerBurrow->CanBurrow &&
+            !LurkerBurrow->IsBurrowed &&
+            LurkerBurrow->Phase == Game::Components::BurrowPhase::Surface,
+        "newly hatched Lurker explicitly starts on the surface and can move");
+    Require(LurkerTransform && LurkerTransform->Position.Y > 520.0f,
+        "newly hatched Lurker exits below its parent Lair");
+
     constexpr int ZergDroneBuildingPlayerID = 7;
     auto& ZergDroneBuildingResources =
         Game::Systems::HarvestSystem::GetResources(ZergDroneBuildingPlayerID);
@@ -767,7 +887,7 @@ int main()
     const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
     const auto HatcheryDef = Game::Races::GetUnitDefByID(HatcheryDefID);
     Require(Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
-                EM, BuilderDrone, HatcheryDefID, {1088.0f, 560.0f}),
+                EM, BuilderDrone, HatcheryDefID, {2000.0f, 2000.0f}),
         "Zerg Drone can start morphing into a Hatchery");
     Require(!EM.IsAlive(BuilderDrone), "Zerg Drone building morph consumes the source Drone");
     const int MorphingHatchery =
@@ -781,10 +901,31 @@ int main()
         "Zerg Drone building morph releases the consumed Drone supply");
     Require(ZergDroneBuildingResources.SupplyMax == 10,
         "Zerg building morph does not grant supply before completion");
+    const auto CountCreepNearNewHatchery = [&]()
+    {
+        int Count = 0;
+        for (int Y = 56; Y <= 68; ++Y)
+            for (int X = 52; X <= 72; ++X)
+                if (ZergMorphMap.GetTile(X, Y).HasCreep)
+                    ++Count;
+        return Count;
+    };
+    ZergMorphSystem.Update(0.1f);
+    Require(ZergMorphMap.GetTile(60, 61).HasCreep &&
+            ZergMorphMap.GetTile(63, 63).HasCreep,
+        "new Hatchery seeds continuous creep across its full 4x3 footprint");
+    const int InitialConstructionCreep = CountCreepNearNewHatchery();
+    ZergMorphSystem.Update(0.6f);
+    Require(CountCreepNearNewHatchery() > InitialConstructionCreep,
+        "Hatchery construction expands creep incrementally at the OpenBW spread interval");
     ZergMorphSystem.Update((float)HatcheryDef.BuildTime + 0.1f);
     Require(ZergDroneBuildingResources.SupplyMax ==
             10 + Game::Races::GetSupplyProvidedByDefID(HatcheryDefID),
         "completed Zerg Hatchery morph grants its supply cap");
+    const int CompletedConstructionCreep = CountCreepNearNewHatchery();
+    ZergMorphSystem.Update(2.0f);
+    Require(CountCreepNearNewHatchery() == CompletedConstructionCreep,
+        "completed Hatchery freezes its reached creep extent without further expansion");
 
     constexpr int ProtossMorphPlayerID = 1;
     auto& ProtossMorphResources =

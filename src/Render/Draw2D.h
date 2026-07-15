@@ -49,8 +49,11 @@ public:
                           float Cloaked,
                           float Brighten = 0.0f,
                           float Shadow = 0.0f,
+                          float WarpTexture = 0.0f,
+                          float WarpScaleX = 1.0f,
+                          float WarpScaleY = 1.0f,
                           Color TeamColor = Color(255, 255, 255, 255),
-                          const GpuTextureHandle* TeamColorMask = nullptr);
+                          const GpuTextureHandle* EffectMask = nullptr);
 
     // Solid color rectangle (no texture; uses the 1x1 white image)
     void DrawRect(float X, float Y, float W, float H, Color C);
@@ -93,6 +96,9 @@ private:
                                float Cloaked,
                                float Brighten,
                                float Shadow,
+                               float WarpTexture,
+                               float WarpScaleX,
+                               float WarpScaleY,
                                Color TeamColor,
                                bool UseTeamColor);
 

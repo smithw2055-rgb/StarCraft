@@ -1,6 +1,8 @@
 #include "Core/Platform/Platform.h"
 #include "GameController.h"
 
+// Keep this translation unit tied to the complete GameController runtime layout.
+
 #include "third_party/sokol/sokol_app.h"
 #include "third_party/sokol/sokol_gfx.h"
 #include "third_party/sokol/sokol_glue.h"

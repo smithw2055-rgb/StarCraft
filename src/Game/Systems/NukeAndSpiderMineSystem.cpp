@@ -4,9 +4,22 @@
 #include "Game/Map/Map.h"
 
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace Game::Systems
 {
+
+namespace
+{
+    NukeAndSpiderMineSystem::ImageIDResolver gImageResolver;
+    constexpr int kTerranSpiderMineChkUnitID = 13;
+}
+
+void NukeAndSpiderMineSystem::SetImageResolver(ImageIDResolver Resolver)
+{
+    gImageResolver = std::move(Resolver);
+}
 
 void NukeAndSpiderMineSystem::Update(float DeltaTime)
 {
@@ -178,8 +191,24 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                 it->MineEntityID = EM.CreateEntity();
                 EM.AddComponent<Components::TransformComponent>(it->MineEntityID).Position = it->PlacementPosition;
                 auto& render = EM.AddComponent<Components::RenderComponent>(it->MineEntityID);
+                render.ImageID = gImageResolver
+                    ? gImageResolver(kTerranSpiderMineChkUnitID)
+                    : std::numeric_limits<uint32_t>::max();
+                render.FrameIndex = 0;
+                render.TotalFrames = 1;
                 render.Layer = Components::RenderLayer::GroundDecor;
                 render.Visible = false;
+
+                // EntityRenderer deliberately accepts only game units. The old
+                // mine entity had only a RenderComponent, so it became armed
+                // but was never submitted to the sprite pass.
+                auto& unit = EM.AddComponent<Components::UnitComponent>(it->MineEntityID);
+                unit.ChkUnitID = kTerranSpiderMineChkUnitID;
+                unit.UnitRace = Components::Race::Terran;
+                unit.SizeType = Components::UnitSize::Small;
+                unit.HitPoints = 20;
+                unit.MaxHitPoints = 20;
+                unit.Speed = 0.0f;
 
                 auto* vulturePlayer = EM.GetComponent<Components::PlayerComponent>(it->VultureEntityID);
                 if (vulturePlayer)

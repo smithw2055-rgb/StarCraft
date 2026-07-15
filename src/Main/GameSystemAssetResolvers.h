@@ -7,6 +7,8 @@
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/BuildingSystem.h"
+#include "Game/Systems/CommandSystem.h"
+#include "Game/Systems/NukeAndSpiderMineSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/ZergSystem.h"
 
@@ -17,6 +19,8 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
 {
     Game::Systems::ProductionSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetImageResolver(Resolver);
+    Game::Systems::CommandSystem::SetImageResolver(Resolver);
+    Game::Systems::NukeAndSpiderMineSystem::SetImageResolver(Resolver);
     Game::Systems::ZergSystem::SetImageResolver(std::move(Resolver));
 }
 
@@ -25,8 +29,18 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
 {
     Game::Systems::ProductionSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetImageResolver(Resolver);
+    Game::Systems::CommandSystem::SetImageResolver(Resolver);
+    Game::Systems::NukeAndSpiderMineSystem::SetImageResolver(Resolver);
     Game::Systems::ZergSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetConstructionImageResolver(std::move(ConstructionResolver));
+}
+
+inline void ConfigureBuildAndProductionSubunitImageResolvers(
+    std::function<uint32_t(int)> Resolver)
+{
+    Game::Systems::ProductionSystem::SetSubunitImageResolver(Resolver);
+    Game::Systems::BuildingSystem::SetSubunitImageResolver(Resolver);
+    Game::Systems::CommandSystem::SetSubunitImageResolver(std::move(Resolver));
 }
 
 inline void ConfigureGameplayCollisionBoundsResolvers(
@@ -53,6 +67,12 @@ inline void ConfigureAnimationWeaponImageResolver(
     Game::Systems::AnimationSystem::WeaponImageResolver Resolver)
 {
     Game::Systems::AnimationSystem::SetWeaponImageResolver(std::move(Resolver));
+}
+
+inline void ConfigureAnimationImageAttachmentPersistenceResolver(
+    Game::Systems::AnimationSystem::ImageAttachmentPersistenceResolver Resolver)
+{
+    Game::Systems::AnimationSystem::SetImageAttachmentPersistenceResolver(std::move(Resolver));
 }
 
 inline void ConfigureZergBurrowCapabilityResolver(

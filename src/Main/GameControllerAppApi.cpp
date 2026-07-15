@@ -1,5 +1,7 @@
 #include "GameController.h"
 
+// Keep this translation unit tied to the complete GameController runtime layout.
+
 #include <utility>
   
 namespace Game::Client::GameLoop

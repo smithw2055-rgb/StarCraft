@@ -14,6 +14,7 @@
 #include "Render/Renderer.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <utility>
 
@@ -78,12 +79,26 @@ inline void UpdateGameRuntimeFrame(
         return;
     }
 
-    const float SimulationScale = RunInteractionDemoIfRequested(
+    float SimulationScale = RunInteractionDemoIfRequested(
         Runtime.InteractionDemo,
         Runtime.Session.Game,
         Runtime.Client.Runtime,
         Runtime.Client.Hud,
         Dt);
+    if (const char* ObserverSpeed = std::getenv("STARCRAFT_AI_OBSERVER_SPEED"))
+    {
+        const float RequestedScale = std::strtof(ObserverSpeed, nullptr);
+        if (RequestedScale >= 1.0f && RequestedScale <= 16.0f)
+            SimulationScale = RequestedScale;
+        static bool SpeedLogged = false;
+        if (!SpeedLogged)
+        {
+            SpeedLogged = true;
+            Core::Utils::Logger::Info(
+                "AiObserverMatch", "simulation_speed=" +
+                std::to_string(SimulationScale) + "x");
+        }
+    }
     const float SimulationDt = Dt * SimulationScale;
 
     RunInteractionSmokeIfRequested(

@@ -1,6 +1,7 @@
 #include "CursorTypes.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Systems/GeyserState.h"
 
 #include <algorithm>
 
@@ -102,7 +103,13 @@ bool IsOrganicBuilding(int Id)
 
 bool RequiresPylonChkId(int Id)
 {
-    return Id >= 154 && Id <= 172 && Id != 157;
+    // Nexus and Assimilator are the two Protoss structures that may be
+    // placed without an existing power field. A Pylon must also be exempt,
+    // otherwise the first power field could never be established.
+    return Id >= 154 && Id <= 172 &&
+           Id != 154 && // Nexus
+           Id != 156 && // Pylon
+           Id != 157;   // Assimilator
 }
 
 bool IsStartLocationUnit(int Id)
@@ -162,7 +169,7 @@ bool CanEntityAttackTarget(Core::ECS::EntityManager& EM,
         return false;
     if (TargetId <= 0 || !EM.IsAlive(TargetId))
         return false;
-    if (EM.GetComponent<Game::Components::ResourceComponent>(TargetId))
+    if (Game::Systems::IsProtectedResourceNode(EM, TargetId))
         return false;
 
     const bool TargetAir = IsAirTarget(EM, TargetId);

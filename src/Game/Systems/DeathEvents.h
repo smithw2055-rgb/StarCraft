@@ -15,6 +15,14 @@ inline void SpawnDeathVisual(Core::ECS::EntityManager& EM,
                              int VictimEntityID,
                              const Game::Components::UnitComponent& VictimUnit)
 {
+    // Combat and bullet systems already create the explosion / impact image.
+    // Copying a building's regular root image into an effect entity here leaves
+    // a second, static building visible after the actual building is gone.
+    // Buildings therefore have no body-copy death visual: only their dedicated
+    // explosion effects remain on screen.
+    if (EM.GetComponent<Game::Components::BuildingComponent>(VictimEntityID))
+        return;
+
     auto* VictimTransform =
         EM.GetComponent<Game::Components::TransformComponent>(VictimEntityID);
     if (!VictimTransform)

@@ -520,6 +520,13 @@ uint32_t GameDataLoader::ResolveUnitConstructionImageID(uint32_t ChkUnitID) cons
         return UINT32_MAX;
 
     const uint32_t ImageID = mUnits[(size_t)ChkUnitID].ConstructionImageID;
+    // Brood War uses construction image id 0 as a sentinel for buildings
+    // without a separate construction GRP (notably Terran Refinery and
+    // Protoss Assimilator). OpenBW's set_construction_graphic falls back to
+    // the unit's normal sprite image in this case. Treating 0 as a real image
+    // renders the SCV graphic inside the building footprint instead.
+    if (ImageID == 0)
+        return ResolveUnitImageID(ChkUnitID);
     if (ImageID == UINT32_MAX || ImageID >= mImages.size())
         return UINT32_MAX;
 

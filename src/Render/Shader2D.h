@@ -18,7 +18,7 @@ struct SpriteEffectShaderParams
     float TeamColor[4];
     // x = hallucination, y = cloaked, z = brighten, w = use team color.
     float EffectData[4];
-    // x = shadow mask rendered directly in the forward 2D path.
+    // x = shadow, y = Protoss warp texture, zw = texture crop scale.
     float EffectMode[4];
 };
 

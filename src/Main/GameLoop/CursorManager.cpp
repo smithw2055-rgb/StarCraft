@@ -11,6 +11,7 @@
 #include "UI/Hud.h"
 #include "Resource/UIAssetCacheView.h"
 #include "Game/Components.h"
+#include "Game/Systems/GeyserState.h"
 #include "Core/Math/Vec2.h"
 #include <cmath>
 #include <limits>
@@ -86,6 +87,13 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
     ClickTargetContext Context;
     Context.WorldPosition = WorldPosition;
 
+    int MyPlayerId = 0;
+    if (!SelectedIds.empty())
+    {
+        if (auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(SelectedIds.front()))
+            MyPlayerId = Player->PlayerID;
+    }
+
     float BestResourceScore = 1.0f;
     for (int EntityId : EM.GetEntitiesWith<
         Game::Components::TransformComponent,
@@ -94,6 +102,13 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
         auto* Transform = EM.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityId);
         if (!Transform || !Resource || Resource->IsDepleted) continue;
+        if (Game::Systems::IsAttackableClaimedGeyser(EM, EntityId))
+        {
+            const auto* Player =
+                EM.GetComponent<Game::Components::PlayerComponent>(EntityId);
+            if (Player && Player->PlayerID != MyPlayerId)
+                continue;
+        }
 
         int ChkUnitID = 0;
         if (auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId))
@@ -108,13 +123,6 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
         }
     }
 
-    int MyPlayerId = 0;
-    if (!SelectedIds.empty())
-    {
-        if (auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(SelectedIds.front()))
-            MyPlayerId = Player->PlayerID;
-    }
-
     float BestEntityScore = std::numeric_limits<float>::max();
     for (int EntityId : EM.GetEntitiesWith<
         Game::Components::TransformComponent,
@@ -125,7 +133,11 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
         auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityId);
         if (!Transform || !Unit || !Player || Unit->HitPoints <= 0) continue;
-        if (EM.GetComponent<Game::Components::ResourceComponent>(EntityId)) continue;
+        if (EM.GetComponent<Game::Components::ResourceComponent>(EntityId) &&
+            !Game::Systems::IsAttackableClaimedGeyser(EM, EntityId))
+        {
+            continue;
+        }
 
         const float Score = EntityClickScore(EM, EntityId, WorldPosition);
         if (Score < BestEntityScore)
@@ -221,6 +233,16 @@ CursorRenderState CursorManager::ResolveCursorState(int MouseX, int MouseY,
                 break;
             case Game::Client::UI::PendingTargetMode::Land:
                 State.Kind = GameCursorKind::TargetYellow;
+                break;
+            case Game::Client::UI::PendingTargetMode::Rally:
+                State.Kind = GameCursorKind::TargetGreen;
+                break;
+            case Game::Client::UI::PendingTargetMode::Scan:
+                State.Kind = GameCursorKind::TargetYellow;
+                break;
+            case Game::Client::UI::PendingTargetMode::Load:
+                Legal = TargetContext.AnyEntityID >= 0;
+                State.Kind = Legal ? GameCursorKind::TargetNeutral : GameCursorKind::Illegal;
                 break;
             default:
                 break;

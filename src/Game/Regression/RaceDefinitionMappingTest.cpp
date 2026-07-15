@@ -85,6 +85,9 @@ int main()
         "Valkyrie raw CHK id is not treated as a detector");
     Require(Game::Races::IsDetectorChkUnitID(124),
         "Missile Turret raw CHK id provides detector metadata");
+    const auto MissileTurret = Game::Races::GetUnitDefByName("MissileTurret");
+    Require(MissileTurret.GroundDamage == 0 && MissileTurret.AirDamage > 0,
+        "Missile Turret is an active air-only defense");
     Require(Game::Races::GetRaceByChkUnitID(88, Race::Terran) == Race::Protoss,
         "Protoss hero Artanis raw CHK id is classified without a UnitDef");
     Require(Game::Races::GetRaceByChkUnitID(104, Race::Terran) == Race::Zerg,
@@ -99,6 +102,70 @@ int main()
     Require(OverlordDef.SupplyCost == 0, "Overlord does not consume supply");
     Require(Game::Races::GetSupplyProvidedByDefID(OverlordDefID) == 8,
         "Overlord provides Zerg supply");
+    Require(Game::Races::GetSupplyProvidedByDefID(
+                Game::Races::GetUnitDefID("Pylon")) == 8,
+        "Pylon provides Protoss supply");
+    Require(Game::Races::GetSupplyProvidedByDefID(
+                Game::Races::GetUnitDefID("Nexus")) == 10,
+        "Nexus provides base Protoss supply");
+    for (const auto& Def : Game::Races::GetProtossDefs())
+    {
+        if (!Def.IsBuilding)
+            continue;
+
+        const bool PowerExempt = Def.Name == "Nexus" ||
+                                 Def.Name == "Assimilator" ||
+                                 Def.Name == "Pylon";
+        Require(Def.RequiresPylon == !PowerExempt,
+            "only Nexus, Assimilator, and Pylon are exempt from Protoss power");
+    }
+    Require(Game::Races::GetUnitDefByName("Marine").GroundDamage == 6 &&
+                Game::Races::GetUnitDefByName("Marine").AirDamage == 6,
+        "Marine Gauss Rifle targets ground and air with its reference damage");
+    Require(Game::Races::GetUnitDefByName("Goliath").AirDamage == 20 &&
+                Game::Races::GetUnitDefByName("Wraith").AirDamage == 20,
+        "Terran anti-air weapon damage matches the reference weapon data");
+    Require(Game::Races::GetUnitDefByName("Valkyrie").GroundDamage == 0 &&
+                Game::Races::GetUnitDefByName("Valkyrie").AirDamage == 12,
+        "Valkyrie is air-only and uses its two-missile volley damage");
+    Require(Game::Races::GetUnitDefByName("Hydralisk").AirDamage == 10 &&
+                Game::Races::GetUnitDefByName("Mutalisk").AirDamage == 9 &&
+                Game::Races::GetUnitDefByName("Scourge").GroundDamage == 0 &&
+                Game::Races::GetUnitDefByName("Scourge").AirDamage == 110,
+        "Zerg anti-air combat values match the reference weapon data");
+    Require(Game::Races::GetUnitDefByName("Zergling").SupplyCost == 1,
+        "single-Zergling production reserves supply instead of bypassing population limits");
+    Require(Game::Races::GetUnitDefByName("Queen").HitPoints == 120 &&
+                Game::Races::GetUnitDefByName("Broodling").HitPoints == 30,
+        "Zerg spell-unit hit points match the reference unit data");
+    Require(Game::Races::GetUnitDefByName("Zealot").HitPoints == 100 &&
+                Game::Races::GetUnitDefByName("Dragoon").AirDamage == 20 &&
+                Game::Races::GetUnitDefByName("Corsair").GroundDamage == 0 &&
+                Game::Races::GetUnitDefByName("Corsair").AirDamage == 5,
+        "Protoss core unit health and target channels match reference data");
+    Require(Game::Races::GetUnitDefByName("Archon").HitPoints == 10 &&
+                Game::Races::GetUnitDefByName("Archon").ShieldPoints == 350 &&
+                Game::Races::GetUnitDefByName("Dark Archon").HitPoints == 25 &&
+                Game::Races::GetUnitDefByName("Dark Archon").ShieldPoints == 200,
+        "Archon variants preserve their reference health and shield split");
+    Require(Game::Races::GetUnitDefByName("Scout").HitPoints == 150 &&
+                Game::Races::GetUnitDefByName("Scout").ShieldPoints == 100 &&
+                Game::Races::GetUnitDefByName("Scout").AirDamage == 28 &&
+                Game::Races::GetUnitDefByName("Carrier").HitPoints == 300 &&
+                Game::Races::GetUnitDefByName("Observer").HitPoints == 40,
+        "Protoss air-unit health and modeled multi-shot damage match reference data");
+
+    const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
+    const int LairDefID = Game::Races::GetUnitDefID("Lair");
+    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
+    Require(Game::Races::BuildingDefSatisfiesRequirement(LairDefID, HatcheryDefID) &&
+                Game::Races::BuildingDefSatisfiesRequirement(HiveDefID, HatcheryDefID) &&
+                Game::Races::BuildingDefSatisfiesRequirement(HiveDefID, LairDefID),
+        "Zerg town-hall upgrades inherit lower-tier technology requirements");
+    Require(Game::Races::BuildingDefSatisfiesRequirement(
+                Game::Races::GetUnitDefID("Greater Spire"),
+                Game::Races::GetUnitDefID("Spire")),
+        "Greater Spire inherits Spire technology requirements");
 
     Require(Bootstrap::Detail::TownHallDefForRace(Bootstrap::Detail::StartRace::Terran) ==
             Game::Races::GetUnitDefID("CommandCenter"),
@@ -144,6 +211,32 @@ int main()
     Require(Bootstrap::Detail::RaceFromScriptRace(2) ==
             Bootstrap::Detail::StartRace::Protoss,
         "SCRIPT/SIDE race 2 selects Protoss fallback");
+    Require(Bootstrap::Detail::ApplyObserverRaceList(
+                "Terran,Zerg,Protoss", 0, Bootstrap::Detail::StartRace::Zerg) ==
+            Bootstrap::Detail::StartRace::Terran &&
+            Bootstrap::Detail::ApplyObserverRaceList(
+                "Terran,Zerg,Protoss", 1, Bootstrap::Detail::StartRace::Terran) ==
+            Bootstrap::Detail::StartRace::Zerg &&
+            Bootstrap::Detail::ApplyObserverRaceList(
+                "Terran,Zerg,Protoss", 2, Bootstrap::Detail::StartRace::Terran) ==
+            Bootstrap::Detail::StartRace::Protoss,
+        "observer race list assigns Terran, Zerg, and Protoss per player");
+
+    Require(Bootstrap::Detail::IsCampaignMissionPath(
+                "assets/locales/zhCN/Assets/campaign/Terran/Terran03/staredit/scenario.chk"),
+        "campaign mission paths disable the generic skirmish AI");
+    Require(Bootstrap::Detail::IsCampaignMissionPath(
+                "ASSETS\\LOCALES\\ZHCN\\ASSETS\\CAMPAIGN\\TERRAN\\TERRAN03\\STAREDIT\\SCENARIO.CHK"),
+        "campaign path detection accepts Windows separators and case differences");
+    Require(!Bootstrap::Detail::IsCampaignMissionPath(
+                "assets/maps/custom/BigGameHunters/scenario.chk"),
+        "custom maps retain the generic skirmish AI");
+
+    Game::Trigger::SCRTriggerData PlayerSelectionData;
+    PlayerSelectionData.Players[0].Owner = 7;
+    PlayerSelectionData.Players[1].Owner = 6;
+    Require(Game::Client::GameLoop::ResolveLocalPlayerID(PlayerSelectionData) == 1,
+        "generic skirmish AI targets the actual CHK human player instead of fixed player zero");
 
     std::printf("RaceDefinitionMappingTest passed\n");
     return 0;

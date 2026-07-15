@@ -1,10 +1,12 @@
 #include "Game/Systems/ProductionSystem.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "Core/Utils/Logger.h"
 #include "Game/DataEnums.h"
+#include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -18,7 +20,9 @@ using namespace Game::Components;
 namespace
 {
     ProductionSystem::ImageIDResolver gImageResolver;
+    ProductionSystem::ImageIDResolver gSubunitImageResolver;
     ProductionSystem::CollisionBoundsResolver gCollisionBoundsResolver;
+    const Game::Map::GameMap* gProductionMap = nullptr;
 
     void SetReason(std::string* OutReason, const std::string& Reason)
     {
@@ -31,9 +35,51 @@ namespace
         return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
     }
 
+    uint32_t ResolveSubunitImageID(int ChkUnitID)
+    {
+        return gSubunitImageResolver
+            ? gSubunitImageResolver(ChkUnitID)
+            : std::numeric_limits<uint32_t>::max();
+    }
+
     UnitCollisionBounds ResolveCollisionBounds(int ChkUnitID)
     {
         return gCollisionBoundsResolver ? gCollisionBoundsResolver(ChkUnitID) : UnitCollisionBounds{};
+    }
+
+    struct CollisionRect
+    {
+        float Left = 16.0f;
+        float Up = 16.0f;
+        float Right = 16.0f;
+        float Down = 16.0f;
+    };
+
+    CollisionRect BoundsFor(const PathfindingComponent* Path,
+                            const UnitCollisionBounds& Resolved)
+    {
+        if (Path && Path->HasCollisionBounds)
+        {
+            return {(float)Path->CollisionLeft, (float)Path->CollisionUp,
+                    (float)Path->CollisionRight + 1.0f,
+                    (float)Path->CollisionDown + 1.0f};
+        }
+        if (Resolved.IsValid)
+        {
+            return {(float)Resolved.Left, (float)Resolved.Up,
+                    (float)Resolved.Right + 1.0f,
+                    (float)Resolved.Down + 1.0f};
+        }
+        return {};
+    }
+
+    bool RectsOverlap(const Core::Math::Vec2& APos, const CollisionRect& A,
+                      const Core::Math::Vec2& BPos, const CollisionRect& B)
+    {
+        return APos.X - A.Left < BPos.X + B.Right &&
+               APos.X + A.Right > BPos.X - B.Left &&
+               APos.Y - A.Up < BPos.Y + B.Down &&
+               APos.Y + A.Down > BPos.Y - B.Up;
     }
 
     int ResolveBuildingDefID(const Core::ECS::EntityManager& EM, int BuildingID)
@@ -61,7 +107,7 @@ namespace
                 continue;
 
             int DefID = ResolveBuildingDefID(EM, EntityID);
-            if (DefID == RequiredDefID)
+            if (Races::BuildingDefSatisfiesRequirement(DefID, RequiredDefID))
                 return true;
         }
         return false;
@@ -104,9 +150,116 @@ void ProductionSystem::SetImageResolver(ImageIDResolver Resolver)
     gImageResolver = std::move(Resolver);
 }
 
+void ProductionSystem::SetSubunitImageResolver(ImageIDResolver Resolver)
+{
+    gSubunitImageResolver = std::move(Resolver);
+}
+
 void ProductionSystem::SetCollisionBoundsResolver(CollisionBoundsResolver Resolver)
 {
     gCollisionBoundsResolver = std::move(Resolver);
+}
+
+void ProductionSystem::SetMap(const Game::Map::GameMap* Map)
+{
+    gProductionMap = Map;
+}
+
+Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
+    Core::ECS::EntityManager& EM,
+    int ProducerID,
+    int UnitChkID,
+    int IgnoreEntityID)
+{
+    const auto* ProducerTrans = EM.GetComponent<TransformComponent>(ProducerID);
+    if (!ProducerTrans)
+        return {};
+
+    const auto UnitBounds = BoundsFor(nullptr, ResolveCollisionBounds(UnitChkID));
+    const auto* ProducerPath = EM.GetComponent<PathfindingComponent>(ProducerID);
+    const auto* ProducerUnit = EM.GetComponent<UnitComponent>(ProducerID);
+    const auto ProducerBounds = BoundsFor(
+        ProducerPath,
+        ResolveCollisionBounds(ProducerUnit ? ProducerUnit->ChkUnitID : -1));
+
+    const Core::Math::Vec2 Preferred{
+        ProducerTrans->Position.X,
+        ProducerTrans->Position.Y + ProducerBounds.Down + UnitBounds.Up + 6.0f};
+    const bool SpawnIsAir = Game::Data::IsAirUnitType(UnitChkID);
+
+    const auto IsFree = [&](const Core::Math::Vec2& Candidate)
+    {
+        if (gProductionMap)
+        {
+            int TileX = 0;
+            int TileY = 0;
+            gProductionMap->WorldToTile(Candidate, TileX, TileY);
+            if (!gProductionMap->IsInBounds(TileX, TileY))
+                return false;
+            const Core::Math::Vec2 Samples[] = {
+                Candidate,
+                {Candidate.X - UnitBounds.Left, Candidate.Y},
+                {Candidate.X + UnitBounds.Right, Candidate.Y},
+                {Candidate.X, Candidate.Y - UnitBounds.Up},
+                {Candidate.X, Candidate.Y + UnitBounds.Down},
+                {Candidate.X - UnitBounds.Left, Candidate.Y - UnitBounds.Up},
+                {Candidate.X + UnitBounds.Right, Candidate.Y - UnitBounds.Up},
+                {Candidate.X - UnitBounds.Left, Candidate.Y + UnitBounds.Down},
+                {Candidate.X + UnitBounds.Right, Candidate.Y + UnitBounds.Down}
+            };
+            if (!SpawnIsAir && std::any_of(
+                    std::begin(Samples), std::end(Samples),
+                    [&](const Core::Math::Vec2& Sample)
+                    {
+                        int X = 0;
+                        int Y = 0;
+                        gProductionMap->WorldToTile(Sample, X, Y);
+                        return !gProductionMap->IsInBounds(X, Y) ||
+                               !gProductionMap->IsWalkable(X, Y);
+                    }))
+            {
+                return false;
+            }
+        }
+
+        for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+        {
+            if (EntityID == ProducerID || EntityID == IgnoreEntityID)
+                continue;
+            const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+            const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+            if (!Unit || !Trans || Unit->HitPoints <= 0)
+                continue;
+            const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+            const bool OtherIsAir = Game::Data::IsAirUnitType(Unit->ChkUnitID);
+            if (SpawnIsAir != OtherIsAir)
+                continue;
+            const auto OtherBounds = BoundsFor(
+                Path, ResolveCollisionBounds(Unit->ChkUnitID));
+            if (RectsOverlap(Candidate, UnitBounds, Trans->Position, OtherBounds))
+                return false;
+        }
+        return true;
+    };
+
+    // Search below the producer first, widening left/right before moving to
+    // the next row. This keeps exits visually faithful while avoiding stacks.
+    constexpr float Step = 24.0f;
+    for (int Row = 0; Row < 10; ++Row)
+    {
+        for (int Column = 0; Column <= 10; ++Column)
+        {
+            const int SignedColumn = Column == 0
+                ? 0
+                : ((Column & 1) ? -(Column + 1) / 2 : Column / 2);
+            const Core::Math::Vec2 Candidate{
+                Preferred.X + (float)SignedColumn * Step,
+                Preferred.Y + (float)Row * Step};
+            if (IsFree(Candidate))
+                return Candidate;
+        }
+    }
+    return Preferred;
 }
 
 bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
@@ -151,7 +304,8 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
 
     int ProducerDefID = ResolveBuildingDefID(EM, BuildingID);
     const int RequiredProducerDefID = NormalizeDefIDForRace(Def.ProducedBy, Def.RaceType);
-    if (ProducerDefID >= 0 && RequiredProducerDefID >= 0 && ProducerDefID != RequiredProducerDefID)
+    if (ProducerDefID >= 0 && RequiredProducerDefID >= 0 &&
+        !Races::BuildingDefSatisfiesRequirement(ProducerDefID, RequiredProducerDefID))
     {
         SetReason(OutReason, "wrong producer for " + Def.Name);
         return false;
@@ -359,6 +513,7 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
 
     auto& Render = EM.AddComponent<RenderComponent>(EntityID);
     Render.ImageID = ResolveImageID(Def.ChkUnitID);
+    Render.SubunitImageID = ResolveSubunitImageID(Def.ChkUnitID);
     Render.FrameIndex = 0;
     Render.TotalFrames = 1;
     Render.Tint = Core::Colors::White();
@@ -407,24 +562,9 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
     if (!BuildingTrans)
         return -1;
 
-    Core::Math::Vec2 SpawnPos = BuildingTrans->Position;
-    const int ProducerDefID = ResolveBuildingDefID(EM, BuildingID);
-    float ExitOffsetY = 48.0f;
-    if (ProducerDefID >= 0)
-    {
-        if (ProducerDefID == Races::GetUnitDefID("CommandCenter"))
-        {
-            ExitOffsetY = 72.0f;
-        }
-        else if (ProducerDefID == Races::GetUnitDefID("Barracks") ||
-                 ProducerDefID == Races::GetUnitDefID("Factory") ||
-                 ProducerDefID == Races::GetUnitDefID("Starport") ||
-                 ProducerDefID == Races::GetUnitDefID("ScienceFacility"))
-        {
-            ExitOffsetY = 56.0f;
-        }
-    }
-    SpawnPos.Y += ExitOffsetY;
+    const auto UnitDef = Races::GetUnitDefByID(UnitDefID);
+    const Core::Math::Vec2 SpawnPos =
+        FindSpawnPosition(EM, BuildingID, UnitDef.ChkUnitID);
     int PlayerID = 0;
     if (auto* SrcPlayer = EM.GetComponent<PlayerComponent>(BuildingID))
         PlayerID = SrcPlayer->PlayerID;

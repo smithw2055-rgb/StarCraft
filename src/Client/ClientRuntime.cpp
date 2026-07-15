@@ -23,6 +23,7 @@
 
 #include <string>
 #include <sstream>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,13 @@ namespace Game::Client
 {
 namespace
 {
+    bool SelectionTraceEnabled()
+    {
+        static const bool Enabled =
+            std::getenv("STARCRAFT_DEBUG_SELECTION") != nullptr;
+        return Enabled;
+    }
+
     std::string SelectionEntityName(Core::ECS::EntityManager& Entities, int EntityID)
     {
         auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityID);
@@ -59,6 +67,9 @@ namespace
                            Core::ECS::EntityManager& Entities,
                            const std::vector<int>& SelectedIds)
     {
+        if (!SelectionTraceEnabled())
+            return;
+
         if (SelectedIds.empty())
         {
             Core::Utils::Logger::Info(

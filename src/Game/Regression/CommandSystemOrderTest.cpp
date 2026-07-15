@@ -98,6 +98,20 @@ int main()
             EM.GetComponent<Game::Components::CommandComponent>(FlightBuilding),
         "building accepts movement after LiftOff animation completion");
 
+    FlightPath.StallTimer = 1.0f;
+    FlightPath.HasLastWaypointDistance = true;
+    FlightPath.DestinationStallTimer = 9.0f;
+    FlightPath.HasLastDestinationDistance = true;
+    FlightPath.RepathFailCount = 2;
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {FlightBuilding}, {224.0f, 160.0f});
+    Require(FlightPath.StallTimer == 0.0f &&
+            !FlightPath.HasLastWaypointDistance &&
+            FlightPath.DestinationStallTimer == 0.0f &&
+            !FlightPath.HasLastDestinationDistance &&
+            FlightPath.RepathFailCount == 0,
+        "a new movement command clears all stall and reroute history");
+
     Game::Components::Order AttackMoveOrder;
     AttackMoveOrder.Type = Game::Components::OrderType::AttackMove;
     AttackMoveOrder.TargetPosition = {192.0f, 96.0f};
@@ -144,11 +158,48 @@ int main()
     Require(!EM.GetComponent<Game::Components::CommandComponent>(SiegedTank),
         "sieged tanks do not receive a move command component");
 
+    int Lurker = CreateUnit(
+        EM,
+        103,
+        2.5f,
+        {64.0f, 192.0f});
+    auto& LurkerPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(Lurker);
+    auto& LurkerBurrow =
+        EM.AddComponent<Game::Components::BurrowComponent>(Lurker);
+    LurkerBurrow.CanBurrow = true;
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {Lurker}, {192.0f, 192.0f});
+    auto* LurkerCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(Lurker);
+    Require(LurkerCommand &&
+            LurkerCommand->CurrentCommand == Game::Components::CommandType::Move &&
+            !LurkerPath.Path.empty(),
+        "surface Lurker receives a move command and movement path");
+
     int Scv = CreateUnit(
         EM,
         7,
         2.8f,
         {32.0f, 32.0f});
+
+    int Mineral = EM.CreateEntity();
+    auto& MineralResource =
+        EM.AddComponent<Game::Components::ResourceComponent>(Mineral);
+    MineralResource.Type = Game::Components::ResourceType::Minerals;
+    MineralResource.Amount = 1500;
+    const int OtherScv = CreateUnit(EM, 7, 2.8f, {32.0f, 64.0f});
+    MineralResource.ActiveGathererEntityID = Scv;
+    MineralResource.QueuedGatherers = {Scv, OtherScv};
+    auto& ScvHarvest = EM.AddComponent<Game::Components::HarvestComponent>(Scv);
+    ScvHarvest.State = Game::Components::HarvestState::Mining;
+    ScvHarvest.TargetResourceID = Mineral;
+    ScvHarvest.DesiredResourceID = Mineral;
+    ScvHarvest.QueuedAtResource = true;
+    ScvHarvest.InsideGasBuilding = true;
+    ScvHarvest.GasExitPosition = {48.0f, 32.0f};
+    auto& ScvRender = EM.AddComponent<Game::Components::RenderComponent>(Scv);
+    ScvRender.Visible = false;
 
     Game::Systems::CommandSystem::IssueMove(EM, {Scv}, {160.0f, 32.0f});
 
@@ -158,6 +209,27 @@ int main()
         "mobile units receive move commands");
     Require(ScvPath && !ScvPath->Path.empty(),
         "mobile units receive movement paths");
+    Require(ScvHarvest.State == Game::Components::HarvestState::Idle &&
+            ScvHarvest.TargetResourceID < 0 &&
+            MineralResource.ActiveGathererEntityID < 0 &&
+            MineralResource.QueuedGatherers.size() == 1 &&
+            MineralResource.QueuedGatherers.front() == OtherScv &&
+            !ScvHarvest.InsideGasBuilding && ScvRender.Visible &&
+            EM.GetComponent<Game::Components::TransformComponent>(Scv)->Position
+                    .DistanceTo({48.0f, 32.0f}) < 0.1f,
+        "a player move releases only the commanded SCV and restores it from gas");
+
+    ScvHarvest.State = Game::Components::HarvestState::MovingToResource;
+    ScvHarvest.TargetResourceID = Mineral;
+    ScvHarvest.DesiredResourceID = Mineral;
+    MineralResource.QueuedGatherers = {Scv};
+    Require(Game::Systems::CommandSystem::IssueMoveAndHasPath(
+                EM, Scv, {192.0f, 32.0f}, Mineral),
+        "an internal harvest approach move receives a path");
+    Require(ScvHarvest.State == Game::Components::HarvestState::MovingToResource &&
+            ScvHarvest.TargetResourceID == Mineral &&
+            MineralResource.QueuedGatherers.size() == 1,
+        "an internal harvest approach move preserves the worker assignment");
 
     int GroupMarineA = CreateUnit(EM, 0, 4.0f, {32.0f, 32.0f});
     int GroupMarineB = CreateUnit(EM, 0, 4.0f, {64.0f, 32.0f});
@@ -597,6 +669,76 @@ int main()
         "movement follow refresh tracks the target's latest position");
     Require(FollowPath && !FollowPath->Path.empty(),
         "movement follow refresh generates a new path to the moving target");
+
+    Core::ECS::SystemManager RepairSysMgr;
+    auto& RepairEM = RepairSysMgr.GetEntityManager();
+    Game::Map::GameMap RepairMap;
+    RepairMap.Generate(16, 16);
+    Game::Systems::CommandSystem::SetMap(&RepairMap);
+    Game::Systems::CommandSystem RepairCommands;
+    RepairCommands.Init(&RepairSysMgr);
+
+    const int RepairTarget = CreateUnit(
+        RepairEM, 106, 0.0f, {160.0f, 96.0f});
+    auto* RepairTargetUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(RepairTarget);
+    RepairTargetUnit->UnitRace = Game::Components::Race::Terran;
+    RepairTargetUnit->HitPoints = 50;
+    RepairTargetUnit->MaxHitPoints = 100;
+    auto& RepairBuilding =
+        RepairEM.AddComponent<Game::Components::BuildingComponent>(RepairTarget);
+    RepairBuilding.UnderConstruction = false;
+    auto& RepairTargetPath =
+        RepairEM.AddComponent<Game::Components::PathfindingComponent>(RepairTarget);
+    RepairTargetPath.HasCollisionBounds = true;
+    RepairTargetPath.CollisionLeft = 63;
+    RepairTargetPath.CollisionUp = 47;
+    RepairTargetPath.CollisionRight = 64;
+    RepairTargetPath.CollisionDown = 48;
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(RepairTarget).PlayerID = 0;
+
+    const int RepairScv = CreateUnit(
+        RepairEM, 7, 2.8f, {248.0f, 96.0f});
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(RepairScv).PlayerID = 0;
+    Game::Components::Order RepairOrder;
+    RepairOrder.Type = Game::Components::OrderType::Repair;
+    RepairOrder.TargetEntityID = RepairTarget;
+    RepairOrder.TargetPosition = {160.0f, 96.0f};
+    RepairOrder.PathingIgnoreEntityID = RepairTarget;
+    Game::Systems::CommandSystem::IssueOrder(
+        RepairEM, RepairScv, RepairOrder, false);
+    RepairCommands.Update(0.05f);
+    Require(RepairTargetUnit->HitPoints == 60,
+        "SCV repairs a damaged friendly Terran building from its collision edge");
+
+    RepairTargetUnit->HitPoints = 95;
+    RepairCommands.Update(0.05f);
+    const auto* RepairCommand =
+        RepairEM.GetComponent<Game::Components::CommandComponent>(RepairScv);
+    Require(RepairTargetUnit->HitPoints == RepairTargetUnit->MaxHitPoints &&
+            RepairCommand &&
+            RepairCommand->CurrentCommand == Game::Components::CommandType::Stop,
+        "repair completes at full health and releases the SCV");
+
+    const int DamagedTank = CreateUnit(
+        RepairEM, 5, 2.8f, {304.0f, 96.0f});
+    auto* DamagedTankUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(DamagedTank);
+    DamagedTankUnit->UnitRace = Game::Components::Race::Terran;
+    DamagedTankUnit->HitPoints = 80;
+    DamagedTankUnit->MaxHitPoints = 150;
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(DamagedTank).PlayerID = 0;
+    RepairOrder.TargetEntityID = DamagedTank;
+    RepairOrder.TargetPosition = {304.0f, 96.0f};
+    RepairOrder.PathingIgnoreEntityID = DamagedTank;
+    Game::Systems::CommandSystem::IssueOrder(
+        RepairEM, RepairScv, RepairOrder, false);
+    auto* RepairScvTransform =
+        RepairEM.GetComponent<Game::Components::TransformComponent>(RepairScv);
+    RepairScvTransform->Position = {280.0f, 96.0f};
+    RepairCommands.Update(0.05f);
+    Require(DamagedTankUnit->HitPoints == 90,
+        "SCV repair order supports damaged friendly Terran mechanical units");
 
     std::printf("CommandSystemOrderTest passed\n");
     return 0;

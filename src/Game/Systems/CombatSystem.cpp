@@ -4,11 +4,14 @@
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/DeathEvents.h"
+#include "Game/Systems/GeyserState.h"
 #include "Game/Components.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <vector>
 
 namespace Game::Systems
 {
@@ -23,6 +26,89 @@ namespace
 {
     constexpr float kAutoTargetLockSeconds = 2.5f;
     constexpr float kInvalidDirectAttackAutoAcquireDelay = 0.35f;
+
+    bool IsProtectedResourceEntity(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        return IsProtectedResourceNode(EM, EntityID);
+    }
+
+    bool RestoreClaimedGeyser(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        auto* Claimed = EM.GetComponent<ClaimedGeyserComponent>(EntityID);
+        auto* Resource = EM.GetComponent<ResourceComponent>(EntityID);
+        auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+        auto* Render = EM.GetComponent<RenderComponent>(EntityID);
+        auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+        if (!Claimed || !Claimed->IsClaimed || !Resource || !Unit || !Player ||
+            !Render || !Building)
+        {
+            return false;
+        }
+
+        *Unit = Claimed->OriginalUnit;
+        *Player = Claimed->OriginalPlayer;
+        *Render = Claimed->OriginalRender;
+        *Building = Claimed->OriginalBuilding;
+        if (Claimed->HadPathfinding)
+        {
+            auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+            if (!Path)
+                Path = &EM.AddComponent<PathfindingComponent>(EntityID);
+            *Path = Claimed->OriginalPathfinding;
+        }
+        if (auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID))
+            *Tree = ImageTreeComponent{};
+        if (auto* Command = EM.GetComponent<CommandComponent>(EntityID))
+        {
+            Command->CancelAll();
+            Command->TargetEntityID = -1;
+        }
+        Claimed->IsClaimed = false;
+
+        // Workers inside or queued at the destroyed gas building must be
+        // released visibly; otherwise they remain hidden in the restored raw
+        // geyser and can never receive another economy order.
+        for (int WorkerID : EM.GetEntitiesWith<HarvestComponent>())
+        {
+            auto* Harvest = EM.GetComponent<HarvestComponent>(WorkerID);
+            if (!Harvest ||
+                (Harvest->TargetResourceID != EntityID &&
+                 Harvest->DesiredResourceID != EntityID))
+            {
+                continue;
+            }
+            if (Harvest->InsideGasBuilding)
+            {
+                if (auto* WorkerTransform = EM.GetComponent<TransformComponent>(WorkerID))
+                    WorkerTransform->Position = Harvest->GasExitPosition;
+                if (auto* WorkerRender = EM.GetComponent<RenderComponent>(WorkerID))
+                    WorkerRender->Visible = true;
+            }
+            Harvest->State = HarvestState::Idle;
+            Harvest->TargetResourceID = -1;
+            Harvest->DesiredResourceID = -1;
+            Harvest->QueuedAtResource = false;
+            Harvest->InsideGasBuilding = false;
+            Harvest->MineTimer = 0.0f;
+            if (auto* WorkerCommand = EM.GetComponent<CommandComponent>(WorkerID))
+            {
+                WorkerCommand->CancelAll();
+                WorkerCommand->TargetEntityID = -1;
+            }
+            if (auto* WorkerPath = EM.GetComponent<PathfindingComponent>(WorkerID))
+            {
+                WorkerPath->Path.clear();
+                WorkerPath->PathIndex = 0;
+                WorkerPath->CurrentSpeed = 0.0f;
+                WorkerPath->TargetSpeed = 0.0f;
+                WorkerPath->CurrentVelocity = {};
+            }
+        }
+        Resource->ActiveGathererEntityID = -1;
+        Resource->QueuedGatherers.clear();
+        return true;
+    }
 
     float CollisionRadiusFromPath(const PathfindingComponent* Path, float Fallback)
     {
@@ -119,8 +205,47 @@ namespace
     {
         auto* PA = EM.GetComponent<PlayerComponent>(A);
         auto* PB = EM.GetComponent<PlayerComponent>(B);
-        return PA && PB && PA->PlayerID != PB->PlayerID;
+        return PA && PB && PA->PlayerID != PB->PlayerID &&
+               !PA->IsRescuePassive && !PB->IsRescuePassive;
     }
+}
+
+static bool IsAirTarget(Core::ECS::EntityManager& EM, int EntityID);
+
+static bool EntityHasIScriptAttack(Core::ECS::EntityManager& EM,
+                                   int EntityID,
+                                   int TargetID)
+{
+    const bool TargetAir = IsAirTarget(EM, TargetID);
+    const int AttackAnim = TargetAir
+        ? Game::IScriptAnims::Anim_AirAttkInit
+        : Game::IScriptAnims::Anim_GndAttkInit;
+    if (const auto* Render = EM.GetComponent<RenderComponent>(EntityID);
+        Render && AnimationSystem::HasIScriptAnimationForImage(
+                      (int)Render->ImageID, AttackAnim))
+    {
+        return true;
+    }
+    if (const auto* Render = EM.GetComponent<RenderComponent>(EntityID);
+        Render && Render->SubunitImageID != UINT32_MAX &&
+        AnimationSystem::HasIScriptAnimationForImage(
+            (int)Render->SubunitImageID, AttackAnim))
+    {
+        return true;
+    }
+    if (const auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID))
+    {
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (Node.Visible && !Node.UseSpriteID &&
+                AnimationSystem::HasIScriptAnimationForImage(
+                    (int)Node.ImageID, AttackAnim))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static float GetSizeDamageModifier(DamageType DmgType, UnitSize TargetSize)
@@ -206,6 +331,150 @@ static bool IsRangedAttack(const CombatComponent& Combat)
     return Combat.IsRanged || Combat.WeaponBeh != WeaponBehavior::Melee;
 }
 
+static int EngagementTargetFor(Core::ECS::EntityManager& EM, int EntityID)
+{
+    if (const auto* Cmd = EM.GetComponent<CommandComponent>(EntityID);
+        Cmd && Cmd->TargetEntityID >= 0 &&
+        (Cmd->CurrentCommand == CommandType::Attack ||
+         Cmd->CurrentCommand == CommandType::AttackMove))
+    {
+        return Cmd->TargetEntityID;
+    }
+
+    if (const auto* Combat = EM.GetComponent<CombatComponent>(EntityID))
+    {
+        if (Combat->TargetEntityID >= 0)
+            return Combat->TargetEntityID;
+        return Combat->AutoTargetEntityID;
+    }
+    return -1;
+}
+
+static bool MovesInAir(Core::ECS::EntityManager& EM, int EntityID)
+{
+    if (const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        return Path->IsAir;
+    if (const auto* Combat = EM.GetComponent<CombatComponent>(EntityID))
+        return Combat->MyElevation == Elevation::Air;
+    return false;
+}
+
+static Core::Math::Vec2 ComputeCombatFormationTarget(
+    Core::ECS::EntityManager& EM,
+    int EntityID,
+    int TargetID,
+    float RangePixels)
+{
+    const auto* SelfTrans = EM.GetComponent<TransformComponent>(EntityID);
+    const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
+    const auto* SelfCombat = EM.GetComponent<CombatComponent>(EntityID);
+    const auto* SelfPlayer = EM.GetComponent<PlayerComponent>(EntityID);
+    if (!SelfTrans || !TargetTrans || !SelfCombat || !SelfPlayer)
+        return TargetTrans ? TargetTrans->Position : Core::Math::Vec2{};
+
+    const bool SelfRanged = IsRangedAttack(*SelfCombat);
+    const bool SelfAir = MovesInAir(EM, EntityID);
+    std::vector<int> Engagers;
+    std::vector<int> RoleEngagers;
+    Core::Math::Vec2 GroupCenter;
+
+    for (int CandidateID :
+         EM.GetEntitiesWith<TransformComponent, UnitComponent,
+                            CombatComponent, PlayerComponent>())
+    {
+        const auto* CandidateUnit = EM.GetComponent<UnitComponent>(CandidateID);
+        const auto* CandidatePlayer = EM.GetComponent<PlayerComponent>(CandidateID);
+        const auto* CandidateCombat = EM.GetComponent<CombatComponent>(CandidateID);
+        const auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
+        const auto* CandidateBuilding = EM.GetComponent<BuildingComponent>(CandidateID);
+        if (!CandidateUnit || CandidateUnit->HitPoints <= 0 ||
+            !CandidatePlayer || !CandidateCombat || !CandidateTrans ||
+            CandidatePlayer->PlayerID != SelfPlayer->PlayerID ||
+            EngagementTargetFor(EM, CandidateID) != TargetID ||
+            MovesInAir(EM, CandidateID) != SelfAir ||
+            (CandidateBuilding && !CandidateBuilding->IsLifted))
+        {
+            continue;
+        }
+
+        Engagers.push_back(CandidateID);
+        GroupCenter += CandidateTrans->Position;
+        if (IsRangedAttack(*CandidateCombat) == SelfRanged)
+            RoleEngagers.push_back(CandidateID);
+    }
+
+    if (Engagers.size() < 2 || RoleEngagers.empty())
+        return TargetTrans->Position;
+
+    std::sort(Engagers.begin(), Engagers.end());
+    std::sort(RoleEngagers.begin(), RoleEngagers.end());
+    GroupCenter = GroupCenter / (float)Engagers.size();
+
+    Core::Math::Vec2 Forward = TargetTrans->Position - GroupCenter;
+    if (Forward.LengthSq() <= 0.001f)
+        Forward = TargetTrans->Position - SelfTrans->Position;
+    if (Forward.LengthSq() <= 0.001f)
+        Forward = {1.0f, 0.0f};
+    else
+        Forward = Forward.Normalized();
+    const Core::Math::Vec2 Lateral{-Forward.Y, Forward.X};
+
+    const auto SelfIt =
+        std::find(RoleEngagers.begin(), RoleEngagers.end(), EntityID);
+    if (SelfIt == RoleEngagers.end())
+        return TargetTrans->Position;
+    const int RoleIndex = (int)std::distance(RoleEngagers.begin(), SelfIt);
+    const int Columns = std::min(5, (int)RoleEngagers.size());
+    const int Row = RoleIndex / Columns;
+    const int Column = RoleIndex % Columns;
+    const int RowBegin = Row * Columns;
+    const int RowCount = std::min(
+        Columns, (int)RoleEngagers.size() - RowBegin);
+
+    float SlotSpacing = 28.0f;
+    for (int CandidateID : RoleEngagers)
+        SlotSpacing = std::max(
+            SlotSpacing, CombatCollisionRadius(EM, CandidateID) * 2.0f + 8.0f);
+    const float LateralOffset =
+        ((float)Column - (float)(RowCount - 1) * 0.5f) * SlotSpacing;
+
+    const float SelfRadius = CombatCollisionRadius(EM, EntityID);
+    const float TargetRadius = CombatCollisionRadius(EM, TargetID);
+    const float RoleDepth = SelfRanged
+        ? std::max(32.0f, RangePixels * 0.72f)
+        : 6.0f;
+    const float StandOff = TargetRadius + SelfRadius + RoleDepth +
+                           (float)Row * SlotSpacing;
+    return TargetTrans->Position - Forward * StandOff +
+           Lateral * LateralOffset;
+}
+
+static void IssueCombatApproachPreservingCommand(
+    Core::ECS::EntityManager& EM,
+    int EntityID,
+    int TargetID,
+    float RangePixels,
+    CommandType Command,
+    const Core::Math::Vec2& CommandTarget,
+    int PreserveTargetEntity)
+{
+    const Core::Math::Vec2 ApproachTarget = ComputeCombatFormationTarget(
+        EM, EntityID, TargetID, RangePixels);
+    if (const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        Path && Path->PathIndex < (int)Path->Path.size())
+    {
+        Core::Math::Vec2 ExistingTarget = Path->RequestedDestination;
+        if (ExistingTarget.LengthSq() <= 0.001f && !Path->Path.empty())
+            ExistingTarget = Path->Path.back();
+        if (ExistingTarget.DistanceTo(ApproachTarget) <= 8.0f)
+            return;
+    }
+
+    IssueMovePreservingCommand(EM, EntityID, ApproachTarget,
+                               Command, CommandTarget,
+                               PreserveTargetEntity, TargetID);
+}
+
 static bool IsProtectedByDarkSwarm(Core::ECS::EntityManager& EM, int TargetID)
 {
     if (IsAirTarget(EM, TargetID))
@@ -271,7 +540,7 @@ static bool CanAttackTarget(const CombatComponent& Combat,
 {
     if (!EM.IsAlive(TargetID))
         return false;
-    if (EM.GetComponent<ResourceComponent>(TargetID))
+    if (IsProtectedResourceEntity(EM, TargetID))
         return false;
     const bool TargetAir = IsAirTarget(EM, TargetID);
     return TargetAir ? (Combat.CanTargetAir && Combat.AirDamage > 0)
@@ -413,7 +682,7 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
         !TargetTrans ||
         !TargetUnit ||
         TargetUnit->HitPoints <= 0 ||
-        EM.GetComponent<ResourceComponent>(TargetEntityID))
+        IsProtectedResourceEntity(EM, TargetEntityID))
     {
         ClearDirectAttackOrderForInvalidTarget(EM, Attackers, TargetEntityID);
         return;
@@ -464,7 +733,8 @@ bool CombatSystem::AreEnemies(int A, int B, Core::ECS::EntityManager& EM)
     auto* PA = EM.GetComponent<PlayerComponent>(A);
     auto* PB = EM.GetComponent<PlayerComponent>(B);
     if (!PA || !PB) return false;
-    return PA->PlayerID != PB->PlayerID;
+    return PA->PlayerID != PB->PlayerID &&
+           !PA->IsRescuePassive && !PB->IsRescuePassive;
 }
 
 int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange)
@@ -485,7 +755,7 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
         auto* TargetUnit = EM.GetComponent<UnitComponent>(ID);
         if (!TargetTrans || !TargetUnit) continue;
         if (TargetUnit->HitPoints <= 0) continue;
-        if (EM.GetComponent<ResourceComponent>(ID)) continue;
+        if (IsProtectedResourceEntity(EM, ID)) continue;
         auto* MyCombat = EM.GetComponent<CombatComponent>(EntityID);
         if (MyCombat && !CanAttackTarget(*MyCombat, EM, ID)) continue;
 
@@ -565,7 +835,7 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
     if (!EM.IsAlive(TargetID) || !TargetUnit || TargetUnit->HitPoints <= 0) return;
     if (BaseDamage <= 0)
         return;
-    if (EM.GetComponent<ResourceComponent>(TargetID))
+    if (IsProtectedResourceEntity(EM, TargetID))
         return;
     if (IsInvulnerableByStatus(EM, TargetID))
         return;
@@ -629,11 +899,14 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
     {
         TargetUnit->HitPoints = 0;
         RecordUnitDeath(EM, TargetID, AttackerID, true);
-        EM.DestroyEntity(TargetID);
+        const bool RestoredGeyser = RestoreClaimedGeyser(EM, TargetID);
+        if (!RestoredGeyser)
+            EM.DestroyEntity(TargetID);
         ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
         Core::Utils::Logger::Info("CombatSystem",
             "Entity " + std::to_string(TargetID) + " destroyed by " +
-            std::to_string(AttackerID));
+            std::to_string(AttackerID) +
+            (RestoredGeyser ? "; restored vespene geyser" : ""));
     }
 }
 
@@ -664,7 +937,7 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
             ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
             return false;
         }
-        if (EM.GetComponent<ResourceComponent>(TargetID))
+        if (IsProtectedResourceEntity(EM, TargetID))
         {
             ClearCombatTargetForInvalidTarget(EM, AttackerID, TargetID);
             return false;
@@ -707,14 +980,10 @@ bool CombatSystem::BeginOrResolveAttack(Core::ECS::EntityManager& EM,
                                         float RangePixels)
 {
     auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
-    auto* Render = EM.GetComponent<RenderComponent>(EntityID);
     if (!Combat)
         return false;
 
-    const bool HasIScriptAttack =
-        Render &&
-        (AnimationSystem::HasIScriptAnimationForImage((int)Render->ImageID, Game::IScriptAnims::Anim_GndAttkInit) ||
-         AnimationSystem::HasIScriptAnimationForImage((int)Render->ImageID, Game::IScriptAnims::Anim_AirAttkInit));
+    const bool HasIScriptAttack = EntityHasIScriptAttack(EM, EntityID, TargetID);
 
     if (HasIScriptAttack)
     {
@@ -931,10 +1200,12 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
             const Core::Math::Vec2 AttackMoveDestination = Cmd->TargetPosition;
             Combat->TargetEntityID = TargetID;
             Cmd->TargetEntityID = TargetID;
-            if (auto* TTrans = EM.GetComponent<TransformComponent>(TargetID))
-                IssueMovePreservingCommand(EM, EntityID, TTrans->Position,
-                                           CommandType::AttackMove, AttackMoveDestination, TargetID,
-                                           TargetID);
+            if (EM.GetComponent<TransformComponent>(TargetID))
+            {
+                IssueCombatApproachPreservingCommand(
+                    EM, EntityID, TargetID, BaseRangePixels,
+                    CommandType::AttackMove, AttackMoveDestination, TargetID);
+            }
         }
     }
 
@@ -988,8 +1259,9 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         const CommandType PreserveCommand = Cmd ? Cmd->CurrentCommand : CommandType::Attack;
         const Core::Math::Vec2 PreserveTarget = Cmd ? Cmd->TargetPosition : TargetTrans->Position;
         const int PreserveTargetEntity = Cmd ? Cmd->TargetEntityID : TargetID;
-        IssueMovePreservingCommand(EM, EntityID, TargetTrans->Position,
-                                   PreserveCommand, PreserveTarget, PreserveTargetEntity, TargetID);
+        IssueCombatApproachPreservingCommand(
+            EM, EntityID, TargetID, RangePixels,
+            PreserveCommand, PreserveTarget, PreserveTargetEntity);
         return;
     }
 

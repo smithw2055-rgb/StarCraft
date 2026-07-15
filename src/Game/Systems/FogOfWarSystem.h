@@ -47,7 +47,9 @@ public:
     // Last-seen snapshots for ghost rendering
     const std::vector<LastSeenSnapshot>& GetLastSeenSnapshots() const { return mLastSeen; }
     void SetAlliance(int PlayerA, int PlayerB, bool Allied);
+    bool AreAllied(int PlayerA, int PlayerB) const;
     void SetLocalPlayerID(int PlayerID) { mLocalPlayerID = PlayerID; }
+    void SetObserverRevealAll(bool Enabled) { mObserverRevealAll = Enabled; }
 
     int GetWidth() const { return mMapWidth; }
     int GetHeight() const { return mMapHeight; }
@@ -76,6 +78,7 @@ private:
 
     int mMaxPlayers = 8;
     int mLocalPlayerID = 0;
+    bool mObserverRevealAll = false;
 };
 
 } // namespace Game::Systems

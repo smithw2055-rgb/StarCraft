@@ -22,6 +22,14 @@ namespace Game::Systems { class FogOfWarSystem; }
 namespace Game::Client::GameLoop
 {
 
+inline int ResolveLocalPlayerID(const Game::Trigger::SCRTriggerData& ScriptData)
+{
+    for (int PlayerID = 0; PlayerID < 8; ++PlayerID)
+        if (ScriptData.Players[(size_t)PlayerID].Owner == 6)
+            return PlayerID;
+    return 0;
+}
+
 struct GameSession
 {
     Core::ECS::EntityManager& Entities()
@@ -47,6 +55,20 @@ struct GameSession
     const GameMap& GetMapData() const
     {
         return MapData;
+    }
+
+    void SyncCreepPresentation()
+    {
+        const size_t TileCount = (size_t)MapData.Width * (size_t)MapData.Height;
+        MapData.Creep.assign(TileCount, 0);
+        for (int Y = 0; Y < MapData.Height; ++Y)
+        {
+            for (int X = 0; X < MapData.Width; ++X)
+            {
+                if (EcsMap.IsInBounds(X, Y) && EcsMap.GetTile(X, Y).HasCreep)
+                    MapData.Creep[(size_t)Y * (size_t)MapData.Width + (size_t)X] = 1;
+            }
+        }
     }
 
     Game::Map::GameMap& MutableEcsMap()
@@ -81,10 +103,7 @@ struct GameSession
 
     int GetLocalPlayerID() const
     {
-        for (int PlayerID = 0; PlayerID < 8; ++PlayerID)
-            if (ScrTriggerData.Players[(size_t)PlayerID].Owner == 6)
-                return PlayerID;
-        return 0;
+        return ResolveLocalPlayerID(ScrTriggerData);
     }
 
     void ConfigureSyntheticSkirmishMap()
@@ -103,6 +122,7 @@ struct GameSession
             }
         }
         MapData.Walkable.assign((size_t)MapData.Width * MapData.Height, 1);
+        MapData.Creep.assign((size_t)MapData.Width * MapData.Height, 0);
         MapData.StartLocations.clear();
         MapData.StartLocations.push_back({16, 18, 0});
         MapData.StartLocations.push_back({48, 46, 1});

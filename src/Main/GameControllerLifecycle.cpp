@@ -1,5 +1,7 @@
 #include "Main/GameController.h"
 
+// Keep this translation unit tied to the complete GameController runtime layout.
+
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
 #include "Main/GameClientLifecycle.h"

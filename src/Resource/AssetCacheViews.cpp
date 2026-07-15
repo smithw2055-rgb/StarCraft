@@ -81,6 +81,12 @@ const TilesetAtlas* TilesetAssetCacheView::GetTilesetAtlas(const std::string& Ti
     return mCache ? mCache->GetTilesetAtlas(TilesetName) : nullptr;
 }
 
+const std::vector<TilesetCreepFrame>* TilesetAssetCacheView::GetTilesetCreepFrames(
+    const std::string& TilesetName) const
+{
+    return mCache ? mCache->GetTilesetCreepFrames(TilesetName) : nullptr;
+}
+
 const TilesetData* TilesetAssetCacheView::GetTilesetData(const std::string& TilesetName) const
 {
     return mCache ? mCache->GetTilesetData(TilesetName) : nullptr;

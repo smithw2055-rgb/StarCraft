@@ -14,7 +14,10 @@ namespace Core::ECS
 
 using EntityID = int;
 constexpr EntityID InvalidEntity = 0;
-constexpr size_t MaxEntities = 10000;
+// Long-running melee matches create many short-lived projectile/effect entities.
+// Entity IDs are currently monotonic, so the component pools must cover the
+// whole session rather than only the peak number of simultaneously alive units.
+constexpr size_t MaxEntities = 100000;
 constexpr size_t MaxComponents = 64;
 
 using ComponentMask = std::bitset<MaxComponents>;

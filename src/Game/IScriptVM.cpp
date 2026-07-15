@@ -344,6 +344,8 @@ void IScriptVM::LoadScript(int AnimationID, const std::vector<int>* ProgramData,
     mSprite.PC = EntryPC;
     mCurrentAnim = AnimationID;
     mSprite.OrderDone = false;
+    mSprite.HasWarpOverlay = false;
+    mSprite.WarpOverlayFrame = 0;
     mWaitRemaining = 0;
     mEvents.clear();
     mCallStack.clear();
@@ -460,20 +462,20 @@ void IScriptVM::RegisterDefaultOpcodes()
     };
     mOpcodeHandlers[Opc_PlayFramTile] = mOpcodeHandlers[Opc_PlayFram];
     mOpcodeHandlers[Opc_SetHorPos] = [](IScriptVM& VM) {
-        VM.mSprite.HorPos = VM.PeekArg();
+        VM.mSprite.HorPos = (int)(int8_t)VM.PeekArg();
         VM.mSprite.HorPosSet = true;
         VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_SetVertPos] = [](IScriptVM& VM) {
-        VM.mSprite.VertPos = VM.PeekArg();
+        VM.mSprite.VertPos = (int)(int8_t)VM.PeekArg();
         VM.mSprite.VertPosSet = true;
         VM.AdvanceArgs(1);
         return false;
     };
     mOpcodeHandlers[Opc_SetPos] = [](IScriptVM& VM) {
-        VM.mSprite.HorPos = VM.PeekArg(1);
-        VM.mSprite.VertPos = VM.PeekArg(2);
+        VM.mSprite.HorPos = (int)(int8_t)VM.PeekArg(1);
+        VM.mSprite.VertPos = (int)(int8_t)VM.PeekArg(2);
         VM.mSprite.HorPosSet = true;
         VM.mSprite.VertPosSet = true;
         VM.AdvanceArgs(2);
@@ -666,6 +668,7 @@ void IScriptVM::RegisterDefaultOpcodes()
     mOpcodeHandlers[Opc_WarpOverlay] = [](IScriptVM& VM) {
         const int PackedModifier = VM.PeekArg(1);
         VM.mSprite.HasWarpOverlay = true;
+        VM.mSprite.WarpOverlayFrame = PackedModifier & 0xff;
         VM.Emit(IScriptEventType::WarpOverlay,
                 PackedModifier & 0xff,
                 (PackedModifier >> 8) & 0xff);

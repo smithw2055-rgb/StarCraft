@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include "Core/ECS/SystemManager.h"
@@ -69,6 +70,14 @@ private:
     float mCreepInterval = 1.0f;
     float mCreepRegressionTimer = 0.0f;
     bool mGridInitialized = false;
+
+    struct CreepSourceState
+    {
+        float SpreadTimer = 0.0f;
+        uint32_t SelectionSequence = 0;
+        bool Frozen = false;
+    };
+    std::unordered_map<int, CreepSourceState> mCreepSourceStates;
 };
 
 } // namespace Game::Systems

@@ -76,6 +76,7 @@ struct GameMap
     int Height = 0;
     std::vector<uint16_t> MegaTileIds;   // 16-bit megatile index per tile
     std::vector<uint8_t> Walkable;       // 1 byte per tile
+    std::vector<uint8_t> Creep;          // live gameplay creep mask per tile
     std::vector<StartLocation> StartLocations;
     std::string TilesetName;
 };

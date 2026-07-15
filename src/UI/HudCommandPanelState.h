@@ -94,6 +94,7 @@ enum class ActionKind : uint8_t
     Train,
     Research,
     Upgrade,
+    MorphBuilding,
     UseTech,
     Cancel,
     OpenSubmenu,
@@ -111,7 +112,28 @@ enum class HudCommandId : uint8_t
     Follow,
     Harvest,
     LiftOff,
-    Land
+    Land,
+    Rally,
+    Scan,
+    Load,
+    UnloadAll,
+    Siege,
+    Unsiege,
+    RechargeShields,
+    Burrow,
+    PsionicStorm,
+    YamatoGun,
+    Lockdown,
+    EMPShockwave,
+    Hallucination,
+    StasisField,
+    Recall,
+    DarkSwarm,
+    Plague,
+    Ensnare,
+    SpawnBroodling,
+    Parasite,
+    Consume
 };
 
 enum class PendingTargetMode : uint8_t
@@ -124,7 +146,24 @@ enum class PendingTargetMode : uint8_t
     AttackMove,
     Patrol,
     Follow,
-    Land
+    Land,
+    Rally,
+    Scan,
+    Load,
+    RechargeShields,
+    PsionicStorm,
+    YamatoGun,
+    Lockdown,
+    EMPShockwave,
+    Hallucination,
+    StasisField,
+    Recall,
+    DarkSwarm,
+    Plague,
+    Ensnare,
+    SpawnBroodling,
+    Parasite,
+    Consume
 };
 
 enum class HudVisualId : uint8_t
@@ -132,7 +171,8 @@ enum class HudVisualId : uint8_t
     None,
     BasicBuild,
     AdvancedBuild,
-    Back
+    Back,
+    Cancel
 };
 
 enum class HudPanelCategory : uint8_t
@@ -183,6 +223,8 @@ enum PanelPage : int
     PageZergDroneBuild2,
     PageZergUnitCommands,
     PageZergHatchery,
+    PageZergHatcheryCommands,
+    PageZergCreepColony,
     PageZergSpawningPool,
     PageZergEvolutionChamber,
     PageZergHydraliskDen,
@@ -207,7 +249,8 @@ enum PanelPage : int
     PageProtossRoboticsSupportBay,
     PageProtossFleetBeacon,
     PageProtossArbiterTribunal,
-    PageProtossObservatory
+    PageProtossObservatory,
+    PageProtossShieldBattery
 };
 
 struct CmdButtonDef

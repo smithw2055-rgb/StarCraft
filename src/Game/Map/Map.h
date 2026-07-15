@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <array>
 
 #include "Game/Components.h"
 #include "Core/Math/Vec2.h"
@@ -27,6 +28,8 @@ struct Tile
     ResourceType Resource = ResourceType::None;
     int ResourceAmount = 0;
     uint16_t MegaTileID = 0;
+    uint8_t GroundHeight = 0;
+    std::array<uint8_t, 16> SubtileGroundHeights{};
 };
 
 struct StartLocationInfo
@@ -48,6 +51,11 @@ public:
     bool IsWalkable(int X, int Y) const;
     bool IsBuildable(int X, int Y) const;
     bool IsInBounds(int X, int Y) const;
+    int GetGroundHeight(int X, int Y) const;
+    int GetGroundHeightAtWorld(const Core::Math::Vec2& WorldPos) const;
+    bool CanTraverseGround(int FromX, int FromY, int ToX, int ToY) const;
+    bool CanTraverseGround(const Core::Math::Vec2& From,
+                           const Core::Math::Vec2& To) const;
 
     int GetWidth() const { return mWidth; }
     int GetHeight() const { return mHeight; }

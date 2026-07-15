@@ -10,9 +10,12 @@
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
+#include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace Game::Systems
@@ -22,6 +25,14 @@ using namespace Game::Components;
 
 const Game::Map::GameMap* gCmdMap = nullptr;
 static Game::Pathfinding::RegionPathfinder sRegionPathfinder;
+static CommandSystem::ImageIDResolver sCommandImageResolver;
+static CommandSystem::ImageIDResolver sCommandSubunitImageResolver;
+
+static bool PathingDebugEnabled()
+{
+    const char* Value = std::getenv("STARCRAFT_DEBUG_PATHING");
+    return Value && Value[0] != '\0' && Value[0] != '0';
+}
 
 void CommandSystem::SetMap(const Game::Map::GameMap* Map)
 {
@@ -45,6 +56,16 @@ void CommandSystem::SetMap(const Game::Map::GameMap* Map)
     }
 }
 
+void CommandSystem::SetImageResolver(ImageIDResolver Resolver)
+{
+    sCommandImageResolver = std::move(Resolver);
+}
+
+void CommandSystem::SetSubunitImageResolver(ImageIDResolver Resolver)
+{
+    sCommandSubunitImageResolver = std::move(Resolver);
+}
+
 static bool ShouldAutoAttackOnGuard(const Components::CombatComponent& Combat)
 {
     return Combat.GroundDamage > 0 || Combat.AirDamage > 0;
@@ -56,7 +77,8 @@ static bool IsMovementOrder(OrderType Type)
            Type == OrderType::AttackMove ||
            Type == OrderType::Patrol ||
            Type == OrderType::Follow ||
-           Type == OrderType::Guard;
+           Type == OrderType::Guard ||
+           Type == OrderType::Repair;
 }
 
 static bool IsGroupPositionOrder(OrderType Type)
@@ -376,6 +398,8 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     Path->PathIndex = 0;
     Path->StallTimer = 0.0f;
     Path->HasLastWaypointDistance = false;
+    Path->DestinationStallTimer = 0.0f;
+    Path->HasLastDestinationDistance = false;
     Path->RequestedDestination = InOrder.TargetPosition;
     Path->RequestedTargetEntityID = InOrder.TargetEntityID;
     Path->RequestedIgnoreEntityID = InOrder.PathingIgnoreEntityID;
@@ -397,6 +421,11 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         Path->CurrentSpeed = 0.0f;
         Path->TargetSpeed = 0.0f;
         Path->CurrentVelocity = {0.0f, 0.0f};
+        if (PathingDebugEnabled())
+            Core::Utils::Logger::Info("Pathing",
+                "order suppressed entity=" + std::to_string(EntityID) +
+                " target=" + std::to_string((int)InOrder.TargetPosition.X) + "," +
+                    std::to_string((int)InOrder.TargetPosition.Y));
         return;
     }
 
@@ -451,6 +480,23 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
             }
             if (Result.Found && !Result.Waypoints.empty())
                 Path->Path = std::move(Result.Waypoints);
+
+            if (PathingDebugEnabled())
+            {
+                const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+                Core::Utils::Logger::Info("Pathing",
+                    "order entity=" + std::to_string(EntityID) +
+                    " unit=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
+                    " start=" + std::to_string((int)Trans->Position.X) + "," +
+                        std::to_string((int)Trans->Position.Y) +
+                    " target=" + std::to_string((int)InOrder.TargetPosition.X) + "," +
+                        std::to_string((int)InOrder.TargetPosition.Y) +
+                    " stage=" + std::to_string((int)StageTarget.X) + "," +
+                        std::to_string((int)StageTarget.Y) +
+                    " clearance=" + std::to_string(TerrainClearanceForPath(*Path)) +
+                    " found=" + std::to_string(Result.Found ? 1 : 0) +
+                    " nodes=" + std::to_string(Path->Path.size()));
+            }
         }
         else
         {
@@ -461,6 +507,54 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     {
         Path->Path.push_back(InOrder.TargetPosition);
     }
+}
+
+static float DistanceToRepairFootprint(Core::ECS::EntityManager& EM,
+                                       const Core::Math::Vec2& WorkerPosition,
+                                       Core::ECS::EntityID TargetEntityID)
+{
+    const auto* TargetTransform = EM.GetComponent<TransformComponent>(TargetEntityID);
+    if (!TargetTransform)
+        return std::numeric_limits<float>::max();
+
+    float Left = 48.0f;
+    float Up = 32.0f;
+    float Right = 48.0f;
+    float Down = 32.0f;
+    if (const auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetEntityID))
+    {
+        if (TargetPath->HasCollisionBounds)
+        {
+            Left = (float)TargetPath->CollisionLeft;
+            Up = (float)TargetPath->CollisionUp;
+            Right = (float)TargetPath->CollisionRight + 1.0f;
+            Down = (float)TargetPath->CollisionDown + 1.0f;
+        }
+        else if (TargetPath->CollisionRadius > 0)
+        {
+            Left = Up = Right = Down = (float)TargetPath->CollisionRadius;
+        }
+    }
+
+    const Core::Math::Vec2 Delta = WorkerPosition - TargetTransform->Position;
+    const Core::Math::Vec2 Nearest{
+        TargetTransform->Position.X + std::clamp(Delta.X, -Left, Right),
+        TargetTransform->Position.Y + std::clamp(Delta.Y, -Up, Down)
+    };
+    return WorkerPosition.DistanceTo(Nearest);
+}
+
+static bool IsTerranRepairableMechanicalUnit(const UnitComponent& Unit)
+{
+    if (Unit.UnitRace != Race::Terran)
+        return false;
+    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit.ChkUnitID);
+    if (DefID < 0)
+        return false;
+    const auto Def = Game::Races::GetUnitDefByID(DefID);
+    return !Def.IsBuilding && Def.Name != "SCV" && Def.Name != "Marine" &&
+           Def.Name != "Firebat" && Def.Name != "Medic" &&
+           Def.Name != "Ghost";
 }
 
 void CommandSystem::Update(float DeltaTime)
@@ -552,50 +646,54 @@ void CommandSystem::Update(float DeltaTime)
 
             case OrderType::Repair:
             {
-                // Repair target: move near friendly mechanical unit/building
+                bool ContinueRepair = false;
                 if (Order->TargetEntityID >= 0)
                 {
-                    auto* TargetTrans = EM.GetComponent<TransformComponent>(Order->TargetEntityID);
                     auto* TargetUnit = EM.GetComponent<UnitComponent>(Order->TargetEntityID);
+                    auto* TargetBuilding = EM.GetComponent<BuildingComponent>(Order->TargetEntityID);
                     auto* TargetPlayer = EM.GetComponent<PlayerComponent>(Order->TargetEntityID);
                     auto* MyPlayer = EM.GetComponent<PlayerComponent>(ID);
+                    auto* MyUnit = EM.GetComponent<UnitComponent>(ID);
+                    auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
 
-                    if (TargetTrans && TargetUnit && TargetPlayer && MyPlayer &&
+                    const bool RepairableTarget = TargetUnit &&
+                        ((TargetBuilding && !TargetBuilding->UnderConstruction) ||
+                         (!TargetBuilding &&
+                          IsTerranRepairableMechanicalUnit(*TargetUnit)));
+                    if (RepairableTarget && TargetPlayer && MyPlayer &&
+                        MyUnit && MyUnit->ChkUnitID == 7 && MyTrans &&
                         TargetPlayer->PlayerID == MyPlayer->PlayerID &&
+                        TargetUnit->UnitRace == Components::Race::Terran &&
                         TargetUnit->HitPoints > 0 &&
                         TargetUnit->HitPoints < TargetUnit->MaxHitPoints)
                     {
-                        auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
-                        if (MyTrans)
+                        ContinueRepair = true;
+                        const auto* MyPath = EM.GetComponent<PathfindingComponent>(ID);
+                        const float WorkerRadius = MyPath
+                            ? (float)std::max(4, MyPath->CollisionRadius)
+                            : 16.0f;
+                        const float Distance = DistanceToRepairFootprint(
+                            EM, MyTrans->Position, Order->TargetEntityID);
+                        if (Distance <= WorkerRadius + 12.0f)
                         {
-                            float D = MyTrans->Position.DistanceTo(TargetTrans->Position);
-                            if (D > 48.0f)
+                            if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
                             {
-                                // Move toward repair target
-                                auto* Path = EM.GetComponent<PathfindingComponent>(ID);
-                                if (!Path)
-                                    Path = &EM.AddComponent<PathfindingComponent>(ID);
                                 Path->Path.clear();
                                 Path->PathIndex = 0;
-
-                                auto Result = Game::Pathfinding::AStar::FindPath(
-                                    *gCmdMap, MyTrans->Position, TargetTrans->Position,
-                                    1000, TerrainClearanceForPath(*Path));
-                                if (Result.Found && !Result.Waypoints.empty())
-                                    Path->Path = std::move(Result.Waypoints);
-                                else
-                                    Path->Path.push_back(TargetTrans->Position);
+                                Path->CurrentSpeed = 0.0f;
+                                Path->TargetSpeed = 0.0f;
+                                Path->CurrentVelocity = {0.0f, 0.0f};
                             }
-                            else
-                            {
-                                // In range: repair
-                                int RepairAmount = std::min(10, TargetUnit->MaxHitPoints - TargetUnit->HitPoints);
-                                TargetUnit->HitPoints = std::min(TargetUnit->MaxHitPoints,
-                                    TargetUnit->HitPoints + RepairAmount);
-                            }
+                            const int RepairAmount = std::min(
+                                10, TargetUnit->MaxHitPoints - TargetUnit->HitPoints);
+                            TargetUnit->HitPoints += RepairAmount;
+                            if (TargetUnit->HitPoints >= TargetUnit->MaxHitPoints)
+                                ContinueRepair = false;
                         }
                     }
                 }
+                if (!ContinueRepair)
+                    AdvanceQueue(EM, ID);
                 break;
             }
 
@@ -837,6 +935,9 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
                                const Core::Math::Vec2& Target,
                                int PathingIgnoreEntityID)
 {
+    for (Core::ECS::EntityID EntityID : Entities)
+        InterruptHarvest(EM, EntityID);
+
     Order MoveOrder;
     MoveOrder.Type = OrderType::Move;
     MoveOrder.TargetPosition = Target;
@@ -844,12 +945,59 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
     IssueOrder(EM, Entities, MoveOrder, false);
 }
 
+void CommandSystem::InterruptHarvest(Core::ECS::EntityManager& EM,
+                                     Core::ECS::EntityID EntityID)
+{
+    auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+    if (!Harvest ||
+        (Harvest->State == HarvestState::Idle &&
+         Harvest->TargetResourceID < 0 && Harvest->DesiredResourceID < 0))
+        return;
+
+    const auto ReleaseFromResource = [&](int ResourceID)
+    {
+        auto* Resource = EM.GetComponent<ResourceComponent>(ResourceID);
+        if (!Resource)
+            return;
+        if (Resource->ActiveGathererEntityID == EntityID)
+            Resource->ActiveGathererEntityID = -1;
+        Resource->QueuedGatherers.erase(
+            std::remove(Resource->QueuedGatherers.begin(),
+                        Resource->QueuedGatherers.end(), EntityID),
+            Resource->QueuedGatherers.end());
+    };
+
+    ReleaseFromResource(Harvest->TargetResourceID);
+    if (Harvest->DesiredResourceID != Harvest->TargetResourceID)
+        ReleaseFromResource(Harvest->DesiredResourceID);
+
+    if (Harvest->InsideGasBuilding)
+    {
+        if (auto* Transform = EM.GetComponent<TransformComponent>(EntityID))
+            Transform->Position = Harvest->GasExitPosition;
+        if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
+            Render->Visible = true;
+        Harvest->InsideGasBuilding = false;
+    }
+
+    Harvest->State = HarvestState::Idle;
+    Harvest->MineTimer = 0.0f;
+    Harvest->TargetResourceID = -1;
+    Harvest->DesiredResourceID = -1;
+    Harvest->ReturnBuildingID = -1;
+    Harvest->QueuedAtResource = false;
+}
+
 bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
                                         const Core::Math::Vec2& Target,
                                         int PathingIgnoreEntityID)
 {
-    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
+    Order MoveOrder;
+    MoveOrder.Type = OrderType::Move;
+    MoveOrder.TargetPosition = Target;
+    MoveOrder.PathingIgnoreEntityID = PathingIgnoreEntityID;
+    IssueOrder(EM, EntityID, MoveOrder, false);
 
     if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
         return !Path->Path.empty();
@@ -903,6 +1051,94 @@ void CommandSystem::SetRallyPoint(Core::ECS::EntityManager& EM,
         Cmd = &EM.AddComponent<CommandComponent>(EntityID);
     Cmd->RallyPoint = Point;
     Cmd->HasRallyPoint = true;
+}
+
+bool CommandSystem::CanSetSiegeMode(Core::ECS::EntityManager& EM,
+                                    Core::ECS::EntityID EntityID,
+                                    bool Siege)
+{
+    const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+    if (!Unit || !Player || Unit->HitPoints <= 0)
+        return false;
+    if (const auto* Transition = EM.GetComponent<SiegeTransitionComponent>(EntityID);
+        Transition && Transition->Active)
+    {
+        return false;
+    }
+
+    if (Siege)
+    {
+        return Unit->ChkUnitID == 5 &&
+               UpgradeSystem::HasResearch(Player->PlayerID, ResearchId::Terran_SiegeMode);
+    }
+    return Unit->ChkUnitID == 30;
+}
+
+bool CommandSystem::SetSiegeMode(Core::ECS::EntityManager& EM,
+                                 Core::ECS::EntityID EntityID,
+                                 bool Siege)
+{
+    if (!CanSetSiegeMode(EM, EntityID, Siege))
+        return false;
+
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit)
+        return false;
+
+    const auto TankDef = Game::Races::GetUnitDefByName("SiegeTank");
+    const int TargetChkUnitID = Siege ? 30 : TankDef.ChkUnitID;
+    auto* Transition = EM.GetComponent<SiegeTransitionComponent>(EntityID);
+    if (!Transition)
+        Transition = &EM.AddComponent<SiegeTransitionComponent>(EntityID);
+    *Transition = SiegeTransitionComponent{};
+    Transition->Active = true;
+    Transition->TargetSieged = Siege;
+    Transition->TargetChkUnitID = TargetChkUnitID;
+    Transition->TargetSpeed = Siege ? 0.0f : TankDef.Speed;
+    Transition->TargetImageID = sCommandImageResolver
+        ? sCommandImageResolver(TargetChkUnitID)
+        : static_cast<uint32_t>(TargetChkUnitID);
+    Transition->TargetSubunitImageID = sCommandSubunitImageResolver
+        ? sCommandSubunitImageResolver(TargetChkUnitID)
+        : std::numeric_limits<uint32_t>::max();
+    Unit->Speed = 0.0f;
+
+    if (auto* Combat = EM.GetComponent<CombatComponent>(EntityID))
+    {
+        Transition->TargetCombat = *Combat;
+        Game::Races::ApplyCombatDefinition(Transition->TargetCombat, TankDef, false);
+        if (Siege)
+        {
+            Transition->TargetCombat.GroundDamage = 70;
+            Transition->TargetCombat.AttackRange = 12.0f;
+            Transition->TargetCombat.Splash = SplashType::Radial;
+            Transition->TargetCombat.SplashRadius = 2.0f;
+            Transition->TargetCombat.IsRanged = true;
+            Transition->TargetCombat.CanTargetGround = true;
+        }
+        Combat->PendingAttackFrame = false;
+        Combat->PendingAttackTargetEntityID = -1;
+        Combat->CanTargetGround = false;
+        Combat->CanTargetAir = false;
+    }
+
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+    {
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->TargetSpeed = 0.0f;
+        Path->CurrentVelocity = {};
+    }
+    if (auto* Command = EM.GetComponent<CommandComponent>(EntityID))
+    {
+        Command->CancelAll();
+        Command->CommandQueue.clear();
+        Command->CurrentCommand = CommandType::Stop;
+        Command->TargetEntityID = -1;
+    }
+    return true;
 }
 
 void CommandSystem::AdvanceQueue(Core::ECS::EntityManager& EM,

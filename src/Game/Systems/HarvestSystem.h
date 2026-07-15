@@ -44,10 +44,17 @@ public:
                              const std::vector<int>& Units,
                              int TargetResourceID);
 
+    // A lifted Command Center is not a valid return depot. Workers whose
+    // automatic harvest loop stopped only because no depot was available keep
+    // their desired resource, so landing can resume those nearby loops without
+    // overriding an explicit player Stop/Move command.
+    static int ResumeNearbyHarvestersForDepot(Core::ECS::EntityManager& EM,
+                                               int DepotID);
+
 private:
     void ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float DeltaTime);
-    int FindNearestDepot(Core::ECS::EntityManager& EM, int HarvesterID,
-                         Game::Components::ResourceType Type);
+    static int FindNearestDepot(Core::ECS::EntityManager& EM, int HarvesterID,
+                                Game::Components::ResourceType Type);
 
     Core::ECS::SystemManager& mSystemMgr;
 };

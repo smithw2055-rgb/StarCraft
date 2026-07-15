@@ -34,12 +34,33 @@ namespace
     constexpr int kDirectionalImage = 234;
     constexpr int kBattlecruiserImage = 218;
     constexpr int kBattlecruiserShadowImage = 219;
+    constexpr int kScienceVesselImage = 260;
+    constexpr int kScienceVesselTransitionImage = 261;
+    constexpr int kScienceVesselShadowImage = 262;
+    constexpr int kWraithImage = 243;
+    constexpr int kWraithShadowImage = 244;
+    constexpr int kValkyrieImage = 939;
+    constexpr int kValkyrieShadowImage = 940;
     constexpr int kGaussProjectileImage = 527;
     constexpr int kScvImage = 247;
     constexpr int kScvGlowImage = 249;
     constexpr int kScvSparkImage = 526;
+    constexpr int kTankBaseImage = 250;
+    constexpr int kTankTurretImage = 251;
+    constexpr int kTankMuzzleImage = 536;
+    constexpr int kSiegeTankBaseImage = 253;
+    constexpr int kSiegeTankTurretImage = 254;
     constexpr int kScvMiningWeapon = 14;
     constexpr int kGoliathChkUnit = 3;
+    constexpr int kCommandCenterImage = 275;
+    constexpr int kCommandCenterControlImage = 276;
+    constexpr int kBarracksImage = 266;
+    constexpr int kSupplyDepotImage = 278;
+    constexpr int kSupplyDepotMachineryImage = 279;
+    constexpr int kEngineeringBayImage = 322;
+    constexpr int kEngineeringBayMachineryImage = 323;
+    constexpr int kComsatStationImage = 271;
+    constexpr int kComsatConnectorImage = 272;
 
     void Require(bool Value, const char* Message)
     {
@@ -247,6 +268,14 @@ int main()
 
     Game::Systems::AnimationSystem Anim(SysMgr);
 
+    Game::Systems::AnimationSystem::SetImageAttachmentPersistenceResolver(
+        [](uint32_t ImageID) {
+            return ImageID == kBattlecruiserShadowImage ||
+                   ImageID == kScienceVesselShadowImage ||
+                   ImageID == kWraithShadowImage ||
+                   ImageID == kValkyrieShadowImage;
+        });
+
     int ScvWeaponVisualResolves = 0;
     Game::Systems::AnimationSystem::SetWeaponImageResolver(
         [&ScvWeaponVisualResolves](int WeaponID) -> std::optional<uint32_t> {
@@ -256,12 +285,177 @@ int main()
             return (uint32_t)kScvSparkImage;
         });
 
+    const int Tank = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(Tank).Position =
+        {96.0f, 224.0f};
+    auto& TankRender = EM.AddComponent<Game::Components::RenderComponent>(Tank);
+    TankRender.ImageID = kTankBaseImage;
+    TankRender.SubunitImageID = kTankTurretImage;
+    TankRender.TotalFrames = 256;
+    EM.AddComponent<Game::Components::UnitComponent>(Tank).ChkUnitID = 5;
+    auto& TankPath = EM.AddComponent<Game::Components::PathfindingComponent>(Tank);
+    TankPath.FacingAngle = 0.0f;
+    Anim.Update(1.0f / 24.0f);
+    auto* TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+    Game::Components::ImageSubnode* TankTurret = nullptr;
+    if (TankTree)
+    {
+        for (auto& Node : TankTree->Nodes)
+            if (Node.IsUnitSubunit)
+                TankTurret = &Node;
+    }
+    Require(TankTurret && TankTurret->Visible &&
+            TankTurret->ImageID == (uint32_t)kTankTurretImage &&
+            TankTurret->VM.GetContext().HasDirectionalFrames,
+        "Tank turret is an independently scripted directional subunit image");
+    const int EastTurretFrame = TankTurret->FrameIndex;
+    const bool EastTurretFlip = TankTurret->Flipped;
+    TankPath.FacingAngle = 3.14159265359f;
+    Anim.Update(1.0f / 24.0f);
+    TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+    TankTurret = nullptr;
+    if (TankTree)
+    {
+        for (auto& Node : TankTree->Nodes)
+            if (Node.IsUnitSubunit)
+                TankTurret = &Node;
+    }
+    Require(TankTurret && (TankTurret->FrameIndex != EastTurretFrame ||
+            TankTurret->Flipped != EastTurretFlip),
+        "moving Tank turret follows chassis heading instead of reusing body animation frames");
+
+    auto& TankCombat = EM.AddComponent<Game::Components::CombatComponent>(Tank);
+    TankCombat.PendingAttackFrame = true;
+    TankCombat.PendingAttackTargetPos = {192.0f, 224.0f};
+    TankCombat.AttackCooldown = 1.0f;
+    TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+    std::vector<bool> TankNodesVisibleBeforeAttack;
+    if (TankTree)
+    {
+        TankNodesVisibleBeforeAttack.reserve(TankTree->Nodes.size());
+        for (const auto& Node : TankTree->Nodes)
+            TankNodesVisibleBeforeAttack.push_back(Node.Visible);
+    }
+    bool SawTurretMuzzleOverlay = false;
+    bool SawChassisMuzzleOverlay = false;
+    bool SawMuzzleDirectionInheritedFromTurret = false;
+    for (int Step = 0; Step < 48; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+        if (!TankTree)
+            continue;
+        int TurretIndex = -1;
+        for (size_t I = 0; I < TankTree->Nodes.size(); ++I)
+            if (TankTree->Nodes[I].IsUnitSubunit)
+                TurretIndex = (int)I;
+        for (size_t I = 0; I < TankTree->Nodes.size(); ++I)
+        {
+            const auto& Node = TankTree->Nodes[I];
+            if (!Node.Visible || Node.IsUnitSubunit || Node.PersistentSpriteAttachment ||
+                Node.ImageID != (uint32_t)kTankMuzzleImage)
+                continue;
+            const bool WasVisibleBeforeAttack =
+                I < TankNodesVisibleBeforeAttack.size() &&
+                TankNodesVisibleBeforeAttack[I];
+            if (WasVisibleBeforeAttack)
+                continue;
+            int Ancestor = Node.ParentIndex;
+            bool HasTurretAncestor = false;
+            while (Ancestor >= 0 && Ancestor < (int)TankTree->Nodes.size())
+            {
+                if (Ancestor == TurretIndex)
+                {
+                    HasTurretAncestor = true;
+                    break;
+                }
+                Ancestor = TankTree->Nodes[(size_t)Ancestor].ParentIndex;
+            }
+            if (HasTurretAncestor)
+            {
+                SawTurretMuzzleOverlay = true;
+                SawMuzzleDirectionInheritedFromTurret =
+                    Node.InheritSpriteDirection && Node.ParentIndex >= 0 &&
+                    Node.VM.GetContext().CurrentDirection ==
+                        TankTree->Nodes[(size_t)Node.ParentIndex]
+                            .VM.GetContext().CurrentDirection;
+            }
+            else
+                SawChassisMuzzleOverlay = true;
+        }
+    }
+    Require(SawTurretMuzzleOverlay && !SawChassisMuzzleOverlay,
+        "Tank muzzle overlay is parented to the turret instead of the chassis root");
+    Require(SawMuzzleDirectionInheritedFromTurret,
+        "Tank muzzle directional frame inherits the turret heading on its first visible frame");
+    TankCombat.PendingAttackFrame = false;
+    TankCombat.PendingAttackTargetEntityID = -1;
+    TankCombat.PendingAttackDamage = 0;
+
+    auto& TankSiege =
+        EM.AddComponent<Game::Components::SiegeTransitionComponent>(Tank);
+    TankSiege.Active = true;
+    TankSiege.TargetSieged = true;
+    TankSiege.TargetChkUnitID = 30;
+    TankSiege.TargetSpeed = 0.0f;
+    TankSiege.TargetImageID = kSiegeTankBaseImage;
+    TankSiege.TargetSubunitImageID = kSiegeTankTurretImage;
+    TankSiege.TargetCombat = TankCombat;
+    std::set<int> SiegeDeployFrames;
+    for (int Step = 0; Step < 180 && TankSiege.Active; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        if (TankSiege.Stage == 1)
+            SiegeDeployFrames.insert(TankRender.FrameIndex);
+    }
+    Require(!TankSiege.Active &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID == 30 &&
+            SiegeDeployFrames.size() > 1,
+        "Tank waits for the authored sieged-hull Init animation before completing deployment");
+    TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+    TankTurret = nullptr;
+    if (TankTree)
+    {
+        for (auto& Node : TankTree->Nodes)
+            if (Node.IsUnitSubunit)
+                TankTurret = &Node;
+    }
+    Require(TankTurret && TankTurret->Visible &&
+            TankTurret->ImageID == (uint32_t)kSiegeTankTurretImage,
+        "Siege mode replaces the mobile turret with the authored siege turret subunit");
+
+    TankSiege = Game::Components::SiegeTransitionComponent{};
+    TankSiege.Active = true;
+    TankSiege.TargetSieged = false;
+    TankSiege.TargetChkUnitID = 5;
+    TankSiege.TargetSpeed = 2.0f;
+    TankSiege.TargetImageID = kTankBaseImage;
+    TankSiege.TargetSubunitImageID = kTankTurretImage;
+    TankSiege.TargetCombat = TankCombat;
+    std::set<int> UnsiegeFrames;
+    for (int Step = 0; Step < 180 && TankSiege.Active; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        UnsiegeFrames.insert(TankRender.FrameIndex);
+    }
+    Require(!TankSiege.Active && TankRender.ImageID == (uint32_t)kTankBaseImage &&
+            TankRender.SubunitImageID == (uint32_t)kTankTurretImage &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID == 5 &&
+            UnsiegeFrames.size() > 1,
+        "Tank keeps the sieged hull through authored SpecialState2 before restoring tank mode");
+
     const int Mineral = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(Mineral)
         .Position = {160.0f, 128.0f};
     auto& MineralResource = EM.AddComponent<Game::Components::ResourceComponent>(Mineral);
     MineralResource.Type = Game::Components::ResourceType::Minerals;
     MineralResource.Amount = 1500;
+    MineralResource.MaxAmount = 1500;
+    auto& MineralRender = EM.AddComponent<Game::Components::RenderComponent>(Mineral);
+    MineralRender.ImageID = 347;
+    MineralRender.TotalFrames = 4;
+    auto& MineralTree = EM.AddComponent<Game::Components::ImageTreeComponent>(Mineral);
+    MineralTree.Nodes.emplace_back().TotalFrames = 4;
 
     const int MiningScv = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(MiningScv)
@@ -306,6 +500,26 @@ int main()
     Require(MiningSparkFrames.size() > 1,
         "SCV Fusion Cutter spark advances through multiple project GRP frames");
 
+    MineralResource.Amount = 1100;
+    Anim.Update(1.0f / 24.0f);
+    Require(MineralRender.Visible && MineralRender.FrameIndex == 1,
+        "mineral texture advances to its first depleted frame below 75 percent");
+    MineralResource.Amount = 700;
+    Anim.Update(1.0f / 24.0f);
+    Require(MineralRender.Visible && MineralRender.FrameIndex == 2,
+        "mineral texture advances to its second depleted frame below 50 percent");
+    MineralResource.Amount = 300;
+    Anim.Update(1.0f / 24.0f);
+    Require(MineralRender.Visible && MineralRender.FrameIndex == 3,
+        "mineral texture uses its smallest authored frame below 25 percent");
+    MineralResource.Amount = 0;
+    MineralResource.IsDepleted = true;
+    Anim.Update(1.0f / 24.0f);
+    Require(!MineralRender.Visible && !MineralTree.Nodes.front().Visible,
+        "fully depleted mineral hides both its root texture and image-tree layers");
+    MineralResource.Amount = 1500;
+    MineralResource.IsDepleted = false;
+
     MiningScvHarvest.State = Game::Components::HarvestState::MovingToDepot;
     Anim.Update(1.0f / 24.0f);
     bool HasStaleMiningSpark = false;
@@ -317,6 +531,324 @@ int main()
     }
     Require(!HasStaleMiningSpark,
         "leaving mineral mining clears the transient Fusion Cutter spark");
+
+    const int ConstructionTarget = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ConstructionTarget)
+        .Position = {224.0f, 224.0f};
+    auto& ConstructionBuilding =
+        EM.AddComponent<Game::Components::BuildingComponent>(ConstructionTarget);
+    ConstructionBuilding.UnderConstruction = true;
+
+    const int ConstructingScv = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ConstructingScv)
+        .Position = {192.0f, 224.0f};
+    auto& ConstructingScvRender =
+        EM.AddComponent<Game::Components::RenderComponent>(ConstructingScv);
+    ConstructingScvRender.ImageID = kScvImage;
+    ConstructingScvRender.TotalFrames = 51;
+    EM.AddComponent<Game::Components::UnitComponent>(ConstructingScv).ChkUnitID = 7;
+    EM.AddComponent<Game::Components::PlayerComponent>(ConstructingScv).PlayerID = 0;
+    EM.AddComponent<Game::Components::PathfindingComponent>(ConstructingScv)
+        .FacingAngle = 0.0f;
+    auto& ConstructionCommand =
+        EM.AddComponent<Game::Components::CommandComponent>(ConstructingScv);
+    ConstructionCommand.CurrentCommand = Game::Components::CommandType::Build;
+    ConstructionCommand.TargetEntityID = ConstructionTarget;
+    ConstructionBuilding.BuilderUnitID = ConstructingScv;
+
+    const int WeaponResolvesBeforeConstruction = ScvWeaponVisualResolves;
+    std::set<int> ConstructionScvFrames;
+    bool SawConstructionSparkAtContactPoint = false;
+    for (int Step = 0; Step < 96; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        ConstructionScvFrames.insert(ConstructingScvRender.FrameIndex);
+        const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(ConstructingScv);
+        if (!Tree)
+            continue;
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (!Node.Visible || (int)Node.ImageID != kScvSparkImage)
+                continue;
+            SawConstructionSparkAtContactPoint =
+                SawConstructionSparkAtContactPoint ||
+                (std::fabs(Node.CreationOffset.X - 20.0f) < 0.1f &&
+                 std::fabs(Node.CreationOffset.Y) < 0.1f);
+        }
+    }
+    Require(ConstructionScvFrames.size() > 1,
+        "constructing SCV advances the real AlmostBuilt work animation");
+    Require(ScvWeaponVisualResolves >= WeaponResolvesBeforeConstruction + 2,
+        "constructing SCV repeatedly emits Fusion Cutter sparks");
+    Require(SawConstructionSparkAtContactPoint,
+        "construction spark appears at the building contact side");
+
+    ConstructionBuilding.UnderConstruction = false;
+    ConstructionCommand.CurrentCommand = Game::Components::CommandType::Stop;
+    ConstructionCommand.TargetEntityID = -1;
+    Anim.Update(1.0f / 24.0f);
+    bool HasStaleConstructionSpark = false;
+    if (const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(ConstructingScv))
+    {
+        for (const auto& Node : Tree->Nodes)
+            HasStaleConstructionSpark = HasStaleConstructionSpark ||
+                (Node.Visible && (int)Node.ImageID == kScvSparkImage);
+    }
+    Require(!HasStaleConstructionSpark,
+        "finishing construction clears the transient Fusion Cutter spark");
+
+    int CarryOffsetResolverCalls = 0;
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+        [&CarryOffsetResolverCalls](uint32_t ImageID, size_t LoType, size_t,
+                                    size_t OffsetIndex, bool Flipped)
+            -> std::optional<Core::Math::Vec2> {
+            Require(ImageID == kScvImage,
+                "carried mineral resolves its attachment from the SCV main image");
+            Require(LoType == 2 && OffsetIndex == 0,
+                "carried mineral uses OpenBW special LO offset type 2 index 0");
+            ++CarryOffsetResolverCalls;
+            return Core::Math::Vec2{Flipped ? -7.0f : 7.0f, -9.0f};
+        });
+    MiningScvHarvest.CarryingAmount = 8;
+    MiningScvHarvest.CarryingType = Game::Components::ResourceType::Minerals;
+    auto* MiningScvPath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(MiningScv);
+    Require(MiningScvPath, "carrying SCV keeps direction state");
+    MiningScvPath->CurrentVelocity = {64.0f, 0.0f};
+    MiningScvPath->Path = {{256.0f, 128.0f}};
+    MiningScvPath->PathIndex = 0;
+    Anim.Update(1.0f / 24.0f);
+    const auto* CarryTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(MiningScv);
+    Require(CarryTree, "carrying SCV owns an image tree attachment");
+    const Game::Components::ImageSubnode* CarryNode = nullptr;
+    for (const auto& Node : CarryTree->Nodes)
+    {
+        if (Node.IsCarriedResourceOverlay)
+        {
+            CarryNode = &Node;
+            break;
+        }
+    }
+    Require(CarryNode && CarryNode->Visible && CarryNode->ImageID == 397u &&
+                CarryNode->UseSpecialOffset && CarryNode->InheritSpriteDirection,
+        "mineral chunk is a directional SCV sprite attachment with special offset");
+    const std::pair<int, bool> EastCarrySignature{
+        CarryNode->FrameIndex, CarryNode->Flipped};
+    MiningScvPath->CurrentVelocity = {-64.0f, 0.0f};
+    MiningScvPath->Path = {{0.0f, 128.0f}};
+    for (int I = 0; I < 3; ++I)
+        Anim.Update(1.0f / 24.0f);
+    CarryTree = EM.GetComponent<Game::Components::ImageTreeComponent>(MiningScv);
+    CarryNode = nullptr;
+    for (const auto& Node : CarryTree->Nodes)
+        if (Node.IsCarriedResourceOverlay)
+            CarryNode = &Node;
+    Require(CarryNode &&
+                std::pair<int, bool>{CarryNode->FrameIndex, CarryNode->Flipped} !=
+                    EastCarrySignature,
+        "carried mineral rotates and flips with the SCV heading");
+    Require(CarryOffsetResolverCalls >= 2,
+        "carried mineral refreshes its two-arm LO attachment while direction changes");
+    MiningScvHarvest.CarryingAmount = 0;
+    MiningScvHarvest.CarryingType = Game::Components::ResourceType::None;
+    Anim.Update(1.0f / 24.0f);
+    CarryTree = EM.GetComponent<Game::Components::ImageTreeComponent>(MiningScv);
+    CarryNode = nullptr;
+    for (const auto& Node : CarryTree->Nodes)
+        if (Node.IsCarriedResourceOverlay)
+            CarryNode = &Node;
+    Require(CarryNode && !CarryNode->Visible,
+        "depositing resources removes the carried sprite attachment");
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
+
+    const auto SpawnBuilding = [&](int MainImageID)
+    {
+        const int EntityID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(EntityID)
+            .Position = {320.0f + (float)EntityID * 8.0f, 192.0f};
+        auto& Render = EM.AddComponent<Game::Components::RenderComponent>(EntityID);
+        Render.ImageID = (uint32_t)MainImageID;
+        Render.TotalFrames = 1;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.HitPoints = 1000;
+        Unit.MaxHitPoints = 1000;
+        auto& Building = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);
+        Building.UnderConstruction = false;
+        EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = 0;
+        return EntityID;
+    };
+
+    const auto StartProduction = [&](int EntityID)
+    {
+        auto& Production =
+            EM.AddComponent<Game::Components::ProductionComponent>(EntityID);
+        Production.Queue.push_back(0);
+        Production.CurrentTrainingUnitDefID = 0;
+        Production.TrainingTimePerUnit = 20.0f;
+        return &Production;
+    };
+
+    const int WorkingCommandCenter = SpawnBuilding(kCommandCenterImage);
+    auto* CommandCenterProduction = StartProduction(WorkingCommandCenter);
+    for (int Step = 0; Step < 4; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    auto* CommandCenterTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(WorkingCommandCenter);
+    const Game::Components::ImageSubnode* CommandCenterWorkingNode = nullptr;
+    if (CommandCenterTree)
+        for (const auto& Node : CommandCenterTree->Nodes)
+            if ((int)Node.ImageID == kCommandCenterControlImage)
+                CommandCenterWorkingNode = &Node;
+    Require(CommandCenterWorkingNode && CommandCenterWorkingNode->Visible &&
+                (int)CommandCenterWorkingNode->ImageID == kCommandCenterControlImage,
+        "Command Center production exposes its canonical control-panel overlay");
+    float MinCommandCenterOpacity = 1.0f;
+    float MaxCommandCenterOpacity = 0.0f;
+    for (int Step = 0; Step < 48; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        CommandCenterTree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(WorkingCommandCenter);
+        if (!CommandCenterTree)
+            continue;
+        for (const auto& Node : CommandCenterTree->Nodes)
+        {
+            if ((int)Node.ImageID != kCommandCenterControlImage)
+                continue;
+            MinCommandCenterOpacity = std::min(MinCommandCenterOpacity, Node.Opacity);
+            MaxCommandCenterOpacity = std::max(MaxCommandCenterOpacity, Node.Opacity);
+        }
+    }
+    Require(MaxCommandCenterOpacity - MinCommandCenterOpacity > 0.35f,
+        "Command Center production continuously pulses its control-panel image");
+    CommandCenterProduction->Queue.clear();
+    CommandCenterProduction->CurrentTrainingUnitDefID = -1;
+    Anim.Update(1.0f / 24.0f);
+    CommandCenterTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(WorkingCommandCenter);
+    CommandCenterWorkingNode = nullptr;
+    if (CommandCenterTree)
+        for (const auto& Node : CommandCenterTree->Nodes)
+            if ((int)Node.ImageID == kCommandCenterControlImage)
+                CommandCenterWorkingNode = &Node;
+    Require(CommandCenterWorkingNode &&
+                CommandCenterWorkingNode->AnimID ==
+                    Game::IScriptAnims::Anim_WorkingToIdle &&
+                std::fabs(CommandCenterWorkingNode->Opacity - 1.0f) < 0.001f,
+        "Command Center control panel receives WorkingToIdle when production stops");
+
+    const int WorkingBarracks = SpawnBuilding(kBarracksImage);
+    StartProduction(WorkingBarracks);
+    int BarracksFrameChanges = 0;
+    int PreviousBarracksFrame = -1;
+    for (int Step = 0; Step < 96; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        const auto* Render =
+            EM.GetComponent<Game::Components::RenderComponent>(WorkingBarracks);
+        if (Render && PreviousBarracksFrame >= 0 &&
+            Render->FrameIndex != PreviousBarracksFrame)
+        {
+            ++BarracksFrameChanges;
+        }
+        if (Render)
+            PreviousBarracksFrame = Render->FrameIndex;
+    }
+    Require(BarracksFrameChanges > 8,
+        "Barracks production advances the real 62-frame IsWorking root animation");
+
+    const int SupplyDepot = SpawnBuilding(kSupplyDepotImage);
+    int DepotMachineryFrameChanges = 0;
+    int PreviousDepotMachineryFrame = -1;
+    for (int Step = 0; Step < 96; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(SupplyDepot);
+        if (!Tree)
+            continue;
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (Node.Visible && (int)Node.ImageID == kSupplyDepotMachineryImage)
+            {
+                if (PreviousDepotMachineryFrame >= 0 &&
+                    Node.FrameIndex != PreviousDepotMachineryFrame)
+                {
+                    ++DepotMachineryFrameChanges;
+                }
+                PreviousDepotMachineryFrame = Node.FrameIndex;
+            }
+        }
+    }
+    Require(DepotMachineryFrameChanges > 8,
+        "Supply Depot Built creates and advances its completed idle machinery image");
+
+    const int EngineeringBay = SpawnBuilding(kEngineeringBayImage);
+    auto* EngineeringBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(EngineeringBay);
+    EngineeringBuilding->IsResearching = true;
+    EngineeringBuilding->ResearchingID = 0;
+    EngineeringBuilding->BuildTimeRemaining = 30.0f;
+    int EngineeringMachineryFrameChanges = 0;
+    int PreviousEngineeringMachineryFrame = -1;
+    bool SawEngineeringWorking = false;
+    for (int Step = 0; Step < 72; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        const auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(EngineeringBay);
+        if (!Tree)
+            continue;
+        for (const auto& Node : Tree->Nodes)
+        {
+            if (Node.Visible && (int)Node.ImageID == kEngineeringBayMachineryImage)
+            {
+                if (Node.AnimID != Game::IScriptAnims::Anim_IsWorking)
+                    continue;
+                SawEngineeringWorking = true;
+                if (PreviousEngineeringMachineryFrame >= 0 &&
+                    Node.FrameIndex != PreviousEngineeringMachineryFrame)
+                {
+                    ++EngineeringMachineryFrameChanges;
+                }
+                PreviousEngineeringMachineryFrame = Node.FrameIndex;
+            }
+        }
+    }
+    Require(SawEngineeringWorking && EngineeringMachineryFrameChanges > 8,
+        "Engineering Bay research advances its child machinery animation");
+
+    const int Comsat = SpawnBuilding(kComsatStationImage);
+    auto* ComsatRender = EM.GetComponent<Game::Components::RenderComponent>(Comsat);
+    ComsatRender->AddonConnectorImageID = kComsatConnectorImage;
+    for (int Step = 0; Step < 4; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    const auto* ComsatTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(Comsat);
+    const Game::Components::ImageSubnode* Connector = nullptr;
+    if (ComsatTree)
+        for (const auto& Node : ComsatTree->Nodes)
+            if (Node.IsAddonConnectorOverlay)
+                Connector = &Node;
+    Require(Connector && Connector->Visible && !Connector->DrawAbove &&
+                (int)Connector->ImageID == kComsatConnectorImage,
+        "Terran add-on connector is a persistent animated image below the body");
+    auto* ComsatBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(Comsat);
+    ComsatBuilding->FlightPhase =
+        Game::Components::BuildingFlightPhase::LiftingOff;
+    Anim.Update(1.0f / 24.0f);
+    ComsatTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Comsat);
+    Connector = nullptr;
+    if (ComsatTree)
+        for (const auto& Node : ComsatTree->Nodes)
+            if (Node.IsAddonConnectorOverlay)
+                Connector = &Node;
+    Require(Connector && Connector->AnimID == Game::IScriptAnims::Anim_LiftOff,
+        "Terran add-on connector receives its own LiftOff animation");
 
     const int ImpactProbe = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(ImpactProbe)
@@ -406,11 +938,32 @@ int main()
             "real project LiftOff iscript emits the building flight completion signal");
 
     FlightBuilding.FlightAnimationComplete = false;
+    FlightBuilding.FlightPhase = Game::Components::BuildingFlightPhase::Airborne;
+    const int AirborneRootFrame = FlightRender.FrameIndex;
+    std::vector<int> LiftOffChildAnimations;
+    if (const auto* FlightTree = EM.GetComponent<Game::Components::ImageTreeComponent>(FlightProbe))
+        for (const auto& Node : FlightTree->Nodes)
+            LiftOffChildAnimations.push_back(Node.AnimID);
+    for (int Step = 0; Step < 96; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    Require(FlightRender.FrameIndex == AirborneRootFrame,
+        "airborne building holds the terminal LiftOff root frame instead of replaying Init");
+    if (const auto* FlightTree = EM.GetComponent<Game::Components::ImageTreeComponent>(FlightProbe))
+    {
+        for (size_t I = 0; I < LiftOffChildAnimations.size() &&
+                           I < FlightTree->Nodes.size(); ++I)
+            if (LiftOffChildAnimations[I] == Game::IScriptAnims::Anim_LiftOff)
+                Require(FlightTree->Nodes[I].AnimID != Game::IScriptAnims::Anim_Init,
+                    "airborne landing gear is not restarted in the grounded Init animation");
+    }
+
     FlightBuilding.FlightPhase = Game::Components::BuildingFlightPhase::Landing;
     for (int Step = 0; Step < 360 && !FlightBuilding.FlightAnimationComplete; ++Step)
         Anim.Update(1.0f / 24.0f);
     Require(FlightBuilding.FlightAnimationComplete,
             "real project Landing iscript emits the building flight completion signal");
+    Require(std::fabs(FlightRender.VisualOffset.Y) < 0.001f,
+            "Landing returns the building root image and landing gear to ground offset");
 
     Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
         [FlightImageID](uint32_t ImageID, size_t LoType, size_t,
@@ -484,11 +1037,10 @@ int main()
         BuildingTreeMax = std::max(BuildingTreeMax, (int)ProbeTree->Nodes.size());
         for (const auto& ProbeNode : ProbeTree->Nodes)
         {
-            if (!ProbeNode.Visible) continue;
+            if (!ProbeNode.Visible || ProbeNode.ImageID != 279u) continue;
             if (BuildingLastNodeFrame >= 0 && BuildingLastNodeFrame != ProbeNode.FrameIndex)
                 ++BuildingNodeFrameChanges;
             BuildingLastNodeFrame = ProbeNode.FrameIndex;
-            break;
         }
     }
     Require(BuildingTreeMax > 0,
@@ -606,6 +1158,83 @@ int main()
             (!EngineContext.VertPosSet ||
                 BattlecruiserEngines->Offset.Y == (float)EngineContext.VertPos),
         "engine flame applies its own iscript setpos offset instead of staying at the hull center");
+
+    auto VerifyFighterShadowAcrossStates =
+        [&](int ChkUnitID, int ImageID, int ShadowImageID)
+    {
+        const int Fighter = SpawnIdleDirectionalUnit(EM, 0.0f, 256, ImageID);
+        auto* FighterUnit = EM.GetComponent<Game::Components::UnitComponent>(Fighter);
+        auto* FighterPath = EM.GetComponent<Game::Components::PathfindingComponent>(Fighter);
+        auto* FighterTransform = EM.GetComponent<Game::Components::TransformComponent>(Fighter);
+        Require(FighterUnit && FighterPath && FighterTransform,
+            "fighter shadow probe has unit, path, and transform state");
+        FighterUnit->ChkUnitID = ChkUnitID;
+        FighterPath->Path = {FighterTransform->Position + Core::Math::Vec2{128.0f, 0.0f}};
+        FighterPath->CurrentSpeed = 64.0f;
+        FighterPath->CurrentVelocity = {64.0f, 0.0f};
+        for (int I = 0; I < 8; ++I)
+            Anim.Update(1.0f / 24.0f);
+
+        auto HasPersistentShadow = [&]()
+        {
+            const auto* Tree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(Fighter);
+            if (!Tree)
+                return false;
+            for (const auto& Node : Tree->Nodes)
+                if (Node.Visible && (int)Node.ImageID == ShadowImageID &&
+                    Node.PersistentSpriteAttachment)
+                    return true;
+            return false;
+        };
+        Require(HasPersistentShadow(),
+            "moving Terran fighter keeps its Init-created ground shadow");
+
+        FighterPath->Path.clear();
+        FighterPath->CurrentSpeed = 0.0f;
+        FighterPath->CurrentVelocity = {};
+        auto& FighterCombat =
+            EM.AddComponent<Game::Components::CombatComponent>(Fighter);
+        FighterCombat.PendingAttackFrame = true;
+        FighterCombat.PendingAttackTargetPos =
+            FighterTransform->Position + Core::Math::Vec2{96.0f, 32.0f};
+        FighterCombat.AttackCooldown = 1.0f;
+        for (int I = 0; I < 3; ++I)
+            Anim.Update(1.0f / 24.0f);
+        Require(HasPersistentShadow(),
+            "attacking Terran fighter keeps its ground shadow");
+    };
+
+    VerifyFighterShadowAcrossStates(8, kWraithImage, kWraithShadowImage);
+    VerifyFighterShadowAcrossStates(58, kValkyrieImage, kValkyrieShadowImage);
+
+    const int ScienceVessel = SpawnIdleDirectionalUnit(
+        EM, 0.0f, 256, kScienceVesselImage);
+    auto* ScienceVesselUnit = EM.GetComponent<Game::Components::UnitComponent>(ScienceVessel);
+    Require(ScienceVesselUnit, "Science Vessel probe has a unit component");
+    ScienceVesselUnit->ChkUnitID = 9;
+    for (int I = 0; I < 8; ++I)
+        Anim.Update(1.0f / 24.0f);
+
+    const auto* ScienceVesselTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(ScienceVessel);
+    Require(ScienceVesselTree, "real Science Vessel Init creates an image tree");
+    const Game::Components::ImageSubnode* ScienceVesselTransition = nullptr;
+    const Game::Components::ImageSubnode* ScienceVesselShadow = nullptr;
+    for (const auto& Node : ScienceVesselTree->Nodes)
+    {
+        if ((int)Node.ImageID == kScienceVesselTransitionImage)
+            ScienceVesselTransition = &Node;
+        if ((int)Node.ImageID == kScienceVesselShadowImage)
+            ScienceVesselShadow = &Node;
+    }
+    Require(ScienceVesselTransition &&
+                !ScienceVesselTransition->PersistentSpriteAttachment,
+        "Science Vessel Init keeps its transition image transient instead of pinning it on screen");
+    Require(ScienceVesselShadow && ScienceVesselShadow->PersistentSpriteAttachment,
+        "Science Vessel Init keeps its classified static shadow attached");
+    Require(ScienceVesselTransition->VM.IsRunning(),
+        "Science Vessel turret retains its directional iscript while idle");
 
     static const Core::Math::Vec2 EightDirections[8] = {
         {1.0f, 0.0f}, {0.7071f, 0.7071f}, {0.0f, 1.0f}, {-0.7071f, 0.7071f},
@@ -788,6 +1417,38 @@ int main()
                 FollowMainNode.Flipped == FollowMainRender.Flipped,
         "followmaingraphic child copies the rendered main frame and absolute flip");
 
+    const int RefineryConstruction = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(RefineryConstruction)
+        .Position = {256.0f, 160.0f};
+    auto& RefineryConstructionRender =
+        EM.AddComponent<Game::Components::RenderComponent>(RefineryConstruction);
+    RefineryConstructionRender.ImageID = 307;
+    RefineryConstructionRender.TotalFrames = 5;
+    auto& RefineryConstructionUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(RefineryConstruction);
+    RefineryConstructionUnit.ChkUnitID = 110;
+    auto& RefineryConstructionBuilding =
+        EM.AddComponent<Game::Components::BuildingComponent>(RefineryConstruction);
+    RefineryConstructionBuilding.IsBuilding = true;
+    RefineryConstructionBuilding.UnderConstruction = true;
+    RefineryConstructionBuilding.BuildingDefID = 0;
+    RefineryConstructionBuilding.TotalBuildTime = 40.0f;
+    RefineryConstructionBuilding.BuildProgress = 0.0f;
+    auto& RefineryConstructionResource =
+        EM.AddComponent<Game::Components::ResourceComponent>(RefineryConstruction);
+    RefineryConstructionResource.Type = Game::Components::ResourceType::VespeneGas;
+    RefineryConstructionResource.Amount = 5000;
+    Anim.Update(1.0f / 24.0f);
+    const auto* RefineryConstructionTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(RefineryConstruction);
+    bool HasConstructionGasOverlay = false;
+    if (RefineryConstructionTree)
+        for (const auto& Node : RefineryConstructionTree->Nodes)
+            HasConstructionGasOverlay = HasConstructionGasOverlay ||
+                (Node.Visible && Node.ImageID == 308u);
+    Require(RefineryConstructionRender.ImageID == 307u && HasConstructionGasOverlay,
+        "initial Refinery construction uses its main image and creates the gas overlay");
+
     const int CompletedRefinery = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(CompletedRefinery)
         .Position = {320.0f, 160.0f};
@@ -808,8 +1469,18 @@ int main()
     RefineryResource.Type = Game::Components::ResourceType::VespeneGas;
     RefineryResource.Amount = 5000;
     Anim.Update(1.0f / 24.0f);
+    const auto* RefineryTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(CompletedRefinery);
+    bool HasRefineryOverlay = false;
+    if (RefineryTree)
+        for (const auto& Node : RefineryTree->Nodes)
+            HasRefineryOverlay = HasRefineryOverlay ||
+                (Node.Visible && Node.ImageID == 308u);
+    Require(HasRefineryOverlay,
+        "completed Refinery runs Init once to create its gas overlay image");
+    Anim.Update(1.0f / 24.0f);
     Require(RefineryRender.FrameIndex == 0,
-        "completed Refinery uses its Built frame instead of the fragmented Init frame");
+        "completed Refinery advances from Init to its Built frame");
 
     int ResolverCalls = 0;
     Game::Systems::AnimationSystem::SetOverlayOffsetResolver(

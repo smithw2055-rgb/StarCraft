@@ -231,6 +231,8 @@ int main()
     Require(Path && !Path->Path.empty(), "harvest command receives an approach waypoint");
     Require(Path->Path.front().X < 124.0f,
         "harvest approach waypoint is outside the mineral center");
+    Require(EntityEdgeDistance(EM, Path->Path.front(), Mineral) <= 10.1f,
+        "mineral approach closes the last few visual pixels around the patch");
     Require(Harvest && Harvest->State == Game::Components::HarvestState::MovingToResource,
         "harvest component starts by moving to resource");
 
@@ -263,10 +265,10 @@ int main()
         "worker selects the nearest owned resource depot");
     Require(Path && !Path->Path.empty(),
         "returning worker receives a depot approach waypoint");
-    Require(EntityEdgeDistance(EM, Path->Path.front(), Depot) <= 17.0f,
-        "return path targets the command center collision edge");
-    Require(Path->Path.front().X < 300.0f - 64.0f,
-        "return path stays outside the command center footprint instead of its center");
+    Require(EntityEdgeDistance(EM, Path->Path.front(), Depot) <= 0.1f,
+        "return path enters the command center collision footprint");
+    Require(Path->Path.front().X >= 300.0f - 64.0f + 12.0f,
+        "return path carries the worker visibly inside the command center");
 
     auto& Resources = Game::Systems::HarvestSystem::GetResources(0);
     Resources.Minerals = 50;
@@ -290,15 +292,118 @@ int main()
     Path->PathIndex = (int)Path->Path.size();
     Path->CurrentSpeed = 0.0f;
     Path->CurrentVelocity = {0.0f, 0.0f};
+    const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
+    const int LairDefID = Game::Races::GetUnitDefID("Lair");
+    auto* MorphingMineralDepot =
+        EM.GetComponent<Game::Components::BuildingComponent>(Depot);
+    auto* MorphingMineralDepotUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(Depot);
+    Require(MorphingMineralDepot && MorphingMineralDepotUnit &&
+            HatcheryDefID >= 0 && LairDefID >= 0,
+        "zerg depot definitions are available for upgrade delivery regression");
+    MorphingMineralDepot->BuildingDefID = HatcheryDefID;
+    MorphingMineralDepot->UnderConstruction = true;
+    MorphingMineralDepotUnit->ChkUnitID =
+        Game::Races::GetUnitDefByID(HatcheryDefID).ChkUnitID;
+    auto& MineralDepotMorph =
+        EM.AddComponent<Game::Components::MorphComponent>(Depot);
+    MineralDepotMorph.IsMorphing = true;
+    MineralDepotMorph.SourceUnitID = Depot;
+    MineralDepotMorph.MorphTargetDefID = LairDefID;
     HarvestSystem.Update(0.1f);
     Require(Resources.Minerals == 58,
-        "worker deposits minerals after reaching the command center collision edge");
+        "worker deposits minerals while its Hatchery is upgrading to Lair");
     Require(Harvest->CarryingAmount == 0 &&
             Harvest->State == Game::Components::HarvestState::MovingToResource,
-        "mineral worker resumes the harvest loop after depositing at the depot");
+        "edge-contact delivery resumes the harvest loop without a depot stall");
     Require(Cmd->CurrentCommand == Game::Components::CommandType::Harvest &&
             Cmd->TargetEntityID == Mineral,
         "mineral worker keeps harvest command and mineral target after deposit");
+    Require(Path->RequestedIgnoreEntityID == Depot && !Path->Path.empty(),
+        "worker leaving a completed delivery ignores the depot it starts inside");
+
+    int ReplacementMineral = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ReplacementMineral).Position =
+        {520.0f, 100.0f};
+    auto& ReplacementMineralUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(ReplacementMineral);
+    ReplacementMineralUnit.ChkUnitID = 176;
+    auto& ReplacementResource =
+        EM.AddComponent<Game::Components::ResourceComponent>(ReplacementMineral);
+    ReplacementResource.Type = Game::Components::ResourceType::Minerals;
+    ReplacementResource.Amount = 1500;
+    ReplacementResource.MaxAmount = 1500;
+    auto& ReplacementMineralPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(ReplacementMineral);
+    SetCollisionBounds(ReplacementMineralPath, 32, 20, 31, 19);
+    Resource.Amount = 0;
+    Resource.IsDepleted = true;
+    HarvestSystem.Update(0.1f);
+    Require(Harvest->TargetResourceID == ReplacementMineral &&
+            Harvest->DesiredResourceID == ReplacementMineral &&
+            Harvest->State == Game::Components::HarvestState::MovingToResource,
+        "depleted mineral field immediately selects a live replacement patch");
+    Require(Path->RequestedDestination.X > 450.0f && !Path->Path.empty(),
+        "depleted mineral field rebuilds a path toward the replacement patch");
+    Require(std::find(Resource.QueuedGatherers.begin(),
+                      Resource.QueuedGatherers.end(), Scv) ==
+                Resource.QueuedGatherers.end() &&
+            std::find(ReplacementResource.QueuedGatherers.begin(),
+                      ReplacementResource.QueuedGatherers.end(), Scv) !=
+                ReplacementResource.QueuedGatherers.end(),
+        "depleted mineral reroute releases the old queue and joins the new one");
+
+    for (int WorkerChkUnitID : {0x29, 0x40}) // Drone, Probe; SCV covered above.
+    {
+        Core::ECS::SystemManager RaceRerouteSysMgr;
+        auto& RaceEM = RaceRerouteSysMgr.GetEntityManager();
+        const int Worker = RaceEM.CreateEntity();
+        RaceEM.AddComponent<Game::Components::TransformComponent>(Worker).Position =
+            {64.0f, 64.0f};
+        auto& WorkerUnit = RaceEM.AddComponent<Game::Components::UnitComponent>(Worker);
+        WorkerUnit.ChkUnitID = WorkerChkUnitID;
+        WorkerUnit.Speed = 2.8f;
+        RaceEM.AddComponent<Game::Components::PlayerComponent>(Worker).PlayerID = 0;
+        auto& WorkerPath =
+            RaceEM.AddComponent<Game::Components::PathfindingComponent>(Worker);
+        RaceEM.AddComponent<Game::Components::CommandComponent>(Worker).CurrentCommand =
+            Game::Components::CommandType::Harvest;
+
+        const int EmptyMineral = RaceEM.CreateEntity();
+        RaceEM.AddComponent<Game::Components::TransformComponent>(EmptyMineral).Position =
+            {96.0f, 64.0f};
+        auto& EmptyResource =
+            RaceEM.AddComponent<Game::Components::ResourceComponent>(EmptyMineral);
+        EmptyResource.Type = Game::Components::ResourceType::Minerals;
+        EmptyResource.Amount = 0;
+        EmptyResource.IsDepleted = true;
+
+        const int LiveMineral = RaceEM.CreateEntity();
+        RaceEM.AddComponent<Game::Components::TransformComponent>(LiveMineral).Position =
+            {320.0f, 64.0f};
+        auto& LiveResource =
+            RaceEM.AddComponent<Game::Components::ResourceComponent>(LiveMineral);
+        LiveResource.Type = Game::Components::ResourceType::Minerals;
+        LiveResource.Amount = 1500;
+        LiveResource.MaxAmount = 1500;
+        auto& LiveMineralPath =
+            RaceEM.AddComponent<Game::Components::PathfindingComponent>(LiveMineral);
+        SetCollisionBounds(LiveMineralPath, 32, 20, 31, 19);
+
+        auto& WorkerHarvest =
+            RaceEM.AddComponent<Game::Components::HarvestComponent>(Worker);
+        WorkerHarvest.State = Game::Components::HarvestState::MovingToResource;
+        WorkerHarvest.TargetResourceID = EmptyMineral;
+        WorkerHarvest.DesiredResourceID = EmptyMineral;
+        Game::Systems::HarvestSystem RaceHarvestSystem(RaceRerouteSysMgr);
+        RaceHarvestSystem.Update(0.1f);
+        Require(WorkerHarvest.TargetResourceID == LiveMineral &&
+                WorkerHarvest.State == Game::Components::HarvestState::MovingToResource &&
+                !WorkerPath.Path.empty(),
+            WorkerChkUnitID == 0x29
+                ? "Drone replans to a live mineral field after depletion"
+                : "Probe replans to a live mineral field after depletion");
+    }
 
     Core::ECS::SystemManager GasSysMgr;
     auto& GasEM = GasSysMgr.GetEntityManager();
@@ -315,41 +420,149 @@ int main()
     GasScvUnit.ChkUnitID = 7;
     GasScvUnit.Speed = 2.8f;
     GasEM.AddComponent<Game::Components::PlayerComponent>(GasScv).PlayerID = 0;
+    GasEM.AddComponent<Game::Components::RenderComponent>(GasScv);
+
+    int QueuedGasScv = GasEM.CreateEntity();
+    auto& QueuedGasScvTrans =
+        GasEM.AddComponent<Game::Components::TransformComponent>(QueuedGasScv);
+    QueuedGasScvTrans.Position = {100.0f, 132.0f};
+    auto& QueuedGasScvUnit =
+        GasEM.AddComponent<Game::Components::UnitComponent>(QueuedGasScv);
+    QueuedGasScvUnit.ChkUnitID = 7;
+    QueuedGasScvUnit.Speed = 2.8f;
+    GasEM.AddComponent<Game::Components::PlayerComponent>(QueuedGasScv).PlayerID = 0;
+    GasEM.AddComponent<Game::Components::RenderComponent>(QueuedGasScv);
+
+    int ThirdGasScv = GasEM.CreateEntity();
+    auto& ThirdGasScvTrans =
+        GasEM.AddComponent<Game::Components::TransformComponent>(ThirdGasScv);
+    ThirdGasScvTrans.Position = {148.0f, 132.0f};
+    auto& ThirdGasScvUnit =
+        GasEM.AddComponent<Game::Components::UnitComponent>(ThirdGasScv);
+    ThirdGasScvUnit.ChkUnitID = 7;
+    ThirdGasScvUnit.Speed = 2.8f;
+    GasEM.AddComponent<Game::Components::PlayerComponent>(ThirdGasScv).PlayerID = 0;
+    GasEM.AddComponent<Game::Components::RenderComponent>(ThirdGasScv);
 
     int Refinery = CreateCompletedRefinery(GasEM, {124.0f, 100.0f}, 0, 5000);
     const int GasDepot = CreateCompletedDepot(GasEM, {300.0f, 100.0f}, 0);
+    auto* GasResource =
+        GasEM.GetComponent<Game::Components::ResourceComponent>(Refinery);
 
-    Require(Game::Systems::HarvestSystem::IssueHarvest(GasEM, {GasScv}, Refinery),
-        "SCV can receive a harvest order on a completed owned refinery");
+    Require(Game::Systems::HarvestSystem::IssueHarvest(
+                GasEM, {GasScv, QueuedGasScv, ThirdGasScv}, Refinery),
+        "multiple SCVs can queue a harvest order on a completed owned refinery");
     auto* GasCmd = GasEM.GetComponent<Game::Components::CommandComponent>(GasScv);
     auto* GasPath = GasEM.GetComponent<Game::Components::PathfindingComponent>(GasScv);
     auto* GasHarvest = GasEM.GetComponent<Game::Components::HarvestComponent>(GasScv);
+    auto* QueuedGasPath =
+        GasEM.GetComponent<Game::Components::PathfindingComponent>(QueuedGasScv);
+    auto* QueuedGasHarvest =
+        GasEM.GetComponent<Game::Components::HarvestComponent>(QueuedGasScv);
+    auto* ThirdGasPath =
+        GasEM.GetComponent<Game::Components::PathfindingComponent>(ThirdGasScv);
     Require(GasCmd && GasCmd->CurrentCommand == Game::Components::CommandType::Harvest,
         "gas harvest command starts as a harvest order");
     Require(GasHarvest && GasHarvest->State == Game::Components::HarvestState::MovingToResource,
         "gas harvest starts by moving to the refinery");
+    Require(GasPath && QueuedGasPath && ThirdGasPath &&
+            GasPath->RequestedDestination.X < 60.0f &&
+            std::abs(GasPath->RequestedDestination.Y - 100.0f) <= 0.1f &&
+            QueuedGasPath->RequestedDestination.Y > 139.0f &&
+            ThirdGasPath->RequestedDestination.Y > 139.0f &&
+            QueuedGasPath->RequestedDestination.X < 124.0f &&
+            ThirdGasPath->RequestedDestination.X > 124.0f,
+        "gas workers approach the nearest reachable refinery edge instead of one fixed doorway");
 
+    // Like openbw, any refinery edge contact can enter once this SCV owns the
+    // gather slot. It disappears at the boundary rather than walking visibly
+    // to the refinery center.
+    const Core::Math::Vec2 GasEntryContact{171.0f, 150.0f};
+    GasScvTrans.Position = GasEntryContact;
+    QueuedGasScvTrans.Position = {80.0f, 220.0f};
+    ThirdGasScvTrans.Position = {220.0f, 220.0f};
     GasPath->Path.clear();
     GasPath->PathIndex = 0;
     Game::Systems::HarvestSystem GasHarvestSystem(GasSysMgr);
     GasHarvestSystem.Update(0.1f);
+    auto* LiveGasScvRender =
+        GasEM.GetComponent<Game::Components::RenderComponent>(GasScv);
+    auto* LiveQueuedGasScvRender =
+        GasEM.GetComponent<Game::Components::RenderComponent>(QueuedGasScv);
+    Require(GasHarvest->State == Game::Components::HarvestState::Mining &&
+            GasResource && GasResource->ActiveGathererEntityID == GasScv &&
+            GasHarvest->InsideGasBuilding &&
+            LiveGasScvRender && !LiveGasScvRender->Visible &&
+            LiveQueuedGasScvRender && LiveQueuedGasScvRender->Visible,
+        "front gas worker hides immediately upon valid refinery edge contact");
+
+    auto* LiveGasScvTrans =
+        GasEM.GetComponent<Game::Components::TransformComponent>(GasScv);
+    Require(LiveGasScvTrans != nullptr,
+        "front gas worker transform remains available after queue creation");
     Require(GasHarvest->State == Game::Components::HarvestState::Mining,
-        "worker starts mining gas when inside refinery interaction range");
+        "front gas worker starts mining immediately after reaching the refinery doorway");
+    Require(GasHarvest->InsideGasBuilding,
+        "front gas worker records that it is inside the refinery");
+    Require(LiveGasScvRender && !LiveGasScvRender->Visible,
+        "front gas worker hides while it mines inside the refinery");
+    Require(GasResource->ActiveGathererEntityID == GasScv,
+        "front gas worker retains the active refinery slot while mining");
+    Require(QueuedGasPath->RequestedDestination.Y > 139.0f,
+        "waiting gas worker retains its own nearest-edge approach while the refinery is occupied");
 
     GasHarvestSystem.Update(GasHarvest->MineInterval);
-    Require(GasHarvest->State == Game::Components::HarvestState::MovingToDepot,
-        "worker returns to depot after filling gas cargo");
+    Require(GasHarvest->State == Game::Components::HarvestState::MovingToDepot &&
+            !GasHarvest->InsideGasBuilding && LiveGasScvRender->Visible &&
+            LiveGasScvTrans->Position.X > 187.0f &&
+            std::abs(LiveGasScvTrans->Position.Y - 100.0f) <= 0.1f &&
+            LiveGasScvTrans->Position.DistanceTo(GasEntryContact) > 30.0f,
+        "worker exits independently on the refinery side facing the nearest depot");
     Require(GasHarvest->CarryingType == Game::Components::ResourceType::VespeneGas,
         "worker records carried gas before returning");
 
-    GasScvTrans.Position = {225.0f, 100.0f};
+    GasHarvestSystem.Update(0.1f);
+    Require(QueuedGasHarvest && QueuedGasPath &&
+            GasResource->ActiveGathererEntityID == -1 &&
+            QueuedGasHarvest->State == Game::Components::HarvestState::MovingToResource &&
+            QueuedGasPath->RequestedDestination.Y > 139.0f,
+        "next queued gas worker advances to its nearest refinery edge after the previous worker exits");
+    auto* LiveQueuedGasScvTrans =
+        GasEM.GetComponent<Game::Components::TransformComponent>(QueuedGasScv);
+    Require(LiveQueuedGasScvTrans != nullptr,
+        "queued gas worker transform remains available after queue creation");
+    LiveQueuedGasScvTrans->Position = QueuedGasPath->RequestedDestination;
+    QueuedGasPath->Path.clear();
+    QueuedGasPath->PathIndex = 0;
+    GasHarvestSystem.Update(0.1f);
+    Require(GasResource->ActiveGathererEntityID == QueuedGasScv &&
+            QueuedGasHarvest->InsideGasBuilding &&
+            LiveQueuedGasScvRender && !LiveQueuedGasScvRender->Visible,
+        "next queued gas worker hides immediately at its own refinery edge contact");
+
+    LiveGasScvTrans->Position = {252.0f, 100.0f};
     GasPath->Path.clear();
     GasPath->PathIndex = 0;
+    auto* MorphingGasDepot =
+        GasEM.GetComponent<Game::Components::BuildingComponent>(GasDepot);
+    auto* MorphingGasDepotUnit =
+        GasEM.GetComponent<Game::Components::UnitComponent>(GasDepot);
+    Require(MorphingGasDepot && MorphingGasDepotUnit,
+        "gas depot components are available for zerg upgrade delivery regression");
+    MorphingGasDepot->BuildingDefID = HatcheryDefID;
+    MorphingGasDepot->UnderConstruction = true;
+    MorphingGasDepotUnit->ChkUnitID =
+        Game::Races::GetUnitDefByID(HatcheryDefID).ChkUnitID;
+    auto& GasDepotMorph =
+        GasEM.AddComponent<Game::Components::MorphComponent>(GasDepot);
+    GasDepotMorph.IsMorphing = true;
+    GasDepotMorph.SourceUnitID = GasDepot;
+    GasDepotMorph.MorphTargetDefID = LairDefID;
     GasHarvestSystem.Update(0.1f);
-    Require(EntityEdgeDistance(GasEM, GasScvTrans.Position, GasDepot) <= 17.0f,
-        "gas return test places the worker inside the depot collision boundary contact");
+    Require(EntityEdgeDistance(GasEM, LiveGasScvTrans->Position, GasDepot) <= 0.1f,
+        "gas return test places the worker inside the depot footprint");
     Require(GasResources.VespeneGas == 8,
-        "returning gas worker deposits vespene into player resources");
+        "returning gas worker deposits vespene while Hatchery upgrades to Lair");
     Require(GasResources.Minerals == 50,
         "gas deposit does not change mineral count");
     Require(GasHarvest->CarryingAmount == 0 &&
@@ -358,6 +571,37 @@ int main()
     Require(GasCmd->CurrentCommand == Game::Components::CommandType::Harvest &&
             GasCmd->TargetEntityID == Refinery,
         "gas worker keeps harvest command and refinery target after deposit");
+    Require(GasPath->RequestedDestination.DistanceTo({124.0f, 100.0f}) > 39.0f &&
+            GasResource &&
+            std::find(GasResource->QueuedGatherers.begin(),
+                      GasResource->QueuedGatherers.end(), GasScv) !=
+                GasResource->QueuedGatherers.end() &&
+            GasPath->RequestedIgnoreEntityID == GasDepot &&
+            !GasPath->Path.empty(),
+        "gas worker rejoins the refinery doorway queue after delivery instead of targeting its blocked center");
+
+    GasResource->Amount = 0;
+    GasResource->IsDepleted = true;
+    GasResource->ActiveGathererEntityID = GasScv;
+    GasResource->QueuedGatherers.erase(
+        std::remove(GasResource->QueuedGatherers.begin(),
+                    GasResource->QueuedGatherers.end(), GasScv),
+        GasResource->QueuedGatherers.end());
+    GasHarvest->State = Game::Components::HarvestState::Mining;
+    GasHarvest->CarryingAmount = 0;
+    GasHarvest->CarryingType = Game::Components::ResourceType::None;
+    GasHarvest->InsideGasBuilding = true;
+    GasHarvest->MineTimer = 0.0f;
+    LiveGasScvTrans->Position = {124.0f, 100.0f};
+    LiveGasScvRender->Visible = false;
+    Require(Game::Systems::HarvestSystem::CanHarvest(GasEM, GasScv, Refinery),
+        "openbw-compatible depleted refinery remains a valid gas target");
+    GasHarvestSystem.Update(GasHarvest->MineInterval);
+    Require(GasHarvest->State == Game::Components::HarvestState::MovingToDepot &&
+            GasHarvest->CarryingAmount == 2 &&
+            GasHarvest->CarryingType == Game::Components::ResourceType::VespeneGas &&
+            LiveGasScvRender->Visible,
+        "depleted refinery yields two gas and releases the worker for its return trip");
 
     Core::ECS::SystemManager DeadDepotSysMgr;
     auto& DeadDepotEM = DeadDepotSysMgr.GetEntityManager();
@@ -424,6 +668,27 @@ int main()
             CarryingPath.CurrentSpeed == 0.0f &&
             CarryingPath.CurrentVelocity.Length() == 0.0f,
         "destroyed depot return clears stale movement");
+    Require(Game::Systems::HarvestSystem::IssueHarvest(
+                DeadDepotEM, {CarryingScv}, DeadDepotMineral),
+        "loaded worker can receive a replacement mineral order");
+    Require(CarryingHarvest.CarryingAmount == 8 &&
+            CarryingHarvest.CarryingType == Game::Components::ResourceType::Minerals,
+        "replacement harvest order preserves visible carried minerals");
+
+    const int LiftedDepot =
+        CreateCompletedDepot(DeadDepotEM, {240.0f, 132.0f}, DeadDepotPlayerID);
+    auto* LiftedDepotBuilding =
+        DeadDepotEM.GetComponent<Game::Components::BuildingComponent>(LiftedDepot);
+    Require(LiftedDepotBuilding != nullptr, "lifted depot regression has building data");
+    LiftedDepotBuilding->IsLifted = true;
+    CarryingHarvest.State = Game::Components::HarvestState::MovingToDepot;
+    CarryingHarvest.ReturnBuildingID = LiftedDepot;
+    CarryingCmd.CurrentCommand = Game::Components::CommandType::Harvest;
+    DeadDepotHarvestSystem.Update(0.1f);
+    Require(CarryingHarvest.CarryingAmount == 8 &&
+            CarryingHarvest.State == Game::Components::HarvestState::Idle &&
+            CarryingCmd.CurrentCommand == Game::Components::CommandType::Stop,
+        "SCV cannot deliver cargo to a lifted Command Center");
 
     Core::ECS::SystemManager BlockedApproachSysMgr;
     auto& BlockedEM = BlockedApproachSysMgr.GetEntityManager();
@@ -478,6 +743,9 @@ int main()
     };
     const int QueueScvA = CreateQueuedScv({24.0f, 0.0f});
     const int QueueScvB = CreateQueuedScv({24.0f, 32.0f});
+    std::vector<int> QueueScvs = {QueueScvA, QueueScvB};
+    for (int I = 2; I < 14; ++I)
+        QueueScvs.push_back(CreateQueuedScv({24.0f, 32.0f + (float)I * 4.0f}));
     const int QueueMineral = QueueEM.CreateEntity();
     QueueEM.AddComponent<Game::Components::TransformComponent>(QueueMineral).Position =
         {128.0f, 0.0f};
@@ -491,14 +759,29 @@ int main()
         QueueEM.AddComponent<Game::Components::PathfindingComponent>(QueueMineral);
     SetCollisionBounds(QueueMineralPath, 32, 20, 31, 19);
 
+    const int AlternateMineral = QueueEM.CreateEntity();
+    QueueEM.AddComponent<Game::Components::TransformComponent>(AlternateMineral).Position =
+        {128.0f, 64.0f};
+    auto& AlternateMineralUnit =
+        QueueEM.AddComponent<Game::Components::UnitComponent>(AlternateMineral);
+    AlternateMineralUnit.ChkUnitID = 176;
+    auto& AlternateResource =
+        QueueEM.AddComponent<Game::Components::ResourceComponent>(AlternateMineral);
+    AlternateResource.Type = Game::Components::ResourceType::Minerals;
+    AlternateResource.Amount = 1500;
+    AlternateResource.MaxAmount = 1500;
+    auto& AlternatePath =
+        QueueEM.AddComponent<Game::Components::PathfindingComponent>(AlternateMineral);
+    SetCollisionBounds(AlternatePath, 32, 20, 31, 19);
+
     Require(Game::Systems::HarvestSystem::IssueHarvest(
-                QueueEM, {QueueScvA, QueueScvB}, QueueMineral),
+                QueueEM, QueueScvs, QueueMineral),
         "multi-selection harvest order is accepted");
     const auto* QueuePathA =
         QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvA);
     const auto* QueuePathB =
         QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvB);
-    Require(QueueResource.QueuedGatherers.size() == 2 &&
+    Require(QueueResource.QueuedGatherers.size() == QueueScvs.size() &&
             QueueResource.QueuedGatherers[0] == QueueScvA &&
             QueueResource.QueuedGatherers[1] == QueueScvB,
         "multi-selection harvest preserves selection order in the resource queue");
@@ -509,6 +792,39 @@ int main()
             QueuePathB->Path.back().DistanceTo({128.0f, 0.0f}) >
                 QueuePathA->Path.back().DistanceTo({128.0f, 0.0f}),
         "non-front harvesters wait outside the resource footprint instead of stacking on it");
+
+    for (size_t I = 1; I < QueueScvs.size(); ++I)
+    {
+        const auto* ApproachPath =
+            QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvs[I]);
+        Require(ApproachPath && !ApproachPath->Path.empty(),
+            "every queued SCV receives a resource approach path");
+    }
+
+    const Core::Math::Vec2 QueueScvBApproachTarget = QueuePathB->RequestedDestination;
+    QueueEM.GetComponent<Game::Components::TransformComponent>(QueueScvB)->Position =
+        {80.0f, 0.0f};
+    QueueResource.ActiveGathererEntityID = QueueScvA;
+    QueueResource.QueuedGatherers.erase(QueueResource.QueuedGatherers.begin());
+    auto* QueueHarvestA =
+        QueueEM.GetComponent<Game::Components::HarvestComponent>(QueueScvA);
+    Require(QueueHarvestA != nullptr, "front SCV has harvest state");
+    QueueHarvestA->State = Game::Components::HarvestState::Mining;
+    Game::Systems::HarvestSystem QueueHarvestSystem(QueueSysMgr);
+    QueueHarvestSystem.Update(0.1f);
+    QueuePathB = QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvB);
+    const auto* QueueHarvestB =
+        QueueEM.GetComponent<Game::Components::HarvestComponent>(QueueScvB);
+    Require(QueuePathB && QueueHarvestB &&
+            QueueHarvestB->TargetResourceID == AlternateMineral &&
+            QueuePathB->RequestedDestination.DistanceTo(QueueScvBApproachTarget) > 0.1f &&
+            AlternateResource.QueuedGatherers.size() == 1 &&
+            AlternateResource.QueuedGatherers.front() == QueueScvB,
+        "a queued SCV already at a busy patch spreads to an unused nearby mineral");
+    Require(std::find(QueueResource.QueuedGatherers.begin(),
+                      QueueResource.QueuedGatherers.end(), QueueScvB) ==
+                QueueResource.QueuedGatherers.end(),
+        "spreading removes the SCV from its previous mineral queue");
 
     std::printf("HarvestSystemCommandTest passed\n");
     return 0;

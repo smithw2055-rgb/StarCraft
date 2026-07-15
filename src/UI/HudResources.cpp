@@ -38,6 +38,9 @@ namespace
                 return IconForDef(Game::Races::GetUnitDefID("CommandCenter"));
             case HudVisualId::AdvancedBuild:
                 return IconForDef(Game::Races::GetUnitDefID("Factory"));
+            case HudVisualId::Back:
+            case HudVisualId::Cancel:
+                return 236;
             default:
                 return -1;
         }

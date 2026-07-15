@@ -44,6 +44,10 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
                 return std::numeric_limits<uint32_t>::max();
             return DataLoader->ResolveUnitConstructionImageID((uint32_t)ChkUnitID);
         });
+    ConfigureBuildAndProductionSubunitImageResolvers(
+        [&Client](int ChkUnitID) {
+            return Client.GetSpriteAssets().ResolveSubunitImageID(ChkUnitID);
+        });
     ConfigureGameplayCollisionBoundsResolvers(
         [&Client](int ChkUnitID) {
             Game::Components::UnitCollisionBounds Bounds;
@@ -147,6 +151,14 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
             if (!Sprite || Loader->ResolveImageGrpPath(Sprite->ImageID).empty())
                 return std::nullopt;
             return Sprite->ImageID;
+        });
+    ConfigureAnimationImageAttachmentPersistenceResolver(
+        [&Client](uint32_t ImageID) {
+            const auto* DataLoader = Client.GetDataAssets().GetDataLoader();
+            const auto* Relation = DataLoader
+                ? DataLoader->FindImageRelationByID(ImageID)
+                : nullptr;
+            return Relation && (Relation->IsShadow() || Relation->IsGlowOverlay());
         });
     ConfigureBulletVisualResolver(
         [&Client](int ChkUnitID, bool TargetIsAir)

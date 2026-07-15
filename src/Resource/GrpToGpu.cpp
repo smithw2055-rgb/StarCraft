@@ -33,7 +33,6 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
     const ColorPalette& ActivePalette = Options.PaletteOverride ? *Options.PaletteOverride : Pal;
     DecodedSprite Out;
     Out.Frames.reserve(Sprite.FrameCount);
-
     for (int I = 0; I < Sprite.FrameCount; ++I)
     {
         const GrpFrameInfo& Info = Sprite.Frames[I];
@@ -72,6 +71,16 @@ std::optional<DecodedSprite> DecodeGrpToRgba(
             const size_t OutOffset = ((size_t)OutY * (size_t)F.Width + (size_t)OutX) * 4u;
             if (Options.DecodeLightTableMask)
             {
+                if (Options.UseLightTableRgba)
+                {
+                    const RawColor& LightColor =
+                        Options.LightTableRgba[SourceIndex];
+                    F.Rgba[OutOffset + 0] = LightColor.R;
+                    F.Rgba[OutOffset + 1] = LightColor.G;
+                    F.Rgba[OutOffset + 2] = LightColor.B;
+                    F.Rgba[OutOffset + 3] = LightColor.A;
+                    continue;
+                }
                 const uint8_t Alpha = DecodeLightTableMaskAlpha(
                     SourceIndex, Options.LightTableIndexCount,
                     Options.LightTableMaxAlpha);

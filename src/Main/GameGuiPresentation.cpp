@@ -141,7 +141,8 @@ void UpdateGuiPresentationLayer(
     if (Gui.UseGui && Gui.MainGui.IsActive())
     {
         SyncCampaignPingsToHud(Hud, Client, Session.GetMapData().Width, Session.GetMapData().Height);
-        SyncMinimapDotsToHud(Hud, Session.Entities());
+        SyncMinimapDotsToHud(
+            Hud, Session.Entities(), Session.GetLocalPlayerID(), Session.GetFogSystem());
         const auto HudResources = CaptureHudResourceState(Hud);
         Gui.MainGui.SetResources(
             HudResources.MineralCount,

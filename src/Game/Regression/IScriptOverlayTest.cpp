@@ -310,6 +310,9 @@ int main()
             WarpEvents.front().Type == Game::IScriptEventType::WarpOverlay &&
             WarpEvents.front().A == 0x12 && WarpEvents.front().B == 0x34,
         "warpoverlay splits its packed modifier operand without treating it as an image id");
+    Require(WarpVM.GetContext().HasWarpOverlay &&
+            WarpVM.GetContext().WarpOverlayFrame == 0x12,
+        "warpoverlay retains modifier_data1 for textured root rendering");
     Require(WarpVM.GetContext().BaseFrameIndex == 9,
         "warpoverlay consumes one operand and preserves the following opcode boundary");
 

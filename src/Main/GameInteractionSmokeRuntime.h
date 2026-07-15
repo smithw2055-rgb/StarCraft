@@ -49,6 +49,7 @@ struct GameInteractionDemoState
         BarracksConstruction,
         MarineProduction,
         Research,
+        FullRoster,
         Observe,
         Done,
         Failed
@@ -71,13 +72,29 @@ struct GameInteractionDemoState
     int EngineeringBayID = -1;
     int ResearchStartLevel = 0;
     int FocusEntityID = -1;
+    std::vector<int> FullRosterEntityIDs;
+    int FullRosterBuildingCount = 0;
+    int FullRosterUnitCount = 0;
 };
 
 namespace InteractionSmoke
 {
+    struct FullRosterSpawnResult
+    {
+        std::vector<int> EntityIDs;
+        int BuildingCount = 0;
+        int UnitCount = 0;
+    };
+
     inline bool IsEnabled()
     {
         const char* Value = std::getenv("STARCRAFT_INTERACTION_SMOKE");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    inline bool IsFullRosterOnly()
+    {
+        const char* Value = std::getenv("STARCRAFT_FULL_ROSTER_SMOKE");
         return Value && Value[0] != '\0' && Value[0] != '0';
     }
 
@@ -230,7 +247,7 @@ namespace InteractionSmoke
             auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
             if (Building &&
                 Building->BuildingDefID == BuildingDefID &&
-                Building->BuilderUnitID == BuilderID)
+                Building->HasBuilderUnit(BuilderID))
             {
                 BestID = std::max(BestID, EntityID);
             }
@@ -486,6 +503,138 @@ namespace InteractionSmoke
                                        Core::Math::Vec2& Out)
     {
         const auto& Map = Session.GetEcsMap();
+
+        // Automated construction must stay out of the depot-to-mineral lane.
+        // Anchor the search on the nearest owned town hall and prefer the
+        // opposite, outer side of the base before falling back to the caller's
+        // local search center.
+        Core::Math::Vec2 DepotPosition{};
+        bool HasDepot = false;
+        float BestDepotDistance = std::numeric_limits<float>::max();
+        const std::array<int, 5> DepotDefIDs = {{
+            Game::Races::GetUnitDefID("CommandCenter"),
+            Game::Races::GetUnitDefID("Nexus"),
+            Game::Races::GetUnitDefID("Hatchery"),
+            Game::Races::GetUnitDefID("Lair"),
+            Game::Races::GetUnitDefID("Hive")
+        }};
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                                Game::Components::BuildingComponent,
+                                                Game::Components::PlayerComponent>())
+        {
+            const auto* Player =
+                EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+            const auto* Building =
+                EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+            const auto* Transform =
+                EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+            if (!Player || Player->PlayerID != PlayerID || !Building ||
+                Building->UnderConstruction || !Transform ||
+                std::find(DepotDefIDs.begin(), DepotDefIDs.end(),
+                          Building->BuildingDefID) == DepotDefIDs.end())
+            {
+                continue;
+            }
+            const float Distance = Center.DistanceTo(Transform->Position);
+            if (Distance < BestDepotDistance)
+            {
+                BestDepotDistance = Distance;
+                DepotPosition = Transform->Position;
+                HasDepot = true;
+            }
+        }
+
+        Core::Math::Vec2 MineralCenter{};
+        int MineralCount = 0;
+        if (HasDepot)
+        {
+            constexpr float MineralClusterRadiusSq = 640.0f * 640.0f;
+            for (int EntityID : EM.GetEntitiesWith<Game::Components::TransformComponent,
+                                                    Game::Components::ResourceComponent>())
+            {
+                const auto* Resource =
+                    EM.GetComponent<Game::Components::ResourceComponent>(EntityID);
+                const auto* Transform =
+                    EM.GetComponent<Game::Components::TransformComponent>(EntityID);
+                if (!Resource || Resource->Type !=
+                        Game::Components::ResourceType::Minerals ||
+                    !Transform ||
+                    (Transform->Position - DepotPosition).LengthSq() >
+                        MineralClusterRadiusSq)
+                {
+                    continue;
+                }
+                MineralCenter += Transform->Position;
+                ++MineralCount;
+            }
+        }
+
+        if (HasDepot && MineralCount > 0)
+        {
+            MineralCenter = MineralCenter * (1.0f / (float)MineralCount);
+            Core::Math::Vec2 TowardMinerals = MineralCenter - DepotPosition;
+            if (TowardMinerals.LengthSq() > 1.0f)
+            {
+                TowardMinerals = TowardMinerals.Normalized();
+                const Core::Math::Vec2 AwayFromMinerals = TowardMinerals * -1.0f;
+                const Core::Math::Vec2 PreferredTarget =
+                    DepotPosition + AwayFromMinerals * 224.0f;
+                int DepotTileX = 0;
+                int DepotTileY = 0;
+                Map.WorldToTile(DepotPosition, DepotTileX, DepotTileY);
+                bool FoundOutward = false;
+                float BestScore = std::numeric_limits<float>::max();
+                Core::Math::Vec2 BestOutward{};
+                for (int Radius = 3; Radius <= 18; ++Radius)
+                {
+                    for (int DY = -Radius; DY <= Radius; ++DY)
+                    {
+                        for (int DX = -Radius; DX <= Radius; ++DX)
+                        {
+                            if (std::max(std::abs(DX), std::abs(DY)) != Radius)
+                                continue;
+                            const int TileX = DepotTileX + DX;
+                            const int TileY = DepotTileY + DY;
+                            if (!Map.IsInBounds(TileX, TileY))
+                                continue;
+                            const Core::Math::Vec2 Candidate =
+                                Map.TileToWorld(TileX, TileY);
+                            const Core::Math::Vec2 FromDepot =
+                                Candidate - DepotPosition;
+                            const float MineralProjection =
+                                FromDepot.X * TowardMinerals.X +
+                                FromDepot.Y * TowardMinerals.Y;
+                            if (MineralProjection > -32.0f ||
+                                !Game::Systems::BuildingSystem::IsPlacementValid(
+                                    EM, BuildingDefID, Candidate, PlayerID))
+                            {
+                                continue;
+                            }
+                            const float Score =
+                                (Candidate - PreferredTarget).LengthSq();
+                            if (Score < BestScore)
+                            {
+                                BestScore = Score;
+                                BestOutward = Candidate;
+                                FoundOutward = true;
+                            }
+                        }
+                    }
+                }
+                if (FoundOutward)
+                {
+                    Out = BestOutward;
+                    Core::Utils::Logger::Info(
+                        "InteractionSmoke",
+                        "outward build placement def=" +
+                            std::to_string(BuildingDefID) + " pos=" +
+                            std::to_string((int)Out.X) + "," +
+                            std::to_string((int)Out.Y));
+                    return true;
+                }
+            }
+        }
+
         int CenterX = 0;
         int CenterY = 0;
         Map.WorldToTile(Center, CenterX, CenterY);
@@ -595,6 +744,112 @@ namespace InteractionSmoke
             "Interaction smoke spawned combat pair attacker=" +
                 std::to_string(OutAttackerID) +
                 " target=" + std::to_string(OutTargetID));
+        return true;
+    }
+
+    inline bool SpawnFullRoster(GameSession& Session,
+                                FullRosterSpawnResult& Out,
+                                std::string& Error)
+    {
+        auto& EM = Session.Entities();
+        const auto& Map = Session.GetEcsMap();
+        const auto& Terran = Game::Races::GetTerranDefs();
+        const auto& Zerg = Game::Races::GetZergDefs();
+        const auto& Protoss = Game::Races::GetProtossDefs();
+        const std::array<const std::vector<Game::Races::UnitDef>*, 3> Tables = {{
+            &Terran, &Zerg, &Protoss
+        }};
+        const std::array<int, 3> Offsets = {{
+            0,
+            (int)Terran.size(),
+            (int)Terran.size() + (int)Zerg.size()
+        }};
+
+        std::vector<std::pair<int, int>> Buildings;
+        std::vector<std::pair<int, int>> Units;
+        for (int RaceIndex = 0; RaceIndex < (int)Tables.size(); ++RaceIndex)
+        {
+            const auto& Defs = *Tables[(size_t)RaceIndex];
+            for (int LocalDefID = 0; LocalDefID < (int)Defs.size(); ++LocalDefID)
+            {
+                const int GlobalDefID = Offsets[(size_t)RaceIndex] + LocalDefID;
+                (Defs[(size_t)LocalDefID].IsBuilding ? Buildings : Units)
+                    .push_back({GlobalDefID, RaceIndex});
+            }
+        }
+
+        const int BuildingColumns = std::max(1, (Map.GetWidth() - 8) / 4);
+        const int BuildingRows = std::max(
+            1, ((int)Buildings.size() + BuildingColumns - 1) / BuildingColumns);
+        const int UnitColumns = std::max(1, (Map.GetWidth() - 8) / 2);
+        const int BuildingStartY = 4;
+        const int UnitStartY = BuildingStartY + BuildingRows * 4 + 4;
+        const int UnitRows = std::max(
+            1, ((int)Units.size() + UnitColumns - 1) / UnitColumns);
+        if (UnitStartY + UnitRows * 2 >= Map.GetHeight() - 2)
+        {
+            Error = "loaded map is too small for the full unit/building roster";
+            return false;
+        }
+
+        auto ValidateSpawn = [&](int EntityID,
+                                 int DefID,
+                                 bool ExpectBuilding,
+                                 const std::string& Name)
+        {
+            if (EntityID < 0 || !EM.IsAlive(EntityID))
+            {
+                Error = "full roster failed to spawn " + Name;
+                return false;
+            }
+            const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+            const auto* Render = EM.GetComponent<Game::Components::RenderComponent>(EntityID);
+            const auto* Building =
+                EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+            if (!Unit || !Render || (ExpectBuilding != (Building != nullptr)) ||
+                (ExpectBuilding && Building->BuildingDefID != DefID))
+            {
+                Error = "full roster components are incomplete for " + Name;
+                return false;
+            }
+            return true;
+        };
+
+        Out = {};
+        Out.EntityIDs.reserve(Buildings.size() + Units.size());
+        for (int I = 0; I < (int)Buildings.size(); ++I)
+        {
+            const int TileX = 4 + (I % BuildingColumns) * 4;
+            const int TileY = BuildingStartY + (I / BuildingColumns) * 4;
+            const auto [DefID, PlayerID] = Buildings[(size_t)I];
+            const auto Def = Game::Races::GetUnitDefByID(DefID);
+            const int EntityID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+                EM, DefID, Map.TileToWorld(TileX, TileY), PlayerID);
+            if (!ValidateSpawn(EntityID, DefID, true, Def.Name))
+                return false;
+            Out.EntityIDs.push_back(EntityID);
+            ++Out.BuildingCount;
+        }
+
+        for (int I = 0; I < (int)Units.size(); ++I)
+        {
+            const int TileX = 4 + (I % UnitColumns) * 2;
+            const int TileY = UnitStartY + (I / UnitColumns) * 2;
+            const auto [DefID, PlayerID] = Units[(size_t)I];
+            const auto Def = Game::Races::GetUnitDefByID(DefID);
+            const int EntityID = Game::Systems::ProductionSystem::DebugSpawnUnit(
+                EM, DefID, Map.TileToWorld(TileX, TileY), PlayerID);
+            if (!ValidateSpawn(EntityID, DefID, false, Def.Name))
+                return false;
+            Out.EntityIDs.push_back(EntityID);
+            ++Out.UnitCount;
+        }
+
+        Core::Utils::Logger::Info(
+            "InteractionSmoke",
+            "full roster spawned buildings=" + std::to_string(Out.BuildingCount) +
+                " units=" + std::to_string(Out.UnitCount) +
+                " total=" + std::to_string(Out.EntityIDs.size()));
         return true;
     }
 
@@ -2642,6 +2897,31 @@ namespace InteractionSmoke
             "Interaction smoke initial scene remained playable after load: local_player=" +
                 std::to_string(LocalPlayerID));
 
+        if (IsFullRosterOnly())
+        {
+            FullRosterSpawnResult FullRoster;
+            if (!SpawnFullRoster(Session, FullRoster, Error))
+                return false;
+            if (!FullRoster.EntityIDs.empty())
+            {
+                const int FocusID = FullRoster.EntityIDs.front();
+                Client.SetSelectedIdsForDemo({FocusID});
+                Hud.UpdateContext(EM, {FocusID});
+                if (const auto* Transform =
+                        EM.GetComponent<Game::Components::TransformComponent>(FocusID))
+                {
+                    Client.CenterCamera(Transform->Position.X, Transform->Position.Y);
+                }
+            }
+            Core::Utils::Logger::Info(
+                "InteractionSmoke",
+                "Interaction smoke passed: roster-only buildings=" +
+                    std::to_string(FullRoster.BuildingCount) +
+                    " units=" + std::to_string(FullRoster.UnitCount) +
+                    " total=" + std::to_string(FullRoster.EntityIDs.size()));
+            return true;
+        }
+
         const int ResourceID = FindResource(EM);
         if (ResourceID < 0)
         {
@@ -2731,6 +3011,10 @@ namespace InteractionSmoke
         if (!VerifyCampaignVictoryClosure(Session, Campaign, EM, Client, Gui, Hud, WorkerID, Error))
             return false;
 
+        FullRosterSpawnResult FullRoster;
+        if (!SpawnFullRoster(Session, FullRoster, Error))
+            return false;
+
         Core::Utils::Logger::Info(
             "InteractionSmoke",
             "Interaction smoke passed: worker=" + std::to_string(WorkerID) +
@@ -2741,7 +3025,9 @@ namespace InteractionSmoke
                 " barracks=" + std::to_string(BarracksID) +
                 " marine=" + std::to_string(MarineID) +
                 " attacker=" + std::to_string(AttackerID) +
-                " target=" + std::to_string(TargetID));
+                " target=" + std::to_string(TargetID) +
+                " roster_buildings=" + std::to_string(FullRoster.BuildingCount) +
+                " roster_units=" + std::to_string(FullRoster.UnitCount));
         return true;
     }
 }
@@ -2774,6 +3060,76 @@ namespace InteractionDemo
         return Value && Value[0] != '\0' && Value[0] != '0';
     }
 
+    inline bool IsAiShowcase()
+    {
+        const char* Value = std::getenv("STARCRAFT_AI_SHOWCASE");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    inline void SelectAndFocus(GameInteractionDemoState& State,
+                               ClientRuntime& Client,
+                               Core::ECS::EntityManager& EM,
+                               int EntityID);
+    inline void KeepFocus(GameInteractionDemoState& State,
+                          ClientRuntime& Client,
+                          Core::ECS::EntityManager& EM);
+
+    inline float RunAiShowcase(GameInteractionDemoState& State,
+                               GameSession& Session,
+                               ClientRuntime& Client,
+                               UI::Hud& Hud,
+                               float Dt)
+    {
+        constexpr float kShowcaseSimulationScale = 8.0f;
+        auto& EM = Session.Entities();
+        if (!State.Started)
+        {
+            State.Started = true;
+            State.StageSeconds = 0.0f;
+            Core::Utils::Logger::Info(
+                "InteractionDemo",
+                "visible AI showcase started at 8x simulation speed; no roster debug spawn");
+        }
+
+        State.StageSeconds += Dt;
+        KeepFocus(State, Client, EM);
+        if (State.StageSeconds < 0.75f)
+            return kShowcaseSimulationScale;
+        State.StageSeconds = 0.0f;
+
+        const int PlayerID = Session.GetLocalPlayerID();
+        int FocusID = -1;
+        for (int Eid : EM.GetEntitiesWith<Game::Components::BuildingComponent,
+                                          Game::Components::PlayerComponent>())
+        {
+            auto* B = EM.GetComponent<Game::Components::BuildingComponent>(Eid);
+            auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+            if (!B || !P || P->PlayerID != PlayerID)
+                continue;
+            if (B->UnderConstruction)
+                FocusID = std::max(FocusID, Eid);
+            else if (auto* Prod = EM.GetComponent<Game::Components::ProductionComponent>(Eid);
+                     Prod && !Prod->Queue.empty() && FocusID < 0)
+                FocusID = Eid;
+        }
+        if (FocusID < 0)
+        {
+            for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent,
+                                              Game::Components::PlayerComponent>())
+            {
+                auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+                if (P && P->PlayerID == PlayerID)
+                    FocusID = std::max(FocusID, Eid);
+            }
+        }
+        if (FocusID >= 0)
+        {
+            SelectAndFocus(State, Client, EM, FocusID);
+            Hud.UpdateContext(EM, {FocusID});
+        }
+        return kShowcaseSimulationScale;
+    }
+
     inline const char* StageName(GameInteractionDemoState::Stage Stage)
     {
         using StageT = GameInteractionDemoState::Stage;
@@ -2788,6 +3144,7 @@ namespace InteractionDemo
             case StageT::BarracksConstruction: return "barracks";
             case StageT::MarineProduction: return "marine production";
             case StageT::Research: return "research";
+            case StageT::FullRoster: return "full roster";
             case StageT::Observe: return "observe";
             case StageT::Done: return "done";
             case StageT::Failed: return "failed";
@@ -3420,7 +3777,7 @@ namespace InteractionDemo
                 auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(BuildingID);
                 auto* BuildingUnit = EM.GetComponent<Game::Components::UnitComponent>(BuildingID);
                 if (Building && BuildingUnit && Building->UnderConstruction &&
-                    Building->BuilderUnitID == EntityID && BuildingUnit->HitPoints > 0)
+                    Building->HasBuilderUnit(EntityID) && BuildingUnit->HitPoints > 0)
                 {
                     BusyConstructing = true;
                     break;
@@ -3611,12 +3968,48 @@ namespace InteractionDemo
         return true;
     }
 
+    inline bool StartFullRoster(GameInteractionDemoState& State,
+                                GameSession& Session,
+                                ClientRuntime& Client,
+                                UI::Hud& Hud)
+    {
+        InteractionSmoke::FullRosterSpawnResult Result;
+        std::string Error;
+        if (!InteractionSmoke::SpawnFullRoster(Session, Result, Error))
+        {
+            Core::Utils::Logger::Error("InteractionDemo", Error);
+            return false;
+        }
+
+        State.FullRosterEntityIDs = std::move(Result.EntityIDs);
+        State.FullRosterBuildingCount = Result.BuildingCount;
+        State.FullRosterUnitCount = Result.UnitCount;
+        if (!State.FullRosterEntityIDs.empty())
+        {
+            SelectAndFocus(
+                State, Client, Session.Entities(), State.FullRosterEntityIDs.front());
+            Hud.UpdateContext(Session.Entities(), {State.FullRosterEntityIDs.front()});
+        }
+        Core::Utils::Logger::Info(
+            "InteractionDemo",
+            "demo full roster ready buildings=" +
+                std::to_string(State.FullRosterBuildingCount) +
+                " units=" + std::to_string(State.FullRosterUnitCount));
+        return true;
+    }
+
     inline float Run(GameInteractionDemoState& State,
                      GameSession& Session,
                      ClientRuntime& Client,
                      UI::Hud& Hud,
                      float Dt)
     {
+        if (IsAiShowcase())
+        {
+            if (!Session.IsEcsInitialized() || !Session.IsMapLoaded())
+                return 1.0f;
+            return RunAiShowcase(State, Session, Client, Hud, Dt);
+        }
         if (!IsEnabled(State))
             return 1.0f;
         if (!Session.IsEcsInitialized() || !Session.IsMapLoaded())
@@ -3764,12 +4157,30 @@ namespace InteractionDemo
                         "InteractionDemo",
                         "demo completed Infantry Weapons level=" +
                             std::to_string(Level));
-                    SetStage(State, StageT::Observe);
+                    if (!StartFullRoster(State, Session, Client, Hud))
+                        Fail(State, "could not spawn the full building/unit roster");
+                    else
+                        SetStage(State, StageT::FullRoster);
                 }
                 else if (State.StageSeconds >= 42.0f)
                 {
                     Fail(State, "Infantry Weapons upgrade did not complete during demo");
                 }
+                break;
+            }
+            case StageT::FullRoster:
+            {
+                if (!State.FullRosterEntityIDs.empty())
+                {
+                    const size_t Index = std::min(
+                        State.FullRosterEntityIDs.size() - 1,
+                        (size_t)(State.StageSeconds / 2.0f));
+                    SelectAndFocus(
+                        State, Client, EM, State.FullRosterEntityIDs[Index]);
+                    Hud.UpdateContext(EM, {State.FullRosterEntityIDs[Index]});
+                }
+                if (State.StageSeconds >= 16.0f)
+                    SetStage(State, StageT::Observe);
                 break;
             }
             case StageT::Observe:

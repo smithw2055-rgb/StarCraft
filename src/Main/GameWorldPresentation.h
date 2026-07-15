@@ -13,6 +13,7 @@ inline void RenderGameplayWorldFrame(ClientRuntime& Client, GameSession& Session
 
     if (Session.IsMapLoaded())
     {
+        Session.SyncCreepPresentation();
         Client.RenderWorld(Session.GetMapData(), Session.Entities(), Session.IsMapLoaded());
         Client.RenderWorldEffects(Render::g_Draw2D);
     }

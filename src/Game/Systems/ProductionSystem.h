@@ -6,6 +6,8 @@
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
 
+namespace Game::Map { class GameMap; }
+
 namespace Game::Systems
 {
 
@@ -20,7 +22,15 @@ public:
     std::string_view GetName() const override { return "ProductionSystem"; }
 
     static void SetImageResolver(ImageIDResolver Resolver);
+    static void SetSubunitImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
+    static void SetMap(const Game::Map::GameMap* Map);
+
+    static Core::Math::Vec2 FindSpawnPosition(
+        Core::ECS::EntityManager& EM,
+        int ProducerID,
+        int UnitChkID,
+        int IgnoreEntityID = -1);
 
     static bool CanTrain(const Core::ECS::EntityManager& EM,
                          int BuildingID, int UnitDefID,

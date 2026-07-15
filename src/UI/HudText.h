@@ -53,13 +53,58 @@ inline int CommandIconForCommand(HudCommandId CommandId)
 {
     switch (CommandId)
     {
-        case HudCommandId::Move: return 231;
-        case HudCommandId::AttackMove: return 290;
-        case HudCommandId::Stop: return 232;
-        case HudCommandId::Hold: return 249;
-        case HudCommandId::Patrol: return 254;
+        // Canonical common command frames in cmdicons.grp.
+        case HudCommandId::Move: return 228;
+        case HudCommandId::AttackMove: return 230;
+        case HudCommandId::Stop: return 229;
+        case HudCommandId::Hold: return 255;
+        case HudCommandId::Patrol: return 233;
         case HudCommandId::Follow: return 309;
-        case HudCommandId::Harvest: return 346;
+        case HudCommandId::Harvest: return 231;
+        // Canonical Terran building flight commands in cmdicons.grp.
+        case HudCommandId::LiftOff: return 282;
+        case HudCommandId::Land: return 283;
+        // Canonical transport command pair in cmdicons.grp. Keeping these
+        // distinct prevents Load/Unload from degrading into tiny text-only
+        // buttons in both the native console and the XAML HUD.
+        case HudCommandId::Load: return 234;
+        case HudCommandId::UnloadAll: return 235;
+        case HudCommandId::Rally: return 286;
+        case HudCommandId::Scan: return 249;
+        case HudCommandId::Siege: return 289;
+        case HudCommandId::Unsiege: return 290;
+        case HudCommandId::RechargeShields: return 255;
+        // Unit abilities still come from the embedded cmdicons.grp atlas. The
+        // research mapping provides a stable project-owned fallback until the
+        // DAT command-card tables are imported verbatim.
+        case HudCommandId::Burrow:
+            return IconForDef(Game::Races::GetUnitDefID("Drone"));
+        case HudCommandId::PsionicStorm:
+            return IconForDef(Game::Races::GetUnitDefID("High Templar"));
+        case HudCommandId::YamatoGun:
+            return IconForDef(Game::Races::GetUnitDefID("Battlecruiser"));
+        case HudCommandId::Lockdown:
+            return IconForDef(Game::Races::GetUnitDefID("Ghost"));
+        case HudCommandId::Hallucination:
+            return IconForDef(Game::Races::GetUnitDefID("High Templar"));
+        case HudCommandId::StasisField:
+            return IconForDef(Game::Races::GetUnitDefID("Arbiter"));
+        case HudCommandId::Recall:
+            return IconForDef(Game::Races::GetUnitDefID("Arbiter"));
+        case HudCommandId::Plague:
+            return IconForDef(Game::Races::GetUnitDefID("Defiler"));
+        case HudCommandId::Ensnare:
+            return IconForDef(Game::Races::GetUnitDefID("Queen"));
+        case HudCommandId::SpawnBroodling:
+            return IconForDef(Game::Races::GetUnitDefID("Queen"));
+        case HudCommandId::Consume:
+            return IconForDef(Game::Races::GetUnitDefID("Defiler"));
+        case HudCommandId::EMPShockwave:
+            return IconForDef(Game::Races::GetUnitDefID("ScienceVessel"));
+        case HudCommandId::DarkSwarm:
+            return IconForDef(Game::Races::GetUnitDefID("Defiler"));
+        case HudCommandId::Parasite:
+            return IconForDef(Game::Races::GetUnitDefID("Queen"));
         default: return -1;
     }
 }

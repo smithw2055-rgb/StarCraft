@@ -49,6 +49,9 @@ public:
     using OverlayOffsetResolver = std::function<std::optional<Core::Math::Vec2>(
         uint32_t, size_t, size_t, size_t, bool)>;
     using WeaponImageResolver = std::function<std::optional<uint32_t>(int)>;
+    // Images.rel marks only shadows and glow overlays as static attachments.
+    // Transition images created by Init must be allowed to finish and disappear.
+    using ImageAttachmentPersistenceResolver = std::function<bool(uint32_t)>;
 
     AnimationSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     AnimationSystem(Core::ECS::SystemManager& SysMgr, Core::Audio::AudioSystem* Audio)
@@ -66,6 +69,8 @@ public:
                                         const std::string& ImagesDatPath);
     static void SetOverlayOffsetResolver(OverlayOffsetResolver Resolver);
     static void SetWeaponImageResolver(WeaponImageResolver Resolver);
+    static void SetImageAttachmentPersistenceResolver(
+        ImageAttachmentPersistenceResolver Resolver);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
     static int ResolvePlayableIScriptAnimation(int AnimID,
                                                const std::function<bool(int)>& HasAnim);
@@ -101,6 +106,7 @@ private:
         int AnimID = -1;
         bool WasWorking = false;
         bool WasMiningMinerals = false;
+        bool WasConstructing = false;
         bool WasUnderConstruction = false;
         bool WasWalking = false;
         bool HasPlayedBuilt = false;
@@ -118,6 +124,7 @@ private:
     static std::string sImagesDatPath;
     static OverlayOffsetResolver sOverlayOffsetResolver;
     static WeaponImageResolver sWeaponImageResolver;
+    static ImageAttachmentPersistenceResolver sImageAttachmentPersistenceResolver;
 
     Core::ECS::SystemManager& mSystemMgr;
     Core::Audio::AudioSystem* mAudio = nullptr;
@@ -132,10 +139,24 @@ private:
                                      bool* OutFlipped = nullptr);
     void UpdateScriptEffects(float DeltaTime);
     void UpdateImageTrees(float DeltaTime);
+    void UpdateCarriedResourceOverlay(int EntityID,
+                                      Components::ImageTreeComponent& Tree,
+                                      const Components::UnitComponent* Unit,
+                                      const Components::HarvestComponent* Harvest);
+    void EnsureUnitSubunitNode(int EntityID,
+                               const Components::RenderComponent& Render);
+    void UpdateAddonConnectorOverlay(
+        int EntityID,
+        const Components::RenderComponent& Render);
     void UpdateDamageOverlays(int EntityID,
                               const Components::RenderComponent& Render,
                               const Components::UnitComponent* Unit,
                               const Components::BuildingComponent* Building);
+    void UpdateCommandCenterProductionVisual(
+        int EntityID,
+        const Components::RenderComponent& Render,
+        const Components::ProductionComponent* Production,
+        float DeltaTime);
     void ClearImageTree(int EntityID, bool PreservePersistentAttachments = false);
     void MarkImageSubtreeHidden(Components::ImageTreeComponent& Tree, int ParentIndex);
     void AddImageTreeNode(int EntityID,
@@ -159,6 +180,8 @@ private:
                           bool PersistentSpriteAttachment = false,
                           bool UseSpecialOffset = false);
     void StartImageNodeScript(Components::ImageSubnode& Node);
+    void RunImageTreeAnimation(int EntityID, int AnimID);
+    void RunUnitSubunitAnimation(int EntityID, int AnimID);
     void CreateGasOverlay(int EntityID,
                           int ParentIndex,
                           int SourceImageID,
@@ -314,6 +337,10 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
         return -1;
     }
 
+    if (IsWorking && HasAnim(Game::IScriptAnims::Anim_IsWorking))
+        return Game::IScriptAnims::Anim_IsWorking;
+    if (WasWorking && HasAnim(Game::IScriptAnims::Anim_WorkingToIdle))
+        return Game::IScriptAnims::Anim_WorkingToIdle;
     if (WasUnderConstruction)
     {
         const int BuiltAnim =
@@ -321,10 +348,6 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
         if (BuiltAnim >= 0)
             return BuiltAnim;
     }
-    if (IsWorking && HasAnim(Game::IScriptAnims::Anim_IsWorking))
-        return Game::IScriptAnims::Anim_IsWorking;
-    if (WasWorking && HasAnim(Game::IScriptAnims::Anim_WorkingToIdle))
-        return Game::IScriptAnims::Anim_WorkingToIdle;
     if (HasAnim(Game::IScriptAnims::Anim_Init))
         return Game::IScriptAnims::Anim_Init;
     return -1;
@@ -333,23 +356,17 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
 inline bool AnimationSystem::ShouldClearImageTreeForAnimRestart(
     bool IsBuilding,
     bool ImageOrScriptChanged,
-    int PreviousAnim,
-    int TargetAnim,
-    bool UnderConstruction)
+    int /*PreviousAnim*/,
+    int /*TargetAnim*/,
+    bool /*UnderConstruction*/)
 {
     if (ImageOrScriptChanged)
         return true;
 
-    if (TargetAnim == Game::IScriptAnims::Anim_GndAttkInit ||
-        TargetAnim == Game::IScriptAnims::Anim_AirAttkInit ||
-        TargetAnim == Game::IScriptAnims::Anim_LiftOff ||
-        TargetAnim == Game::IScriptAnims::Anim_Landing)
-        return true;
-
-    if (UnderConstruction)
-        return PreviousAnim != TargetAnim;
-
-    return !IsBuilding && PreviousAnim != TargetAnim;
+    // Mobile attack/movement effects remain transient runtime overlays. A
+    // building sprite, however, owns a stable list of images: state changes
+    // are propagated to those images by RunImageTreeAnimation().
+    return !IsBuilding;
 }
 
 inline AnimState AnimationSystem::GetAnimStateFromComponents(
@@ -363,11 +380,20 @@ inline AnimState AnimationSystem::GetAnimStateFromComponents(
     const Components::StatusEffectComponent* Status)
 {
     if (Unit && Unit->HitPoints <= 0) return AnimState::Dying;
+    // A Zerg building morph (Hatchery -> Lair -> Hive, Spire -> Greater
+    // Spire) is still building construction visually.  Eggs also carry a
+    // BuildingComponent, but have no building definition and must retain the
+    // ordinary unit-morph animation.
+    if (Bldg && Bldg->UnderConstruction && Bldg->BuildingDefID >= 0)
+        return AnimState::Constructing;
     if (Morph && Morph->IsMorphing) return AnimState::Morphing;
-    if (Bldg && Bldg->UnderConstruction) return AnimState::Constructing;
-    if (Bldg && Bldg->FlightPhase == Components::BuildingFlightPhase::LiftingOff)
+    if (Bldg &&
+        Bldg->FlightPhase == Components::BuildingFlightPhase::LiftingOff &&
+        !Bldg->FlightHeightTransitionActive)
         return AnimState::LiftingOff;
-    if (Bldg && Bldg->FlightPhase == Components::BuildingFlightPhase::Landing)
+    if (Bldg &&
+        Bldg->FlightPhase == Components::BuildingFlightPhase::Landing &&
+        !Bldg->FlightHeightTransitionActive)
         return AnimState::Landing;
     if (Burrow)
     {

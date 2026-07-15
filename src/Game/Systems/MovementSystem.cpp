@@ -7,8 +7,10 @@
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/AStar.h"
 #include "Core/Math/Vec2.h"
+#include "Core/Utils/Logger.h"
 
 #include <unordered_map>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <functional>
@@ -21,6 +23,32 @@ using namespace Game::Components;
 
 namespace
 {
+    static bool PathingDebugEnabled()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEBUG_PATHING");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
+    static void LogMovementStall(Core::ECS::EntityID EntityID,
+                                 const TransformComponent& Transform,
+                                 const PathfindingComponent& Path,
+                                 const char* Phase)
+    {
+        if (!PathingDebugEnabled())
+            return;
+        Core::Utils::Logger::Info("Pathing",
+            std::string("stall phase=") + Phase +
+            " entity=" + std::to_string(EntityID) +
+            " pos=" + std::to_string((int)Transform.Position.X) + "," +
+                std::to_string((int)Transform.Position.Y) +
+            " target=" + std::to_string((int)Path.RequestedDestination.X) + "," +
+                std::to_string((int)Path.RequestedDestination.Y) +
+            " blocker=" + std::to_string(Path.BlockedByEntityID) +
+            " repath=" + std::to_string(Path.RepathFailCount) +
+            " nodes=" + std::to_string(Path.Path.size()) +
+            " index=" + std::to_string(Path.PathIndex));
+    }
+
     static bool IsSiegedTankUnit(int ChkUnitID)
     {
         return ChkUnitID == 30 ||  // Terran Siege Tank Siege Mode
@@ -154,6 +182,7 @@ namespace
                Type == CommandType::Patrol ||
                Type == CommandType::Harvest ||
                Type == CommandType::Build ||
+               Type == CommandType::Repair ||
                Type == CommandType::Follow;
     }
 
@@ -249,6 +278,7 @@ namespace
             std::max(Path.NodeTolerance, (float)CollisionRadiusFromBounds(Path));
         if (Distance <= ArrivalTolerance)
         {
+            Path.RepathFailCount = 0;
             Path.DestinationStallTimer = 0.0f;
             Path.LastDestinationDistance = Distance;
             Path.HasLastDestinationDistance = true;
@@ -258,6 +288,7 @@ namespace
         if (!Path.HasLastDestinationDistance ||
             Distance < Path.LastDestinationDistance - 1.0f)
         {
+            Path.RepathFailCount = 0;
             Path.DestinationStallTimer = 0.0f;
             Path.LastDestinationDistance = Distance;
             Path.HasLastDestinationDistance = true;
@@ -314,7 +345,8 @@ namespace
             int SX = 0;
             int SY = 0;
             Map.WorldToTile(Sample, SX, SY);
-            if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY))
+            if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY) ||
+                !Map.CanTraverseGround(Position, Sample))
                 return false;
         }
         return true;
@@ -326,15 +358,19 @@ namespace
                                                   float MovingRadius,
                                                   bool IsAir)
     {
-        if (IsAir || !Map || IsWalkableWorldPosition(*Map, Proposed, MovingRadius))
+        if (IsAir || !Map ||
+            (Map->CanTraverseGround(Current, Proposed) &&
+             IsWalkableWorldPosition(*Map, Proposed, MovingRadius)))
             return Proposed;
 
         const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
-        if (IsWalkableWorldPosition(*Map, SlideX, MovingRadius))
+        if (Map->CanTraverseGround(Current, SlideX) &&
+            IsWalkableWorldPosition(*Map, SlideX, MovingRadius))
             return SlideX;
 
         const Core::Math::Vec2 SlideY{Current.X, Proposed.Y};
-        if (IsWalkableWorldPosition(*Map, SlideY, MovingRadius))
+        if (Map->CanTraverseGround(Current, SlideY) &&
+            IsWalkableWorldPosition(*Map, SlideY, MovingRadius))
             return SlideY;
 
         return Current;
@@ -470,6 +506,26 @@ namespace
         return OverlapX * OverlapY;
     }
 
+    static bool IsActiveHarvester(Core::ECS::EntityManager& EM,
+                                  Core::ECS::EntityID EntityID)
+    {
+        const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+        return Harvest && Harvest->State != HarvestState::Idle;
+    }
+
+    static bool IsAssignedConstructionWorker(Core::ECS::EntityManager& EM,
+                                             Core::ECS::EntityID EntityID)
+    {
+        const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        if (!Path || Path->RequestedIgnoreEntityID < 0)
+            return false;
+
+        const auto* Building =
+            EM.GetComponent<BuildingComponent>(Path->RequestedIgnoreEntityID);
+        return Building && Building->UnderConstruction &&
+               Building->HasBuilderUnit(EntityID);
+    }
+
     static Core::Math::Vec2 DynamicCollisionSeparation(
         Core::Math::Vec2 PositionA,
         const StaticBlockerRect& RectA,
@@ -510,6 +566,13 @@ namespace
         if (!MovingPath || MovingPath->IsAir)
             return -1;
 
+        // OpenBW removes the ground-unit collision flag from an SCV while it
+        // is entering its assigned Terran construction footprint. Without
+        // this exception, nearby workers can permanently hold the builder a
+        // few pixels outside a large building such as a Command Center.
+        if (IsAssignedConstructionWorker(EM, MovingID))
+            return -1;
+
         const StaticBlockerRect MovingRect =
             DynamicCollisionRectForPath(*MovingPath);
         auto Units = EM.GetEntitiesWith<TransformComponent,
@@ -518,6 +581,16 @@ namespace
         for (auto OtherID : Units)
         {
             if (OtherID == MovingID || IsStaticGroundBlocker(EM, OtherID))
+                continue;
+
+            if (IsAssignedConstructionWorker(EM, OtherID))
+                continue;
+
+            // OpenBW's unit_can_collide_with() gives gathering workers a
+            // harvest-specific no-collide pass against mobile units. This is
+            // what lets inbound and returning workers cross in a mineral lane
+            // instead of forming a permanent head-on blockage.
+            if (IsActiveHarvester(EM, MovingID))
                 continue;
 
             auto* OtherTrans = EM.GetComponent<TransformComponent>(OtherID);
@@ -535,11 +608,25 @@ namespace
                 Current, MovingRect, OtherTrans->Position, OtherRect);
             const float ProposedOverlap = DynamicCollisionOverlap(
                 Proposed, MovingRect, OtherTrans->Position, OtherRect);
-            // Existing overlaps can occur during spawn, map load, or dense group
-            // movement. Leave those to the soft repulse field so units can
-            // separate; the hard boundary prevents a separated pair from
-            // entering a new overlap.
-            if (CurrentOverlap <= 0.0f && ProposedOverlap > 0.0f)
+            // Existing overlaps can occur during spawn, map load, or dense
+            // group movement. Permit only steps that actually reduce that
+            // overlap. Allowing every step from an overlapped position lets
+            // units on the same route collapse into identical coordinates.
+            const bool EntersNewOverlap =
+                CurrentOverlap <= 0.0f && ProposedOverlap > 0.0f;
+            const float MovingArea =
+                (MovingRect.Left + MovingRect.Right) *
+                (MovingRect.Top + MovingRect.Bottom);
+            const float OtherArea =
+                (OtherRect.Left + OtherRect.Right) *
+                (OtherRect.Top + OtherRect.Bottom);
+            const float SmallerArea = std::min(MovingArea, OtherArea);
+            const bool AlreadyNearlyMerged =
+                SmallerArea > 0.0f && CurrentOverlap >= SmallerArea * 0.90f;
+            const bool FailsToEscapeExistingOverlap =
+                AlreadyNearlyMerged && ProposedOverlap > 0.0f &&
+                ProposedOverlap >= CurrentOverlap - 0.01f;
+            if (EntersNewOverlap || FailsToEscapeExistingOverlap)
             {
                 return OtherID;
             }
@@ -847,17 +934,33 @@ namespace
                                     PathfindingComponent& Path,
                                     const Game::Map::GameMap* Map)
     {
+        const auto RefreshAndRestartWaypointTracking =
+            [&](bool UseEdgeTarget)
+            {
+                const bool Refreshed = RefreshPathForCurrentRequest(
+                    EM, EntityID, Map, UseEdgeTarget);
+                if (Refreshed)
+                {
+                    // The replacement route has a different first waypoint.
+                    // Keeping the expired timer/baseline makes it look stalled
+                    // again on the very next frame and creates a repath storm.
+                    Path.StallTimer = 0.0f;
+                    Path.HasLastWaypointDistance = false;
+                }
+                return Refreshed;
+            };
+
         if (Path.RepathFailCount == 0)
         {
             Path.RepathFailCount = 1;
             Path.LastRepathTime = 0.0f;
-            return RefreshPathForCurrentRequest(EM, EntityID, Map, false);
+            return RefreshAndRestartWaypointTracking(false);
         }
         if (Path.RepathFailCount == 1)
         {
             Path.RepathFailCount = 2;
             Path.LastRepathTime = 0.0f;
-            return RefreshPathForCurrentRequest(EM, EntityID, Map, true);
+            return RefreshAndRestartWaypointTracking(true);
         }
 
         MarkMoveTargetFailed(Path);
@@ -952,9 +1055,6 @@ void MovementSystem::Update(float DeltaTime)
             PathComp->RepulseVector = {0.0f, 0.0f};
             continue;
         }
-        if (!Cmd || Cmd->CurrentCommand != CommandType::Stop)
-            PathComp->HasFriendlyYieldAnchor = false;
-
         // Set defaults from unit data if not yet initialized
         if (PathComp->TargetSpeed <= 0.0f && Unit)
         {
@@ -991,9 +1091,16 @@ void MovementSystem::Update(float DeltaTime)
         auto* PathA = EM.GetComponent<PathfindingComponent>(ID);
         if (!TransA || !PathA || PathA->IsAir) continue;
 
+        if (IsAssignedConstructionWorker(EM, ID))
+            continue;
+
         for (auto ID2 : Entities)
         {
             if (ID == ID2) continue;
+            if (IsActiveHarvester(EM, ID))
+                continue;
+            if (IsAssignedConstructionWorker(EM, ID2))
+                continue;
             auto* TransB = EM.GetComponent<TransformComponent>(ID2);
             auto* PathB = EM.GetComponent<PathfindingComponent>(ID2);
             if (!TransB || !PathB || PathB->IsAir) continue;
@@ -1015,6 +1122,13 @@ void MovementSystem::Update(float DeltaTime)
         for (auto BlockerID : Blockers)
         {
             if (BlockerID == ID || !IsStaticGroundBlocker(EM, BlockerID))
+                continue;
+            // Harvest and construction deliberately path into their current
+            // resource depot/building.  ResolveStaticBlockers already honors
+            // this exception; the repulse field must honor it as well or the
+            // worker is pushed back out every frame and can never reach the
+            // delivery/work contact point.
+            if (BlockerID == PathA->RequestedIgnoreEntityID)
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -1055,6 +1169,8 @@ void MovementSystem::Update(float DeltaTime)
         // A request created after this entity's turn remains queued for the
         // next frame; a request already present is consumed exactly once here.
         PathComp->FriendlyYieldVector = {0.0f, 0.0f};
+        if (FriendlyYield.LengthSq() <= 0.001f)
+            PathComp->HasFriendlyYieldAnchor = false;
         auto& Path = PathComp->Path;
 
         if (!CanMoveEntity(EM, ID))
@@ -1080,6 +1196,7 @@ void MovementSystem::Update(float DeltaTime)
         // terrain/static-blocker checked, and rejected if it would enter a new
         // unit overlap. Hold-position remains a hard reservation.
         if (FriendlyYield.LengthSq() > 0.001f &&
+            PathComp->CurrentVelocity.LengthSq() <= 0.01f &&
             (!Cmd || Cmd->CurrentCommand != CommandType::HoldPosition))
         {
             constexpr float kFriendlyYieldSpeed = 24.0f;
@@ -1143,9 +1260,10 @@ void MovementSystem::Update(float DeltaTime)
             if (Cmd &&
                 (Cmd->CurrentCommand == CommandType::Move ||
                  Cmd->CurrentCommand == CommandType::AttackMove ||
-                 Cmd->CurrentCommand == CommandType::Follow ||
-                 Cmd->CurrentCommand == CommandType::Build ||
-                 Cmd->CurrentCommand == CommandType::Harvest) &&
+                  Cmd->CurrentCommand == CommandType::Follow ||
+                  Cmd->CurrentCommand == CommandType::Build ||
+                  Cmd->CurrentCommand == CommandType::Repair ||
+                  Cmd->CurrentCommand == CommandType::Harvest) &&
                 !RecentlyFailedCurrentRequest(*PathComp) &&
                 Trans->Position.DistanceTo(PathComp->RequestedDestination) >
                     std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp)))
@@ -1291,20 +1409,25 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
+                    LogMovementStall(ID, *Trans, *PathComp, "waypoint");
                     if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
                     {
                         const int AvoidEntityID = PathComp->BlockedByEntityID;
-                        if (mMap && RefreshPathForCurrentRequest(
+                        if (PathComp->RepathFailCount < 2 && mMap &&
+                            RefreshPathForCurrentRequest(
                                 EM, ID, mMap, false, AvoidEntityID))
                         {
+                            ++PathComp->RepathFailCount;
                             PathComp->StallTimer = 0.0f;
                             PathComp->HasLastWaypointDistance = false;
                             break;
                         }
-                        PathComp->StallTimer = 0.0f;
-                        PathComp->HasLastWaypointDistance = false;
                         PathComp->CurrentSpeed = 0.0f;
                         PathComp->CurrentVelocity = {0.0f, 0.0f};
+                        // Do not erase the stall after a failed friendly-unit
+                        // detour. Escalate through the normal reroute/retry
+                        // sequence instead of retrying the same blocker forever.
+                        HandleMovementStall(EM, ID, *PathComp, mMap);
                         break;
                     }
                     if (!HandleMovementStall(EM, ID, *PathComp, mMap))
@@ -1357,20 +1480,22 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
+                    LogMovementStall(ID, *Trans, *PathComp, "segment");
                     if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
                     {
                         const int AvoidEntityID = PathComp->BlockedByEntityID;
-                        if (mMap && RefreshPathForCurrentRequest(
+                        if (PathComp->RepathFailCount < 2 && mMap &&
+                            RefreshPathForCurrentRequest(
                                 EM, ID, mMap, false, AvoidEntityID))
                         {
+                            ++PathComp->RepathFailCount;
                             PathComp->StallTimer = 0.0f;
                             PathComp->HasLastWaypointDistance = false;
                             break;
                         }
-                        PathComp->StallTimer = 0.0f;
-                        PathComp->HasLastWaypointDistance = false;
                         PathComp->CurrentSpeed = 0.0f;
                         PathComp->CurrentVelocity = {0.0f, 0.0f};
+                        HandleMovementStall(EM, ID, *PathComp, mMap);
                         break;
                     }
                     if (!HandleMovementStall(EM, ID, *PathComp, mMap))
@@ -1394,9 +1519,10 @@ void MovementSystem::Update(float DeltaTime)
                 Cmd &&
                 (Cmd->CurrentCommand == CommandType::Move ||
                  Cmd->CurrentCommand == CommandType::AttackMove ||
-                 Cmd->CurrentCommand == CommandType::Follow ||
-                 Cmd->CurrentCommand == CommandType::Build ||
-                 Cmd->CurrentCommand == CommandType::Harvest) &&
+                  Cmd->CurrentCommand == CommandType::Follow ||
+                  Cmd->CurrentCommand == CommandType::Build ||
+                  Cmd->CurrentCommand == CommandType::Repair ||
+                  Cmd->CurrentCommand == CommandType::Harvest) &&
                 !RecentlyFailedCurrentRequest(*PathComp))
             {
                 if (!RefreshPathForCurrentRequest(EM, ID, mMap, false))

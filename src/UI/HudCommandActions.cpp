@@ -90,7 +90,78 @@ void Hud::OnButtonInvoked(int ButtonIndex)
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
             case HudCommandId::Land:
-                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Land;
+                // Landing is immediate at the building's current position.
+                // It is not a world-target command.
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::None;
+                mState.CommandPanel.PendingCommandId = HudCommandId::None;
+                mState.ActiveCommand = -1;
+                break;
+            case HudCommandId::Rally:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Rally;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Scan:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Scan;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Load:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Load;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::RechargeShields:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::RechargeShields;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::PsionicStorm:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::PsionicStorm;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::YamatoGun:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::YamatoGun;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Lockdown:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Lockdown;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::EMPShockwave:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::EMPShockwave;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Hallucination:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Hallucination;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::StasisField:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::StasisField;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Recall:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Recall;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::DarkSwarm:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::DarkSwarm;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Plague:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Plague;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Ensnare:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Ensnare;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::SpawnBroodling:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::SpawnBroodling;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Parasite:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Parasite;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Consume:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Consume;
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
             default: break;

@@ -4,6 +4,7 @@
 
 #include "Resource/DdsGrpDecoder.h"
 #include "Resource/GrpToGpu.h"
+#include "Resource/LightTable.h"
 
 #include <algorithm>
 #include <cctype>
@@ -85,6 +86,16 @@ namespace
             case 7: return 1;
             default: return 63;
         }
+    }
+
+    const char* LightTableFileName(uint8_t ColorShift)
+    {
+        static constexpr const char* Names[] = {
+            "ofire", "gfire", "bfire", "bexpl", "trans50", "red", "green"
+        };
+        if (ColorShift < 1 || ColorShift > 7)
+            return nullptr;
+        return Names[ColorShift - 1];
     }
 
     std::string DescribeRgba(const std::vector<uint8_t>& Rgba)
@@ -171,10 +182,60 @@ const std::vector<GpuImage>* ResourceCache::GetDatImageFrames(uint32_t ImageID)
         DecodeOptions.LightTableTint = LightTableTint(Image->ColorShift);
         DecodeOptions.LightTableIndexCount =
             LightTableIndexCount(Image->ColorShift);
+
+        const char* TableName = LightTableFileName(Image->ColorShift);
+        if (TableName && !mTilesets.ActiveName.empty())
+        {
+            auto Cached = mTilesets.LightTableRgbaByColorShift.find(Image->ColorShift);
+            if (Cached != mTilesets.LightTableRgbaByColorShift.end())
+            {
+                DecodeOptions.LightTableRgba = Cached->second;
+                DecodeOptions.UseLightTableRgba = true;
+            }
+            else
+            {
+                const std::string TilesetBase = "Tileset/" + mTilesets.ActiveName;
+                auto TableData = ReadWithFallback(
+                    TilesetBase + "/" + TableName + ".pcx");
+                auto PaletteData = ReadWithFallback(TilesetBase + ".wpe");
+                if (TableData && PaletteData)
+                {
+                    const IndexedPcx Table = DecodeIndexedPcx(*TableData);
+                    const auto TilesetPalette = DecodeWpe(*PaletteData);
+                    if (TilesetPalette && Table.Valid() && Table.Width == 256)
+                    {
+                        DecodeOptions.LightTableRgba = BuildLightTableRgba(
+                            Table.Pixels, Table.Width, Table.Height, *TilesetPalette);
+                        DecodeOptions.UseLightTableRgba = true;
+                        mTilesets.LightTableRgbaByColorShift.emplace(
+                            Image->ColorShift, DecodeOptions.LightTableRgba);
+                    }
+                }
+            }
+        }
     }
 
     std::string GrpPath = mData.Loader.ResolveImageGrpPath(ImageID);
     if (GrpPath.empty()) return nullptr;
+
+    std::string NormalizedGrpPath = ToLowerCopy(GrpPath);
+    std::replace(NormalizedGrpPath.begin(), NormalizedGrpPath.end(), '\\', '/');
+    if (NormalizedGrpPath == "protoss/texture.grp")
+    {
+        DecodeOptions.GenerateTeamColorMask = false;
+        DecodeOptions.TransparentIndexZero = false;
+    }
+
+    // images.dat also contains links to LO coordinate tables (for example the
+    // Nexus large-shield table). They are reached by valid iscript next-image
+    // opcodes but are not GRP bitmaps. Feeding their binary offsets into the
+    // GRP decoder produced the translucent ring seen under Protoss bases.
+    const std::string LowerGrpPath = ToLowerCopy(GrpPath);
+    if (LowerGrpPath.size() < 4 ||
+        LowerGrpPath.substr(LowerGrpPath.size() - 4) != ".grp")
+    {
+        return nullptr;
+    }
 
     const std::vector<GpuImage>* Frames = LoadSpriteFramesForPath(
         CacheKey, GrpPath, "DAT image", DecodeOptions);

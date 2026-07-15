@@ -6,6 +6,8 @@
 
 #include "Resource/PortraitVideoDecoder.h"
 
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,11 @@ class Texture;
 
 namespace Game::Client::UI::Glue
 {
+
+namespace Detail
+{
+struct AsyncWebmLoadState;
+}
 
 class GlueAnimatedImage final : public Aero::Image
 {
@@ -42,6 +49,8 @@ private:
     void SetPngFrame(int FrameIndex);
     void SetWebmFrame(int FrameIndex);
     void UpdatePlayback(double TimeSeconds);
+    void ApplyPendingWebmLoad();
+    void CancelPendingWebmLoad();
     bool DecodeWebmFrame(int FrameIndex);
     Aero::Texture* RenderDynamicTexture(Aero::RenderDevice* Device);
     static Aero::Texture* RenderDynamicTextureCallback(Aero::RenderDevice* Device, void* User);
@@ -69,6 +78,10 @@ private:
     Resource::Graphics::DecodedVideoFrame mCurrentWebmFrame;
     Aero::Ptr<Aero::DynamicTextureSource> mDynamicSource;
     Aero::Ptr<Aero::Texture> mDynamicTexture;
+    // DynamicTextureSource can invoke its callback from the render thread
+    // while the UI thread swaps portrait frames during selection changes.
+    mutable std::mutex mDynamicTextureMutex;
+    std::shared_ptr<Detail::AsyncWebmLoadState> mAsyncWebmLoadState;
 
     NS_DECLARE_REFLECTION(GlueAnimatedImage, Aero::Image)
 };

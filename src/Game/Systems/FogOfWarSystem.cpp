@@ -47,12 +47,24 @@ void FogOfWarSystem::SetAlliance(int PlayerA, int PlayerB, bool Allied)
     mAlliance[(size_t)PlayerB * mMaxPlayers + PlayerA] = Allied;
 }
 
+bool FogOfWarSystem::AreAllied(int PlayerA, int PlayerB) const
+{
+    if (PlayerA < 0 || PlayerA >= mMaxPlayers ||
+        PlayerB < 0 || PlayerB >= mMaxPlayers)
+    {
+        return false;
+    }
+    return mAlliance[(size_t)PlayerA * mMaxPlayers + PlayerB];
+}
+
 FogState FogOfWarSystem::GetFog(int TileX, int TileY, int PlayerID) const
 {
     if (TileX < 0 || TileX >= mMapWidth || TileY < 0 || TileY >= mMapHeight)
         return FogState::Unexplored;
     if (PlayerID < 0 || PlayerID >= mMaxPlayers)
         return FogState::Unexplored;
+    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
+        return FogState::Visible;
 
     // Check own visibility
     size_t Idx = (size_t)PlayerID * mMapWidth * mMapHeight + (size_t)TileY * mMapWidth + (size_t)TileX;
@@ -89,6 +101,8 @@ bool FogOfWarSystem::IsDetected(int TileX, int TileY, int PlayerID) const
         return false;
     if (PlayerID < 0 || PlayerID >= mMaxPlayers)
         return false;
+    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
+        return true;
 
     size_t Idx = (size_t)PlayerID * mMapWidth * mMapHeight + (size_t)TileY * mMapWidth + (size_t)TileX;
 

@@ -3,6 +3,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/ProtossPower.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/CombatSystem.h"
@@ -12,6 +13,7 @@
 #include "Main/GameCommandDispatchRuntime.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "UI/MainGuiSelectionPresentation.h"
+#include "UI/HudText.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -53,6 +55,14 @@ void CombatSystem::IssueAttackMove(Core::ECS::EntityManager&,
 {
     ++gAttackMoveCallCount;
     gLastAttackMoveTarget = Target;
+}
+
+void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
+                               int,
+                               const Game::Components::CombatComponent&,
+                               int,
+                               int)
+{
 }
 
 } // namespace Game::Systems
@@ -291,8 +301,10 @@ int main()
     const auto& LiftOffButton = RequireButton(Hud, 8, "Lift Off");
     Require(LiftOffButton.Kind == Game::Client::UI::ActionKind::Command &&
             LiftOffButton.CommandId == Game::Client::UI::HudCommandId::LiftOff &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::LiftOff) == 282 &&
             LiftOffButton.Enabled,
-        "grounded liftable building exposes an enabled Lift Off command");
+        "grounded liftable building exposes an icon-backed Lift Off command");
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
                 EM, {FlightCommandCenter}, Hud, 8),
         "Lift Off command dispatch starts the building flight transition");
@@ -312,6 +324,13 @@ int main()
         "Land command remains disabled while LiftOff animation is in progress");
     FlightBuilding->FlightAnimationComplete = true;
     Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FlightCommandCenter);
+    Require(FlightBuilding->FlightHeightTransitionActive &&
+            FlightBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::LiftingOff &&
+            FlightUnit->Speed == 0.0f,
+        "LiftOff signal starts body rise only after the landing gear retracts");
+    Game::Systems::BuildingSystem::AdvanceFlightHeightTransition(
+        EM, FlightCommandCenter, 0.5f);
     Require(FlightBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::Airborne &&
             FlightUnit->Speed > 0.0f,
@@ -320,22 +339,35 @@ int main()
     const auto& FlyingMoveButton = RequireButton(Hud, 0, "Move");
     const auto& LandButton = RequireButton(Hud, 8, "Land");
     Require(FlyingMoveButton.Enabled && LandButton.Enabled &&
-            LandButton.CommandId == Game::Client::UI::HudCommandId::Land,
-        "airborne building exposes movement and targeted landing commands");
+            LandButton.CommandId == Game::Client::UI::HudCommandId::Land &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Land) == 283,
+        "airborne building exposes movement and an icon-backed landing command");
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
                 EM, {FlightCommandCenter}, Hud, 8) &&
-            Hud.GetPendingTargetMode() ==
-                Game::Client::UI::PendingTargetMode::Land,
-        "Land command enters world-target mode");
-    Game::Client::GameLoop::ClickTargetContext EmptyFlightTarget;
-    Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
-                EM, {FlightCommandCenter}, Hud.GetPendingTargetMode(),
-                Hud.GetPendingBuildDefID(), EmptyFlightTarget,
-                Map.TileToWorld(26, 9)),
-        "valid Land target starts the Landing animation transition");
+            !Hud.HasPendingTarget(),
+        "Land command immediately starts landing without world-target mode");
     Require(FlightBuilding->IsLifted &&
             FlightBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Landing,
-        "HUD landing keeps flight state until the project Landing animation signals completion");
+        "HUD lands at the current position and keeps flight state until the Landing animation signals completion");
+
+    const int ResumeMineral = CreateMineralField(EM);
+    EM.GetComponent<Game::Components::TransformComponent>(ResumeMineral)->Position =
+        Map.TileToWorld(29, 4);
+    const int ResumeScv = CreateTerranUnit(EM, ScvDef, 0);
+    EM.GetComponent<Game::Components::TransformComponent>(ResumeScv)->Position =
+        Map.TileToWorld(27, 4);
+    EM.AddComponent<Game::Components::PathfindingComponent>(ResumeScv);
+    auto& ResumeHarvest =
+        EM.AddComponent<Game::Components::HarvestComponent>(ResumeScv);
+    ResumeHarvest.State = Game::Components::HarvestState::Idle;
+    ResumeHarvest.TargetResourceID = ResumeMineral;
+    ResumeHarvest.DesiredResourceID = ResumeMineral;
+    ResumeHarvest.CarryingType = Game::Components::ResourceType::Minerals;
+    ResumeHarvest.CarryingAmount = 8;
+
+    Game::Systems::BuildingSystem::AdvanceFlightHeightTransition(
+        EM, FlightCommandCenter, 0.5f);
     FlightBuilding->FlightAnimationComplete = true;
     Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FlightCommandCenter);
     auto* FlightPath =
@@ -347,6 +379,9 @@ int main()
             FlightPath && !FlightPath->IsAir &&
             (!FlightRender || FlightRender->Layer == Game::Components::RenderLayer::Buildings),
         "Landing animation signal restores ground pathing and rendering state");
+    Require(ResumeHarvest.State == Game::Components::HarvestState::MovingToDepot &&
+            ResumeHarvest.ReturnBuildingID == FlightCommandCenter,
+        "landed Command Center resumes the nearby loaded SCV's interrupted mining loop");
     Hud.CancelPendingTarget();
 
     const int FactoryDef = Game::Races::GetUnitDefID("Factory");
@@ -370,16 +405,20 @@ int main()
     Require(Game::Systems::BuildingSystem::LiftOffBuilding(EM, FactoryWithAddon) &&
             FactoryBuilding->AddonID == -1 &&
             MachineShopBuilding->BuilderUnitID == -1 &&
-            MachineShopPlayer->PlayerID == 11 &&
+            MachineShopPlayer->PlayerID == 0 &&
             MachineShopBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::LiftingOff,
-        "parent lift-off makes the add-on neutral and starts its detach animation");
+        "parent lift-off preserves add-on ownership and starts its detach animation");
     FactoryBuilding->FlightAnimationComplete = true;
     Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FactoryWithAddon);
+    Game::Systems::BuildingSystem::AdvanceFlightHeightTransition(
+        EM, FactoryWithAddon, 0.5f);
     MachineShopBuilding->FlightPhase = Game::Components::BuildingFlightPhase::Grounded;
     Require(Game::Systems::BuildingSystem::LandBuilding(
                 EM, FactoryWithAddon, FactoryPosition),
         "airborne parent can land at the asset-derived add-on position");
+    Game::Systems::BuildingSystem::AdvanceFlightHeightTransition(
+        EM, FactoryWithAddon, 0.5f);
     FactoryBuilding->FlightAnimationComplete = true;
     Game::Systems::BuildingSystem::ProcessFlightTransition(EM, FactoryWithAddon);
     Require(FactoryBuilding->AddonID == MachineShop &&
@@ -387,7 +426,7 @@ int main()
             MachineShopPlayer->PlayerID == 0 &&
             MachineShopBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::Landing,
-        "landing reconnects a compatible neutral add-on and starts its Landing animation");
+        "landing reconnects a compatible owned add-on and starts its Landing animation");
 
     const Core::Math::Vec2 RestoredFactoryPosition = Map.TileToWorld(10, 4);
     const int RestoredFactory = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
@@ -526,13 +565,17 @@ int main()
         EmptyClickTarget,
         SupplyDepotPlacement),
         "valid world placement click reports success");
-    Require(CountBuildingsByDef(EM, SupplyDepotDef) == BuildingsBeforePlacement + 1,
-        "world placement click creates an under-construction Supply Depot entity");
+    Require(CountBuildingsByDef(EM, SupplyDepotDef) == BuildingsBeforePlacement &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(0, SupplyDepotDef) == 1,
+        "world placement click records a pending Supply Depot until the SCV reaches the site");
     Require(Resources.Minerals == MineralsBeforePlacement - SupplyDepot.MineralCost,
         "world placement click spends the building mineral cost");
     auto* ScvCommand = EM.GetComponent<Game::Components::CommandComponent>(ScvEntity);
-    Require(ScvCommand && ScvCommand->CurrentCommand == Game::Components::CommandType::Move,
-        "world placement click sends the worker toward the building site");
+    Require(ScvCommand &&
+            (ScvCommand->CurrentCommand == Game::Components::CommandType::Move ||
+             ScvCommand->CurrentCommand == Game::Components::CommandType::Build) &&
+            Game::Systems::BuildingSystem::IsBuilderCommitted(EM, ScvEntity),
+        "world placement click commits the worker to approaching the building site");
     Hud.CancelPendingTarget();
 
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {ScvEntity}, Hud, 2),
@@ -922,10 +965,9 @@ int main()
     Require(Resources.Minerals == AssimilatorMineralsBefore - Assimilator.MineralCost,
         "Protoss Assimilator target click spends the mineral cost");
     auto* AssimilatorBuilding = EM.GetComponent<Game::Components::BuildingComponent>(ProtossGeyser);
-    Require(AssimilatorBuilding &&
-            AssimilatorBuilding->BuildingDefID == AssimilatorDef &&
-            AssimilatorBuilding->UnderConstruction,
-        "Protoss Assimilator target click converts the geyser into an under-construction Assimilator");
+    Require(AssimilatorBuilding && AssimilatorBuilding->BuildingDefID == -1 &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(0, AssimilatorDef) == 1,
+        "Protoss Assimilator target click reserves the geyser until the Probe reaches it");
 
     Resources.Minerals = 900;
     const int NexusDef = Game::Races::GetUnitDefID("Nexus");
@@ -935,14 +977,20 @@ int main()
     Require(Gateway.RequiresPylon,
         "Gateway definition requires Pylon power");
     Require(!Game::Races::GetUnitDefByID(NexusDef).RequiresPylon &&
-            !Game::Races::GetUnitDefByID(PylonDef).RequiresPylon,
-        "Nexus and Pylon can be placed without existing Pylon power");
+            !Game::Races::GetUnitDefByID(PylonDef).RequiresPylon &&
+            !Game::Races::GetUnitDefByID(AssimilatorDef).RequiresPylon,
+        "Nexus, Assimilator, and Pylon can be placed without existing Pylon power");
+    Require(!Game::Client::GameLoop::RequiresPylonChkId(154) &&
+            !Game::Client::GameLoop::RequiresPylonChkId(156) &&
+            !Game::Client::GameLoop::RequiresPylonChkId(157) &&
+            Game::Client::GameLoop::RequiresPylonChkId(160),
+        "CHK building power metadata exempts Nexus, Pylon, and Assimilator only");
     const int NexusEntity = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
         EM, NexusDef, Map.TileToWorld(4, 24), 0);
     Require(NexusEntity > 0,
         "completed Nexus satisfies Gateway prerequisite");
     const int GatewayProbe = CreateProtossUnit(EM, ProbeDef, 0, Map.TileToWorld(22, 24));
-    const Core::Math::Vec2 GatewayPlacement = Map.TileToWorld(24, 24);
+    const Core::Math::Vec2 GatewayPlacement = Map.TileToWorld(23, 24);
     Hud.UpdateContext(EM, {GatewayProbe});
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {GatewayProbe}, Hud, 6),
         "Protoss Probe build submenu can be reopened for Gateway");
@@ -971,6 +1019,10 @@ int main()
         EM, PylonDef, Map.TileToWorld(20, 24), 0);
     Require(PylonEntity > 0,
         "completed Pylon can be spawned to power the Gateway placement");
+    Require(Game::ProtossPower::ContainsTileOffset(6, 0),
+        "Pylon circular power reaches the six-tile cardinal boundary");
+    Require(!Game::ProtossPower::ContainsTileOffset(5, 5),
+        "Pylon circular power excludes a five-by-five diagonal outside its radius");
     Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
         EM,
         {GatewayProbe},
@@ -983,23 +1035,9 @@ int main()
         "successful Protoss Gateway placement keeps the Probe alive");
     Require(Resources.Minerals == 900 - Gateway.MineralCost,
         "successful Protoss Gateway placement spends the building mineral cost");
-    int GatewayEntity = -1;
-    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
-    {
-        auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
-        if (Building && Building->BuildingDefID == GatewayDef && Building->UnderConstruction)
-        {
-            GatewayEntity = EntityID;
-            break;
-        }
-    }
-    auto* GatewayBuilding = GatewayEntity > 0
-        ? EM.GetComponent<Game::Components::BuildingComponent>(GatewayEntity)
-        : nullptr;
-    Require(GatewayBuilding &&
-            GatewayBuilding->RequiresPylon &&
-            GatewayBuilding->HasPylonPower,
-        "new Protoss Gateway records required and available Pylon power");
+    Require(Game::Systems::BuildingSystem::CountPendingBuilds(0, GatewayDef) == 1 &&
+            Game::Systems::BuildingSystem::IsBuilderCommitted(EM, GatewayProbe),
+        "powered Gateway placement stays pending while the Probe approaches the warp site");
 
     Resources.Minerals = 3000;
     Resources.VespeneGas = 3000;
@@ -1102,6 +1140,307 @@ int main()
     Require(SingularityButton.Kind == Game::Client::UI::ActionKind::Upgrade &&
             SingularityButton.Enabled,
         "Protoss Cybernetics Core exposes Singularity Charge as an upgrade action");
+
+    Hud.UpdateContext(EM, {CommandCenter});
+    const auto& RallyButton = RequireButton(Hud, 7, "Rally");
+    Require(RallyButton.Enabled &&
+            RallyButton.CommandId == Game::Client::UI::HudCommandId::Rally,
+        "Terran production buildings expose an enabled rally command");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {CommandCenter}, Hud, 7),
+        "Terran rally button enters target mode");
+    const Core::Math::Vec2 RallyPoint = Map.TileToWorld(12, 12);
+    Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {CommandCenter}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), EmptyClickTarget, RallyPoint),
+        "Terran rally target is accepted");
+    const auto* RallyCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(CommandCenter);
+    Require(RallyCommand && RallyCommand->HasRallyPoint &&
+            RallyCommand->RallyPoint.DistanceTo(RallyPoint) < 0.1f,
+        "Terran production building stores the selected rally point");
+
+    const int ComsatDef = Game::Races::GetUnitDefID("ComsatStation");
+    const int Comsat = CreateTerranUnit(EM, ComsatDef, 0);
+    auto* ComsatUnit = EM.GetComponent<Game::Components::UnitComponent>(Comsat);
+    ComsatUnit->EnergyPoints = 200;
+    ComsatUnit->MaxEnergyPoints = 200;
+    Hud.UpdateContext(EM, {Comsat});
+    const auto& ScanButton = RequireButton(Hud, 0, "Scan");
+    Require(ScanButton.Enabled &&
+            ScanButton.CommandId == Game::Client::UI::HudCommandId::Scan,
+        "Comsat exposes Scanner Sweep when it has enough energy");
+    const size_t RevealCountBefore =
+        EM.GetEntitiesWith<Game::Components::RevealAreaComponent>().size();
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Comsat}, Hud, 0) &&
+            Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {Comsat}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), EmptyClickTarget,
+                Map.TileToWorld(16, 16)),
+        "Comsat Scanner Sweep accepts a map target");
+    Require(ComsatUnit->EnergyPoints == 150 &&
+            EM.GetEntitiesWith<Game::Components::RevealAreaComponent>().size() ==
+                RevealCountBefore + 1,
+        "Scanner Sweep spends energy and creates a timed reveal area");
+
+    const int DropshipDef = Game::Races::GetUnitDefID("Dropship");
+    const int TransportMarineDef = Game::Races::GetUnitDefID("Marine");
+    const int DropshipEntity = CreateTerranUnit(EM, DropshipDef, 0);
+    const int Passenger = CreateTerranUnit(EM, TransportMarineDef, 0);
+    EM.GetComponent<Game::Components::TransformComponent>(DropshipEntity)->Position =
+        Map.TileToWorld(18, 18);
+    EM.GetComponent<Game::Components::TransformComponent>(Passenger)->Position =
+        Map.TileToWorld(19, 18);
+    EM.AddComponent<Game::Components::RenderComponent>(Passenger).Visible = true;
+    Hud.UpdateContext(EM, {DropshipEntity});
+    const auto& LoadButton = RequireButton(Hud, 6, "Load");
+    Require(LoadButton.Enabled &&
+            LoadButton.CommandId == Game::Client::UI::HudCommandId::Load,
+        "Dropship exposes a targeted load command");
+    Game::Client::GameLoop::ClickTargetContext LoadTarget;
+    LoadTarget.AnyEntityID = Passenger;
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {DropshipEntity}, Hud, 6) &&
+            Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {DropshipEntity}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), LoadTarget,
+                EM.GetComponent<Game::Components::TransformComponent>(Passenger)->Position),
+        "Dropship loads a selected friendly ground unit");
+    const auto* Loaded =
+        EM.GetComponent<Game::Components::LoadedUnitsComponent>(DropshipEntity);
+    Require(Loaded && Loaded->PassengerIDs.size() == 1 &&
+            !EM.GetComponent<Game::Components::RenderComponent>(Passenger)->Visible,
+        "loaded passenger is stored and hidden");
+    const int SecondPassenger = CreateTerranUnit(EM, TransportMarineDef, 0);
+    EM.GetComponent<Game::Components::TransformComponent>(SecondPassenger)->Position =
+        Map.TileToWorld(19, 18);
+    EM.AddComponent<Game::Components::RenderComponent>(SecondPassenger).Visible = true;
+    Require(Game::Systems::TransportSystem::LoadUnit(
+                EM, DropshipEntity, SecondPassenger),
+        "Dropship accepts a second passenger for sequential unload regression");
+    Hud.UpdateContext(EM, {DropshipEntity});
+    const auto& UnloadButton = RequireButton(Hud, 7, "Unload");
+    Require(UnloadButton.Enabled &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Load) == 234 &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::UnloadAll) == 235 &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {DropshipEntity}, Hud, 7),
+        "Dropship unload-all button is visible, icon-backed, and enabled while carrying units");
+    const auto* PendingUnload =
+        EM.GetComponent<Game::Components::PendingTransportUnloadComponent>(DropshipEntity);
+    Require(PendingUnload && PendingUnload->Active &&
+            Loaded->PassengerIDs.size() == 2,
+        "unload-all starts a timed sequence instead of releasing every unit in one frame");
+    Game::Systems::TransportSystem::UpdateOrders(EM, 0.0f);
+    Require(Loaded->PassengerIDs.size() == 1,
+        "sequential unload releases the first passenger on the next update");
+    Game::Systems::TransportSystem::UpdateOrders(EM, 0.2f);
+    Require(Loaded->PassengerIDs.size() == 1,
+        "sequential unload keeps the next passenger aboard during the interval");
+    Game::Systems::TransportSystem::UpdateOrders(EM, 0.2f);
+    Require(Loaded->PassengerIDs.empty() &&
+            EM.GetComponent<Game::Components::RenderComponent>(Passenger)->Visible &&
+            EM.GetComponent<Game::Components::RenderComponent>(SecondPassenger)->Visible &&
+            EM.GetComponent<Game::Components::UnitComponent>(Passenger)->Speed > 0.0f,
+        "sequential unloading eventually restores passenger visibility and movement speed");
+
+    auto& SiegePlayerUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(0);
+    SiegePlayerUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Terran_SiegeMode)] = 1;
+    const int TankDef = Game::Races::GetUnitDefID("SiegeTank");
+    const int Tank = CreateTerranUnit(EM, TankDef, 0);
+    EM.AddComponent<Game::Components::CombatComponent>(Tank);
+    auto& TankRender = EM.AddComponent<Game::Components::RenderComponent>(Tank);
+    Game::Systems::CommandSystem::SetImageResolver(
+        [](int ChkUnitID) { return static_cast<uint32_t>(1000 + ChkUnitID); });
+    Game::Systems::CommandSystem::SetSubunitImageResolver(
+        [](int ChkUnitID) { return static_cast<uint32_t>(2000 + ChkUnitID); });
+    Hud.UpdateContext(EM, {Tank});
+    const auto& SiegeButton = RequireButton(Hud, 6, "Siege");
+    Require(SiegeButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Tank}, Hud, 6),
+        "researched Siege Tank exposes and executes Siege Mode");
+    auto* TankTransition =
+        EM.GetComponent<Game::Components::SiegeTransitionComponent>(Tank);
+    Require(TankTransition && TankTransition->Active && TankTransition->TargetSieged &&
+            TankTransition->TargetImageID == 1030 &&
+            TankTransition->TargetSubunitImageID == 2030 &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID == 5 &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->Speed == 0.0f,
+        "sieging queues the authored lowering animation before changing unit mode and weapon profile");
+    EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID = 30;
+    TankRender.ImageID = TankTransition->TargetImageID;
+    TankRender.SubunitImageID = TankTransition->TargetSubunitImageID;
+    *EM.GetComponent<Game::Components::CombatComponent>(Tank) = TankTransition->TargetCombat;
+    TankTransition->Active = false;
+    Hud.UpdateContext(EM, {Tank});
+    const auto& UnsiegeButton = RequireButton(Hud, 6, "Unsiege");
+    Require(UnsiegeButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Tank}, Hud, 6),
+        "sieged tank exposes and executes Unsiege");
+    Require(TankTransition->Active && !TankTransition->TargetSieged &&
+            TankTransition->TargetImageID == 1005 &&
+            TankTransition->TargetSubunitImageID == 2005 &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID == 30 &&
+            EM.GetComponent<Game::Components::UnitComponent>(Tank)->Speed == 0.0f,
+        "unsieging keeps the siege hull until authored SpecialState2 completes");
+
+    Require(Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Move) == 228 &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Stop) == 229 &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::AttackMove) == 230 &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Rally) == 286 &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Scan) == 249,
+        "common and building commands resolve to their canonical cmdicons.grp frames");
+
+    Resources.Minerals = 5000;
+    Resources.VespeneGas = 5000;
+    const int SpawningPoolDef = Game::Races::GetUnitDefID("Spawning Pool");
+    const int LairDef = Game::Races::GetUnitDefID("Lair");
+    const int ZergHatchery = CreateCompletedRaceBuilding(
+        EM, HatcheryDef, 0, Map.TileToWorld(4, 4));
+    CreateCompletedRaceBuilding(EM, SpawningPoolDef, 0, Map.TileToWorld(8, 4));
+    Hud.UpdateContext(EM, {ZergHatchery});
+    RequireButton(Hud, 7, "Rally");
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {ZergHatchery}, Hud, 8),
+        "Zerg Hatchery opens its building command page");
+    Hud.UpdateContext(EM, {ZergHatchery});
+    const auto& LairMorphButton = RequireButton(Hud, 3, "Lair");
+    Require(LairMorphButton.Kind == Game::Client::UI::ActionKind::MorphBuilding &&
+            LairMorphButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {ZergHatchery}, Hud, 3),
+        "Hatchery exposes and starts the resource-backed Lair morph command");
+    const auto* HatcheryMorph =
+        EM.GetComponent<Game::Components::MorphComponent>(ZergHatchery);
+    Require(HatcheryMorph && HatcheryMorph->IsMorphing &&
+            HatcheryMorph->MorphTargetDefID == LairDef,
+        "Lair command dispatch records the building morph state");
+
+    const int EvolutionDef = Game::Races::GetUnitDefID("Evolution Chamber");
+    const int CreepColonyDef = Game::Races::GetUnitDefID("Creep Colony");
+    const int SporeColonyDef = Game::Races::GetUnitDefID("Spore Colony");
+    CreateCompletedRaceBuilding(EM, EvolutionDef, 0, Map.TileToWorld(12, 4));
+    const int CreepColony = CreateCompletedRaceBuilding(
+        EM, CreepColonyDef, 0, Map.TileToWorld(16, 4));
+    Hud.UpdateContext(EM, {CreepColony});
+    const auto& SporeMorphButton = RequireButton(Hud, 1, "Spore Colony");
+    Require(SporeMorphButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {CreepColony}, Hud, 1),
+        "Creep Colony exposes and starts its Spore Colony morph command");
+    Require(EM.GetComponent<Game::Components::MorphComponent>(CreepColony)->
+                MorphTargetDefID == SporeColonyDef,
+        "Spore Colony command dispatch uses the selected colony target definition");
+
+    const int ProtossNexus = CreateCompletedRaceBuilding(
+        EM, NexusDef, 0, Map.TileToWorld(4, 20));
+    Hud.UpdateContext(EM, {ProtossNexus});
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {ProtossNexus}, Hud, 7),
+        "Protoss Nexus exposes the shared rally target command");
+
+    const int ShieldBatteryDef = Game::Races::GetUnitDefID("Shield Battery");
+    const int ZealotDef = Game::Races::GetUnitDefID("Zealot");
+    const int ShieldBattery = CreateCompletedRaceBuilding(
+        EM, ShieldBatteryDef, 0, Map.TileToWorld(20, 20));
+    auto* BatteryUnit = EM.GetComponent<Game::Components::UnitComponent>(ShieldBattery);
+    BatteryUnit->EnergyPoints = 100;
+    BatteryUnit->MaxEnergyPoints = 200;
+    const int ShieldTarget = CreateProtossUnit(
+        EM, ZealotDef, 0, Map.TileToWorld(21, 20));
+    auto* ShieldTargetUnit = EM.GetComponent<Game::Components::UnitComponent>(ShieldTarget);
+    ShieldTargetUnit->ShieldPoints = 10;
+    Hud.UpdateContext(EM, {ShieldBattery});
+    const auto& RechargeButton = RequireButton(Hud, 0, "Recharge");
+    Game::Client::GameLoop::ClickTargetContext RechargeTarget;
+    RechargeTarget.AnyEntityID = ShieldTarget;
+    Require(RechargeButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(
+                EM, {ShieldBattery}, Hud, 0) &&
+            Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {ShieldBattery}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), RechargeTarget,
+                Map.TileToWorld(21, 20)),
+        "Shield Battery exposes and executes targeted shield recharge");
+    Require(ShieldTargetUnit->ShieldPoints == ShieldTargetUnit->MaxShieldPoints &&
+            BatteryUnit->EnergyPoints < 100,
+        "Shield Battery command transfers stored energy into friendly shields");
+
+    auto& AbilityUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(0);
+    AbilityUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_Ensnare)] = 1;
+    const int QueenDef = Game::Races::GetUnitDefID("Queen");
+    const int Queen = CreateZergUnit(EM, QueenDef, 0, Map.TileToWorld(24, 20));
+    auto* QueenUnit = EM.GetComponent<Game::Components::UnitComponent>(Queen);
+    QueenUnit->EnergyPoints = 200;
+    const int EnsnareTarget = CreateTerranUnit(
+        EM, Game::Races::GetUnitDefID("Marine"), 1);
+    EM.GetComponent<Game::Components::TransformComponent>(EnsnareTarget)->Position =
+        Map.TileToWorld(25, 20);
+    Hud.UpdateContext(EM, {Queen});
+    const auto& EnsnareButton = RequireButton(Hud, 7, "Ensnare");
+    Game::Client::GameLoop::ClickTargetContext EnsnareClick;
+    EnsnareClick.AnyEntityID = EnsnareTarget;
+    Require(EnsnareButton.Enabled &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Ensnare) >= 0 &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Queen}, Hud, 7) &&
+            Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {Queen}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), EnsnareClick,
+                Map.TileToWorld(25, 20)),
+        "Queen exposes an icon-backed Ensnare command and casts it from the embedded HUD");
+    const auto* Ensnared =
+        EM.GetComponent<Game::Components::StatusEffectComponent>(EnsnareTarget);
+    Require(Ensnared && Ensnared->HasEffect(Game::Components::StatusEffect::Ensnare),
+        "Ensnare HUD targeting reaches the gameplay spell system");
+
+    AbilityUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_PsionicStorm)] = 1;
+    const int TemplarDef = Game::Races::GetUnitDefID("High Templar");
+    const int Templar = CreateProtossUnit(
+        EM, TemplarDef, 0, Map.TileToWorld(26, 20));
+    auto* TemplarUnit = EM.GetComponent<Game::Components::UnitComponent>(Templar);
+    TemplarUnit->EnergyPoints = 200;
+    const int StormTarget = CreateTerranUnit(
+        EM, Game::Races::GetUnitDefID("Marine"), 1);
+    EM.GetComponent<Game::Components::TransformComponent>(StormTarget)->Position =
+        Map.TileToWorld(27, 20);
+    const int StormHpBefore =
+        EM.GetComponent<Game::Components::UnitComponent>(StormTarget)->HitPoints;
+    Hud.UpdateContext(EM, {Templar});
+    const auto& StormButton = RequireButton(Hud, 6, "Storm");
+    Game::Client::GameLoop::ClickTargetContext StormClick;
+    StormClick.AnyEntityID = StormTarget;
+    Require(StormButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Templar}, Hud, 6) &&
+            Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {Templar}, Hud.GetPendingTargetMode(),
+                Hud.GetPendingBuildDefID(), StormClick,
+                Map.TileToWorld(27, 20)),
+        "High Templar exposes and casts Psionic Storm from the embedded HUD");
+    Require(EM.GetComponent<Game::Components::UnitComponent>(StormTarget)->HitPoints <
+                StormHpBefore,
+        "Psionic Storm HUD targeting applies spell damage");
+
+    const int LurkerDef = Game::Races::GetUnitDefID("Lurker");
+    const int Lurker = CreateZergUnit(EM, LurkerDef, 0, Map.TileToWorld(28, 20));
+    auto& LurkerBurrow = EM.AddComponent<Game::Components::BurrowComponent>(Lurker);
+    LurkerBurrow.CanBurrow = true;
+    Hud.UpdateContext(EM, {Lurker});
+    const auto& BurrowButton = RequireButton(Hud, 8, "Burrow");
+    Require(BurrowButton.Enabled &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Lurker}, Hud, 8) &&
+            LurkerBurrow.Phase == Game::Components::BurrowPhase::Burrowing,
+        "Lurker's innate Burrow command executes directly from the embedded HUD");
 
     std::printf("HudCommandMetadataTest passed\n");
     return 0;

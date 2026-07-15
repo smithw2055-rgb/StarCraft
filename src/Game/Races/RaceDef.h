@@ -68,6 +68,7 @@ int GetTerranDefIDByChkUnitID(int ChkUnitID);
 Race GetRaceByChkUnitID(int ChkUnitID, Race Fallback = Race::Terran);
 int GetSupplyProvidedByDefID(int ID);
 bool IsDetectorChkUnitID(int ChkUnitID);
+bool BuildingDefSatisfiesRequirement(int ActualDefID, int RequiredDefID);
 
 inline void ApplyCombatDefinition(Components::CombatComponent& Combat,
                                   const UnitDef& Def,

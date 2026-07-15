@@ -1,8 +1,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
@@ -47,6 +51,72 @@ inline StartRace RaceFromScriptRace(uint8_t Race)
     }
 }
 
+inline StartRace ApplyShowcaseRaceOverride(StartRace Fallback)
+{
+    const char* Value = std::getenv("STARCRAFT_SHOWCASE_RACE");
+    if (!Value || Value[0] == '\0')
+        return Fallback;
+    std::string RaceName(Value);
+    std::transform(RaceName.begin(), RaceName.end(), RaceName.begin(),
+        [](unsigned char C) { return (char)std::tolower(C); });
+    if (RaceName == "protoss")
+        return StartRace::Protoss;
+    if (RaceName == "zerg")
+        return StartRace::Zerg;
+    if (RaceName == "terran")
+        return StartRace::Terran;
+    return Fallback;
+}
+
+inline StartRace ApplyObserverRaceList(const std::string& RaceList,
+                                       int PlayerId,
+                                       StartRace Fallback)
+{
+    if (PlayerId < 0 || RaceList.empty())
+        return Fallback;
+    size_t Begin = 0;
+    for (int Index = 0;; ++Index)
+    {
+        const size_t End = RaceList.find(',', Begin);
+        if (Index == PlayerId)
+        {
+            std::string RaceName = RaceList.substr(
+                Begin, End == std::string::npos ? std::string::npos : End - Begin);
+            RaceName.erase(
+                std::remove_if(RaceName.begin(), RaceName.end(),
+                    [](unsigned char C) { return std::isspace(C) != 0; }),
+                RaceName.end());
+            std::transform(RaceName.begin(), RaceName.end(), RaceName.begin(),
+                [](unsigned char C) { return (char)std::tolower(C); });
+            if (RaceName == "zerg") return StartRace::Zerg;
+            if (RaceName == "protoss") return StartRace::Protoss;
+            if (RaceName == "terran") return StartRace::Terran;
+            return Fallback;
+        }
+        if (End == std::string::npos)
+            return Fallback;
+        Begin = End + 1u;
+    }
+}
+
+inline StartRace ApplyObserverRaceOverride(int PlayerId, StartRace Fallback)
+{
+    const char* Value = std::getenv("STARCRAFT_AI_OBSERVER_RACES");
+    return Value && Value[0] != '\0'
+        ? ApplyObserverRaceList(Value, PlayerId, Fallback)
+        : Fallback;
+}
+
+inline const char* StartRaceName(StartRace Race)
+{
+    switch (Race)
+    {
+        case StartRace::Zerg: return "Zerg";
+        case StartRace::Protoss: return "Protoss";
+        default: return "Terran";
+    }
+}
+
 inline size_t ScriptPlayerDataIndex(const GameSession& Session, int PlayerId)
 {
     if (PlayerId >= 0 && PlayerId < (int)Session.GetScriptData().Players.size())
@@ -54,8 +124,42 @@ inline size_t ScriptPlayerDataIndex(const GameSession& Session, int PlayerId)
     return 0u;
 }
 
+inline bool IsForcedSkirmishAiPlayer(int PlayerId)
+{
+    const char* Value = std::getenv("STARCRAFT_SKIRMISH_AI_PLAYERS");
+    if (!Value || Value[0] == '\0' || PlayerId < 0)
+        return false;
+
+    std::string List(Value);
+    size_t Begin = 0;
+    while (Begin < List.size())
+    {
+        const size_t End = List.find(',', Begin);
+        const std::string Item = List.substr(
+            Begin, End == std::string::npos ? std::string::npos : End - Begin);
+        char* ParsedEnd = nullptr;
+        const long Parsed = std::strtol(Item.c_str(), &ParsedEnd, 10);
+        if (ParsedEnd != Item.c_str() && Parsed == PlayerId)
+            return true;
+        if (End == std::string::npos)
+            break;
+        Begin = End + 1u;
+    }
+    return false;
+}
+
 inline bool ShouldEnsurePlayableStart(const GameSession& Session, int PlayerId)
 {
+    if (IsForcedSkirmishAiPlayer(PlayerId))
+        return true;
+    const char* ShowcaseValue = std::getenv("STARCRAFT_AI_SHOWCASE");
+    if (ShowcaseValue && ShowcaseValue[0] != '\0' && ShowcaseValue[0] != '0')
+    {
+        // A campaign observation/rescue slot may not own an economy.  The
+        // showcase supplies only the standard melee starting state; every
+        // later resource, building and unit still goes through gameplay.
+        return PlayerId == Session.GetLocalPlayerID();
+    }
     const auto& Data = Session.GetScriptData();
     if (Data.RawData.empty())
         return true;
@@ -66,10 +170,26 @@ inline bool ShouldEnsurePlayableStart(const GameSession& Session, int PlayerId)
 
 inline bool IsComputerPlayer(const GameSession& Session, int PlayerId)
 {
+    if (IsForcedSkirmishAiPlayer(PlayerId))
+        return true;
     const auto& Data = Session.GetScriptData();
     if (Data.RawData.empty())
         return PlayerId > 0;
     return Data.Players[ScriptPlayerDataIndex(Session, PlayerId)].Owner == 5;
+}
+
+inline bool IsAiObserverMatch()
+{
+    const char* Value = std::getenv("STARCRAFT_AI_OBSERVER_MATCH");
+    return Value && Value[0] != '\0' && Value[0] != '0';
+}
+
+inline bool IsCampaignMissionPath(std::string MapPath)
+{
+    std::replace(MapPath.begin(), MapPath.end(), '\\', '/');
+    std::transform(MapPath.begin(), MapPath.end(), MapPath.begin(),
+        [](unsigned char C) { return (char)std::tolower(C); });
+    return MapPath.find("/campaign/") != std::string::npos;
 }
 
 inline StartRace RaceFromScriptPlayer(const GameSession& Session, int PlayerId)
@@ -146,6 +266,114 @@ inline int WorkerDefForRace(StartRace Race)
 }
 }
 
+class AiObserverMatchMonitor final : public Core::ECS::ISystem
+{
+public:
+    AiObserverMatchMonitor(Core::ECS::SystemManager& SysMgr,
+                           std::vector<int> Participants)
+        : mSysMgr(SysMgr), mParticipants(std::move(Participants))
+    {
+        for (int PlayerID : mParticipants)
+            if (PlayerID >= 0 && PlayerID < 8)
+                mAlive[(size_t)PlayerID] = true;
+    }
+
+    std::string_view GetName() const override { return "AiObserverMatchMonitor"; }
+
+    void Update(float DeltaTime) override
+    {
+        if (mFinished || DeltaTime <= 0.0f)
+            return;
+        mElapsed += DeltaTime;
+        mCheckTimer += DeltaTime;
+        mSnapshotTimer += DeltaTime;
+        if (mCheckTimer < 2.0f)
+            return;
+        mCheckTimer = 0.0f;
+
+        std::array<int, 8> UnitCounts{};
+        std::array<int, 8> BuildingCounts{};
+        std::array<int, 8> CombatCounts{};
+        auto& EM = mSysMgr.GetEntityManager();
+        for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent,
+                                          Game::Components::PlayerComponent>())
+        {
+            auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Eid);
+            auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+            if (!Unit || !Player || Unit->HitPoints <= 0 ||
+                Player->PlayerID < 0 || Player->PlayerID >= 8 ||
+                EM.GetComponent<Game::Components::ResourceComponent>(Eid))
+            {
+                continue;
+            }
+            ++UnitCounts[(size_t)Player->PlayerID];
+            if (EM.GetComponent<Game::Components::BuildingComponent>(Eid))
+                ++BuildingCounts[(size_t)Player->PlayerID];
+            auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(Eid);
+            if (Combat && (Combat->GroundDamage > 0 || Combat->AirDamage > 0))
+                ++CombatCounts[(size_t)Player->PlayerID];
+        }
+
+        int AliveCount = 0;
+        int Winner = -1;
+        for (int PlayerID : mParticipants)
+        {
+            const bool AliveNow = UnitCounts[(size_t)PlayerID] > 0;
+            if (mElapsed >= 10.0f && mAlive[(size_t)PlayerID] && !AliveNow)
+            {
+                mAlive[(size_t)PlayerID] = false;
+                Core::Utils::Logger::Info(
+                    "AiObserverMatch", "player " + std::to_string(PlayerID) +
+                    " eliminated at simulated_seconds=" + std::to_string((int)mElapsed));
+            }
+            if (AliveNow)
+            {
+                ++AliveCount;
+                Winner = PlayerID;
+            }
+        }
+
+        if (mSnapshotTimer >= 30.0f)
+        {
+            mSnapshotTimer = 0.0f;
+            std::string Snapshot = "status simulated_seconds=" + std::to_string((int)mElapsed);
+            for (int PlayerID : mParticipants)
+            {
+                const auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
+                Snapshot += " p" + std::to_string(PlayerID) + "{units=" +
+                    std::to_string(UnitCounts[(size_t)PlayerID]) + ",buildings=" +
+                    std::to_string(BuildingCounts[(size_t)PlayerID]) + ",combat=" +
+                    std::to_string(CombatCounts[(size_t)PlayerID]) + ",minerals=" +
+                    std::to_string(Resources.Minerals) + ",gas=" +
+                    std::to_string(Resources.VespeneGas) + "}";
+            }
+            Core::Utils::Logger::Info("AiObserverMatch", Snapshot);
+        }
+
+        if (mElapsed >= 10.0f && AliveCount <= 1)
+        {
+            mFinished = true;
+            if (Winner >= 0)
+                Core::Utils::Logger::Info(
+                    "AiObserverMatch", "winner player=" + std::to_string(Winner) +
+                    " simulated_seconds=" + std::to_string((int)mElapsed));
+            else
+                Core::Utils::Logger::Info(
+                    "AiObserverMatch", "draw simulated_seconds=" +
+                    std::to_string((int)mElapsed));
+        }
+    }
+
+private:
+    Core::ECS::SystemManager& mSysMgr;
+    std::vector<int> mParticipants;
+    std::array<bool, 8> mAlive{};
+    float mElapsed = 0.0f;
+    float mCheckTimer = 0.0f;
+    float mSnapshotTimer = 0.0f;
+    bool mFinished = false;
+};
+
 inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSystem& Audio)
 {
     auto& SysMgr = Session.Systems();
@@ -165,6 +393,7 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::UpgradeSystem>(SysMgr));
     auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, &Session.MutableEcsMap());
     FogSys->SetLocalPlayerID(Session.GetLocalPlayerID());
+    FogSys->SetObserverRevealAll(Detail::IsAiObserverMatch());
     Session.SetFogSystem(FogSys.get());
     SysMgr.RegisterSystem(std::move(FogSys));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::ZergSystem>(SysMgr, &Session.MutableEcsMap()));
@@ -176,6 +405,7 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
 
     Game::Systems::CommandSystem::SetMap(&Session.MutableEcsMap());
     Game::Systems::BuildingSystem::SetMap(&Session.MutableEcsMap());
+    Game::Systems::ProductionSystem::SetMap(&Session.MutableEcsMap());
 }
 
 template <typename SpawnResourceEntityT, typename IsMineralUnitT, typename IsGeyserUnitT>
@@ -240,6 +470,8 @@ inline void EnsurePlayableStart(GameSession& Session,
         if (Owner == PlayerId && !EM.GetComponent<Game::Components::ResourceComponent>(EntityId))
             Race = Detail::RaceFromChkUnitID(Unit->ChkUnitID, Race);
     }
+    Race = Detail::ApplyShowcaseRaceOverride(Race);
+    Race = Detail::ApplyObserverRaceOverride(PlayerId, Race);
 
     for (int EntityId : Existing)
     {
@@ -314,11 +546,14 @@ inline void EnsurePlayableStart(GameSession& Session,
     {
         Core::Utils::Logger::Info("GameController",
             "Ensured playable start for player " + std::to_string(PlayerId) +
-            " at tile " + std::to_string(ChosenStart->TileX) + "," + std::to_string(ChosenStart->TileY));
+            " race=" + Detail::StartRaceName(Race) +
+            " at tile " + std::to_string(ChosenStart->TileX) + "," +
+            std::to_string(ChosenStart->TileY));
     }
 }
 
-inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session)
+inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
+                                             bool RegisterGenericAi)
 {
     auto& SysMgr = Session.Systems();
     auto& EM = SysMgr.GetEntityManager();
@@ -352,10 +587,71 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session)
                 Resources.SupplyUsed += Def.SupplyCost;
         }
     }
-    for (int PlayerId = 1; PlayerId < 8; ++PlayerId)
+    const char* ShowcaseValue = std::getenv("STARCRAFT_AI_SHOWCASE");
+    const bool RunShowcase = ShowcaseValue && ShowcaseValue[0] != '\0' &&
+                             ShowcaseValue[0] != '0';
+    if (RunShowcase)
     {
+        const int ShowcasePlayerId = Session.GetLocalPlayerID();
+        SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
+            SysMgr, ShowcasePlayerId, ShowcasePlayerId, true,
+            &Session.MutableEcsMap()));
+        Core::Utils::Logger::Info(
+            "GameController",
+            "Registered real-progression showcase AIBrain for local player " +
+                std::to_string(ShowcasePlayerId));
+    }
+
+    if (!RegisterGenericAi)
+    {
+        // Campaign UNIT placements are controlled by CHK triggers and the
+        // mission's AI scripts.  Attaching the generic skirmish brain here
+        // selects every pre-placed combat unit and collapses the whole map into
+        // one attack wave before the mission scripts can issue their orders.
+        Core::Utils::Logger::Info(
+            "GameController",
+            "Generic skirmish AI disabled for campaign mission");
+        return;
+    }
+
+    if (Detail::IsAiObserverMatch())
+    {
+        std::vector<int> Participants;
+        for (int PlayerId = 0; PlayerId < 8; ++PlayerId)
+            if (HasPlayerUnits[PlayerId])
+                Participants.push_back(PlayerId);
+
+        for (size_t I = 0; I < Participants.size(); ++I)
+        {
+            const int PlayerId = Participants[I];
+            const int TargetPlayerId = Participants[(I + 1u) % Participants.size()];
+            SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
+                SysMgr, PlayerId, TargetPlayerId, false,
+                &Session.MutableEcsMap()));
+            Core::Utils::Logger::Info(
+                "AiObserverMatch", "registered simple AIBrain player=" +
+                std::to_string(PlayerId) + " initial_target=" +
+                std::to_string(TargetPlayerId));
+        }
+        SysMgr.RegisterSystem(std::make_unique<AiObserverMatchMonitor>(
+            SysMgr, Participants));
+        Core::Utils::Logger::Info(
+            "AiObserverMatch", "observer match started participants=" +
+            std::to_string(Participants.size()) + " reveal_all=1");
+        return;
+    }
+
+    const int TargetPlayerId = Session.GetLocalPlayerID();
+    for (int PlayerId = 0; PlayerId < 8; ++PlayerId)
+    {
+        if (PlayerId == TargetPlayerId)
+            continue;
         if (HasPlayerUnits[PlayerId] && Detail::IsComputerPlayer(Session, PlayerId))
-            SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(SysMgr, PlayerId, 0));
+        {
+            SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
+                SysMgr, PlayerId, TargetPlayerId, false,
+                &Session.MutableEcsMap()));
+        }
     }
 }
 

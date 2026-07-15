@@ -172,7 +172,10 @@ void main() {
     float cloaked = clamp(u_effectData.y, 0.0, 1.0);
     float brighten = clamp(u_effectData.z, 0.0, 1.0);
     float useTeamColor = step(0.5, u_effectData.w);
-    float teamMask = texture(u_teamMask, v_uv).r * useTeamColor;
+    float warpTexture = step(0.5, u_effectMode.y);
+    vec2 effectUv = mix(v_uv, v_uv * u_effectMode.zw, warpTexture);
+    vec4 effectMask = texture(u_teamMask, effectUv);
+    float teamMask = effectMask.r * useTeamColor;
 
     vec3 spriteTeamColor = spriteColor.rgb * u_teamColor.rgb;
     spriteColor.rgb = mix(spriteColor.rgb, spriteTeamColor, teamMask);
@@ -185,6 +188,10 @@ void main() {
     spriteColor.a = mix(spriteColor.a, spriteColor.a * 0.42, cloaked);
 
     spriteColor.rgb = mix(spriteColor.rgb, vec3(1.0), brighten);
+    if (warpTexture > 0.5) {
+        spriteColor.rgb = effectMask.rgb;
+        spriteColor.a = sampledColor.a * u_multiplyColor.a;
+    }
     frag_color = spriteColor;
 }
 )";
@@ -230,7 +237,10 @@ float4 main(PSInput input) : SV_Target
     float cloaked = saturate(u_effectData.y);
     float brighten = saturate(u_effectData.z);
     float useTeamColor = step(0.5f, u_effectData.w);
-    float teamMask = u_teamMask.Sample(u_smp, input.uv).r * useTeamColor;
+    float warpTexture = step(0.5f, u_effectMode.y);
+    float2 effectUv = lerp(input.uv, input.uv * u_effectMode.zw, warpTexture);
+    float4 effectMask = u_teamMask.Sample(u_smp, effectUv);
+    float teamMask = effectMask.r * useTeamColor;
 
     float3 spriteTeamColor = spriteColor.rgb * u_teamColor.rgb;
     spriteColor.rgb = lerp(spriteColor.rgb, spriteTeamColor, teamMask);
@@ -243,6 +253,11 @@ float4 main(PSInput input) : SV_Target
     spriteColor.a = lerp(spriteColor.a, spriteColor.a * 0.42f, cloaked);
 
     spriteColor.rgb = lerp(spriteColor.rgb, float3(1.0f, 1.0f, 1.0f), brighten);
+    if (warpTexture > 0.5f)
+    {
+        spriteColor.rgb = effectMask.rgb;
+        spriteColor.a = sampledColor.a * u_multiplyColor.a;
+    }
     return spriteColor;
 }
 )";

@@ -22,7 +22,13 @@ public:
 
     static bool MorphArchon(Core::ECS::EntityManager& EM,
                              int TemplarAID, int TemplarBID,
-                             bool IsDarkArchon);
+                            bool IsDarkArchon);
+    static bool CanRechargeShieldsTarget(Core::ECS::EntityManager& EM,
+                                         int BatteryID,
+                                         int TargetID);
+    static bool RechargeShieldsTarget(Core::ECS::EntityManager& EM,
+                                      int BatteryID,
+                                      int TargetID);
 
 private:
     void UpdatePowerGrid(Core::ECS::EntityManager& EM);

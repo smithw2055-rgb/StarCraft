@@ -1,4 +1,5 @@
 #include "Game/Systems/BuildingSystem.h"
+#include "Client/EntityRenderer.h"
 
 #include "Core/ECS/SystemManager.h"
 #include "Game/Map/Map.h"
@@ -6,6 +7,7 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -13,19 +15,57 @@
 namespace Game::Systems
 {
 
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                              const std::vector<Core::ECS::EntityID>& Units,
+                              const Core::Math::Vec2& Target)
+{
+    IssueMove(EM, Units, Target, -1);
+}
+
 void CommandSystem::IssueMove(Core::ECS::EntityManager&,
                               const std::vector<Core::ECS::EntityID>&,
-                              const Core::Math::Vec2&)
+                              const Core::Math::Vec2&,
+                              int)
 {
 }
 
 bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
                                         const Core::Math::Vec2& Target,
-                                        int)
+                                        int PathingIgnoreEntityID)
 {
-    IssueMove(EM, {EntityID}, Target);
+    IssueMove(EM, {EntityID}, Target, PathingIgnoreEntityID);
+    auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(EntityID);
+    if (!Path)
+        Path = &EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+    Path->Path = {Target};
+    Path->PathIndex = 0;
+    Path->RequestedDestination = Target;
+    Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
     return true;
+}
+
+void CommandSystem::InterruptHarvest(Core::ECS::EntityManager& EM,
+                                     Core::ECS::EntityID EntityID)
+{
+    auto* Harvest = EM.GetComponent<Game::Components::HarvestComponent>(EntityID);
+    if (!Harvest)
+        return;
+    if (auto* Resource =
+            EM.GetComponent<Game::Components::ResourceComponent>(Harvest->TargetResourceID))
+    {
+        if (Resource->ActiveGathererEntityID == EntityID)
+            Resource->ActiveGathererEntityID = -1;
+        Resource->QueuedGatherers.erase(
+            std::remove(Resource->QueuedGatherers.begin(),
+                        Resource->QueuedGatherers.end(), EntityID),
+            Resource->QueuedGatherers.end());
+    }
+    Harvest->State = Game::Components::HarvestState::Idle;
+    Harvest->TargetResourceID = -1;
+    Harvest->DesiredResourceID = -1;
+    Harvest->ReturnBuildingID = -1;
+    Harvest->QueuedAtResource = false;
 }
 
 } // namespace Game::Systems
@@ -61,6 +101,25 @@ namespace
         Command.CurrentCommand = Game::Components::CommandType::Build;
         return EntityID;
     }
+
+    int CreateProtossProbe(Core::ECS::EntityManager& EM,
+                           int PlayerID,
+                           Core::Math::Vec2 Position)
+    {
+        const int DefID = Game::Races::GetUnitDefID("Probe");
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        const int EntityID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(EntityID).Position = Position;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.ChkUnitID = Def.ChkUnitID;
+        Unit.UnitRace = Def.RaceType;
+        Unit.HitPoints = Def.HitPoints;
+        Unit.MaxHitPoints = Def.HitPoints;
+        EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
+        EM.AddComponent<Game::Components::CommandComponent>(EntityID).CurrentCommand =
+            Game::Components::CommandType::Stop;
+        return EntityID;
+    }
 }
 
 int main()
@@ -72,6 +131,8 @@ int main()
     Game::Systems::BuildingSystem::SetMap(&Map);
     Game::Systems::BuildingSystem::SetImageResolver(
         [](int ChkUnitID) { return (uint32_t)(10000 + ChkUnitID); });
+    Game::Systems::BuildingSystem::SetSubunitImageResolver(
+        [](int ChkUnitID) { return (uint32_t)(30000 + ChkUnitID); });
     Game::Systems::BuildingSystem::SetConstructionImageResolver(
         [](int ChkUnitID) { return (uint32_t)(20000 + ChkUnitID); });
 
@@ -111,6 +172,91 @@ int main()
     Require(NexusUnit->ShieldPoints == NexusDef.ShieldPoints,
         "completed Protoss building starts with full shields for UI and combat");
 
+    constexpr int ProtossBuilderPlayerID = 4;
+    auto& ProtossResources =
+        Game::Systems::HarvestSystem::GetResources(ProtossBuilderPlayerID);
+    ProtossResources.Minerals = 1000;
+    ProtossResources.VespeneGas = 1000;
+    const Core::Math::Vec2 ProbeNexusPos = Map.TileToWorld(80, 40);
+    const int Probe = CreateProtossProbe(EM, ProtossBuilderPlayerID, ProbeNexusPos);
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, Probe, NexusDefID, ProbeNexusPos),
+        "Probe can accept a Nexus warp-in order at valid placement");
+    Require(Game::Systems::BuildingSystem::CountPendingBuilds(
+                ProtossBuilderPlayerID, NexusDefID) == 1,
+        "Protoss build order remains pending until the Probe reaches the site");
+    int PendingNexus = -1;
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ProtossBuilderPlayerID &&
+            Building->BuildingDefID == NexusDefID)
+            PendingNexus = EntityID;
+    }
+    Require(PendingNexus < 0,
+        "Protoss building entity is not created before Probe arrival");
+
+    Game::Systems::BuildingSystem ProtossBuildingSystem(SysMgr);
+    ProtossBuildingSystem.Update(0.001f);
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ProtossBuilderPlayerID &&
+            Building->BuildingDefID == NexusDefID)
+            PendingNexus = EntityID;
+    }
+    auto* PendingNexusBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(PendingNexus);
+    auto* PendingNexusRender =
+        EM.GetComponent<Game::Components::RenderComponent>(PendingNexus);
+    auto* ProbeCommand = EM.GetComponent<Game::Components::CommandComponent>(Probe);
+    Require(PendingNexus > 0 && PendingNexusBuilding &&
+            PendingNexusBuilding->UnderConstruction &&
+            PendingNexusBuilding->BuilderUnitID == -1,
+        "Probe arrival creates an autonomous Protoss warp-in entity");
+    Require(PendingNexusRender && PendingNexusRender->ImageID == 211,
+        "Probe arrival starts the Protoss warp-anchor visual");
+    Require(ProbeCommand &&
+            ProbeCommand->CurrentCommand == Game::Components::CommandType::Stop,
+        "Probe is released immediately after opening the warp-in rift");
+
+    const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
+    const int Hatchery = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, HatcheryDefID, Map.TileToWorld(18, 12), PlayerID);
+    auto* HatcheryBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(Hatchery);
+    Require(HatcheryBuilding && HatcheryBuilding->IsOrganic,
+        "completed Zerg Hatchery is organic so the live Zerg system can spawn larva");
+    EM.DestroyEntity(Hatchery);
+
+    const int SpawningPoolDefID = Game::Races::GetUnitDefID("Spawning Pool");
+    const Core::Math::Vec2 CreepBuildPos = Map.TileToWorld(25, 12);
+    Require(!Game::Systems::BuildingSystem::IsPlacementValid(
+                EM, SpawningPoolDefID, CreepBuildPos, PlayerID),
+            "Zerg tech building is rejected when its footprint is off creep");
+    for (int Y = 11; Y <= 12; ++Y)
+    {
+        for (int X = 24; X <= 26; ++X)
+        {
+            auto Tile = Map.GetTile(X, Y);
+            Tile.HasCreep = true;
+            Map.SetTile(X, Y, Tile);
+        }
+    }
+    Require(Game::Systems::BuildingSystem::IsPlacementValid(
+                EM, SpawningPoolDefID, CreepBuildPos, PlayerID),
+            "Zerg tech building is allowed when its entire footprint has creep");
+    auto MissingCreepTile = Map.GetTile(26, 12);
+    MissingCreepTile.HasCreep = false;
+    Map.SetTile(26, 12, MissingCreepTile);
+    Require(!Game::Systems::BuildingSystem::IsPlacementValid(
+                EM, SpawningPoolDefID, CreepBuildPos, PlayerID),
+            "partial creep coverage does not satisfy a Zerg building footprint");
+
     const int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
     const int CommandCenter = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
         EM, CommandCenterDefID, Map.TileToWorld(20, 6), PlayerID);
@@ -125,6 +271,19 @@ int main()
 
     const Core::Math::Vec2 NewDepotPos = Map.TileToWorld(20, 12);
     const int Scv = CreateTerranUnit(EM, "SCV", PlayerID, NewDepotPos);
+    const int HarvestMineral = EM.CreateEntity();
+    auto& HarvestResource =
+        EM.AddComponent<Game::Components::ResourceComponent>(HarvestMineral);
+    const int OtherMiningScv = EM.CreateEntity();
+    HarvestResource.Type = Game::Components::ResourceType::Minerals;
+    HarvestResource.Amount = 1500;
+    HarvestResource.ActiveGathererEntityID = Scv;
+    HarvestResource.QueuedGatherers = {Scv, OtherMiningScv};
+    auto& BuilderHarvest =
+        EM.AddComponent<Game::Components::HarvestComponent>(Scv);
+    BuilderHarvest.State = Game::Components::HarvestState::Mining;
+    BuilderHarvest.TargetResourceID = HarvestMineral;
+    BuilderHarvest.DesiredResourceID = HarvestMineral;
     const auto SupplyDepotDef = Game::Races::GetUnitDefByID(SupplyDepotDefID);
     const int MineralsBeforeBuild = Resources.Minerals;
     const int SupplyMaxBeforeBuild = Resources.SupplyMax;
@@ -134,7 +293,14 @@ int main()
         "starting construction spends the building mineral cost");
     Require(Resources.SupplyMax == SupplyMaxBeforeBuild,
         "Supply Depot does not grant supply before construction completes");
+    Require(BuilderHarvest.State == Game::Components::HarvestState::Idle &&
+            BuilderHarvest.TargetResourceID < 0 &&
+            HarvestResource.ActiveGathererEntityID < 0 &&
+            HarvestResource.QueuedGatherers.size() == 1 &&
+            HarvestResource.QueuedGatherers.front() == OtherMiningScv,
+        "forced construction releases only the builder from the mineral queue");
 
+    Game::Systems::BuildingSystem BuildingSystem(SysMgr);
     int NewDepot = -1;
     for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
     {
@@ -148,7 +314,26 @@ int main()
             break;
         }
     }
-    Require(NewDepot > 0, "starting construction creates an under-construction building entity");
+    Require(NewDepot < 0 &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                PlayerID, SupplyDepotDefID) == 1,
+        "starting construction queues the build without creating a building entity");
+
+    BuildingSystem.Update(0.001f);
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        if (Building &&
+            Building->BuildingDefID == SupplyDepotDefID &&
+            Building->UnderConstruction &&
+            Building->BuilderUnitID == Scv)
+        {
+            NewDepot = EntityID;
+            break;
+        }
+    }
+    Require(NewDepot > 0,
+        "SCV arrival creates the under-construction building entity");
 
     auto* NewDepotBuilding = EM.GetComponent<Game::Components::BuildingComponent>(NewDepot);
     auto* NewDepotUnit = EM.GetComponent<Game::Components::UnitComponent>(NewDepot);
@@ -159,9 +344,10 @@ int main()
         "under-construction Supply Depot uses the construction animation image");
     Require(NewDepotRender && NewDepotRender->Tint.A == 255,
         "construction image keeps its authored per-pixel alpha without a ghost tint");
-    Require(NewDepotBuilding->BuildProgress == 0.0f &&
+    Require(NewDepotBuilding->BuildProgress > 0.0f &&
+            NewDepotBuilding->BuildProgress <= 0.0011f &&
             NewDepotBuilding->TotalBuildTime == (float)SupplyDepotDef.BuildTime,
-        "new Supply Depot starts with zero progress and definition build time");
+        "new Supply Depot starts near zero progress with definition build time");
     Require(NewDepotUnit->HitPoints == 1 &&
             NewDepotUnit->MaxHitPoints == SupplyDepotDef.HitPoints,
         "under-construction building starts damaged but keeps max HP for progress UI");
@@ -173,7 +359,6 @@ int main()
     Require(Resources.Minerals == MineralsBeforeRejectedConcurrentBuild,
         "rejected concurrent SCV construction does not spend minerals");
 
-    Game::Systems::BuildingSystem BuildingSystem(SysMgr);
     auto* NewDepotBuilderPath =
         &EM.AddComponent<Game::Components::PathfindingComponent>(Scv);
     NewDepotBuilderPath->Path = {{NewDepotPos.X + 96.0f, NewDepotPos.Y}};
@@ -215,6 +400,7 @@ int main()
     const int StalledScv = CreateTerranUnit(EM, "SCV", PlayerID, StalledDepotPos);
     Require(Game::Systems::BuildingSystem::StartBuild(EM, StalledScv, SupplyDepotDefID, StalledDepotPos),
         "live SCV can start a second Supply Depot for construction-stall coverage");
+    BuildingSystem.Update(0.001f);
 
     int StalledDepot = -1;
     for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
@@ -236,11 +422,12 @@ int main()
     auto* StalledScvUnit = EM.GetComponent<Game::Components::UnitComponent>(StalledScv);
     Require(StalledDepotBuilding && StalledDepotUnit && StalledScvUnit,
         "stalled construction scenario has all required unit data");
+    const float StalledProgressBeforeDeath = StalledDepotBuilding->BuildProgress;
     StalledScvUnit->HitPoints = 0;
     BuildingSystem.Update((float)SupplyDepotDef.BuildTime);
     Require(StalledDepotBuilding->UnderConstruction,
         "Terran construction remains unfinished when the assigned SCV dies");
-    Require(StalledDepotBuilding->BuildProgress == 0.0f,
+    Require(StalledDepotBuilding->BuildProgress == StalledProgressBeforeDeath,
         "dead builder does not advance Terran building progress");
     Require(StalledDepotUnit->HitPoints == 1,
         "stalled under-construction building keeps its partial HP");
@@ -294,12 +481,17 @@ int main()
         "Factory with a Machine Shop can begin lift-off");
     Require(FactoryWithAddonBuilding->AddonID == -1 &&
             MachineShopBuilding->BuilderUnitID == -1 &&
-            MachineShopPlayer->PlayerID == 11 &&
+            MachineShopPlayer->PlayerID == AddonPlayerID &&
             MachineShopBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::LiftingOff,
-        "lift-off abandons the add-on as neutral and starts its detach animation");
+        "lift-off detaches the still-owned add-on and starts its detach animation");
     FactoryWithAddonBuilding->FlightAnimationComplete = true;
     BuildingSystem.Update(1.0f / 24.0f);
+    Require(FactoryWithAddonBuilding->FlightHeightTransitionActive &&
+            FactoryWithAddonBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::LiftingOff,
+        "parent retracts its landing gear before the body rises");
+    BuildingSystem.Update(0.5f);
     MachineShopBuilding->FlightPhase = Game::Components::BuildingFlightPhase::Grounded;
     Require(FactoryWithAddonBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::Airborne,
@@ -307,6 +499,7 @@ int main()
     Require(Game::Systems::BuildingSystem::LandBuilding(
                 EM, FactoryWithAddon, FactoryWithAddonPos),
         "airborne Factory can start landing beside its abandoned Machine Shop");
+    BuildingSystem.Update(0.5f);
     FactoryWithAddonBuilding->FlightAnimationComplete = true;
     BuildingSystem.Update(1.0f / 24.0f);
     Require(!FactoryWithAddonBuilding->IsLifted &&
@@ -315,7 +508,7 @@ int main()
             MachineShopPlayer->PlayerID == AddonPlayerID &&
             MachineShopBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::Landing,
-        "landing reconnects the compatible neutral add-on and starts its landing animation");
+        "landing reconnects the compatible owned add-on and starts its landing animation");
 
     const Core::Math::Vec2 RestoredFactoryPos = Map.TileToWorld(52, 18);
     const int RestoredFactory = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
@@ -330,6 +523,69 @@ int main()
                 RestoredFactory,
         "map-spawned parent and add-on relationships are reconstructed from project positions and definitions");
 
+    const Core::Math::Vec2 RestoredCommandCenterPos = Map.TileToWorld(62, 18);
+    const int RestoredCommandCenter = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, CommandCenterDefID, RestoredCommandCenterPos, AddonPlayerID);
+    const int RestoredComsat = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+        EM, Game::Races::GetUnitDefID("ComsatStation"),
+        RestoredCommandCenterPos + Core::Math::Vec2{96.0f, 16.0f}, AddonPlayerID);
+    Game::Systems::BuildingSystem::RestoreSpawnedAddonLinks(EM);
+    auto* RestoredComsatRender = EM.GetComponent<Game::Components::RenderComponent>(RestoredComsat);
+    Require(EM.GetComponent<Game::Components::BuildingComponent>(RestoredCommandCenter)->AddonID ==
+                RestoredComsat &&
+            RestoredComsatRender && RestoredComsatRender->AddonConnectorImageID == 272,
+        "map-spawned Comsat receives its dedicated bridge connector image");
+
+    Resources.Minerals = 1000;
+    const Core::Math::Vec2 CommandCenterBuildPos = Map.TileToWorld(72, 28);
+    const int CommandCenterScv = CreateTerranUnit(
+        EM, "SCV", PlayerID,
+        CommandCenterBuildPos + Core::Math::Vec2{88.0f, 0.0f});
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, CommandCenterScv, CommandCenterDefID, CommandCenterBuildPos),
+        "SCV can place a Command Center foundation for edge-contact coverage");
+    BuildingSystem.Update(0.001f);
+    const int AssistantCommandCenterScv = CreateTerranUnit(
+        EM, "SCV", PlayerID,
+        CommandCenterBuildPos + Core::Math::Vec2{-88.0f, 0.0f});
+    int CommandCenterUnderConstruction = -1;
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        if (Building && Building->BuildingDefID == CommandCenterDefID &&
+            Building->UnderConstruction && Building->BuilderUnitID == CommandCenterScv)
+        {
+            CommandCenterUnderConstruction = EntityID;
+            break;
+        }
+    }
+    Require(CommandCenterUnderConstruction > 0,
+        "Command Center foundation retains its assigned SCV");
+    auto* CommandCenterConstruction =
+        EM.GetComponent<Game::Components::BuildingComponent>(CommandCenterUnderConstruction);
+    Require(Game::Systems::BuildingSystem::AssistConstruction(
+                EM, {AssistantCommandCenterScv}, CommandCenterUnderConstruction),
+        "a second SCV can assist an unfinished Command Center");
+    Require(CommandCenterConstruction &&
+            CommandCenterConstruction->AssistantBuilderUnitIDs.size() == 1 &&
+            CommandCenterConstruction->AssistantBuilderUnitIDs.front() ==
+                AssistantCommandCenterScv,
+        "unfinished Command Center records its assisting SCV");
+    BuildingSystem.Update(1.0f);
+    Require(CommandCenterConstruction && CommandCenterConstruction->BuildProgress >= 1.99f,
+        "two SCVs advance Command Center construction at twice the base rate");
+    CommandCenterConstruction->BuildProgress =
+        CommandCenterConstruction->TotalBuildTime - 1.0f;
+    BuildingSystem.Update(1.0f);
+    const auto* AssistantCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(AssistantCommandCenterScv);
+    Require(!CommandCenterConstruction->UnderConstruction &&
+            CommandCenterConstruction->AssistantBuilderUnitIDs.empty() &&
+            AssistantCommand &&
+            AssistantCommand->CurrentCommand == Game::Components::CommandType::Stop,
+        "completion releases every assisting SCV and clears the construction team");
+
     constexpr int LandingPlayerID = 1;
     auto& PlayerZeroResources = Game::Systems::HarvestSystem::GetResources(0);
     auto& LandingResources = Game::Systems::HarvestSystem::GetResources(LandingPlayerID);
@@ -340,6 +596,12 @@ int main()
 
     const int LiftedCommandCenter = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
         EM, CommandCenterDefID, Map.TileToWorld(34, 6), LandingPlayerID);
+    auto* LiftedCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(LiftedCommandCenter);
+    if (!LiftedCommand)
+        LiftedCommand = &EM.AddComponent<Game::Components::CommandComponent>(LiftedCommandCenter);
+    LiftedCommand->CurrentCommand = Game::Components::CommandType::Move;
+    LiftedCommand->TargetPosition = Map.TileToWorld(50, 6);
     Require(Game::Systems::BuildingSystem::LiftOffBuilding(EM, LiftedCommandCenter),
         "completed Terran Command Center can lift off before landing");
     auto* LiftedBuilding =
@@ -351,6 +613,8 @@ int main()
                 Game::Components::BuildingFlightPhase::LiftingOff &&
             LiftedUnit && LiftedUnit->Speed == 0.0f,
         "lift-off begins as an immobile script-driven transition");
+    Require(Game::Client::BuildingFlightBodyOffsetY(LiftedBuilding) == 0.0f,
+        "lift-off keeps the building body grounded while the landing gear retracts");
     auto* FlyingRender =
         EM.GetComponent<Game::Components::RenderComponent>(LiftedCommandCenter);
     auto* FlyingPath =
@@ -360,15 +624,28 @@ int main()
         "lifted building renders on the air-unit layer");
     Require(FlyingPath && FlyingPath->IsAir,
         "lifted building switches to air pathing");
+    Require(LiftedCommand->CurrentCommand == Game::Components::CommandType::Stop &&
+            LiftedCommand->TargetEntityID == -1 && FlyingPath->Path.empty(),
+        "lift-off clears stale movement so the building does not fly away by itself");
     Require(!Game::Systems::BuildingSystem::LandBuilding(
                 EM, LiftedCommandCenter, Map.TileToWorld(34, 12)),
         "building cannot land before its LiftOff animation signals completion");
     LiftedBuilding->FlightAnimationComplete = true;
     BuildingSystem.Update(1.0f / 24.0f);
     Require(LiftedBuilding->FlightPhase ==
+                Game::Components::BuildingFlightPhase::LiftingOff &&
+            LiftedBuilding->FlightHeightTransitionActive &&
+            LiftedUnit->Speed == 0.0f &&
+            LiftedBuilding->FlightVisualHeight > 0.0f &&
+            LiftedBuilding->FlightVisualHeight < 24.0f,
+        "landing-gear completion starts a separate immobile body-rise stage");
+    BuildingSystem.Update(0.5f);
+    Require(LiftedBuilding->FlightPhase ==
                 Game::Components::BuildingFlightPhase::Airborne &&
             LiftedUnit->Speed > 0.0f,
         "LiftOff completion signal enables airborne movement");
+    Require(Game::Client::BuildingFlightBodyOffsetY(LiftedBuilding) == -24.0f,
+        "airborne building body holds a stable flight height above its shadow");
     Require(!Game::Systems::BuildingSystem::LandBuilding(
                 EM, LiftedCommandCenter, Map.TileToWorld(6, 6)),
             "lifted building cannot land on an occupied building footprint");
@@ -382,6 +659,8 @@ int main()
     Require(LiftedBuilding && LiftedBuilding->IsLifted &&
             LiftedBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Landing,
         "valid landing starts the Landing iscript before clearing flight state");
+    Require(Game::Client::BuildingFlightBodyOffsetY(LiftedBuilding) == -24.0f,
+        "landing begins from the airborne body height while the shadow stays grounded");
     Require(LiftedUnit && LiftedUnit->Speed == 0.0f,
         "landing transition makes the building immobile");
     Require(LiftedPath && LiftedPath->IsAir && LiftedPath->Path.empty(),
@@ -389,11 +668,23 @@ int main()
     Require(LandedRender &&
             LandedRender->Layer == Game::Components::RenderLayer::AirUnits,
         "landing transition remains on the air layer until completion");
+    BuildingSystem.Update(0.25f);
+    Require(LiftedBuilding->FlightHeightTransitionActive &&
+            LiftedBuilding->FlightVisualHeight > 0.0f &&
+            LiftedBuilding->FlightVisualHeight < 24.0f,
+        "landing lowers the body while keeping the landing gear retracted");
+    BuildingSystem.Update(0.25f);
+    Require(!LiftedBuilding->FlightHeightTransitionActive &&
+            LiftedBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Landing &&
+            Game::Client::BuildingFlightBodyOffsetY(LiftedBuilding) == 0.0f,
+        "landing body reaches ground height before the landing gear deploys");
     LiftedBuilding->FlightAnimationComplete = true;
     BuildingSystem.Update(1.0f / 24.0f);
     Require(!LiftedBuilding->IsLifted &&
             LiftedBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Grounded,
         "Landing completion signal clears lifted state");
+    Require(Game::Client::BuildingFlightBodyOffsetY(LiftedBuilding) == 0.0f,
+        "completed landing returns the building body to ground height");
     Require(LiftedPath && !LiftedPath->IsAir && LiftedPath->Path.empty(),
         "completed landing restores ground pathing state");
     Require(LandedRender &&

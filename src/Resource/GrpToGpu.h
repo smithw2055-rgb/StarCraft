@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,6 +43,8 @@ struct GrpDecodeOptions
     // colors. Decode those indices as a graded RGBA glow mask so the modern
     // renderer does not display the whole source frame as a white disc.
     bool DecodeLightTableMask = false;
+    bool UseLightTableRgba = false;
+    std::array<RawColor, 256> LightTableRgba = {};
     uint8_t LightTableIndexCount = 63;
     uint8_t LightTableMaxAlpha = 192;
     RawColor LightTableTint = RawColor(255, 160, 64, 255);

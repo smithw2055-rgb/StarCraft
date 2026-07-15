@@ -2,12 +2,15 @@
 #include "Client/SelectionFootprint.h"
 
 #include "Game/DataEnums.h"
+#include "Game/PlayerColor.h"
+#include "Game/ProtossPower.h"
 #include "Resource/GameDataLoader.h"
 #include "Render/Draw2D.h"
 #include "Render/Color.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cmath>
 #include <unordered_map>
@@ -83,6 +86,30 @@ namespace
             const float PY = CenterY + std::sin(Angle) * RadiusY;
             Draw.DrawRect(PX - 1.25f, PY - 1.25f, 2.5f, 2.5f, Shadow);
             Draw.DrawRect(PX - 0.65f, PY - 0.65f, 1.3f, 1.3f, Green);
+        }
+    }
+
+    void DrawPylonPowerField(Render::Draw2D& Draw, float WorldX, float WorldY)
+    {
+        const Render::Color Fill(48, 116, 255, 26);
+        const Render::Color Edge(92, 176, 255, 210);
+        const float RadiusX = Game::ProtossPower::PylonRadiusWorld;
+        const float RadiusY = RadiusX * 0.5f;
+        for (int Y = -(int)RadiusY; Y <= (int)RadiusY; Y += 2)
+        {
+            const float NormalizedY = (float)Y / RadiusY;
+            const float HalfWidth = RadiusX * std::sqrt(
+                std::max(0.0f, 1.0f - NormalizedY * NormalizedY));
+            Draw.DrawRect(WorldX - HalfWidth, WorldY + (float)Y,
+                          HalfWidth * 2.0f, 2.0f, Fill);
+        }
+        constexpr int Segments = 256;
+        for (int I = 0; I < Segments; ++I)
+        {
+            const float Angle = ((float)I / (float)Segments) * kTwoPi;
+            const float X = WorldX + std::cos(Angle) * RadiusX;
+            const float Y = WorldY + std::sin(Angle) * RadiusY;
+            Draw.DrawRect(X - 1.0f, Y - 1.0f, 2.0f, 2.0f, Edge);
         }
     }
 
@@ -437,13 +464,80 @@ namespace
         float Cloaked = 0.0f;
         float Brighten = 0.0f;
         float Shadow = 0.0f;
+        float WarpTexture = 0.0f;
+        const Resource::Graphics::GpuImage* EffectMask = nullptr;
 
         bool Any() const
         {
             return Hallucination > 0.0f || Cloaked > 0.0f ||
-                   Brighten > 0.0f || Shadow > 0.0f;
+                   Brighten > 0.0f || Shadow > 0.0f || WarpTexture > 0.0f;
         }
     };
+
+    float ProtossConstructionRiftScale(
+        Core::ECS::EntityManager& Entities,
+        int EntityId)
+    {
+        const auto* Building =
+            Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+        const auto* Unit =
+            Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        if (!Building || !Unit || !Building->UnderConstruction ||
+            Unit->UnitRace != Game::Components::Race::Protoss)
+        {
+            return 1.0f;
+        }
+        if (Building->ProtossPhase ==
+            Game::Components::ProtossConstructionPhase::RiftClosing)
+        {
+            return 1.0f;
+        }
+        if (Building->ProtossPhase !=
+            Game::Components::ProtossConstructionPhase::Rift)
+        {
+            return 1.0f;
+        }
+
+        const float Progress = Building->TotalBuildTime > 0.0f
+            ? std::clamp(Building->BuildProgress / Building->TotalBuildTime,
+                         0.0f, 1.0f)
+            : 0.0f;
+        const float SmoothProgress =
+            Progress * Progress * (3.0f - 2.0f * Progress);
+        return 0.18f + 0.82f * SmoothProgress;
+    }
+
+    const std::vector<Resource::Graphics::GpuImage>* ProtossWarpTextureFrames(
+        const Resource::Graphics::DataAssetCacheView& DataAssets,
+        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets)
+    {
+        const auto* Loader = DataLoader(DataAssets);
+        if (!Loader || !SpriteAssets.HasCache())
+            return nullptr;
+
+        static const Resource::GameDataLoader* CachedLoader = nullptr;
+        static uint32_t CachedImageID = UINT32_MAX;
+        if (CachedLoader != Loader)
+        {
+            CachedLoader = Loader;
+            CachedImageID = UINT32_MAX;
+            for (uint32_t ImageID = 0; ImageID < 999; ++ImageID)
+            {
+                std::string Path = Loader->ResolveImageGrpPath(ImageID);
+                std::replace(Path.begin(), Path.end(), '\\', '/');
+                std::transform(Path.begin(), Path.end(), Path.begin(),
+                    [](unsigned char C) { return (char)std::tolower(C); });
+                if (Path == "protoss/texture.grp")
+                {
+                    CachedImageID = ImageID;
+                    break;
+                }
+            }
+        }
+        return CachedImageID != UINT32_MAX
+            ? SpriteAssets.GetDatImageFrames(CachedImageID)
+            : nullptr;
+    }
 
     bool HasStatusEffect(Core::ECS::EntityManager& Entities,
                          int EntityId,
@@ -457,6 +551,7 @@ namespace
         Core::ECS::EntityManager& Entities,
         int EntityId,
         const Resource::Graphics::DataAssetCacheView& DataAssets,
+        const Resource::Graphics::SpriteAssetCacheView& SpriteAssets,
         uint32_t ImageID)
     {
         SpriteVisualEffect Effect;
@@ -468,6 +563,28 @@ namespace
 
         if (HasStatusEffect(Entities, EntityId, Game::Components::StatusEffect::Hallucination))
             Effect.Hallucination = 1.0f;
+
+        const auto* Building =
+            Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+        const auto* Unit =
+            Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        const auto* Render =
+            Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        if (Building && Building->UnderConstruction && Unit && Render &&
+            Unit->UnitRace == Game::Components::Race::Protoss &&
+            Render->UseProtossWarpTexture && ImageID == Render->ImageID)
+        {
+            if (const auto* WarpFrames =
+                    ProtossWarpTextureFrames(DataAssets, SpriteAssets);
+                WarpFrames && !WarpFrames->empty())
+            {
+                const int Frame = std::clamp(
+                    Render->ProtossWarpTextureFrame,
+                    0, (int)WarpFrames->size() - 1);
+                Effect.WarpTexture = 1.0f;
+                Effect.EffectMask = &(*WarpFrames)[(size_t)Frame];
+            }
+        }
 
         if (const auto* Loader = DataLoader(DataAssets))
         {
@@ -498,8 +615,15 @@ namespace
         if (Img.ShadowSprite)
             Effective.Shadow = 1.0f;
 
-        const bool UseTeamColor =
+        const bool UseWarpTexture =
+            Effective.WarpTexture > 0.0f && Effective.EffectMask &&
+            Effective.EffectMask->Valid();
+        const bool UseTeamColor = !UseWarpTexture &&
             Effective.Shadow <= 0.0f && Player && Img.TeamColorMask.Valid();
+        const float WarpScaleX = UseWarpTexture && Effective.EffectMask->Width > 0
+            ? (float)Img.Width / (float)Effective.EffectMask->Width : 1.0f;
+        const float WarpScaleY = UseWarpTexture && Effective.EffectMask->Height > 0
+            ? (float)Img.Height / (float)Effective.EffectMask->Height : 1.0f;
         if (Effective.Any() || UseTeamColor)
         {
             Draw.DrawSpriteEffect(Img, X, Y, W, H,
@@ -509,8 +633,13 @@ namespace
                                   Effective.Cloaked,
                                   Effective.Brighten,
                                   Effective.Shadow,
-                                  UseTeamColor ? Player->PlayerColor : Render::Colors::White(),
-                                  UseTeamColor ? &Img.TeamColorMask : nullptr);
+                                  UseWarpTexture ? 1.0f : 0.0f,
+                                  WarpScaleX,
+                                  WarpScaleY,
+                                  UseTeamColor ? Game::PlayerColorForID(Player->PlayerID) :
+                                                 Render::Colors::White(),
+                                  UseWarpTexture ? Effective.EffectMask :
+                                      (UseTeamColor ? &Img.TeamColorMask : nullptr));
             return;
         }
 
@@ -932,8 +1061,11 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
     if (!Img.Valid())
         return;
 
-    const float HW = Img.Width * 0.5f;
-    const float HH = Img.Height * 0.5f;
+    const float RiftScale = ProtossConstructionRiftScale(Entities, EntityId);
+    const float DrawWidth = (float)Img.Width * RiftScale;
+    const float DrawHeight = (float)Img.Height * RiftScale;
+    const float HW = DrawWidth * 0.5f;
+    const float HH = DrawHeight * 0.5f;
     // Normal IScript offsets are root-sprite-space values and follow the root
     // mirror. LO offsets are resolved for the current flipped root frame by the
     // animation system, so applying that mirror twice moves flames/sparks to
@@ -947,16 +1079,26 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
     const bool Flipped = (Node.InheritSpriteDirection || Node.FollowsMainGraphic)
         ? Node.Flipped
         : (RenderComp->Flipped != Node.Flipped);
+    const SpriteVisualEffect NodeEffect = ResolveSpriteVisualEffect(
+        Entities, EntityId, mDataAssets, mSpriteAssets, Node.ImageID);
+    const bool IsShadowImage = NodeEffect.Shadow > 0.0f;
+    const auto* Building =
+        Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+    const float RootVisualOffsetX = IsShadowImage ? 0.0f : RenderComp->VisualOffset.X;
+    const float RootVisualOffsetY = IsShadowImage
+        ? 0.0f
+        : RenderComp->VisualOffset.Y + BuildingFlightBodyOffsetY(Building);
+    const uint8_t Alpha = (uint8_t)std::lround(
+        std::clamp(Node.Opacity, 0.0f, 1.0f) * 255.0f);
     DrawSpriteWithEffect(Render::g_Draw2D,
                          Img,
-                         Trans->Position.X + DrawOffsetX - HW,
-                         Trans->Position.Y + OffsetY - HH,
-                         (float)Img.Width,
-                         (float)Img.Height,
-                         Render::Colors::White(),
+                         Trans->Position.X + RootVisualOffsetX + DrawOffsetX * RiftScale - HW,
+                         Trans->Position.Y + RootVisualOffsetY + OffsetY * RiftScale - HH,
+                         DrawWidth,
+                         DrawHeight,
+                         Render::Color(255, 255, 255, Alpha),
                          Flipped,
-                         ResolveSpriteVisualEffect(
-                             Entities, EntityId, mDataAssets, Node.ImageID),
+                         NodeEffect,
                          Player);
 }
 
@@ -1082,6 +1224,24 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             return Inserted.first->second;
         };
 
+    // Draw selected Pylon power fields as a ground overlay before any entity
+    // sprites. A world-space circle projects to this 2:1 isometric ellipse,
+    // while buildings and units remain fully in front of it.
+    for (int EntityId : SelectedIds)
+    {
+        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
+        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
+        if (Trans && RenderComp && RenderComp->Visible && Unit && Unit->ChkUnitID == 156)
+        {
+            const SelectionVisual& Visual =
+                GetSelectionVisual(EntityId, *Trans, *Unit, true);
+            DrawPylonPowerField(Draw,
+                                Visual.Footprint.CenterX,
+                                Visual.Footprint.CenterY);
+        }
+    }
+
     for (int EntityId : Order)
     {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
@@ -1095,9 +1255,12 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const bool IsSelected = SelectedLookup.find(EntityId) != SelectedLookup.end();
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
+        const auto* Building =
+            Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+        const float FlightBodyOffsetY = BuildingFlightBodyOffsetY(Building);
         const bool ShowHealthBar = !IsResource && Unit->MaxHitPoints > 0 && IsSelected;
         const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(
-            Entities, EntityId, mDataAssets, RenderComp->ImageID);
+            Entities, EntityId, mDataAssets, mSpriteAssets, RenderComp->ImageID);
 
         if (IsSelected)
             DrawSelectionVisual(Draw, GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding));
@@ -1137,46 +1300,24 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             }
             if (Img.Valid())
             {
-                const float HW = Img.Width * 0.5f;
-                const float HH = Img.Height * 0.5f;
+                const float RiftScale =
+                    ProtossConstructionRiftScale(Entities, EntityId);
+                const float DrawWidth = (float)Img.Width * RiftScale;
+                const float DrawHeight = (float)Img.Height * RiftScale;
+                const float HW = DrawWidth * 0.5f;
+                const float HH = DrawHeight * 0.5f;
                 DrawSpriteWithEffect(Draw,
                                      Img,
-                                     Trans->Position.X - HW,
-                                     Trans->Position.Y - HH,
-                                     (float)Img.Width,
-                                     (float)Img.Height,
+                                     Trans->Position.X + RenderComp->VisualOffset.X - HW,
+                                     Trans->Position.Y + RenderComp->VisualOffset.Y + FlightBodyOffsetY - HH,
+                                     DrawWidth,
+                                     DrawHeight,
                                      RenderComp->Tint,
                                      RenderComp->Flipped,
                                      VisualEffect,
                                      Player);
                 DrewSprite = true;
                 ++DebugSpriteCount;
-
-                if (RenderComp->SubunitImageID != UINT32_MAX)
-                {
-                    const auto* SubunitFrames = mSpriteAssets.GetDatImageFrames(RenderComp->SubunitImageID);
-                    if (SubunitFrames && !SubunitFrames->empty())
-                    {
-                        const int SubFrameIndex = std::clamp(
-                            RenderComp->FrameIndex, 0, (int)SubunitFrames->size() - 1);
-                        const auto& SubImg = (*SubunitFrames)[SubFrameIndex];
-                        if (SubImg.Valid())
-                        {
-                            const float SubHW = SubImg.Width * 0.5f;
-                            const float SubHH = SubImg.Height * 0.5f;
-                            DrawSpriteWithEffect(Draw,
-                                                 SubImg,
-                                                 Trans->Position.X - SubHW,
-                                                 Trans->Position.Y - SubHH,
-                                                 (float)SubImg.Width,
-                                                 (float)SubImg.Height,
-                                                 RenderComp->Tint,
-                                                 RenderComp->Flipped,
-                                                 VisualEffect,
-                                                 Player);
-                        }
-                    }
-                }
 
                 if (ShowHealthBar)
                 {
@@ -1224,7 +1365,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             if (Player && Player->PlayerID == 2) Base = Render::Color(80, 80, 255, 240);
 
             const float X = Trans->Position.X - Size * 0.5f;
-            const float Y = Trans->Position.Y - Size * 0.5f;
+            const float Y = Trans->Position.Y + FlightBodyOffsetY - Size * 0.5f;
             Draw.DrawRect(X, Y, Size, Size, Base);
             Draw.DrawRectLines(X, Y, Size, Size, Render::Color(0, 0, 0, 255), 2.0f);
 
@@ -1304,7 +1445,8 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     (float)Img.Width, (float)Img.Height,
                     RenderComp->Tint, RenderComp->Flipped,
                     ResolveSpriteVisualEffect(
-                        Entities, EntityId, mDataAssets, RenderComp->ImageID),
+                        Entities, EntityId, mDataAssets, mSpriteAssets,
+                        RenderComp->ImageID),
                     Entities.GetComponent<Game::Components::PlayerComponent>(EntityId));
                 ++DebugSpriteCount;
             }

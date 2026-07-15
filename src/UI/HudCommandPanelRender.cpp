@@ -63,9 +63,19 @@ void Hud::DrawCommandPanel(const HudLayout& Layout, int ViewportWidth, int Viewp
         }
 
         const bool HasVisualIcon = (IconMask && IconMask->Valid()) || (Icon && Icon->Valid());
-        const bool DrawLabel = HasCmd && !HasVisualIcon;
+        const bool IsTransportCommand =
+            Button.CommandId == HudCommandId::Load ||
+            Button.CommandId == HudCommandId::UnloadAll;
+        const bool DrawLabel = HasCmd && (!HasVisualIcon || IsTransportCommand);
         if (DrawLabel)
         {
+            if (HasVisualIcon && IsTransportCommand)
+            {
+                D.DrawRect((float)ButtonRect.X + 2.0f,
+                           (float)ButtonRect.Y + (float)ButtonRect.H - 17.0f,
+                           (float)ButtonRect.W - 4.0f, 15.0f,
+                           Render::Color(0, 0, 0, 180));
+            }
             D.DrawText(Ellipsize(Button.Label, 10),
                        (float)ButtonRect.X + 4.0f,
                        (float)ButtonRect.Y + (float)ButtonRect.H - 14.0f,

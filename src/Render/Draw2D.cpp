@@ -175,6 +175,9 @@ void Draw2D::SetSpriteEffectParams(float Hallucination,
                                    float Cloaked,
                                    float Brighten,
                                    float Shadow,
+                                   float WarpTexture,
+                                   float WarpScaleX,
+                                   float WarpScaleY,
                                    Color TeamColor,
                                    bool UseTeamColor)
 {
@@ -193,9 +196,9 @@ void Draw2D::SetSpriteEffectParams(float Hallucination,
     mSpriteEffectParams.EffectData[2] = std::clamp(Brighten, 0.0f, 1.0f);
     mSpriteEffectParams.EffectData[3] = UseTeamColor ? 1.0f : 0.0f;
     mSpriteEffectParams.EffectMode[0] = std::clamp(Shadow, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectMode[1] = 0.0f;
-    mSpriteEffectParams.EffectMode[2] = 0.0f;
-    mSpriteEffectParams.EffectMode[3] = 0.0f;
+    mSpriteEffectParams.EffectMode[1] = std::clamp(WarpTexture, 0.0f, 1.0f);
+    mSpriteEffectParams.EffectMode[2] = std::max(0.0f, WarpScaleX);
+    mSpriteEffectParams.EffectMode[3] = std::max(0.0f, WarpScaleY);
 }
 
 void Draw2D::EnsureCapacity(int V, int I)
@@ -414,11 +417,15 @@ void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
                               float Cloaked,
                               float Brighten,
                               float Shadow,
+                              float WarpTexture,
+                              float WarpScaleX,
+                              float WarpScaleY,
                               Color TeamColor,
-                              const GpuTextureHandle* TeamColorMask)
+                              const GpuTextureHandle* EffectMask)
 {
     if (!Texture.Valid()) return;
-    const bool UseTeamColor = TeamColorMask && TeamColorMask->Valid();
+    const bool UseWarpTexture = WarpTexture > 0.0f && EffectMask && EffectMask->Valid();
+    const bool UseTeamColor = !UseWarpTexture && EffectMask && EffectMask->Valid();
     if (mCurrentTexture.Image.id != Texture.Image.id ||
         mCurrentTexture.View.id != Texture.View.id ||
         mCurrentMaterial != BatchMaterial::SpriteEffect)
@@ -426,19 +433,23 @@ void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
         Flush();
         mCurrentTexture = Texture;
     }
-    if (UseTeamColor &&
-        (mCurrentTeamColorMask.Image.id != TeamColorMask->Image.id ||
-         mCurrentTeamColorMask.View.id != TeamColorMask->View.id))
+    const bool UseEffectMask = UseTeamColor || UseWarpTexture;
+    if (UseEffectMask &&
+        (mCurrentTeamColorMask.Image.id != EffectMask->Image.id ||
+         mCurrentTeamColorMask.View.id != EffectMask->View.id))
     {
         Flush();
-        mCurrentTeamColorMask = *TeamColorMask;
+        mCurrentTeamColorMask = *EffectMask;
     }
-    else if (!UseTeamColor && mCurrentTeamColorMask.Valid())
+    else if (!UseEffectMask && mCurrentTeamColorMask.Valid())
     {
         Flush();
         mCurrentTeamColorMask = {};
     }
-    SetSpriteEffectParams(Hallucination, Cloaked, Brighten, Shadow, TeamColor, UseTeamColor);
+    SetSpriteEffectParams(Hallucination, Cloaked, Brighten, Shadow,
+                          UseWarpTexture ? 1.0f : 0.0f,
+                          WarpScaleX, WarpScaleY,
+                          TeamColor, UseTeamColor);
     SetPipeline(true, BatchMaterial::SpriteEffect);
     AddQuad(X, Y, W, H, U0, V0, U1, V1, Tint, FlipX);
     Flush();

@@ -1,6 +1,7 @@
 #include "Game/Systems/ProtossSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/ProtossPower.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Core/Utils/Logger.h"
@@ -81,27 +82,29 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
 
     std::fill(mPowerGrid.begin(), mPowerGrid.end(), false);
 
-    // Pylon provides power in a 4-tile radius = 8x8 area around its center
-    // OpenBW psi_field_mask: 5x8 shape, simplified here as radius 4
+    // Pylon power is a four-tile circle around its center.
     auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
     for (int Eid : Units)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
         if (!U || !T) continue;
-        if (U->ChkUnitID != 0x6A) continue; // Pylon = 0x6A
+        const int PylonDefID = Game::Races::GetUnitDefID("Pylon");
+        const int PylonChkID = Game::Races::GetUnitDefByID(PylonDefID).ChkUnitID;
+        if (U->ChkUnitID != PylonChkID) continue;
         if (U->HitPoints <= 0) continue;
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
 
-    // Pylon psi_field: ~5 tiles wide × 7 tiles tall, matching SC/BW shape
-    // Centre tile + 4 left/right, 3 up/down (forming a wide diamond-ish area)
-    for (int DY = -3; DY <= 3; DY++)
+    for (int DY = -Game::ProtossPower::PylonRadiusTiles;
+         DY <= Game::ProtossPower::PylonRadiusTiles; ++DY)
     {
-        int MaxDX = 4 - (std::abs(DY) > 2 ? std::abs(DY) - 2 : 0);
-        for (int DX = -MaxDX; DX <= MaxDX; DX++)
+        for (int DX = -Game::ProtossPower::PylonRadiusTiles;
+             DX <= Game::ProtossPower::PylonRadiusTiles; ++DX)
         {
+            if (!Game::ProtossPower::ContainsTileOffset(DX, DY))
+                continue;
             int X = TX + DX, Y = TY + DY;
             if (X >= 0 && X < W && Y >= 0 && Y < H)
                 mPowerGrid[Y * W + X] = true;
@@ -133,7 +136,7 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
         auto* BT = EM.GetComponent<TransformComponent>(Bid);
         auto* BB = EM.GetComponent<BuildingComponent>(Bid);
         if (!BU || !BT || !BB) continue;
-        if (BU->ChkUnitID != 0x6D) continue; // Shield Battery = 0x6D
+        if (BU->ChkUnitID != 172) continue; // Protoss Shield Battery
         if (BU->EnergyPoints <= 0) continue;
         if (BB->UnderConstruction) continue;
 
@@ -168,6 +171,44 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
             BU->EnergyPoints = std::max(0, BU->EnergyPoints - (int)EnergyDrain);
         }
     }
+}
+
+bool ProtossSystem::CanRechargeShieldsTarget(Core::ECS::EntityManager& EM,
+                                             int BatteryID,
+                                             int TargetID)
+{
+    auto* BatteryUnit = EM.GetComponent<UnitComponent>(BatteryID);
+    auto* BatteryBuilding = EM.GetComponent<BuildingComponent>(BatteryID);
+    auto* BatteryPlayer = EM.GetComponent<PlayerComponent>(BatteryID);
+    auto* BatteryTransform = EM.GetComponent<TransformComponent>(BatteryID);
+    auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+    auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetID);
+    auto* TargetTransform = EM.GetComponent<TransformComponent>(TargetID);
+    return BatteryUnit && BatteryBuilding && BatteryPlayer && BatteryTransform &&
+           TargetUnit && TargetPlayer && TargetTransform &&
+           BatteryUnit->ChkUnitID == 172 && !BatteryBuilding->UnderConstruction &&
+           BatteryUnit->EnergyPoints > 0 &&
+           BatteryPlayer->PlayerID == TargetPlayer->PlayerID &&
+           TargetUnit->MaxShieldPoints > 0 &&
+           TargetUnit->ShieldPoints < TargetUnit->MaxShieldPoints &&
+           BatteryTransform->Position.DistanceTo(TargetTransform->Position) <= 128.0f;
+}
+
+bool ProtossSystem::RechargeShieldsTarget(Core::ECS::EntityManager& EM,
+                                          int BatteryID,
+                                          int TargetID)
+{
+    if (!CanRechargeShieldsTarget(EM, BatteryID, TargetID))
+        return false;
+
+    auto* BatteryUnit = EM.GetComponent<UnitComponent>(BatteryID);
+    auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+    const int MissingShields = TargetUnit->MaxShieldPoints - TargetUnit->ShieldPoints;
+    const int Restored = std::min(MissingShields, BatteryUnit->EnergyPoints * 2);
+    const int EnergySpent = (Restored + 1) / 2;
+    TargetUnit->ShieldPoints += Restored;
+    BatteryUnit->EnergyPoints -= EnergySpent;
+    return Restored > 0;
 }
 
 bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,

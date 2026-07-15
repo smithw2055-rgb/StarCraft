@@ -338,6 +338,7 @@ if(BUILD_COMBAT_RULES_TEST)
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
+        src/Game/IScriptVM.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BulletSystem.cpp
         src/Game/Systems/CombatSystem.cpp
@@ -451,6 +452,7 @@ if(BUILD_SPRITE_IMAGE_DATA_TEST)
     add_executable(SpriteImageDataTest
         src/Game/Regression/SpriteImageDataTest.cpp
         src/Core/Utils/Logger.cpp
+        src/Game/IScriptVM.cpp
         src/Resource/CascArchive.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/FileSystemArchive.cpp
@@ -589,6 +591,9 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
         src/Game/Systems/CommandSystem.cpp
         src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
@@ -648,6 +653,8 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
         src/Game/Systems/CommandSystem.cpp
         src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
@@ -870,6 +877,7 @@ if(BUILD_BUILDING_PLACEMENT_TEST)
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
     )
 
     target_include_directories(BuildingPlacementTest PRIVATE
@@ -1045,6 +1053,7 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Pathfinding/AStar.cpp

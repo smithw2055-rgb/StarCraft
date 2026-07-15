@@ -16,6 +16,9 @@
 namespace Game::Systems
 {
 
+static int gScriptAttackImageID = -1;
+static int gScriptAttackAnimID = -1;
+
 void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
                               const std::vector<Core::ECS::EntityID>& Entities,
                               const Core::Math::Vec2& Target)
@@ -61,9 +64,9 @@ void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
     }
 }
 
-bool AnimationSystem::HasIScriptAnimationForImage(int, int)
+bool AnimationSystem::HasIScriptAnimationForImage(int ImageID, int AnimID)
 {
-    return false;
+    return ImageID == gScriptAttackImageID && AnimID == gScriptAttackAnimID;
 }
 
 } // namespace Game::Systems
@@ -207,6 +210,51 @@ namespace
 int main()
 {
     {
+        Core::ECS::SystemManager TurretSysMgr;
+        auto& TurretEM = TurretSysMgr.GetEntityManager();
+        Game::Systems::BulletSystem TurretBullet(TurretSysMgr);
+        Game::Systems::CombatSystem TurretCombat(TurretSysMgr, TurretBullet);
+
+        const int Turret = SpawnDefUnit(
+            TurretEM, "MissileTurret", {0.0f, 0.0f}, 0, true);
+        auto& TurretWeapon =
+            TurretEM.AddComponent<Game::Components::CombatComponent>(Turret);
+        TurretWeapon.AirDamage = 20;
+        TurretWeapon.AttackRange = 224.0f;
+        TurretWeapon.AttackCooldown = 0.5f;
+        TurretWeapon.CanTargetGround = false;
+        TurretWeapon.CanTargetAir = true;
+        TurretWeapon.IsRanged = true;
+        TurretWeapon.WeaponBeh = Game::Components::WeaponBehavior::Missile;
+        TurretEM.AddComponent<Game::Components::RenderComponent>(Turret).ImageID = 100;
+        auto& TurretTree =
+            TurretEM.AddComponent<Game::Components::ImageTreeComponent>(Turret);
+        TurretTree.Nodes.emplace_back();
+        TurretTree.Nodes.back().ImageID = 777;
+        TurretTree.Nodes.back().Visible = true;
+
+        const int AirTarget = SpawnUnit(TurretEM, {96.0f, 0.0f}, 1, true);
+        const int InitialHitPoints =
+            TurretEM.GetComponent<Game::Components::UnitComponent>(AirTarget)->HitPoints;
+        Game::Systems::gScriptAttackImageID = 777;
+        Game::Systems::gScriptAttackAnimID = Game::IScriptAnims::Anim_AirAttkInit;
+        Game::Systems::CombatSystem::IssueAttack(TurretEM, {Turret}, AirTarget);
+        TurretCombat.Update(0.2f);
+
+        const auto* TurretCombatState =
+            TurretEM.GetComponent<Game::Components::CombatComponent>(Turret);
+        Require(TurretCombatState && TurretCombatState->PendingAttackFrame,
+            "Missile Turret waits for its child turret AirAttkInit fire frame");
+        Require(TurretEM.GetEntitiesWith<Game::Components::BulletComponent>().empty(),
+            "Missile Turret does not create a projectile before the child fire frame");
+        Require(TurretEM.GetComponent<Game::Components::UnitComponent>(AirTarget)->HitPoints ==
+                    InitialHitPoints,
+            "Missile Turret does not apply damage before its visible missile launches");
+        Game::Systems::gScriptAttackImageID = -1;
+        Game::Systems::gScriptAttackAnimID = -1;
+    }
+
+    {
         Core::ECS::SystemManager VisualSysMgr;
         auto& VisualEM = VisualSysMgr.GetEntityManager();
         Game::Systems::BulletSystem VisualBullet(VisualSysMgr);
@@ -279,6 +327,21 @@ int main()
 
         Game::Systems::BulletSystem::SetVisualResolver({});
     }
+
+    Core::ECS::SystemManager RescuePassiveSysMgr;
+    auto& RescuePassiveEM = RescuePassiveSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem RescuePassiveBullet(RescuePassiveSysMgr);
+    Game::Systems::CombatSystem RescuePassiveCombat(RescuePassiveSysMgr, RescuePassiveBullet);
+    int RescueDragoon = SpawnUnit(RescuePassiveEM, {0.0f, 0.0f}, 1, false);
+    AddGroundOnlyWeapon(RescuePassiveEM, RescueDragoon);
+    RescuePassiveEM.GetComponent<Game::Components::PlayerComponent>(RescueDragoon)->IsRescuePassive = true;
+    int RescueFenix = SpawnUnit(RescuePassiveEM, {32.0f, 0.0f}, 2, false);
+    RescuePassiveEM.GetComponent<Game::Components::PlayerComponent>(RescueFenix)->IsRescuePassive = true;
+    RescuePassiveCombat.Update(0.2f);
+    Require(RescuePassiveEM.GetComponent<Game::Components::CombatComponent>(RescueDragoon)->TargetEntityID == -1,
+        "Rescue Passive scenario units do not auto-target another rescue player");
+    Require(RescuePassiveEM.GetComponent<Game::Components::UnitComponent>(RescueFenix)->HitPoints == 40,
+        "Rescue Passive mission target remains unharmed during automatic combat");
 
     Core::ECS::SystemManager SysMgr;
     auto& EM = SysMgr.GetEntityManager();
@@ -416,6 +479,84 @@ int main()
             MarinePath->CurrentSpeed == 0.0f &&
             MarinePath->CurrentVelocity.Length() == 0.0f,
         "direct resource attack clears stale movement immediately");
+
+    int Refinery = SpawnUnit(EM, {48.0f, 64.0f}, 1, false);
+    auto* RefineryUnit = EM.GetComponent<Game::Components::UnitComponent>(Refinery);
+    auto* RefineryPlayer = EM.GetComponent<Game::Components::PlayerComponent>(Refinery);
+    auto* RefineryPath = EM.GetComponent<Game::Components::PathfindingComponent>(Refinery);
+    RefineryUnit->ChkUnitID = 188;
+    RefineryUnit->HitPoints = 500;
+    RefineryUnit->MaxHitPoints = 500;
+    RefineryPlayer->PlayerID = 11;
+    auto& RefineryRender = EM.AddComponent<Game::Components::RenderComponent>(Refinery);
+    RefineryRender.ImageID = 188;
+    auto& RefineryBuilding = EM.AddComponent<Game::Components::BuildingComponent>(Refinery);
+    RefineryBuilding.UnderConstruction = false;
+    RefineryBuilding.BuildingDefID = -1;
+    auto& RefineryResource = EM.AddComponent<Game::Components::ResourceComponent>(Refinery);
+    RefineryResource.Type = Game::Components::ResourceType::VespeneGas;
+    RefineryResource.Amount = 5000;
+    RefineryResource.MaxAmount = 5000;
+    auto& GeyserSnapshot =
+        EM.AddComponent<Game::Components::ClaimedGeyserComponent>(Refinery);
+    GeyserSnapshot.IsClaimed = true;
+    GeyserSnapshot.OriginalUnit = *RefineryUnit;
+    GeyserSnapshot.OriginalPlayer = *RefineryPlayer;
+    GeyserSnapshot.OriginalRender = RefineryRender;
+    GeyserSnapshot.OriginalBuilding = RefineryBuilding;
+    GeyserSnapshot.OriginalPathfinding = *RefineryPath;
+    GeyserSnapshot.HadPathfinding = true;
+
+    RefineryUnit->ChkUnitID = 110;
+    RefineryUnit->HitPoints = 5;
+    RefineryUnit->MaxHitPoints = 5;
+    RefineryPlayer->PlayerID = 1;
+    RefineryRender.ImageID = 307;
+    RefineryRender.Layer = Game::Components::RenderLayer::Buildings;
+    RefineryBuilding.BuildingDefID = Game::Races::GetUnitDefID("Refinery");
+
+    int GasWorker = SpawnUnit(EM, {48.0f, 64.0f}, 1, false);
+    auto& GasWorkerRender = EM.AddComponent<Game::Components::RenderComponent>(GasWorker);
+    GasWorkerRender.Visible = false;
+    auto& GasWorkerHarvest = EM.AddComponent<Game::Components::HarvestComponent>(GasWorker);
+    GasWorkerHarvest.State = Game::Components::HarvestState::Mining;
+    GasWorkerHarvest.TargetResourceID = Refinery;
+    GasWorkerHarvest.DesiredResourceID = Refinery;
+    GasWorkerHarvest.InsideGasBuilding = true;
+    GasWorkerHarvest.GasExitPosition = {80.0f, 96.0f};
+    EM.AddComponent<Game::Components::CommandComponent>(GasWorker)
+        .CurrentCommand = Game::Components::CommandType::Harvest;
+
+    auto* MarineCombat = EM.GetComponent<Game::Components::CombatComponent>(Marine);
+    Game::Systems::CombatSystem::IssueAttack(EM, {Marine}, Refinery);
+    Require(MarineCombat && MarineCombat->TargetEntityID == Refinery,
+        "claimed refinery remains a valid combat target despite owning gas resource data");
+    auto RefineryProjectileCombat = *MarineCombat;
+    RefineryProjectileCombat.WeaponBeh = Game::Components::WeaponBehavior::AppearOnTarget;
+    RefineryProjectileCombat.IsRanged = true;
+    const int RefineryProjectile = Bullet.SpawnBullet(
+        EM, RefineryProjectileCombat,
+        *EM.GetComponent<Game::Components::TransformComponent>(Marine),
+        *EM.GetComponent<Game::Components::PlayerComponent>(Marine),
+        Marine, 10, 0, 128.0f, Refinery,
+        EM.GetComponent<Game::Components::TransformComponent>(Refinery)->Position);
+    Require(RefineryProjectile >= 0,
+        "ranged attack creates a projectile against a claimed refinery");
+    Bullet.Update(0.1f);
+    Require(EM.IsAlive(Refinery) && RefineryUnit->ChkUnitID == 188 &&
+            RefineryUnit->HitPoints == 500 && RefineryPlayer->PlayerID == 11 &&
+            RefineryRender.ImageID == 188 && RefineryRender.Visible &&
+            RefineryBuilding.BuildingDefID == -1 && !GeyserSnapshot.IsClaimed,
+        "projectile-destroyed refinery restores the original neutral vespene geyser entity");
+    Require(RefineryResource.Amount == 5000 &&
+            RefineryResource.Type == Game::Components::ResourceType::VespeneGas,
+        "restored geyser preserves its remaining gas amount");
+    Require(GasWorkerRender.Visible &&
+            GasWorkerHarvest.State == Game::Components::HarvestState::Idle &&
+            GasWorkerHarvest.TargetResourceID < 0 &&
+            GasWorkerHarvest.DesiredResourceID < 0 &&
+            !GasWorkerHarvest.InsideGasBuilding,
+        "destroyed refinery releases and reveals workers that were harvesting inside");
 
     Core::ECS::SystemManager ResourceSysMgr;
     auto& ResourceEM = ResourceSysMgr.GetEntityManager();
@@ -1139,6 +1280,62 @@ int main()
             18 - Game::Races::GetSupplyProvidedByDefID(
                      Game::Races::GetUnitDefID("SupplyDepot")),
         "Supply Depot death removes its supplied capacity");
+    bool HasCopiedDepotBody = false;
+    const int SupplyDepotChkID = Game::Races::GetUnitDefByID(
+        Game::Races::GetUnitDefID("SupplyDepot")).ChkUnitID;
+    for (int EntityID : SupplyDeathEM.GetEntitiesWith<
+             Game::Components::EffectComponent,
+             Game::Components::UnitComponent>())
+    {
+        const auto* EffectUnit =
+            SupplyDeathEM.GetComponent<Game::Components::UnitComponent>(EntityID);
+        HasCopiedDepotBody = HasCopiedDepotBody ||
+            (EffectUnit && EffectUnit->ChkUnitID == SupplyDepotChkID);
+    }
+    Require(!HasCopiedDepotBody,
+        "destroyed buildings do not leave a copied body behind the explosion");
+
+    Core::ECS::SystemManager FormationSysMgr;
+    auto& FormationEM = FormationSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem FormationBullet(FormationSysMgr);
+    Game::Systems::CombatSystem FormationCombat(FormationSysMgr, FormationBullet);
+    const int FrontA = SpawnDefUnit(
+        FormationEM, "Marine", {0.0f, -24.0f}, 0);
+    const int FrontB = SpawnDefUnit(
+        FormationEM, "Marine", {0.0f, 24.0f}, 0);
+    const int BackLine = SpawnDefUnit(
+        FormationEM, "Marine", {-16.0f, 0.0f}, 0);
+    AddGroundOnlyWeapon(FormationEM, FrontA);
+    AddGroundOnlyWeapon(FormationEM, FrontB);
+    AddGroundOnlyWeapon(FormationEM, BackLine);
+    auto* BackLineCombat =
+        FormationEM.GetComponent<Game::Components::CombatComponent>(BackLine);
+    Require(BackLineCombat, "combat formation ranged unit has weapon state");
+    BackLineCombat->IsRanged = true;
+    BackLineCombat->WeaponBeh = Game::Components::WeaponBehavior::Missile;
+    const int FormationEnemy = SpawnDefUnit(
+        FormationEM, "Marine", {240.0f, 0.0f}, 1);
+    Game::Systems::CombatSystem::IssueAttack(
+        FormationEM, {FrontA, FrontB, BackLine}, FormationEnemy);
+    FormationCombat.Update(0.1f);
+
+    const auto* FrontAPath =
+        FormationEM.GetComponent<Game::Components::PathfindingComponent>(FrontA);
+    const auto* FrontBPath =
+        FormationEM.GetComponent<Game::Components::PathfindingComponent>(FrontB);
+    const auto* BackLinePath =
+        FormationEM.GetComponent<Game::Components::PathfindingComponent>(BackLine);
+    Require(FrontAPath && FrontBPath && BackLinePath &&
+            !FrontAPath->Path.empty() && !FrontBPath->Path.empty() &&
+            !BackLinePath->Path.empty(),
+        "all allied attackers receive combat approach slots");
+    const auto FrontATarget = FrontAPath->Path.back();
+    const auto FrontBTarget = FrontBPath->Path.back();
+    const auto BackLineTarget = BackLinePath->Path.back();
+    Require(std::fabs(FrontATarget.Y - FrontBTarget.Y) > 20.0f,
+        "melee combatants spread laterally instead of stacking on the enemy center");
+    Require(BackLineTarget.X < std::min(FrontATarget.X, FrontBTarget.X),
+        "ranged combatants automatically form behind the front line");
 
     std::printf("CombatRulesTest passed\n");
     return 0;

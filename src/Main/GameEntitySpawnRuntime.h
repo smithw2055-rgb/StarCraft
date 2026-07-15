@@ -83,6 +83,11 @@ inline void SpawnChkEntities(GameSession& Session,
 
         auto& Player = EM.AddComponent<Game::Components::PlayerComponent>(EntityID);
         Player.PlayerID = NormalizeChkPlayerID(UnitPlacement.Owner);
+        constexpr uint8_t kChkOwnerRescuePassive = 3;
+        const auto& ScriptPlayers = Session.GetScriptData().Players;
+        if (Player.PlayerID >= 0 && Player.PlayerID < (int)ScriptPlayers.size())
+            Player.IsRescuePassive =
+                ScriptPlayers[(size_t)Player.PlayerID].Owner == kChkOwnerRescuePassive;
         Game::Systems::UpgradeSystem::RefreshUnitEnergyCap(EM, EntityID);
         if (UnitPlacement.EnergyPercent > 0 && Unit.MaxEnergyPoints > 0)
         {
@@ -171,7 +176,9 @@ inline void SpawnChkEntities(GameSession& Session,
             Build.IsBuilding = true;
             Build.UnderConstruction = false;
             Build.IsOrganic = IsOrganicBuilding(UnitPlacement.UnitID);
-            Build.RequiresPylon = RequiresPylonChkId(UnitPlacement.UnitID);
+            Build.RequiresPylon = UnitDefID >= 0
+                ? Game::Races::GetUnitDefByID(UnitDefID).RequiresPylon
+                : RequiresPylonChkId(UnitPlacement.UnitID);
             Build.TotalBuildTime = 120.0f;
             Build.BuildProgress = Build.TotalBuildTime;
             Build.BuildingDefID = UnitDefID;

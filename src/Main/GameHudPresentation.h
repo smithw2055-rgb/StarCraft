@@ -3,6 +3,7 @@
 #include "Client/ClientRuntime.h"
 #include "Client/WorldEffects.h"
 #include "Game/Components.h"
+#include "Game/Systems/FogOfWarSystem.h"
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
 
@@ -17,7 +18,24 @@ inline uint32_t PackHudColor(Core::Color Color)
         static_cast<uint32_t>(Color.B);
 }
 
-inline void SyncMinimapDotsToHud(UI::Hud& Hud, Core::ECS::EntityManager& Entities)
+inline Core::Color MinimapRelationshipColor(
+    const Game::Components::PlayerComponent* Player,
+    int LocalPlayerID,
+    const Game::Systems::FogOfWarSystem* Fog)
+{
+    if (!Player || Player->PlayerID < 0 || Player->PlayerID >= 8)
+        return Core::Color(190, 190, 150, 255);
+    if (Player->PlayerID == LocalPlayerID)
+        return Core::Color(80, 200, 255, 255);
+    if (Player->IsRescuePassive || (Fog && Fog->AreAllied(LocalPlayerID, Player->PlayerID)))
+        return Core::Color(80, 220, 120, 255);
+    return Core::Color(235, 64, 64, 255);
+}
+
+inline void SyncMinimapDotsToHud(UI::Hud& Hud,
+                                 Core::ECS::EntityManager& Entities,
+                                 int LocalPlayerID,
+                                 const Game::Systems::FogOfWarSystem* Fog)
 {
     std::vector<UI::HudMinimapDot> Dots;
     Entities.ForEachEntityWith<Game::Components::TransformComponent,
@@ -31,9 +49,8 @@ inline void SyncMinimapDotsToHud(UI::Hud& Hud, Core::ECS::EntityManager& Entitie
             return;
 
         const auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);
-        const Core::Color DotColor = Player
-            ? Player->PlayerColor
-            : Core::Color(220, 60, 60, 255);
+        const Core::Color DotColor =
+            MinimapRelationshipColor(Player, LocalPlayerID, Fog);
         Dots.push_back({Transform->Position, PackHudColor(DotColor)});
     });
     Hud.SetMinimapDots(Dots);
@@ -62,7 +79,8 @@ inline void RenderNativeHudFrame(UI::Hud& Hud,
 {
     Hud.UpdateContext(Session.Entities(), Client.GetSelectedIds());
     SyncCampaignPingsToHud(Hud, Client, Session.GetMapData().Width, Session.GetMapData().Height);
-    SyncMinimapDotsToHud(Hud, Session.Entities());
+    SyncMinimapDotsToHud(
+        Hud, Session.Entities(), Session.GetLocalPlayerID(), Session.GetFogSystem());
     Hud.Draw(Session.Entities(),
              Client.GetSelectedIds(),
              Session.GetMapData().Width,

@@ -25,6 +25,14 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
     }
 }
 
+void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
+                               int,
+                               const Game::Components::CombatComponent&,
+                               int,
+                               int)
+{
+}
+
 } // namespace Game::Systems
 
 namespace
@@ -221,6 +229,131 @@ namespace
         Require(MarineCommand && MarineCommand->CurrentCommand == Game::Components::CommandType::Move,
             "smart-click still moves non-factory units in a mixed selection");
     }
+
+    void TestFriendlyUnitsSmartClickDropshipToBoard()
+    {
+        Core::ECS::EntityManager EM;
+        const int Marine = CreateUnit(EM, 0, {64.0f, 64.0f}, 0);
+        const int Firebat = CreateUnit(EM, 32, {80.0f, 64.0f}, 0);
+        const int DistantMarine = CreateUnit(EM, 0, {0.0f, 0.0f}, 0);
+        const int DistantFirebat = CreateUnit(EM, 32, {0.0f, 160.0f}, 0);
+        const int Dropship = CreateUnit(EM, 11, {96.0f, 64.0f}, 0);
+        EM.AddComponent<Game::Components::RenderComponent>(Marine).Visible = true;
+        EM.AddComponent<Game::Components::RenderComponent>(Firebat).Visible = true;
+        EM.AddComponent<Game::Components::RenderComponent>(DistantMarine).Visible = true;
+        EM.AddComponent<Game::Components::RenderComponent>(DistantFirebat).Visible = true;
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {96.0f, 64.0f};
+        Target.AnyEntityID = Dropship;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {Marine, Firebat, DistantMarine, DistantFirebat}, Target, Target.WorldPosition);
+
+        const auto* Loaded =
+            EM.GetComponent<Game::Components::LoadedUnitsComponent>(Dropship);
+        Require(Loaded && Loaded->PassengerIDs.size() == 2,
+            "right-clicking a friendly Dropship boards selected ground units");
+        Require(!EM.GetComponent<Game::Components::RenderComponent>(Marine)->Visible &&
+                !EM.GetComponent<Game::Components::RenderComponent>(Firebat)->Visible,
+            "right-click boarding hides every loaded passenger");
+        const auto* Pending =
+            EM.GetComponent<Game::Components::PendingBoardTransportComponent>(DistantMarine);
+        auto* DistantCommand =
+            EM.GetComponent<Game::Components::CommandComponent>(DistantMarine);
+        const auto* TransportPlan =
+            EM.GetComponent<Game::Components::PendingTransportBoardingComponent>(Dropship);
+        const auto* DropshipCommand =
+            EM.GetComponent<Game::Components::CommandComponent>(Dropship);
+        Require(Pending && Pending->TransportID == Dropship && DistantCommand &&
+                DistantCommand->CurrentCommand == Game::Components::CommandType::Move,
+            "distant selected unit automatically approaches the right-clicked Dropship");
+        Require(TransportPlan && TransportPlan->PassengerIDs.size() == 2 &&
+                TransportPlan->PassengerIDs.front() == DistantMarine && DropshipCommand &&
+                DropshipCommand->CurrentCommand == Game::Components::CommandType::Move &&
+                DropshipCommand->TargetPosition.X == 0.0f &&
+                DropshipCommand->TargetPosition.Y == 0.0f,
+            "Dropship flies toward a distant passenger instead of waiting in place");
+
+        DistantCommand->CurrentCommand = Game::Components::CommandType::Stop;
+        if (auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(DistantMarine))
+            Path->Path.clear();
+        EM.GetComponent<Game::Components::TransformComponent>(Dropship)->Position = {8.0f, 0.0f};
+        Game::Systems::TransportSystem::UpdateOrders(EM, 0.0f);
+        Require(Loaded->PassengerIDs.size() == 3 &&
+                !EM.GetComponent<Game::Components::RenderComponent>(DistantMarine)->Visible,
+            "Dropship collects a passenger even when the ground unit cannot approach it");
+
+        Game::Systems::TransportSystem::UpdateOrders(EM, 0.0f);
+        Require(DropshipCommand->CurrentCommand == Game::Components::CommandType::Move &&
+                DropshipCommand->TargetPosition.X == 0.0f &&
+                DropshipCommand->TargetPosition.Y == 160.0f,
+            "Dropship continues to the next passenger in the boarding queue");
+        EM.GetComponent<Game::Components::TransformComponent>(Dropship)->Position = {8.0f, 160.0f};
+        Game::Systems::TransportSystem::UpdateOrders(EM, 0.0f);
+        Require(Loaded->PassengerIDs.size() == 4 &&
+                !EM.GetComponent<Game::Components::RenderComponent>(DistantFirebat)->Visible,
+            "Dropship boards each queued passenger in sequence");
+    }
+
+    void TestScvsSmartClickIncompleteCommandCenterToAssist()
+    {
+        Core::ECS::EntityManager EM;
+        const int CommandCenter = CreateCompletedBuilding(
+            EM, "CommandCenter", {160.0f, 96.0f}, 0);
+        auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(CommandCenter);
+        Require(Building != nullptr, "assist target has building state");
+        Building->UnderConstruction = true;
+
+        const int PrimaryScv = CreateUnit(EM, 7, {96.0f, 96.0f}, 0);
+        const int AssistantA = CreateUnit(EM, 7, {64.0f, 64.0f}, 0);
+        const int AssistantB = CreateUnit(EM, 7, {64.0f, 128.0f}, 0);
+        Building->BuilderUnitID = PrimaryScv;
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {160.0f, 96.0f};
+        Target.AnyEntityID = CommandCenter;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {AssistantA, AssistantB}, Target, Target.WorldPosition);
+
+        Require(Building->AssistantBuilderUnitIDs.size() == 2,
+            "right-clicking an unfinished Command Center assigns every selected SCV");
+        for (int AssistantID : {AssistantA, AssistantB})
+        {
+            const auto* Path =
+                EM.GetComponent<Game::Components::PathfindingComponent>(AssistantID);
+            Require(Path && Path->RequestedIgnoreEntityID == CommandCenter,
+                "assisting SCV approaches the construction footprint");
+        }
+    }
+
+    void TestScvSmartClicksDamagedFriendlyBuildingToRepair()
+    {
+        Core::ECS::EntityManager EM;
+        const int Barracks = CreateCompletedBuilding(
+            EM, "Barracks", {160.0f, 96.0f}, 0);
+        auto* BarracksUnit = EM.GetComponent<Game::Components::UnitComponent>(Barracks);
+        Require(BarracksUnit != nullptr, "repair target has unit state");
+        BarracksUnit->HitPoints = 40;
+        BarracksUnit->MaxHitPoints = 100;
+
+        const int Scv = CreateUnit(EM, 7, {64.0f, 96.0f}, 0);
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {160.0f, 96.0f};
+        Target.AnyEntityID = Barracks;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {Scv}, Target, Target.WorldPosition);
+
+        const auto* Command =
+            EM.GetComponent<Game::Components::CommandComponent>(Scv);
+        const auto* Path =
+            EM.GetComponent<Game::Components::PathfindingComponent>(Scv);
+        Require(Command &&
+                Command->CurrentCommand == Game::Components::CommandType::Repair &&
+                Command->TargetEntityID == Barracks,
+            "right-clicking a damaged friendly Terran building issues Repair");
+        Require(Path && Path->RequestedIgnoreEntityID == Barracks,
+            "repairing SCV approaches the building collision footprint");
+    }
 }
 
 int main()
@@ -229,6 +362,9 @@ int main()
     TestWorkerSmartClicksMinerals();
     TestSmartClickEmptyGroundMovesSelection();
     TestFactorySmartClickSetsRallyPoint();
+    TestFriendlyUnitsSmartClickDropshipToBoard();
+    TestScvsSmartClickIncompleteCommandCenterToAssist();
+    TestScvSmartClicksDamagedFriendlyBuildingToRepair();
 
     std::printf("SmartClickCommandTest passed\n");
     return 0;

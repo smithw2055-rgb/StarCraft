@@ -4,6 +4,8 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
 
 namespace Game::Map
 {
@@ -102,6 +104,44 @@ bool GameMap::IsWalkable(int X, int Y) const
     return mTiles[Y * mWidth + X].Walkable;
 }
 
+int GameMap::GetGroundHeight(int X, int Y) const
+{
+    if (!IsInBounds(X, Y))
+        return 0;
+    return (int)mTiles[Y * mWidth + X].GroundHeight;
+}
+
+int GameMap::GetGroundHeightAtWorld(const Core::Math::Vec2& WorldPos) const
+{
+    int TileX = 0;
+    int TileY = 0;
+    WorldToTile(WorldPos, TileX, TileY);
+    if (!IsInBounds(TileX, TileY))
+        return 0;
+
+    const int PixelX = std::max(0, (int)std::floor(WorldPos.X));
+    const int PixelY = std::max(0, (int)std::floor(WorldPos.Y));
+    const int SubX = std::clamp((PixelX % 32) / 8, 0, 3);
+    const int SubY = std::clamp((PixelY % 32) / 8, 0, 3);
+    return (int)mTiles[TileY * mWidth + TileX]
+        .SubtileGroundHeights[(size_t)SubY * 4 + (size_t)SubX];
+}
+
+bool GameMap::CanTraverseGround(int FromX, int FromY, int ToX, int ToY) const
+{
+    if (!IsInBounds(FromX, FromY) || !IsInBounds(ToX, ToY))
+        return false;
+    return std::abs(GetGroundHeight(FromX, FromY) -
+                    GetGroundHeight(ToX, ToY)) <= 1;
+}
+
+bool GameMap::CanTraverseGround(const Core::Math::Vec2& From,
+                                const Core::Math::Vec2& To) const
+{
+    return std::abs(GetGroundHeightAtWorld(From) -
+                    GetGroundHeightAtWorld(To)) <= 1;
+}
+
 bool GameMap::IsBuildable(int X, int Y) const
 {
     if (!IsInBounds(X, Y)) return false;
@@ -164,6 +204,7 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
     if (!Cv5Data || !Vf4Data) return;
 
     int WalkableTiles = 0, UnwalkableTiles = 0;
+    int GroundHeightTiles[3] = {0, 0, 0};
 
     for (int Y = 0; Y < mHeight; Y++)
     {
@@ -191,15 +232,33 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             }
 
             int WalkableCount = 0;
+            int MiddleCount = 0;
+            int HighCount = 0;
             for (int MI = 0; MI < 16; MI++)
             {
                 size_t Vf4Off = (size_t)MegaIdx * 16 + MI;
-                if (Vf4Off < Vf4Data->size() && (((*Vf4Data)[Vf4Off] & 1) != 0))
-                    WalkableCount++;
+                if (Vf4Off >= Vf4Data->size())
+                    continue;
+
+                const uint16_t Flags = (*Vf4Data)[Vf4Off];
+                if ((Flags & 0x0001) != 0)
+                    ++WalkableCount;
+                if ((Flags & 0x0002) != 0)
+                    ++MiddleCount;
+                if ((Flags & 0x0004) != 0)
+                    ++HighCount;
+                T.SubtileGroundHeights[(size_t)MI] =
+                    (Flags & 0x0004) != 0 ? 2 :
+                    (Flags & 0x0002) != 0 ? 1 : 0;
             }
 
             T.Walkable = (WalkableCount > 12);
             T.Buildable = T.Walkable;
+            // Match the reference megatile aggregation: ramps/middle ground
+            // remain level 1 while true high ground remains level 2.
+            T.GroundHeight = HighCount >= 12 ? 2 :
+                (HighCount < 12 && MiddleCount + HighCount >= 12 ? 1 : 0);
+            ++GroundHeightTiles[std::min(2, (int)T.GroundHeight)];
             T.HasCreep = false;
             if (T.Walkable) WalkableTiles++;
             else UnwalkableTiles++;
@@ -208,7 +267,10 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
     Core::Utils::Logger::Info("GameMap",
         "ApplyTilesetData: " + std::to_string(WalkableTiles) +
         " walkable, " + std::to_string(UnwalkableTiles) +
-        " unwalkable tiles");
+        " unwalkable tiles, ground heights=" +
+        std::to_string(GroundHeightTiles[0]) + "/" +
+        std::to_string(GroundHeightTiles[1]) + "/" +
+        std::to_string(GroundHeightTiles[2]));
 
     if (!ShouldLogMapTileSamples())
         return;

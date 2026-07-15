@@ -4,6 +4,7 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <vector>
 
@@ -40,6 +41,7 @@ void TilesetRenderer::Init(const std::string& TilesetName,
         return;
     }
     mAtlas = mTilesetAssets.GetTilesetAtlas(TilesetName);
+    mCreepFrames = mTilesetAssets.GetTilesetCreepFrames(TilesetName);
     if (mAtlas)
         mMegatileCount = mAtlas->FrameCount;
     else
@@ -47,6 +49,7 @@ void TilesetRenderer::Init(const std::string& TilesetName,
         const auto* Images = mTilesetAssets.GetTilesetImages(TilesetName);
         if (Images) mMegatileCount = static_cast<int>(Images->size());
     }
+
     const auto* Ts = mTilesetAssets.GetTilesetData(TilesetName);
     if (Ts)
     {
@@ -258,6 +261,128 @@ void TilesetRenderer::Render(const GameMap& Map)
 
                 DrawSyntheticTile(RawTile, PX, PY);
                 DrawnCount++;
+            }
+        }
+    }
+
+    // StarCraft renders creep interiors from CV5 group 1. These are authentic
+    // per-tileset megatiles, not a color overlay. Deterministic variation keeps
+    // neighboring creep tiles from repeating the same 32px texture.
+    const auto DrawMegatile = [&](uint16_t MegaIdx, float PX, float PY)
+    {
+        if (UseAtlas && MegaIdx < (uint16_t)Atlas->FrameCount)
+        {
+            const int Col = MegaIdx % Atlas->Columns;
+            const int Row = MegaIdx / Atlas->Columns;
+            const int SrcX = Col * Atlas->CellWidth + 1;
+            const int SrcY = Row * Atlas->CellHeight + 1;
+            Draw.DrawSprite(Atlas->Image, PX, PY, TileSize, TileSize,
+                (float)SrcX / (float)Atlas->Image.Width,
+                (float)SrcY / (float)Atlas->Image.Height,
+                (float)(SrcX + Atlas->FrameWidth) / (float)Atlas->Image.Width,
+                (float)(SrcY + Atlas->FrameHeight) / (float)Atlas->Image.Height);
+            return;
+        }
+        if (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())
+            Draw.DrawSpriteFromImage((*Images)[MegaIdx], PX, PY, TileSize, TileSize);
+    };
+
+    for (int TY = MinTY; TY < MaxTY; ++TY)
+    {
+        for (int TX = MinTX; TX < MaxTX; ++TX)
+        {
+            const size_t TileIndex = (size_t)TY * (size_t)W + (size_t)TX;
+            if (TileIndex >= Map.Creep.size() || Map.Creep[TileIndex] == 0)
+                continue;
+            const float PX = (float)(TX * TileSize);
+            const float PY = (float)(TY * TileSize);
+            if (mCv5 && mCv5->size() >= 32)
+            {
+                std::array<uint16_t, 16> ValidCreepMegatiles{};
+                size_t ValidCount = 0;
+                for (size_t Variant = 0; Variant < 16; ++Variant)
+                {
+                    const uint16_t MegaIdx = (*mCv5)[16u + Variant];
+                    if (MegaIdx != 0 &&
+                        ((UseAtlas && MegaIdx < (uint16_t)Atlas->FrameCount) ||
+                         (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())))
+                    {
+                        ValidCreepMegatiles[ValidCount++] = MegaIdx;
+                    }
+                }
+                if (ValidCount > 0)
+                {
+                    const size_t Variant = (size_t)(TX * 17 + TY * 31) % ValidCount;
+                    DrawMegatile(ValidCreepMegatiles[Variant], PX, PY);
+                }
+            }
+        }
+    }
+
+    // The original tileset GRP supplies transition masks on non-creep tiles.
+    // Use OpenBW's exact eight-neighbor-to-frame lookup.
+    if (mCreepFrames && !mCreepFrames->empty())
+    {
+        static const std::array<int, 256> EdgeFrameByNeighbors = []
+        {
+            std::array<int, 256> NeighborIndex{};
+            std::array<int, 128> DenseIndex{};
+            for (int I = 0; I < 256; ++I)
+            {
+                int V = 0;
+                if (I & 2) V |= 0x10;
+                if (I & 8) V |= 0x24;
+                if (I & 0x10) V |= 9;
+                if (I & 0x40) V |= 2;
+                if ((I & 0xc0) == 0xc0) V |= 1;
+                if ((I & 0x60) == 0x60) V |= 4;
+                if ((I & 3) == 3) V |= 0x20;
+                if ((I & 6) == 6) V |= 8;
+                if ((V & 0x21) == 0x21) V |= 0x40;
+                if ((V & 0x0c) == 0x0c) V |= 0x40;
+                NeighborIndex[(size_t)I] = V;
+            }
+            int Count = 0;
+            for (int I = 0; I < 128; ++I)
+            {
+                if (std::find(NeighborIndex.begin(), NeighborIndex.end(), I) !=
+                    NeighborIndex.end())
+                    DenseIndex[(size_t)I] = Count++;
+            }
+            std::array<int, 256> Result{};
+            for (int I = 0; I < 256; ++I)
+                Result[(size_t)I] = DenseIndex[(size_t)NeighborIndex[(size_t)I]];
+            return Result;
+        }();
+        static constexpr int Dirs[8][2] = {
+            {1, 1}, {0, 1}, {-1, 1}, {1, 0},
+            {-1, 0}, {1, -1}, {0, -1}, {-1, -1}};
+        for (int TY = MinTY; TY < MaxTY; ++TY)
+        {
+            for (int TX = MinTX; TX < MaxTX; ++TX)
+            {
+                const size_t TileIndex = (size_t)TY * (size_t)W + (size_t)TX;
+                if (TileIndex < Map.Creep.size() && Map.Creep[TileIndex] != 0)
+                    continue;
+                int Mask = 0;
+                for (int I = 0; I < 8; ++I)
+                {
+                    const int NX = TX + Dirs[I][0];
+                    const int NY = TY + Dirs[I][1];
+                    if (NX < 0 || NX >= W || NY < 0 || NY >= H) continue;
+                    const size_t NI = (size_t)NY * (size_t)W + (size_t)NX;
+                    if (NI < Map.Creep.size() && Map.Creep[NI] != 0)
+                        Mask |= 1 << I;
+                }
+                const int FrameNumber = EdgeFrameByNeighbors[(size_t)Mask];
+                if (FrameNumber <= 0 || (size_t)(FrameNumber - 1) >= mCreepFrames->size())
+                    continue;
+                const auto& Frame = (*mCreepFrames)[(size_t)(FrameNumber - 1)];
+                Draw.DrawSpriteFromImage(Frame.Image,
+                    (float)(TX * TileSize + Frame.OffsetX),
+                    (float)(TY * TileSize + Frame.OffsetY),
+                    (float)(Frame.WorldWidth > 0 ? Frame.WorldWidth : Frame.Image.Width),
+                    (float)(Frame.WorldHeight > 0 ? Frame.WorldHeight : Frame.Image.Height));
             }
         }
     }
