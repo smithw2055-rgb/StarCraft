@@ -11,6 +11,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/NukeAndSpiderMineSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/ProtossSystem.h"
 #include "Game/Systems/SpellSystem.h"
@@ -99,9 +100,26 @@ inline void ExecuteHudCommandSlot(
         break;
     }
     case UI::ActionKind::Train:
-        Game::Systems::ProductionSystem::StartTrain(
-            EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
+    {
+        const auto* Unit =
+            EntityManager.GetComponent<Game::Components::UnitComponent>(
+                EntityIDs[0]);
+        const bool IsLarva =
+            Unit && Unit->ChkUnitID == 35 &&
+            EntityManager.GetComponent<Game::Components::LarvaComponent>(
+                EntityIDs[0]);
+        if (IsLarva)
+        {
+            Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+                EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
+        }
+        else
+        {
+            Game::Systems::ProductionSystem::StartTrain(
+                EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
+        }
         break;
+    }
     case UI::ActionKind::MorphBuilding:
         Game::Systems::ZergSystem::StartMorphBuilding(
             EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
@@ -146,6 +164,10 @@ inline void ExecuteHudCommandSlot(
                 Game::Systems::CommandSystem::SetSiegeMode(
                     EntityManager, EntityID,
                     CommandDef.CommandId == UI::HudCommandId::Siege);
+        else if (CommandDef.CommandId == UI::HudCommandId::LaySpiderMine)
+            for (int EntityID : EntityIDs)
+                Game::Systems::NukeAndSpiderMineSystem::
+                    PlaceSpiderMineForActiveSession(EntityID);
         else if (CommandDef.CommandId == UI::HudCommandId::Burrow)
             for (int EntityID : EntityIDs)
                 Game::Systems::ZergSystem::BurrowUnit(EntityManager, EntityID);
@@ -239,26 +261,12 @@ inline bool ExecutePendingTargetCommand(
     case UI::PendingTargetMode::BuildRefinery:
         if (ClickTarget.ResourceEntityID >= 0)
         {
-            const auto BuildDef = Game::Races::GetUnitDefByID(BuildDefID);
-            int PlayerID = 0;
-            int ConsumedSupply = 0;
-            if (BuildDef.RaceType == Game::Components::Race::Zerg)
-            {
-                if (auto* Player = EntityManager.GetComponent<Game::Components::PlayerComponent>(EntityIDs[0]))
-                    PlayerID = Player->PlayerID;
-                if (auto* Unit = EntityManager.GetComponent<Game::Components::UnitComponent>(EntityIDs[0]))
-                    ConsumedSupply = std::max(0, Unit->SupplyCost);
-            }
-
-            const bool Built = Game::Systems::BuildingSystem::StartBuild(
+            // Refinery-type structures follow the same pending approach as
+            // every other building. In particular, an Extractor must not
+            // consume its Drone remotely at click time; BuildingSystem does
+            // so only after the Drone actually reaches the selected geyser.
+            return Game::Systems::BuildingSystem::StartBuild(
                 EntityManager, EntityIDs[0], BuildDefID, Game::Systems::BuildTarget::FromEntity(ClickTarget.ResourceEntityID));
-            if (Built && BuildDef.RaceType == Game::Components::Race::Zerg)
-            {
-                auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
-                Resources.SupplyUsed = std::max(0, Resources.SupplyUsed - ConsumedSupply);
-                EntityManager.DestroyEntity(EntityIDs[0]);
-            }
-            return Built;
         }
         return false;
     case UI::PendingTargetMode::Harvest:

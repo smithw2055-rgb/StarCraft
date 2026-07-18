@@ -95,6 +95,18 @@ int main()
     Require(Fog.IsVisible(12, 1, 2),
             "Antennae extends Overlord fog reveal to eleven tiles");
 
+    Fog.SetLocalPlayerID(0);
+    Fog.SetObserverRevealAll(true);
+    Require(Fog.IsVisible(15, 15, 0),
+            "observer presentation reveals an otherwise hidden local tile");
+    Require(!Fog.IsGameplayVisible(15, 15, 0),
+            "observer presentation does not grant gameplay visibility to AI");
+    Require(Fog.IsDetected(15, 15, 0),
+            "observer presentation treats the visible tile as detected");
+    Require(!Fog.IsGameplayDetected(15, 15, 0),
+            "observer presentation does not grant gameplay detection to AI");
+    Fog.SetObserverRevealAll(false);
+
     const int RevealID = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(RevealID).Position =
         {448.0f, 448.0f};

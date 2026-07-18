@@ -187,6 +187,21 @@ int main()
     Require(!AnimationSystem::ShouldClearImageTreeForAnimRestart(
                 true, false, Anim_Init, Anim_LiftOff, false),
             "lift-off propagates to existing building child images");
+    Require(!AnimationSystem::ShouldClearImageTreeForAnimRestart(
+                false, true, Anim_Init, Anim_Death, false),
+            "death preserves the complete sprite image tree even on a copied visual");
+
+    Require(AnimationSystem::ComputeDamageOverlaySteps(
+                1500, 0, 1500, 1) == 0 &&
+            AnimationSystem::ComputeDamageOverlaySteps(
+                1499, 0, 1500, 1) == 0,
+            "minor damage above the first OpenBW threshold does not ignite a flame");
+    Require(AnimationSystem::ComputeDamageOverlaySteps(
+                1000, 0, 1500, 1) == 1,
+            "crossing the first damage_state threshold creates one small flame");
+    Require(AnimationSystem::ComputeDamageOverlaySteps(
+                500, 0, 1500, 1) == 2,
+            "crossing the second damage_state threshold upgrades it to a large flame");
 
     Game::Components::CommandComponent MoveCmd;
     MoveCmd.CurrentCommand = Game::Components::CommandType::Move;
@@ -229,6 +244,15 @@ int main()
                 nullptr) == AnimState::Walking,
             "attack-move units use walking animation while physically moving");
 
+    Game::Components::CombatComponent LiveTargetCombat;
+    LiveTargetCombat.TargetEntityID = 42;
+    LiveTargetCombat.AttackCooldown = 1.0f;
+    LiveTargetCombat.CooldownRemaining = 0.0f;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &AttackMoveCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Walking,
+            "live combat target does not override active AttackMove walking");
+
     EmptyPath.Path.clear();
     EmptyPath.CurrentSpeed = 12.0f;
     Require(AnimationSystem::GetAnimStateFromComponents(
@@ -242,6 +266,35 @@ int main()
                 &AttackMoveCmd, nullptr, &EmptyPath, &Unit, nullptr, nullptr, nullptr,
                 nullptr) == AnimState::Idle,
             "attack-move command without movement does not force attack animation");
+
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &AttackMoveCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Attacking,
+            "stationary AttackMove keeps its live target attack pose across cooldown");
+    Game::Components::CommandComponent HoldCmd;
+    HoldCmd.CurrentCommand = Game::Components::CommandType::HoldPosition;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &HoldCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Attacking,
+            "hold-position automatic target keeps attacking across cooldown");
+    Game::Components::CommandComponent StopCmd;
+    StopCmd.CurrentCommand = Game::Components::CommandType::Stop;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &StopCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Attacking,
+            "stopped unit keeps an automatically acquired target attack pose");
+    LiveTargetCombat.TargetEntityID = -1;
+    LiveTargetCombat.PendingAttackFrame = true;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &AttackMoveCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Attacking,
+            "pending authored shot keeps attacking without a target entity");
+    LiveTargetCombat.PendingAttackFrame = false;
+    LiveTargetCombat.CooldownRemaining = 1.0f;
+    Require(AnimationSystem::GetAnimStateFromComponents(
+                &AttackMoveCmd, &LiveTargetCombat, &EmptyPath, &Unit, nullptr,
+                nullptr, nullptr, nullptr) == AnimState::Idle,
+            "cooldown alone does not delay attack-to-idle after target loss");
 
     Game::Components::BurrowComponent Burrow;
     Burrow.CanBurrow = true;

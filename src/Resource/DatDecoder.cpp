@@ -86,9 +86,9 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
     Offset += Count; // attack unit order
     Offset += Count; // attack move order
     const size_t GroundWeaponOffset = Offset; Offset += Count;
-    Offset += Count; // max ground hits
+    const size_t MaxGroundHitsOffset = Offset; Offset += Count;
     const size_t AirWeaponOffset = Offset; Offset += Count;
-    Offset += Count; // max air hits
+    const size_t MaxAirHitsOffset = Offset; Offset += Count;
     Offset += Count; // AI internal
     Offset += Count * 4; // flags
     Offset += Count; // target acquisition range
@@ -148,7 +148,9 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
             : 0;
         E.HitPoints = (uint32_t)std::max(0, ReadI32Column(Data, HitPointsOffset, I) / 256);
         E.GroundWeapon = ReadU8Column(Data, GroundWeaponOffset, I);
+        E.MaxGroundHits = ReadU8Column(Data, MaxGroundHitsOffset, I);
         E.AirWeapon = ReadU8Column(Data, AirWeaponOffset, I);
+        E.MaxAirHits = ReadU8Column(Data, MaxAirHitsOffset, I);
         E.SightRange = ReadU8Column(Data, SightRangeOffset, I);
         E.ArmorUpgrade = ReadU8Column(Data, ArmorUpgradeOffset, I);
         E.UnitSize = ReadU8Column(Data, UnitSizeOffset, I);
@@ -209,7 +211,7 @@ std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& D
     const size_t DamageUpgradeOffset = Offset; Offset += Count;
     const size_t DamageTypeOffset = Offset; Offset += Count;
     const size_t BulletTypeOffset = Offset; Offset += Count;
-    Offset += Count; // lifetime
+    const size_t LifetimeOffset = Offset; Offset += Count;
     const size_t HitTypeOffset = Offset; Offset += Count;
     const size_t InnerSplashOffset = Offset; Offset += Count * 2;
     const size_t MediumSplashOffset = Offset; Offset += Count * 2;
@@ -217,11 +219,11 @@ std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& D
     const size_t DamageAmountOffset = Offset; Offset += Count * 2;
     const size_t DamageBonusOffset = Offset; Offset += Count * 2;
     const size_t CooldownOffset = Offset; Offset += Count;
-    const size_t BulletCountOffset = Offset; Offset += Count;
-    Offset += Count; // attack angle
-    Offset += Count; // bullet heading offset
-    Offset += Count; // forward offset
-    Offset += Count; // upward offset
+    const size_t DamageFactorOffset = Offset; Offset += Count;
+    const size_t AttackAngleOffset = Offset; Offset += Count;
+    const size_t BulletHeadingOffset = Offset; Offset += Count;
+    const size_t ForwardOffset = Offset; Offset += Count;
+    const size_t UpwardOffset = Offset; Offset += Count;
     Offset += Count * 2; // target error message
     const size_t IconOffset = Offset; Offset += Count * 2;
 
@@ -237,6 +239,7 @@ std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& D
         E.DamageUpgrade = ReadU8Column(Data, DamageUpgradeOffset, I);
         E.DamageType = ReadU8Column(Data, DamageTypeOffset, I);
         E.WeaponBehavior = ReadU8Column(Data, BulletTypeOffset, I);
+        E.Lifetime = ReadU8Column(Data, LifetimeOffset, I);
         E.SplashType = ReadU8Column(Data, HitTypeOffset, I);
         E.InnerSplashRadius = ReadU16Column(Data, InnerSplashOffset, I);
         E.MediumSplashRadius = ReadU16Column(Data, MediumSplashOffset, I);
@@ -244,7 +247,16 @@ std::vector<WeaponEntry> DatDecoder::DecodeWeapons(const std::vector<uint8_t>& D
         E.DamageAmount = ReadU16Column(Data, DamageAmountOffset, I);
         E.DamageBonus = ReadU16Column(Data, DamageBonusOffset, I);
         E.Cooldown = ReadU8Column(Data, CooldownOffset, I);
-        E.BulletCount = ReadU8Column(Data, BulletCountOffset, I);
+        E.DamageFactor = ReadU8Column(Data, DamageFactorOffset, I);
+        // Preserve the older public field while callers migrate to the DAT name.
+        E.BulletCount = static_cast<uint8_t>(E.DamageFactor);
+        E.AttackAngle = ReadU8Column(Data, AttackAngleOffset, I);
+        E.BulletHeadingOffset =
+            static_cast<int8_t>(ReadU8Column(Data, BulletHeadingOffset, I));
+        E.ForwardOffset =
+            static_cast<int8_t>(ReadU8Column(Data, ForwardOffset, I));
+        E.UpwardOffset =
+            static_cast<int8_t>(ReadU8Column(Data, UpwardOffset, I));
         E.Icon = ReadU16Column(Data, IconOffset, I);
 
         Entries.push_back(E);

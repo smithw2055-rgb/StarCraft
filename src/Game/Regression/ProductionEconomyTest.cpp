@@ -3,9 +3,11 @@
 #include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Core/ECS/SystemManager.h"
 #include "Game/Systems/ProtossSystem.h"
@@ -13,6 +15,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <vector>
 
 namespace Game::Systems
@@ -150,6 +153,20 @@ namespace
         }
         return -1;
     }
+
+    int FindBuildingByDef(Core::ECS::EntityManager& EM, int TargetDefID, int PlayerID)
+    {
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent,
+                                               Game::Components::PlayerComponent>())
+        {
+            auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+            auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+            if (Building && Player && Player->PlayerID == PlayerID &&
+                Building->BuildingDefID == TargetDefID)
+                return EntityID;
+        }
+        return -1;
+    }
 }
 
 int main()
@@ -190,6 +207,53 @@ int main()
     Require(SpawnExitBlockerTransform && MarineSpawn.Y > 900.0f &&
             MarineSpawn.DistanceTo(SpawnExitBlockerTransform->Position) >= 32.0f,
         "production buildings choose an unoccupied exit below the building");
+
+    const int CongestedBarracks = CreateCompletedBuilding(
+        EM, "Barracks", 11, {2500.0f, 900.0f});
+    auto& CongestedBarracksPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(CongestedBarracks);
+    CongestedBarracksPath.HasCollisionBounds = true;
+    CongestedBarracksPath.CollisionLeft = 48;
+    CongestedBarracksPath.CollisionRight = 48;
+    CongestedBarracksPath.CollisionUp = 32;
+    CongestedBarracksPath.CollisionDown = 32;
+    std::vector<int> CongestedExitBlockers;
+    for (int Row = 0; Row < 10; ++Row)
+    {
+        for (int Column = 0; Column <= 10; ++Column)
+        {
+            const int SignedColumn = Column == 0
+                ? 0
+                : ((Column & 1) ? -(Column + 1) / 2 : Column / 2);
+            CongestedExitBlockers.push_back(CreateCompletedUnit(
+                EM,
+                "Marine",
+                11,
+                {2500.0f + (float)SignedColumn * 24.0f,
+                 954.0f + (float)Row * 24.0f}));
+        }
+    }
+    const auto CongestedSpawn = Game::Systems::ProductionSystem::FindSpawnPosition(
+        EM, CongestedBarracks, Game::Races::GetUnitDefByID(
+            Game::Races::GetUnitDefID("Marine")).ChkUnitID);
+    bool CongestedSpawnOverlapsBlocker = false;
+    for (const int BlockerID : CongestedExitBlockers)
+    {
+        const auto* BlockerTransform =
+            EM.GetComponent<Game::Components::TransformComponent>(BlockerID);
+        CongestedSpawnOverlapsBlocker = CongestedSpawnOverlapsBlocker ||
+            (BlockerTransform &&
+             std::fabs(CongestedSpawn.X - BlockerTransform->Position.X) < 32.0f &&
+             std::fabs(CongestedSpawn.Y - BlockerTransform->Position.Y) < 32.0f);
+    }
+    const bool CongestedSpawnOverlapsProducer =
+        CongestedSpawn.X > 2500.0f - 48.0f - 16.0f &&
+        CongestedSpawn.X < 2500.0f + 49.0f + 16.0f &&
+        CongestedSpawn.Y > 900.0f - 32.0f - 16.0f &&
+        CongestedSpawn.Y < 900.0f + 33.0f + 16.0f;
+    Require(CongestedSpawn.X >= 0.0f && CongestedSpawn.Y >= 0.0f &&
+            !CongestedSpawnOverlapsBlocker && !CongestedSpawnOverlapsProducer,
+        "saturated production lanes expand the exit search instead of spawning inside a unit");
 
     Require(Game::Systems::ProductionSystem::StartTrain(EM, CommandCenter, ScvDefID),
         "first SCV can be queued when one supply remains");
@@ -318,10 +382,60 @@ int main()
         "doomed barracks has queued Marines before death");
     auto* DoomedUnit = EM.GetComponent<Game::Components::UnitComponent>(DoomedBarracks);
     Require(DoomedUnit != nullptr, "doomed barracks has unit data before death");
+    auto* DoomedRender =
+        EM.GetComponent<Game::Components::RenderComponent>(DoomedBarracks);
+    if (!DoomedRender)
+    {
+        DoomedRender = &EM.AddComponent<Game::Components::RenderComponent>(
+            DoomedBarracks);
+        DoomedRender->ImageID = 266u;
+    }
+    auto& DoomedTree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(DoomedBarracks);
+    auto* DoomedBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(DoomedBarracks);
+    Require(DoomedBuilding != nullptr, "doomed barracks has building flight state");
+    DoomedBuilding->IsLifted = true;
+    DoomedBuilding->FlightPhase =
+        Game::Components::BuildingFlightPhase::Airborne;
     DoomedUnit->HitPoints = 0;
     const int MarinesBeforeDoomedDeath =
         CountUnitsByDef(EM, "Marine", DeadProductionPlayerID);
     Game::Systems::RecordUnitDeath(EM, DoomedBarracks, -1, false);
+    int BarracksDeathVisual = -1;
+    for (int EffectID : EM.GetEntitiesWith<
+             Game::Components::EffectComponent,
+             Game::Components::RenderComponent,
+             Game::Components::UnitComponent>())
+    {
+        const auto* EffectRender =
+            EM.GetComponent<Game::Components::RenderComponent>(EffectID);
+        const auto* Effect =
+            EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+        if (EffectID != DoomedBarracks && EffectRender && Effect &&
+            EffectRender->ImageID == DoomedRender->ImageID &&
+            Effect->InitialAnimation == Game::IScriptAnims::Anim_Death)
+        {
+            BarracksDeathVisual = EffectID;
+            break;
+        }
+    }
+    const auto* BarracksDeathTree = BarracksDeathVisual >= 0
+        ? EM.GetComponent<Game::Components::ImageTreeComponent>(BarracksDeathVisual)
+        : nullptr;
+    const auto* BarracksDeathBuilding = BarracksDeathVisual >= 0
+        ? EM.GetComponent<Game::Components::BuildingComponent>(BarracksDeathVisual)
+        : nullptr;
+    const auto* BarracksDeathEffect = BarracksDeathVisual >= 0
+        ? EM.GetComponent<Game::Components::EffectComponent>(BarracksDeathVisual)
+        : nullptr;
+    Require(BarracksDeathVisual >= 0 && BarracksDeathTree &&
+            BarracksDeathTree->Nodes.size() == DoomedTree.Nodes.size() &&
+            BarracksDeathBuilding && BarracksDeathBuilding->IsLifted &&
+            BarracksDeathEffect &&
+            BarracksDeathEffect->DestroyWhenAnimationCompletes &&
+            BarracksDeathEffect->RenderBand == 2,
+        "building death keeps its real root and child images for the authored Death IScript");
     Require(DoomedProd->Queue.empty() &&
             DoomedProd->CurrentTrainingUnitDefID == -1,
         "producer death clears its pending training queue");
@@ -531,6 +645,8 @@ int main()
 
     const int Factory = CreateCompletedBuilding(EM, "Factory", PlayerID, {400.0f, 400.0f});
     const int MachineShop = CreateCompletedBuilding(EM, "MachineShop", PlayerID, {448.0f, 400.0f});
+    const int Armory = CreateCompletedBuilding(EM, "Armory", PlayerID, {400.0f, 464.0f});
+    (void)Armory;
     EM.GetComponent<Game::Components::BuildingComponent>(Factory)->AddonID = MachineShop;
     const Core::Math::Vec2 RallyPoint = {520.0f, 432.0f};
     Game::Systems::CommandSystem::SetMap(nullptr);
@@ -540,7 +656,7 @@ int main()
     const auto GoliathDef = Game::Races::GetUnitDefByID(GoliathDefID);
 
     Require(Game::Systems::ProductionSystem::StartTrain(EM, Factory, GoliathDefID),
-        "Goliath can be queued from a completed factory with machine shop");
+        "Goliath can be queued from a completed factory with armory");
     Production.Update((float)GoliathDef.BuildTime);
 
     int SpawnedGoliath = -1;
@@ -617,10 +733,10 @@ int main()
         "Zergling is blocked until Spawning Pool prerequisite exists");
     const int SpawningPool = CreateCompletedBuilding(EM, "Spawning Pool", PlayerID, {704.0f, 520.0f});
     Require(SpawningPool > 0, "completed Spawning Pool can be spawned for prerequisite test");
-    Require(Game::Systems::ProductionSystem::StartTrain(EM, Hatchery, ZerglingDefID),
-        "Zergling can be queued once Hatchery producer and Spawning Pool prerequisite are normalized");
+    Require(!Game::Systems::ProductionSystem::StartTrain(EM, Hatchery, ZerglingDefID),
+        "Zergling cannot enter a Hatchery queue because it must morph from Larva");
     auto* HatcheryProd = EM.GetComponent<Game::Components::ProductionComponent>(Hatchery);
-    Require(HatcheryProd && !HatcheryProd->Queue.empty() && HatcheryProd->Queue.back() == ZerglingDefID,
+    Require(!HatcheryProd || HatcheryProd->Queue.empty(),
         "Hatchery production queue records the Zergling def id");
     Require(Resources.Minerals == 200 - ZerglingDef.MineralCost,
         "queued Zergling spends normalized Zerg unit costs");
@@ -646,9 +762,16 @@ int main()
     Require(!EM.IsAlive(LarvaWithPool), "Zerg larva morph consumes the source larva");
     const int ZerglingEgg = FindMorphByTarget(EM, ZerglingDefID, ZergMorphPlayerID);
     auto* ZerglingEggRender = EM.GetComponent<Game::Components::RenderComponent>(ZerglingEgg);
-    Require(ZerglingEgg > 0 && ZerglingEggRender &&
+    auto* ZerglingEggUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(ZerglingEgg);
+    Require(ZerglingEgg > 0 && ZerglingEggRender && ZerglingEggUnit &&
             ZerglingEggRender->ImageID == 50000u + 0x24u,
         "Zerg larva morph creates a visible Egg using the Egg image id");
+    Require(ZerglingEggUnit->ChkUnitID == 36 &&
+            ZerglingEggUnit->HitPoints == 200 &&
+            ZerglingEggUnit->MaxHitPoints == 200 &&
+            ZerglingEggUnit->Armor == 10,
+        "Zerg Egg uses its independent classic 200 HP and 10 armor definition");
     Require(ZergMorphResources.Minerals == 300 - ZerglingDef.MineralCost &&
             ZergMorphResources.SupplyUsed == ZerglingDef.SupplyCost,
         "Zerg larva morph reserves resources and supply");
@@ -661,6 +784,14 @@ int main()
     ZergBuildingResources.SupplyMax = 20;
 
     const int MorphHatchery = CreateCompletedBuilding(EM, "Hatchery", ZergBuildingMorphPlayerID, {880.0f, 520.0f});
+    auto* MorphHatcheryUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(MorphHatchery);
+    constexpr int MorphingBuildingMissingHitPoints = 123;
+    Require(MorphHatcheryUnit &&
+            MorphHatcheryUnit->MaxHitPoints > MorphingBuildingMissingHitPoints,
+        "damaged building morph fixture has enough Hatchery vitality");
+    MorphHatcheryUnit->HitPoints =
+        MorphHatcheryUnit->MaxHitPoints - MorphingBuildingMissingHitPoints;
     const int LairDefID = Game::Races::GetUnitDefID("Lair");
     const auto LairDef = Game::Races::GetUnitDefByID(LairDefID);
     Require(!Game::Systems::ZergSystem::CanMorphBuilding(EM, MorphHatchery, LairDefID),
@@ -690,7 +821,46 @@ int main()
 
     Game::Map::GameMap ZergMorphMap;
     Game::Systems::ZergSystem ZergMorphSystem(SysMgr, &ZergMorphMap);
+    Game::Systems::BuildingSystem::SetMap(&ZergMorphMap);
+    Game::Systems::CommandSystem::SetMap(&ZergMorphMap);
+    Game::Systems::BuildingSystem::SetImageResolver(
+        [](int ChkUnitID) { return 50000u + (uint32_t)ChkUnitID; });
+    Game::Systems::BuildingSystem::SetConstructionImageResolver(
+        [](int ChkUnitID) { return 50000u + (uint32_t)ChkUnitID; });
+    Game::Systems::BuildingSystem ZergMorphBuildingSystem(SysMgr);
+    Game::Systems::CommandSystem ZergMorphCommandSystem;
+    ZergMorphCommandSystem.Init(&SysMgr);
+    Game::Systems::MovementSystem ZergMorphMovementSystem(SysMgr, &ZergMorphMap);
     ZergMorphSystem.Update((float)LairDef.BuildTime * 0.5f);
+    std::vector<int> HatchedZerglings;
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::UnitComponent,
+                                           Game::Components::PlayerComponent>())
+    {
+        const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Unit && Player && Player->PlayerID == ZergMorphPlayerID &&
+            Unit->ChkUnitID == ZerglingDef.ChkUnitID)
+            HatchedZerglings.push_back(EntityID);
+    }
+    Require(HatchedZerglings.size() == 2 &&
+            ZergMorphResources.SupplyUsed == ZerglingDef.SupplyCost,
+        "one Zergling egg hatches a pair for one shared supply reservation");
+    auto* FirstSharedSupply =
+        EM.GetComponent<Game::Components::SharedSupplyComponent>(HatchedZerglings[0]);
+    auto* SecondSharedSupply =
+        EM.GetComponent<Game::Components::SharedSupplyComponent>(HatchedZerglings[1]);
+    Require(FirstSharedSupply && SecondSharedSupply &&
+            FirstSharedSupply->PartnerEntityID == HatchedZerglings[1] &&
+            SecondSharedSupply->PartnerEntityID == HatchedZerglings[0],
+        "paired Zerglings retain a symmetric shared-supply link");
+    Game::Systems::RecordUnitDeath(EM, HatchedZerglings[0], -1, false);
+    EM.DestroyEntity(HatchedZerglings[0]);
+    Require(ZergMorphResources.SupplyUsed == ZerglingDef.SupplyCost,
+        "the first paired Zergling death keeps supply reserved for its sibling");
+    Game::Systems::RecordUnitDeath(EM, HatchedZerglings[1], -1, false);
+    EM.DestroyEntity(HatchedZerglings[1]);
+    Require(ZergMorphResources.SupplyUsed == 0,
+        "the final paired Zergling death releases the shared supply exactly once");
     Require(HatcheryBuilding->BuildProgress > 0.0f &&
             HatcheryBuilding->BuildProgress < HatcheryBuilding->TotalBuildTime &&
             HatcheryBuilding->BuildTimeRemaining < HatcheryBuilding->TotalBuildTime,
@@ -706,6 +876,9 @@ int main()
             MorphedLairRender &&
             MorphedLairRender->ImageID == 50000u + (uint32_t)LairDef.ChkUnitID,
         "completed Zerg building morph switches to the target building image");
+    Require(MorphedLairUnit->HitPoints ==
+                LairDef.HitPoints - MorphingBuildingMissingHitPoints,
+        "Hatchery to Lair morph preserves missing HP instead of healing for free");
 
     const int LairDroneLarva = CreateCompletedUnit(
         EM, "Larva", ZergBuildingMorphPlayerID, {912.0f, 552.0f});
@@ -713,9 +886,12 @@ int main()
                 EM, LairDroneLarva, Game::Races::GetUnitDefID("Drone")),
         "completed Lair satisfies the Hatchery prerequisite for larva production");
 
+    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
+    Require(!Game::Systems::ZergSystem::CanMorphBuilding(
+                EM, MorphHatchery, HiveDefID),
+        "completed Lair cannot morph to Hive before Queen's Nest exists");
     CreateCompletedBuilding(
         EM, "Queen's Nest", ZergBuildingMorphPlayerID, {960.0f, 520.0f});
-    const int HiveDefID = Game::Races::GetUnitDefID("Hive");
     const auto HiveDef = Game::Races::GetUnitDefByID(HiveDefID);
     Require(Game::Systems::ZergSystem::StartMorphBuilding(
                 EM, MorphHatchery, HiveDefID),
@@ -844,12 +1020,9 @@ int main()
             SupplyMaxBeforeOverlord + Game::Races::GetSupplyProvidedByDefID(OverlordDefID),
         "completed Zerg Overlord increases supply cap");
 
-    ZergLarvaEconomyResources.Minerals = 500;
-    ZergLarvaEconomyResources.VespeneGas = 500;
-    ZergLarvaEconomyResources.SupplyMax = 30;
     const int LurkerLair = CreateCompletedBuilding(
         EM, "Lair", ZergLarvaEconomyPlayerID, {1120.0f, 520.0f});
-    CreateCompletedBuilding(
+    const int LurkerDen = CreateCompletedBuilding(
         EM, "Hydralisk Den", ZergLarvaEconomyPlayerID, {1180.0f, 520.0f});
     const int LurkerLarva = CreateCompletedUnit(
         EM, "Larva", ZergLarvaEconomyPlayerID, {1120.0f, 520.0f});
@@ -857,9 +1030,87 @@ int main()
         .ParentHatcheryEntityID = LurkerLair;
     const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
     const auto LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
-    Require(Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+    const int HydraliskDefID = Game::Races::GetUnitDefID("Hydralisk");
+    const auto HydraliskDef = Game::Races::GetUnitDefByID(HydraliskDefID);
+    Require(!Game::Systems::ZergSystem::CanMorphLarvaIntoUnit(
                 EM, LurkerLarva, LurkerDefID),
-        "Lurker morph starts with its tech prerequisites available");
+        "Lurker cannot bypass its Hydralisk source by morphing from larva");
+
+    const Core::Math::Vec2 LurkerMorphPosition{1216.0f, 552.0f};
+    const int LurkerHydralisk = CreateCompletedUnit(
+        EM, "Hydralisk", ZergLarvaEconomyPlayerID, LurkerMorphPosition);
+    ZergLarvaEconomyResources.Minerals = 500;
+    ZergLarvaEconomyResources.VespeneGas = 500;
+    ZergLarvaEconomyResources.SupplyUsed = HydraliskDef.SupplyCost;
+    ZergLarvaEconomyResources.SupplyMax = 30;
+    Require(!Game::Systems::ZergSystem::CanMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "Hydralisk cannot morph before Lurker Aspect is researched");
+
+    auto& LurkerUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(ZergLarvaEconomyPlayerID);
+    LurkerUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_LurkerMorph)] = 1;
+    EM.DestroyEntity(LurkerDen);
+    EM.DestroyEntity(LurkerLair);
+    Require(Game::Systems::ZergSystem::CanMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "researched Lurker Aspect remains usable after the Den and Lair are destroyed");
+
+    // Probe both exact Brood War morph costs before allowing the conversion.
+    ZergLarvaEconomyResources.Minerals = 49;
+    Require(!Game::Systems::ZergSystem::CanMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "Lurker morph requires all 50 minerals");
+    ZergLarvaEconomyResources.Minerals = 50;
+    ZergLarvaEconomyResources.VespeneGas = 99;
+    Require(!Game::Systems::ZergSystem::CanMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "Lurker morph requires all 100 vespene gas");
+    ZergLarvaEconomyResources.VespeneGas = 100;
+    ZergLarvaEconomyResources.SupplyMax = HydraliskDef.SupplyCost;
+    Require(!Game::Systems::ZergSystem::CanMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "Lurker morph reserves only the supply increase over Hydralisk");
+    ZergLarvaEconomyResources.SupplyMax = LurkerDef.SupplyCost;
+
+    Require(Game::Systems::ZergSystem::StartMorphHydraliskIntoLurker(
+                EM, LurkerHydralisk),
+        "researched Hydralisk starts morphing into a Lurker Egg");
+    Require(!EM.IsAlive(LurkerHydralisk),
+        "Lurker morph consumes its source Hydralisk");
+    Require(ZergLarvaEconomyResources.Minerals == 0 &&
+            ZergLarvaEconomyResources.VespeneGas == 0,
+        "Lurker morph deducts exactly 50 minerals and 100 gas");
+    Require(ZergLarvaEconomyResources.SupplyUsed == LurkerDef.SupplyCost,
+        "Lurker morph replaces Hydralisk supply instead of adding full Lurker supply");
+
+    const int LurkerEgg =
+        FindMorphByTarget(EM, LurkerDefID, ZergLarvaEconomyPlayerID);
+    const auto* LurkerEggUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(LurkerEgg);
+    const auto* LurkerEggBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(LurkerEgg);
+    const auto* LurkerEggPath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(LurkerEgg);
+    const auto* LurkerEggRender =
+        EM.GetComponent<Game::Components::RenderComponent>(LurkerEgg);
+    const auto* LurkerEggTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(LurkerEgg);
+    Require(LurkerEgg > 0 && LurkerEggUnit &&
+            LurkerEggUnit->ChkUnitID == 97 &&
+            LurkerEggBuilding && LurkerEggBuilding->UnderConstruction &&
+            LurkerEggPath && !LurkerEggPath->IsAir &&
+            LurkerEggRender && LurkerEggRender->ImageID == 50000u + 97u,
+        "Hydralisk morph uses the ground Lurker Egg intermediate form");
+    Require(LurkerEggUnit->HitPoints == 200 &&
+            LurkerEggUnit->MaxHitPoints == 200 &&
+            LurkerEggUnit->Armor == 10,
+        "Lurker Egg uses its independent classic 200 HP and 10 armor definition");
+    Require(LurkerEggTransform &&
+            LurkerEggTransform->Position.DistanceTo(LurkerMorphPosition) < 0.1f,
+        "Lurker Egg remains at the consumed Hydralisk position");
+
     ZergMorphSystem.Update((float)LurkerDef.BuildTime + 0.1f);
     const int MorphedLurker =
         FindUnitByDef(EM, "Lurker", ZergLarvaEconomyPlayerID);
@@ -867,12 +1118,24 @@ int main()
         EM.GetComponent<Game::Components::BurrowComponent>(MorphedLurker);
     const auto* LurkerTransform =
         EM.GetComponent<Game::Components::TransformComponent>(MorphedLurker);
+    const auto* LurkerPath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(MorphedLurker);
+    const auto* LurkerCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(MorphedLurker);
+    const auto* LurkerUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(MorphedLurker);
     Require(LurkerBurrow && LurkerBurrow->CanBurrow &&
             !LurkerBurrow->IsBurrowed &&
             LurkerBurrow->Phase == Game::Components::BurrowPhase::Surface,
         "newly hatched Lurker explicitly starts on the surface and can move");
-    Require(LurkerTransform && LurkerTransform->Position.Y > 520.0f,
-        "newly hatched Lurker exits below its parent Lair");
+    Require(LurkerTransform &&
+            LurkerTransform->Position.DistanceTo(LurkerMorphPosition) < 0.1f &&
+            LurkerPath && !LurkerPath->IsAir && LurkerCommand &&
+            LurkerUnit && LurkerUnit->Speed > 0.0f,
+        "completed Lurker is a movable ground unit at the morph position");
+    Require(Game::Systems::ZergSystem::BurrowUnit(EM, MorphedLurker) &&
+            LurkerBurrow->Phase == Game::Components::BurrowPhase::Burrowing,
+        "completed Lurker can begin its innate Burrow transition");
 
     constexpr int ZergDroneBuildingPlayerID = 7;
     auto& ZergDroneBuildingResources =
@@ -888,10 +1151,55 @@ int main()
     const auto HatcheryDef = Game::Races::GetUnitDefByID(HatcheryDefID);
     Require(Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
                 EM, BuilderDrone, HatcheryDefID, {2000.0f, 2000.0f}),
-        "Zerg Drone can start morphing into a Hatchery");
-    Require(!EM.IsAlive(BuilderDrone), "Zerg Drone building morph consumes the source Drone");
+        "Zerg Drone can accept a distant Hatchery morph order");
+    Require(EM.IsAlive(BuilderDrone) &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergDroneBuildingPlayerID, HatcheryDefID) == 1,
+        "Zerg Drone remains alive while moving to its Hatchery footprint");
+    const int SpawningPoolDefID =
+        Game::Races::GetUnitDefID("Spawning Pool");
+    const auto* PendingDroneCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(BuilderDrone);
+    std::string PendingDroneReason;
+    Require(PendingDroneCommand &&
+            PendingDroneCommand->CurrentCommand ==
+                Game::Components::CommandType::Build &&
+            PendingDroneCommand->GetCurrentOrder() &&
+            PendingDroneCommand->GetCurrentOrder()->Type ==
+                Game::Components::OrderType::Build &&
+            !Game::Systems::ZergSystem::CanMorphDroneIntoBuilding(
+                EM, BuilderDrone, SpawningPoolDefID, &PendingDroneReason) &&
+            PendingDroneReason ==
+                "drone is already committed to construction" &&
+            !Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
+                EM, BuilderDrone, SpawningPoolDefID, {1900.0f, 1900.0f}) &&
+            PendingDroneCommand->CurrentCommand ==
+                Game::Components::CommandType::Build &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergDroneBuildingPlayerID, HatcheryDefID) == 1,
+        "a second Zerg build request cannot steal or cancel an in-transit Drone");
+    ZergMorphCommandSystem.Update(1.0f / 24.0f);
+    ZergMorphMovementSystem.Update(1.0f / 24.0f);
+    ZergMorphBuildingSystem.Update(0.001f);
+    Require(FindBuildingByDef(
+                EM, HatcheryDefID, ZergDroneBuildingPlayerID) < 0 &&
+            EM.IsAlive(BuilderDrone),
+        "Zerg Drone cannot remotely begin a building morph");
+    auto* PendingDronePath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(BuilderDrone);
+    Require(PendingDronePath,
+        "in-transit Zerg builder keeps a construction approach path");
+    EM.GetComponent<Game::Components::TransformComponent>(BuilderDrone)->Position =
+        PendingDronePath->RequestedDestination;
+    PendingDronePath->Path.clear();
+    PendingDronePath->PathIndex = 0;
+    ZergMorphCommandSystem.Update(1.0f / 24.0f);
+    ZergMorphMovementSystem.Update(1.0f / 24.0f);
+    ZergMorphBuildingSystem.Update(0.001f);
+    Require(!EM.IsAlive(BuilderDrone),
+        "Zerg Drone is consumed only after reaching the building footprint");
     const int MorphingHatchery =
-        FindMorphByTarget(EM, HatcheryDefID, ZergDroneBuildingPlayerID);
+        FindBuildingByDef(EM, HatcheryDefID, ZergDroneBuildingPlayerID);
     auto* MorphingHatcheryRender =
         EM.GetComponent<Game::Components::RenderComponent>(MorphingHatchery);
     Require(MorphingHatchery > 0 && MorphingHatcheryRender &&
@@ -910,15 +1218,18 @@ int main()
                     ++Count;
         return Count;
     };
+    ZergMorphBuildingSystem.Update(0.1f);
     ZergMorphSystem.Update(0.1f);
     Require(ZergMorphMap.GetTile(60, 61).HasCreep &&
             ZergMorphMap.GetTile(63, 63).HasCreep,
         "new Hatchery seeds continuous creep across its full 4x3 footprint");
     const int InitialConstructionCreep = CountCreepNearNewHatchery();
+    ZergMorphBuildingSystem.Update(0.6f);
     ZergMorphSystem.Update(0.6f);
     Require(CountCreepNearNewHatchery() > InitialConstructionCreep,
         "Hatchery construction expands creep incrementally at the OpenBW spread interval");
-    ZergMorphSystem.Update((float)HatcheryDef.BuildTime + 0.1f);
+    ZergMorphBuildingSystem.Update((float)HatcheryDef.BuildTime + 0.1f);
+    ZergMorphSystem.Update(0.1f);
     Require(ZergDroneBuildingResources.SupplyMax ==
             10 + Game::Races::GetSupplyProvidedByDefID(HatcheryDefID),
         "completed Zerg Hatchery morph grants its supply cap");
@@ -926,6 +1237,49 @@ int main()
     ZergMorphSystem.Update(2.0f);
     Require(CountCreepNearNewHatchery() == CompletedConstructionCreep,
         "completed Hatchery freezes its reached creep extent without further expansion");
+
+    ZergDroneBuildingResources.Minerals = HatcheryDef.MineralCost + 100;
+    const int UserCancelledDrone = CreateCompletedUnit(
+        EM, "Drone", ZergDroneBuildingPlayerID, {1280.0f, 800.0f});
+    const int MineralsBeforeUserCancelledBuild =
+        ZergDroneBuildingResources.Minerals;
+    Require(Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
+                EM, UserCancelledDrone, HatcheryDefID, {2300.0f, 2000.0f}),
+        "a second Drone can start a pending build for replacement-command coverage");
+    Game::Systems::CommandSystem::IssueMove(
+        EM, {UserCancelledDrone}, {1400.0f, 800.0f});
+    ZergMorphBuildingSystem.Update(0.001f);
+    const auto* UserCancelledCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(UserCancelledDrone);
+    Require(UserCancelledCommand && UserCancelledCommand->GetCurrentOrder() &&
+            UserCancelledCommand->GetCurrentOrder()->Type ==
+                Game::Components::OrderType::Move &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergDroneBuildingPlayerID, HatcheryDefID) == 0 &&
+            ZergDroneBuildingResources.Minerals ==
+                MineralsBeforeUserCancelledBuild,
+        "a real user Move cancels pending construction, refunds it, and preserves the new order");
+
+    ZergDroneBuildingResources.Minerals = HatcheryDef.MineralCost + 100;
+    const int TransferredDrone = CreateCompletedUnit(
+        EM, "Drone", ZergDroneBuildingPlayerID, {1280.0f, 896.0f});
+    const int MineralsBeforeTransferredBuild =
+        ZergDroneBuildingResources.Minerals;
+    Require(Game::Systems::ZergSystem::StartMorphDroneIntoBuilding(
+                EM, TransferredDrone, HatcheryDefID, {2300.0f, 2200.0f}),
+        "Drone can start a pending build before a trigger ownership transfer");
+    EM.GetComponent<Game::Components::PlayerComponent>(TransferredDrone)->PlayerID = 8;
+    ZergMorphBuildingSystem.Update(0.001f);
+    const auto* TransferredCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(TransferredDrone);
+    Require(EM.IsAlive(TransferredDrone) && TransferredCommand &&
+            TransferredCommand->CurrentCommand ==
+                Game::Components::CommandType::Stop &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergDroneBuildingPlayerID, HatcheryDefID) == 0 &&
+            ZergDroneBuildingResources.Minerals ==
+                MineralsBeforeTransferredBuild,
+        "ownership transfer cancels and refunds the old pending build without consuming the Drone");
 
     constexpr int ProtossMorphPlayerID = 1;
     auto& ProtossMorphResources =
@@ -1000,6 +1354,427 @@ int main()
             ArchonTransform->Position.X == 1216.0f &&
             ArchonTransform->Position.Y == 600.0f,
         "Protoss Archon morph spawns at the midpoint between source templars");
+
+    constexpr int AdvancedTechPlayerID = 12;
+    auto& AdvancedTechResources =
+        Game::Systems::HarvestSystem::GetResources(AdvancedTechPlayerID);
+    AdvancedTechResources.Minerals = 5000;
+    AdvancedTechResources.VespeneGas = 5000;
+    AdvancedTechResources.SupplyUsed = 0;
+    AdvancedTechResources.SupplyMax = 200;
+
+    const int BattlecruiserDefID = Game::Races::GetUnitDefID("Battlecruiser");
+    const int BattlecruiserStarport = CreateCompletedBuilding(
+        EM, "Starport", AdvancedTechPlayerID, {1400.0f, 700.0f});
+    Require(!Game::Systems::ProductionSystem::CanTrain(
+                EM, BattlecruiserStarport, BattlecruiserDefID),
+        "Battlecruiser is blocked before the Starport has a Control Tower");
+    const int BattlecruiserControlTower = CreateCompletedBuilding(
+        EM, "ControlTower", AdvancedTechPlayerID, {1448.0f, 700.0f});
+    auto* BattlecruiserStarportBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(BattlecruiserStarport);
+    Require(BattlecruiserStarportBuilding,
+        "Battlecruiser prerequisite probe has Starport building state");
+    BattlecruiserStarportBuilding->AddonID = BattlecruiserControlTower;
+    CreateCompletedBuilding(
+        EM, "ScienceFacility", AdvancedTechPlayerID, {1500.0f, 700.0f});
+    Require(!Game::Systems::ProductionSystem::CanTrain(
+                EM, BattlecruiserStarport, BattlecruiserDefID),
+        "Control Tower and Science Facility alone do not unlock Battlecruiser");
+    CreateCompletedBuilding(
+        EM, "PhysicsLab", AdvancedTechPlayerID, {1548.0f, 700.0f});
+    Require(Game::Systems::ProductionSystem::CanTrain(
+                EM, BattlecruiserStarport, BattlecruiserDefID),
+        "Control Tower and Physics Lab complete the Battlecruiser technology chain");
+
+    const int ObserverDefID = Game::Races::GetUnitDefID("Observer");
+    const int RoboticsFacility = CreateCompletedBuilding(
+        EM, "Robotics Facility", AdvancedTechPlayerID, {1600.0f, 700.0f});
+    Require(!Game::Systems::ProductionSystem::CanTrain(
+                EM, RoboticsFacility, ObserverDefID),
+        "Observer is blocked before an Observatory exists");
+    CreateCompletedBuilding(
+        EM, "Observatory", AdvancedTechPlayerID, {1648.0f, 700.0f});
+    Require(Game::Systems::ProductionSystem::CanTrain(
+                EM, RoboticsFacility, ObserverDefID),
+        "Robotics Facility and Observatory unlock Observer production");
+
+    const int CarrierDefID = Game::Races::GetUnitDefID("Carrier");
+    const int CarrierStargate = CreateCompletedBuilding(
+        EM, "Stargate", AdvancedTechPlayerID, {1700.0f, 700.0f});
+    Require(!Game::Systems::ProductionSystem::CanTrain(
+                EM, CarrierStargate, CarrierDefID),
+        "Carrier is blocked before a Fleet Beacon exists");
+    CreateCompletedBuilding(
+        EM, "Fleet Beacon", AdvancedTechPlayerID, {1748.0f, 700.0f});
+    Require(Game::Systems::ProductionSystem::CanTrain(
+                EM, CarrierStargate, CarrierDefID),
+        "Stargate and Fleet Beacon unlock Carrier production");
+    Require(Game::Systems::ProductionSystem::StartTrain(
+                EM, CarrierStargate, CarrierDefID),
+        "Carrier can enter the Stargate production queue");
+    const auto CarrierDef = Game::Races::GetUnitDefByID(CarrierDefID);
+    Production.Update((float)CarrierDef.BuildTime + 0.1f);
+    const int TrainedCarrier =
+        FindUnitByDef(EM, "Carrier", AdvancedTechPlayerID);
+    const auto* TrainedCarrierUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(TrainedCarrier);
+    Require(TrainedCarrier > 0 && TrainedCarrierUnit &&
+            TrainedCarrierUnit->HangarCount == 0 &&
+            !TrainedCarrierUnit->HangarBuildInProgress,
+        "newly trained Carrier leaves the Stargate with zero interceptors");
+
+    // Upgrade prerequisites and timers follow the Brood War DAT/OpenBW rules,
+    // independently of the production-tech coverage above.
+    Core::ECS::SystemManager UpgradeRuleSysMgr;
+    auto& UpgradeRuleEM = UpgradeRuleSysMgr.GetEntityManager();
+    constexpr int TerranUpgradeRulePlayerID = 9;
+    constexpr int ZergUpgradeRulePlayerID = 10;
+    constexpr int ProtossUpgradeRulePlayerID = 11;
+
+    const auto SavedTerranUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(TerranUpgradeRulePlayerID);
+    const auto SavedZergUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(ZergUpgradeRulePlayerID);
+    const auto SavedProtossUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(ProtossUpgradeRulePlayerID);
+    const auto SavedTerranUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(TerranUpgradeRulePlayerID);
+    const auto SavedZergUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(ZergUpgradeRulePlayerID);
+    const auto SavedProtossUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(ProtossUpgradeRulePlayerID);
+
+    auto& TerranUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(TerranUpgradeRulePlayerID);
+    TerranUpgradeRules.Levels.fill(0);
+    auto& TerranUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(TerranUpgradeRulePlayerID);
+    TerranUpgradeResources.Minerals = 5000;
+    TerranUpgradeResources.VespeneGas = 5000;
+    const int RuleEngineeringBay = CreateCompletedBuilding(
+        UpgradeRuleEM, "EngineeringBay", TerranUpgradeRulePlayerID);
+    TerranUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Terran_InfantryWeapons)] = 1;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "Terran level-two infantry upgrade requires a completed Science Facility");
+    const int RuleScienceFacility = CreateCompletedBuilding(
+        UpgradeRuleEM, "ScienceFacility", TerranUpgradeRulePlayerID);
+    auto* RuleScienceFacilityBuilding =
+        UpgradeRuleEM.GetComponent<Game::Components::BuildingComponent>(
+            RuleScienceFacility);
+    Require(RuleScienceFacilityBuilding != nullptr,
+        "Terran upgrade prerequisite has building state");
+    RuleScienceFacilityBuilding->UnderConstruction = true;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "an unfinished Science Facility does not unlock Terran level-two upgrades");
+    RuleScienceFacilityBuilding->UnderConstruction = false;
+    Require(Game::Systems::UpgradeSystem::StartResearch(
+                UpgradeRuleEM, RuleEngineeringBay,
+                Game::Systems::ResearchId::Terran_InfantryWeapons),
+        "completed Science Facility unlocks Terran level-two infantry upgrade");
+    auto* RuleEngineeringBayBuilding =
+        UpgradeRuleEM.GetComponent<Game::Components::BuildingComponent>(
+            RuleEngineeringBay);
+    Require(RuleEngineeringBayBuilding &&
+            std::abs(RuleEngineeringBayBuilding->BuildTimeRemaining -
+                     4480.0f / 24.0f) < 0.0001f,
+        "level-two core upgrade uses the exact 4480-frame DAT duration");
+    Require(Game::Systems::UpgradeSystem::GetResearchTimeCost(
+                Game::Systems::ResearchId::Terran_InfantryWeapons,
+                TerranUpgradeRulePlayerID) == 187,
+        "whole-second research metadata rounds the exact level-two duration up");
+    Require(Game::Systems::UpgradeSystem::CancelResearch(
+                UpgradeRuleEM, RuleEngineeringBay),
+        "Terran prerequisite timer probe cancels cleanly");
+
+    const int RuleAcademy = CreateCompletedBuilding(
+        UpgradeRuleEM, "Academy", TerranUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::StartResearch(
+                UpgradeRuleEM, RuleAcademy,
+                Game::Systems::ResearchId::Terran_StimPacks),
+        "Stim Packs research starts for exact tech timer coverage");
+    auto* RuleAcademyBuilding =
+        UpgradeRuleEM.GetComponent<Game::Components::BuildingComponent>(RuleAcademy);
+    Require(RuleAcademyBuilding &&
+            std::abs(RuleAcademyBuilding->BuildTimeRemaining -
+                     1200.0f / 24.0f) < 0.0001f,
+        "Stim Packs uses the exact 1200-frame techdata duration");
+    Require(Game::Systems::UpgradeSystem::CancelResearch(UpgradeRuleEM, RuleAcademy),
+        "Stim Packs timer probe cancels cleanly");
+
+    const int RuleMachineShop = CreateCompletedBuilding(
+        UpgradeRuleEM, "MachineShop", TerranUpgradeRulePlayerID);
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleMachineShop,
+                Game::Systems::ResearchId::Terran_CharonBoosters),
+        "Charon Boosters remains locked without an Armory");
+    CreateCompletedBuilding(UpgradeRuleEM, "Armory", TerranUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleMachineShop,
+                Game::Systems::ResearchId::Terran_CharonBoosters),
+        "completed Armory unlocks Charon Boosters");
+
+    auto& ZergUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(ZergUpgradeRulePlayerID);
+    ZergUpgradeRules.Levels.fill(0);
+    auto& ZergUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(ZergUpgradeRulePlayerID);
+    ZergUpgradeResources.Minerals = 5000;
+    ZergUpgradeResources.VespeneGas = 5000;
+    const int RuleEvolutionChamber = CreateCompletedBuilding(
+        UpgradeRuleEM, "Evolution Chamber", ZergUpgradeRulePlayerID);
+    const int RuleSpawningPool = CreateCompletedBuilding(
+        UpgradeRuleEM, "Spawning Pool", ZergUpgradeRulePlayerID);
+    const int RuleHydraliskDen = CreateCompletedBuilding(
+        UpgradeRuleEM, "Hydralisk Den", ZergUpgradeRulePlayerID);
+    ZergUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_MeleeAttacks)] = 1;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEvolutionChamber,
+                Game::Systems::ResearchId::Zerg_MeleeAttacks),
+        "Zerg level-two attack upgrade is locked before Lair technology");
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleSpawningPool,
+                Game::Systems::ResearchId::Zerg_AdrenalGlands),
+        "Adrenal Glands requires a completed Hive");
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleHydraliskDen,
+                Game::Systems::ResearchId::Zerg_LurkerMorph),
+        "Lurker Aspect requires a completed Lair or Hive");
+
+    const int RuleHive = CreateCompletedBuilding(
+        UpgradeRuleEM, "Hive", ZergUpgradeRulePlayerID);
+    auto* RuleHiveBuilding =
+        UpgradeRuleEM.GetComponent<Game::Components::BuildingComponent>(RuleHive);
+    Require(RuleHiveBuilding != nullptr, "Zerg Hive prerequisite has building state");
+    RuleHiveBuilding->UnderConstruction = true;
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEvolutionChamber,
+                Game::Systems::ResearchId::Zerg_MeleeAttacks),
+        "an owned morphing Hive preserves the OpenBW level-two Zerg prerequisite");
+    ZergUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_MeleeAttacks)] = 2;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEvolutionChamber,
+                Game::Systems::ResearchId::Zerg_MeleeAttacks),
+        "Zerg level-three attack upgrade waits for Hive completion");
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleSpawningPool,
+                Game::Systems::ResearchId::Zerg_AdrenalGlands),
+        "a morphing Hive does not prematurely unlock Adrenal Glands");
+    CreateCompletedBuilding(UpgradeRuleEM, "Lair", ZergUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleHydraliskDen,
+                Game::Systems::ResearchId::Zerg_LurkerMorph),
+        "completed Lair unlocks Lurker Aspect");
+    RuleHiveBuilding->UnderConstruction = false;
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleEvolutionChamber,
+                Game::Systems::ResearchId::Zerg_MeleeAttacks),
+        "completed Hive unlocks Zerg level-three attack upgrade");
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleSpawningPool,
+                Game::Systems::ResearchId::Zerg_AdrenalGlands),
+        "completed Hive unlocks Adrenal Glands");
+
+    auto& ProtossUpgradeRules =
+        Game::Systems::UpgradeSystem::GetUpgrades(ProtossUpgradeRulePlayerID);
+    ProtossUpgradeRules.Levels.fill(0);
+    auto& ProtossUpgradeResources =
+        Game::Systems::HarvestSystem::GetResources(ProtossUpgradeRulePlayerID);
+    ProtossUpgradeResources.Minerals = 5000;
+    ProtossUpgradeResources.VespeneGas = 5000;
+    const int RuleForge = CreateCompletedBuilding(
+        UpgradeRuleEM, "Forge", ProtossUpgradeRulePlayerID);
+    ProtossUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_GroundWeapons)] = 1;
+    ProtossUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_PlasmaShields)] = 1;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleForge,
+                Game::Systems::ResearchId::Protoss_GroundWeapons),
+        "Protoss level-two ground upgrade requires Templar Archives");
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleForge,
+                Game::Systems::ResearchId::Protoss_PlasmaShields),
+        "Protoss level-two shield upgrade requires Cybernetics Core");
+    const int RuleCyberneticsCore = CreateCompletedBuilding(
+        UpgradeRuleEM, "Cybernetics Core", ProtossUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleForge,
+                Game::Systems::ResearchId::Protoss_PlasmaShields),
+        "completed Cybernetics Core unlocks Protoss level-two shields");
+    ProtossUpgradeRules.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_AirWeapons)] = 1;
+    Require(!Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleCyberneticsCore,
+                Game::Systems::ResearchId::Protoss_AirWeapons),
+        "Protoss level-two air upgrade requires Fleet Beacon");
+    CreateCompletedBuilding(
+        UpgradeRuleEM, "Templar Archives", ProtossUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleForge,
+                Game::Systems::ResearchId::Protoss_GroundWeapons),
+        "completed Templar Archives unlocks Protoss level-two ground upgrades");
+    const int RuleFleetBeacon = CreateCompletedBuilding(
+        UpgradeRuleEM, "Fleet Beacon", ProtossUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleCyberneticsCore,
+                Game::Systems::ResearchId::Protoss_AirWeapons),
+        "completed Fleet Beacon unlocks Protoss level-two air upgrades");
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleFleetBeacon,
+                Game::Systems::ResearchId::Protoss_GraviticThrusters),
+        "Fleet Beacon exposes Gravitic Thrusters research");
+    Require(Game::Systems::UpgradeSystem::StartResearch(
+                UpgradeRuleEM, RuleFleetBeacon,
+                Game::Systems::ResearchId::Protoss_DisruptionWeb),
+        "Disruption Web has complete research metadata");
+    auto* RuleFleetBeaconBuilding =
+        UpgradeRuleEM.GetComponent<Game::Components::BuildingComponent>(
+            RuleFleetBeacon);
+    Require(RuleFleetBeaconBuilding &&
+            std::abs(RuleFleetBeaconBuilding->BuildTimeRemaining -
+                     1200.0f / 24.0f) < 0.0001f,
+        "Disruption Web uses the exact 1200-frame techdata duration");
+    Require(Game::Systems::UpgradeSystem::CancelResearch(
+                UpgradeRuleEM, RuleFleetBeacon),
+        "Disruption Web timer probe cancels cleanly");
+    const int RuleObservatory = CreateCompletedBuilding(
+        UpgradeRuleEM, "Observatory", ProtossUpgradeRulePlayerID);
+    Require(Game::Systems::UpgradeSystem::CanStartResearch(
+                UpgradeRuleEM, RuleObservatory,
+                Game::Systems::ResearchId::Protoss_GraviticBoosters),
+        "Observatory exposes Gravitic Boosters research");
+
+    Game::Systems::UpgradeSystem::GetUpgrades(TerranUpgradeRulePlayerID) =
+        SavedTerranUpgradeRules;
+    Game::Systems::UpgradeSystem::GetUpgrades(ZergUpgradeRulePlayerID) =
+        SavedZergUpgradeRules;
+    Game::Systems::UpgradeSystem::GetUpgrades(ProtossUpgradeRulePlayerID) =
+        SavedProtossUpgradeRules;
+    Game::Systems::HarvestSystem::GetResources(TerranUpgradeRulePlayerID) =
+        SavedTerranUpgradeResources;
+    Game::Systems::HarvestSystem::GetResources(ZergUpgradeRulePlayerID) =
+        SavedZergUpgradeResources;
+    Game::Systems::HarvestSystem::GetResources(ProtossUpgradeRulePlayerID) =
+        SavedProtossUpgradeResources;
+
+    constexpr int HangarEconomyPlayerID = 9;
+    auto& HangarUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(HangarEconomyPlayerID);
+    HangarUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_CarrierCapacity)] = 0;
+    HangarUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_ReaverCapacity)] = 0;
+    auto& HangarResources =
+        Game::Systems::HarvestSystem::GetResources(HangarEconomyPlayerID);
+    HangarResources.Minerals = 24;
+    HangarResources.VespeneGas = 0;
+
+    const int EconomyCarrier = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Carrier"),
+        {224.0f, 128.0f},
+        HangarEconomyPlayerID);
+    auto* EconomyCarrierUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(EconomyCarrier);
+    Require(EconomyCarrierUnit && EconomyCarrierUnit->HangarCount == 0 &&
+            !EconomyCarrierUnit->HangarBuildInProgress,
+        "new Carrier starts with an empty interceptor hangar");
+    Require(EconomyCarrierUnit->ChkUnitID == 72 &&
+            Game::Systems::UpgradeSystem::GetMaxHangarCount(
+                EM, EconomyCarrier) == 4,
+        "Carrier payload economy recognizes the classic unit id and base capacity");
+    Production.Update(1.0f);
+    Require(HangarResources.Minerals == 24 &&
+            !EconomyCarrierUnit->HangarBuildInProgress,
+        "Carrier cannot begin an interceptor without its 25 mineral cost");
+
+    // A CHK placement can author a partial payload. Automatic construction
+    // must continue from that exact count rather than resetting it.
+    EconomyCarrierUnit->HangarCount = 3;
+    HangarResources.Minerals = 100;
+    Production.Update(19.0f);
+    Require(EconomyCarrierUnit->HangarCount == 3,
+        "Carrier preserves map-authored payload while building an interceptor");
+    Require(EconomyCarrierUnit->HangarBuildInProgress,
+        "Carrier keeps interceptor construction active before 20 seconds");
+    Require(HangarResources.Minerals == 75,
+        "Carrier reserves 25 minerals when interceptor construction begins");
+    Production.Update(1.0f);
+    Require(EconomyCarrierUnit->HangarCount == 4 &&
+            !EconomyCarrierUnit->HangarBuildInProgress &&
+            HangarResources.Minerals == 75,
+        "Carrier completes exactly one interceptor after 20 seconds");
+    Production.Update(60.0f);
+    Require(EconomyCarrierUnit->HangarCount == 4 &&
+            HangarResources.Minerals == 75,
+        "base Carrier capacity stops automatic construction at four");
+
+    HangarUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_CarrierCapacity)] = 1;
+    Production.Update(20.0f);
+    Require(EconomyCarrierUnit->HangarCount == 5 &&
+            HangarResources.Minerals == 50,
+        "Carrier Capacity permits another paid 20-second interceptor build");
+    EconomyCarrierUnit->HangarCount = 8;
+
+    const int EconomyReaver = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Reaver"),
+        {256.0f, 128.0f},
+        HangarEconomyPlayerID);
+    auto* EconomyReaverUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(EconomyReaver);
+    Require(EconomyReaverUnit && EconomyReaverUnit->HangarCount == 0,
+        "new Reaver starts with an empty scarab bay");
+    EconomyReaverUnit->HangarCount = 4;
+    HangarResources.Minerals = 15;
+    Production.Update(14.0f);
+    Require(EconomyReaverUnit->HangarCount == 4 &&
+            EconomyReaverUnit->HangarBuildInProgress &&
+            HangarResources.Minerals == 0,
+        "Reaver preserves authored payload and reserves the 15 mineral scarab cost");
+    Production.Update(1.0f);
+    Require(EconomyReaverUnit->HangarCount == 5 &&
+            !EconomyReaverUnit->HangarBuildInProgress,
+        "Reaver completes exactly one scarab after 15 seconds");
+    Production.Update(60.0f);
+    Require(EconomyReaverUnit->HangarCount == 5 &&
+            HangarResources.Minerals == 0,
+        "base Reaver capacity stops automatic construction at five");
+
+    HangarUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Protoss_ReaverCapacity)] = 1;
+    HangarResources.Minerals = 15;
+    Production.Update(15.0f);
+    Require(EconomyReaverUnit->HangarCount == 6 &&
+            HangarResources.Minerals == 0,
+        "Reaver Capacity permits another paid 15-second scarab build");
+    EconomyReaverUnit->HangarCount = 10;
+
+    const int HallucinatedCarrier = Game::Systems::ProductionSystem::DebugSpawnUnit(
+        EM,
+        Game::Races::GetUnitDefID("Carrier"),
+        {288.0f, 128.0f},
+        HangarEconomyPlayerID);
+    auto* HallucinatedCarrierUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(HallucinatedCarrier);
+    EM.AddComponent<Game::Components::StatusEffectComponent>(HallucinatedCarrier)
+        .AddEffect(Game::Components::StatusEffect::Hallucination, 180.0f);
+    HangarResources.Minerals = 100;
+    Production.Update(100.0f);
+    Require(HallucinatedCarrierUnit &&
+            HallucinatedCarrierUnit->HangarCount == 0 &&
+            !HallucinatedCarrierUnit->HangarBuildInProgress &&
+            HangarResources.Minerals == 100,
+        "hallucinated Carrier cannot spend minerals or construct real interceptors");
 
     std::printf("ProductionEconomyTest passed\n");
     return 0;

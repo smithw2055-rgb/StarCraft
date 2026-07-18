@@ -8,6 +8,7 @@
 #include "Game/Systems/HarvestSystem.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -120,6 +121,48 @@ namespace
             Game::Components::CommandType::Stop;
         return EntityID;
     }
+
+    int CreateZergDrone(Core::ECS::EntityManager& EM,
+                        int PlayerID,
+                        Core::Math::Vec2 Position)
+    {
+        const int DefID = Game::Races::GetUnitDefID("Drone");
+        const auto Def = Game::Races::GetUnitDefByID(DefID);
+        const int EntityID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(EntityID).Position = Position;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.ChkUnitID = Def.ChkUnitID;
+        Unit.UnitRace = Def.RaceType;
+        Unit.HitPoints = Def.HitPoints;
+        Unit.MaxHitPoints = Def.HitPoints;
+        Unit.SupplyCost = Def.SupplyCost;
+        EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
+        EM.AddComponent<Game::Components::CommandComponent>(EntityID).CurrentCommand =
+            Game::Components::CommandType::Stop;
+        return EntityID;
+    }
+
+    int CreateVespeneGeyser(Core::ECS::EntityManager& EM,
+                            Core::Math::Vec2 Position)
+    {
+        const int EntityID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(EntityID).Position = Position;
+        auto& Unit = EM.AddComponent<Game::Components::UnitComponent>(EntityID);
+        Unit.ChkUnitID = 188;
+        Unit.Speed = 0.0f;
+        Unit.HitPoints = 1;
+        Unit.MaxHitPoints = 1;
+        EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = -1;
+        auto& Building = EM.AddComponent<Game::Components::BuildingComponent>(EntityID);
+        Building.IsBuilding = true;
+        Building.BuildingDefID = -1;
+        auto& Resource = EM.AddComponent<Game::Components::ResourceComponent>(EntityID);
+        Resource.Type = Game::Components::ResourceType::VespeneGas;
+        Resource.Amount = 5000;
+        Resource.MaxAmount = 5000;
+        EM.AddComponent<Game::Components::RenderComponent>(EntityID);
+        return EntityID;
+    }
 }
 
 int main()
@@ -224,6 +267,51 @@ int main()
             ProbeCommand->CurrentCommand == Game::Components::CommandType::Stop,
         "Probe is released immediately after opening the warp-in rift");
 
+    constexpr int UnreachableBuilderPlayerID = 5;
+    auto& UnreachableResources =
+        Game::Systems::HarvestSystem::GetResources(UnreachableBuilderPlayerID);
+    UnreachableResources.Minerals = 1000;
+    UnreachableResources.VespeneGas = 1000;
+    const int UnreachableProbe = CreateProtossProbe(
+        EM, UnreachableBuilderPlayerID, Map.TileToWorld(88, 40));
+    const Core::Math::Vec2 UnreachableNexusPos = Map.TileToWorld(104, 40);
+    const int MineralsBeforeUnreachableBuild = UnreachableResources.Minerals;
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, UnreachableProbe, NexusDefID, UnreachableNexusPos),
+        "Probe can queue a distant Nexus for unreachable-builder coverage");
+    Require(UnreachableResources.Minerals ==
+                MineralsBeforeUnreachableBuild - NexusDef.MineralCost &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                UnreachableBuilderPlayerID, NexusDefID) == 1 &&
+            Game::Systems::BuildingSystem::IsBuilderCommitted(
+                EM, UnreachableProbe),
+        "pending distant build spends resources and commits its Probe");
+
+    // This test's movement stub deliberately never advances the Probe. Each
+    // update therefore exercises one bounded no-progress retry after the
+    // initial distance sample, without relying on a wall-clock timeout.
+    for (int Attempt = 0; Attempt < 9; ++Attempt)
+        ProtossBuildingSystem.Update(4.1f);
+
+    auto* UnreachableProbeCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(UnreachableProbe);
+    auto* UnreachableProbePath =
+        EM.GetComponent<Game::Components::PathfindingComponent>(UnreachableProbe);
+    Require(Game::Systems::BuildingSystem::CountPendingBuilds(
+                UnreachableBuilderPlayerID, NexusDefID) == 0 &&
+            !Game::Systems::BuildingSystem::IsBuilderCommitted(
+                EM, UnreachableProbe),
+        "unreachable pending build is cancelled after bounded retries");
+    Require(UnreachableResources.Minerals == MineralsBeforeUnreachableBuild &&
+            UnreachableResources.VespeneGas == 1000,
+        "unreachable pending build refunds its full resource cost");
+    Require(UnreachableProbeCommand &&
+            UnreachableProbeCommand->CurrentCommand ==
+                Game::Components::CommandType::Stop &&
+            !UnreachableProbeCommand->HasPendingOrders() &&
+            UnreachableProbePath && UnreachableProbePath->Path.empty(),
+        "unreachable cancellation releases the Probe command and path");
+
     const int HatcheryDefID = Game::Races::GetUnitDefID("Hatchery");
     const int Hatchery = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
         EM, HatcheryDefID, Map.TileToWorld(18, 12), PlayerID);
@@ -232,6 +320,98 @@ int main()
     Require(HatcheryBuilding && HatcheryBuilding->IsOrganic,
         "completed Zerg Hatchery is organic so the live Zerg system can spawn larva");
     EM.DestroyEntity(Hatchery);
+
+    constexpr int ZergBaseBuilderPlayerID = 6;
+    auto& ZergBaseResources =
+        Game::Systems::HarvestSystem::GetResources(ZergBaseBuilderPlayerID);
+    ZergBaseResources.Minerals = 1000;
+    ZergBaseResources.VespeneGas = 1000;
+    ZergBaseResources.SupplyUsed = 1;
+    ZergBaseResources.SupplyMax = 10;
+    const Core::Math::Vec2 DistantDronePos = Map.TileToWorld(42, 30);
+    const Core::Math::Vec2 NewHatcheryPos = Map.TileToWorld(50, 30);
+    const int BaseDrone =
+        CreateZergDrone(EM, ZergBaseBuilderPlayerID, DistantDronePos);
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, BaseDrone, HatcheryDefID, NewHatcheryPos),
+        "Drone can accept a distant Hatchery morph order");
+    Require(Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergBaseBuilderPlayerID, HatcheryDefID) == 1 &&
+            EM.IsAlive(BaseDrone),
+        "Hatchery remains pending and keeps its Drone alive during approach");
+    const int MineralsAfterFirstHatcheryOrder = ZergBaseResources.Minerals;
+    Require(!Game::Systems::BuildingSystem::StartBuild(
+                EM, BaseDrone, HatcheryDefID, Map.TileToWorld(54, 30)) &&
+            ZergBaseResources.Minerals == MineralsAfterFirstHatcheryOrder &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergBaseBuilderPlayerID, HatcheryDefID) == 1,
+        "committed Drone rejects a second build order without duplicate spending");
+
+    constexpr int CancelledDronePlayerID = 9;
+    auto& CancelledDroneResources =
+        Game::Systems::HarvestSystem::GetResources(CancelledDronePlayerID);
+    CancelledDroneResources.Minerals = 1000;
+    CancelledDroneResources.VespeneGas = 0;
+    const int CancelledDrone = CreateZergDrone(
+        EM, CancelledDronePlayerID, Map.TileToWorld(42, 42));
+    const int MineralsBeforeCancelledOrder = CancelledDroneResources.Minerals;
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, CancelledDrone, HatcheryDefID,
+                Map.TileToWorld(50, 42)),
+        "Drone can queue a distant build before replacement-command coverage");
+    auto* CancelledDroneCommand =
+        EM.GetComponent<Game::Components::CommandComponent>(CancelledDrone);
+    Require(CancelledDroneCommand != nullptr,
+        "pending Drone has command state for cancellation coverage");
+    CancelledDroneCommand->CurrentCommand =
+        Game::Components::CommandType::Move;
+    CancelledDroneCommand->TargetPosition = Map.TileToWorld(40, 44);
+    ProtossBuildingSystem.Update(0.001f);
+    Require(EM.IsAlive(CancelledDrone) &&
+            CancelledDroneCommand->CurrentCommand ==
+                Game::Components::CommandType::Move &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                CancelledDronePlayerID, HatcheryDefID) == 0 &&
+            CancelledDroneResources.Minerals == MineralsBeforeCancelledOrder,
+        "replacement Move cancels and refunds pending morph without hijacking the Drone");
+    ProtossBuildingSystem.Update(0.001f);
+    int PendingHatchery = -1;
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ZergBaseBuilderPlayerID &&
+            Building->BuildingDefID == HatcheryDefID)
+            PendingHatchery = EntityID;
+    }
+    Require(PendingHatchery < 0 && EM.IsAlive(BaseDrone),
+        "Drone does not remotely hatch a base before reaching its footprint");
+    EM.GetComponent<Game::Components::TransformComponent>(BaseDrone)->Position =
+        NewHatcheryPos;
+    ProtossBuildingSystem.Update(0.001f);
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ZergBaseBuilderPlayerID &&
+            Building->BuildingDefID == HatcheryDefID)
+            PendingHatchery = EntityID;
+    }
+    Require(PendingHatchery > 0 &&
+            EM.GetComponent<Game::Components::BuildingComponent>(PendingHatchery)->UnderConstruction &&
+            !EM.IsAlive(BaseDrone),
+        "Drone arrival consumes the worker and begins Hatchery morphing");
+    const auto* PendingHatcheryUnit =
+        EM.GetComponent<Game::Components::UnitComponent>(PendingHatchery);
+    const auto HatcheryDef = Game::Races::GetUnitDefByID(HatcheryDefID);
+    Require(PendingHatcheryUnit &&
+            PendingHatcheryUnit->HitPoints ==
+                std::max(1, HatcheryDef.HitPoints / 10),
+        "newly morphing Zerg building starts at classic ten-percent vitality");
+    Require(ZergBaseResources.SupplyUsed == 0,
+        "morphing a Zerg base releases the consumed Drone supply");
 
     const int SpawningPoolDefID = Game::Races::GetUnitDefID("Spawning Pool");
     const Core::Math::Vec2 CreepBuildPos = Map.TileToWorld(25, 12);
@@ -256,6 +436,119 @@ int main()
     Require(!Game::Systems::BuildingSystem::IsPlacementValid(
                 EM, SpawningPoolDefID, CreepBuildPos, PlayerID),
             "partial creep coverage does not satisfy a Zerg building footprint");
+
+    constexpr int ZergTechBuilderPlayerID = 7;
+    auto& ZergTechResources =
+        Game::Systems::HarvestSystem::GetResources(ZergTechBuilderPlayerID);
+    ZergTechResources.Minerals = 1000;
+    ZergTechResources.VespeneGas = 1000;
+    ZergTechResources.SupplyUsed = 1;
+    ZergTechResources.SupplyMax = 10;
+    const int TechHatchery =
+        Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, HatcheryDefID, Map.TileToWorld(58, 34), ZergTechBuilderPlayerID);
+    Require(TechHatchery > 0,
+        "completed Hatchery satisfies the Zerg tech-building prerequisite");
+    const Core::Math::Vec2 TechMorphPos = Map.TileToWorld(64, 34);
+    for (int Y = 33; Y <= 34; ++Y)
+    {
+        for (int X = 63; X <= 65; ++X)
+        {
+            auto Tile = Map.GetTile(X, Y);
+            Tile.HasCreep = true;
+            Map.SetTile(X, Y, Tile);
+        }
+    }
+    const int TechDrone = CreateZergDrone(
+        EM, ZergTechBuilderPlayerID, Map.TileToWorld(60, 34));
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, TechDrone, SpawningPoolDefID, TechMorphPos),
+        "Drone can accept a creep-covered tech-building morph order");
+    ProtossBuildingSystem.Update(0.001f);
+    int PendingPool = -1;
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ZergTechBuilderPlayerID &&
+            Building->BuildingDefID == SpawningPoolDefID)
+            PendingPool = EntityID;
+    }
+    Require(PendingPool < 0 && EM.IsAlive(TechDrone),
+        "Zerg tech building does not hatch before its Drone arrives");
+    EM.GetComponent<Game::Components::TransformComponent>(TechDrone)->Position =
+        TechMorphPos;
+    for (int Y = 33; Y <= 34; ++Y)
+    {
+        for (int X = 63; X <= 65; ++X)
+        {
+            auto Tile = Map.GetTile(X, Y);
+            Tile.HasCreep = false;
+            Map.SetTile(X, Y, Tile);
+        }
+    }
+    ProtossBuildingSystem.Update(0.001f);
+    Require(EM.IsAlive(TechDrone) &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergTechBuilderPlayerID, SpawningPoolDefID) == 1,
+        "Drone arrival revalidates creep instead of morphing after it recedes");
+    for (int Y = 33; Y <= 34; ++Y)
+    {
+        for (int X = 63; X <= 65; ++X)
+        {
+            auto Tile = Map.GetTile(X, Y);
+            Tile.HasCreep = true;
+            Map.SetTile(X, Y, Tile);
+        }
+    }
+    ProtossBuildingSystem.Update(0.001f);
+    for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+        const auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        if (Building && Player && Player->PlayerID == ZergTechBuilderPlayerID &&
+            Building->BuildingDefID == SpawningPoolDefID)
+            PendingPool = EntityID;
+    }
+    Require(PendingPool > 0 && !EM.IsAlive(TechDrone),
+        "Drone arrival begins a normal Zerg building morph and consumes the worker");
+
+    constexpr int ZergGasBuilderPlayerID = 8;
+    auto& ZergGasResources =
+        Game::Systems::HarvestSystem::GetResources(ZergGasBuilderPlayerID);
+    ZergGasResources.Minerals = 1000;
+    ZergGasResources.VespeneGas = 0;
+    ZergGasResources.SupplyUsed = 1;
+    ZergGasResources.SupplyMax = 10;
+    const int ExtractorDefID = Game::Races::GetUnitDefID("Extractor");
+    const Core::Math::Vec2 GeyserPosition = Map.TileToWorld(80, 38);
+    const int Geyser = CreateVespeneGeyser(EM, GeyserPosition);
+    const int GasDrone = CreateZergDrone(
+        EM, ZergGasBuilderPlayerID, Map.TileToWorld(70, 38));
+    Require(Game::Systems::BuildingSystem::StartBuild(
+                EM, GasDrone, ExtractorDefID,
+                Game::Systems::BuildTarget::FromEntity(Geyser)),
+        "Drone can accept a distant Extractor morph order on a geyser");
+    ProtossBuildingSystem.Update(0.001f);
+    auto* PendingGeyserBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(Geyser);
+    Require(EM.IsAlive(GasDrone) && PendingGeyserBuilding &&
+            PendingGeyserBuilding->BuildingDefID != ExtractorDefID &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(
+                ZergGasBuilderPlayerID, ExtractorDefID) == 1,
+        "Extractor keeps its Drone and geyser intact until the approach completes");
+    EM.GetComponent<Game::Components::TransformComponent>(GasDrone)->Position =
+        GeyserPosition;
+    ProtossBuildingSystem.Update(0.001f);
+    auto* ExtractorBuilding =
+        EM.GetComponent<Game::Components::BuildingComponent>(Geyser);
+    Require(!EM.IsAlive(GasDrone) && ExtractorBuilding &&
+            ExtractorBuilding->BuildingDefID == ExtractorDefID &&
+            ExtractorBuilding->UnderConstruction &&
+            ZergGasResources.SupplyUsed == 0,
+        "Extractor consumes the Drone and releases supply only after geyser arrival");
 
     const int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
     const int CommandCenter = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
@@ -348,9 +641,10 @@ int main()
             NewDepotBuilding->BuildProgress <= 0.0011f &&
             NewDepotBuilding->TotalBuildTime == (float)SupplyDepotDef.BuildTime,
         "new Supply Depot starts near zero progress with definition build time");
-    Require(NewDepotUnit->HitPoints == 1 &&
+    Require(NewDepotUnit->HitPoints ==
+                std::max(1, SupplyDepotDef.HitPoints / 10) &&
             NewDepotUnit->MaxHitPoints == SupplyDepotDef.HitPoints,
-        "under-construction building starts damaged but keeps max HP for progress UI");
+        "under-construction building starts at classic ten-percent vitality and keeps max HP");
 
     const int MineralsBeforeRejectedConcurrentBuild = Resources.Minerals;
     Require(!Game::Systems::BuildingSystem::StartBuild(
@@ -375,6 +669,21 @@ int main()
             NewDepotBuilderPath->TargetSpeed == 0.0f &&
             NewDepotBuilderPath->CurrentVelocity.LengthSq() == 0.0f,
         "SCV stops its approach motion once it reaches the construction footprint");
+    constexpr int ConstructionCombatDamage = 25;
+    NewDepotUnit->HitPoints -= ConstructionCombatDamage;
+    const int DamagedConstructionHitPoints = NewDepotUnit->HitPoints;
+    const float ProgressBeforeDamageTick = NewDepotBuilding->BuildProgress;
+    BuildingSystem.Update(1.0f);
+    const float DamageTickProgress =
+        NewDepotBuilding->BuildProgress - ProgressBeforeDamageTick;
+    const int MaximumEarnedHitPoints = (int)std::ceil(
+        (float)(NewDepotUnit->MaxHitPoints -
+                std::max(1, NewDepotUnit->MaxHitPoints / 10)) *
+        DamageTickProgress / NewDepotBuilding->TotalBuildTime);
+    Require(NewDepotUnit->HitPoints >= DamagedConstructionHitPoints &&
+            NewDepotUnit->HitPoints <=
+                DamagedConstructionHitPoints + MaximumEarnedHitPoints,
+        "construction tick adds only earned vitality and does not heal combat damage");
     BuildingSystem.Update((float)SupplyDepotDef.BuildTime * 0.42f);
     Require(NewDepotBuilding->UnderConstruction &&
             NewDepotRender->ImageID == (uint32_t)(10000 + SupplyDepotDef.ChkUnitID) &&
@@ -385,8 +694,9 @@ int main()
         "construction update completes the Supply Depot when the builder is nearby");
     Require(NewDepotBuilding->BuildProgress == NewDepotBuilding->TotalBuildTime,
         "completed building records full build progress");
-    Require(NewDepotUnit->HitPoints == NewDepotUnit->MaxHitPoints,
-        "completed building restores full HP");
+    Require(NewDepotUnit->HitPoints ==
+                NewDepotUnit->MaxHitPoints - ConstructionCombatDamage,
+        "completed building preserves combat damage taken during construction");
     Require(NewDepotRender->ImageID == (uint32_t)(10000 + SupplyDepotDef.ChkUnitID),
         "completed Supply Depot swaps back to the finished building image");
     Require(Resources.SupplyMax == SupplyMaxBeforeBuild + SupplyDepotDef.SupplyCost,
@@ -429,8 +739,9 @@ int main()
         "Terran construction remains unfinished when the assigned SCV dies");
     Require(StalledDepotBuilding->BuildProgress == StalledProgressBeforeDeath,
         "dead builder does not advance Terran building progress");
-    Require(StalledDepotUnit->HitPoints == 1,
-        "stalled under-construction building keeps its partial HP");
+    Require(StalledDepotUnit->HitPoints ==
+                std::max(1, SupplyDepotDef.HitPoints / 10),
+        "stalled under-construction building keeps its classic partial HP");
     Require(Resources.SupplyMax == SupplyMaxAfterCompletedDepot,
         "stalled Supply Depot does not grant supply");
 

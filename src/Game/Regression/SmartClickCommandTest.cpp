@@ -29,6 +29,7 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
                                int,
                                const Game::Components::CombatComponent&,
                                int,
+                               int,
                                int)
 {
 }

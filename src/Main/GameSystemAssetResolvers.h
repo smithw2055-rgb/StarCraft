@@ -69,6 +69,12 @@ inline void ConfigureAnimationWeaponImageResolver(
     Game::Systems::AnimationSystem::SetWeaponImageResolver(std::move(Resolver));
 }
 
+inline void ConfigureAnimationSpriteImageResolver(
+    Game::Systems::AnimationSystem::SpriteImageResolver Resolver)
+{
+    Game::Systems::AnimationSystem::SetSpriteImageResolver(std::move(Resolver));
+}
+
 inline void ConfigureAnimationImageAttachmentPersistenceResolver(
     Game::Systems::AnimationSystem::ImageAttachmentPersistenceResolver Resolver)
 {

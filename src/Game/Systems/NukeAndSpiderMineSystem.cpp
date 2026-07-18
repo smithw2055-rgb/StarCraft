@@ -1,7 +1,9 @@
 #include "Game/Systems/NukeAndSpiderMineSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/Map/Map.h"
+#include "Game/IScriptVM.h"
 
 #include <cmath>
 #include <limits>
@@ -13,12 +15,38 @@ namespace Game::Systems
 namespace
 {
     NukeAndSpiderMineSystem::ImageIDResolver gImageResolver;
+    NukeAndSpiderMineSystem* gActiveNukeAndSpiderMineSystem = nullptr;
     constexpr int kTerranSpiderMineChkUnitID = 13;
+    constexpr int kTerranVultureChkUnitID = 2;
+    constexpr int kTerranHeroVultureChkUnitID = 19;
+    constexpr float kSpiderMineExplosionRadius = 64.0f;
+    constexpr int kSpiderMineDamage = 125;
+}
+
+NukeAndSpiderMineSystem::NukeAndSpiderMineSystem(
+    Core::ECS::SystemManager& SysMgr,
+    BulletSystem& BulletSys)
+    : mSystemMgr(SysMgr), mBulletSystem(BulletSys)
+{
+    gActiveNukeAndSpiderMineSystem = this;
+}
+
+NukeAndSpiderMineSystem::~NukeAndSpiderMineSystem()
+{
+    if (gActiveNukeAndSpiderMineSystem == this)
+        gActiveNukeAndSpiderMineSystem = nullptr;
 }
 
 void NukeAndSpiderMineSystem::SetImageResolver(ImageIDResolver Resolver)
 {
     gImageResolver = std::move(Resolver);
+}
+
+bool NukeAndSpiderMineSystem::PlaceSpiderMineForActiveSession(
+    int VultureEntityID)
+{
+    return gActiveNukeAndSpiderMineSystem &&
+           gActiveNukeAndSpiderMineSystem->PlaceSpiderMine(VultureEntityID);
 }
 
 void NukeAndSpiderMineSystem::Update(float DeltaTime)
@@ -56,17 +84,52 @@ void NukeAndSpiderMineSystem::CancelNuke(int EntityID)
     }
 }
 
-void NukeAndSpiderMineSystem::PlaceSpiderMine(int VultureEntityID)
+bool NukeAndSpiderMineSystem::PlaceSpiderMine(int VultureEntityID)
 {
-    auto* trans = mSystemMgr.GetEntityManager().GetComponent<Components::TransformComponent>(VultureEntityID);
-    if (!trans) return;
+    auto& EM = mSystemMgr.GetEntityManager();
+    auto* Trans =
+        EM.GetComponent<Components::TransformComponent>(VultureEntityID);
+    auto* Unit = EM.GetComponent<Components::UnitComponent>(VultureEntityID);
+    auto* Player =
+        EM.GetComponent<Components::PlayerComponent>(VultureEntityID);
+    if (!Trans || !Unit || !Player ||
+        (Unit->ChkUnitID != kTerranVultureChkUnitID &&
+         Unit->ChkUnitID != kTerranHeroVultureChkUnitID) ||
+        !UpgradeSystem::HasResearch(
+            Player->PlayerID, ResearchId::Terran_SpiderMines))
+    {
+        return false;
+    }
+
+    auto* Inventory =
+        EM.GetComponent<Components::VultureMineInventoryComponent>(
+            VultureEntityID);
+    if (!Inventory)
+    {
+        Inventory =
+            &EM.AddComponent<Components::VultureMineInventoryComponent>(
+                VultureEntityID);
+    }
+    if (Inventory->RemainingMines <= 0)
+        return false;
+    --Inventory->RemainingMines;
+
+    if (auto* Path =
+            EM.GetComponent<Components::PathfindingComponent>(VultureEntityID))
+    {
+        Path->Path.clear();
+        Path->PathIndex = 0;
+        Path->CurrentSpeed = 0.0f;
+        Path->CurrentVelocity = {0.0f, 0.0f};
+    }
 
     SpiderMineState mine;
     mine.VultureEntityID = VultureEntityID;
-    mine.PlacementPosition = trans->Position;
+    mine.PlacementPosition = Trans->Position;
     mine.BurrowTimer = 1.0f;
     mine.Burrowed = false;
     mMines.push_back(mine);
+    return true;
 }
 
 bool NukeAndSpiderMineSystem::IsSpiderMineTriggered(int MineEntityID) const
@@ -260,13 +323,112 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                     if (dist < 2.0f)
                     {
                         Components::CombatComponent combat;
-                        combat.GroundDamage = 125;
+                        combat.GroundDamage = kSpiderMineDamage;
                         combat.GroundDmgType = Components::DamageType::Normal;
                         combat.Splash = Components::SplashType::Radial;
-                        combat.SplashRadius = 64.0f;
-                        CombatSystem::ApplyDamage(EM, spiderComp->ChasingEntityID, combat, it->MineEntityID, 125);
+                        combat.SplashRadius = kSpiderMineExplosionRadius;
 
-                        EM.DestroyEntity(it->MineEntityID);
+                        const int MineEntityID = it->MineEntityID;
+                        const Core::Math::Vec2 ExplosionPosition =
+                            trans->Position;
+                        Components::PlayerComponent MinePlayerCopy;
+                        bool HasMinePlayer = false;
+                        if (const auto* MinePlayer =
+                                EM.GetComponent<Components::PlayerComponent>(
+                                    MineEntityID))
+                        {
+                            MinePlayerCopy = *MinePlayer;
+                            HasMinePlayer = true;
+                        }
+
+                        const uint32_t MineImageID = gImageResolver
+                            ? gImageResolver(kTerranSpiderMineChkUnitID)
+                            : std::numeric_limits<uint32_t>::max();
+                        if (MineImageID != std::numeric_limits<uint32_t>::max())
+                        {
+                            const int EffectID = EM.CreateEntity();
+                            EM.AddComponent<Components::TransformComponent>(
+                                  EffectID)
+                                .Position = ExplosionPosition;
+                            auto& EffectRender =
+                                EM.AddComponent<Components::RenderComponent>(
+                                    EffectID);
+                            EffectRender.ImageID = MineImageID;
+                            EffectRender.FrameIndex = 0;
+                            EffectRender.TotalFrames = 1;
+                            EffectRender.Layer =
+                                Components::RenderLayer::Effects;
+                            EffectRender.Visible = true;
+
+                            auto& Effect =
+                                EM.AddComponent<Components::EffectComponent>(
+                                    EffectID);
+                            Effect.LifetimeRemaining = 8.0f;
+                            Effect.InitialAnimation =
+                                Game::IScriptAnims::Anim_Death;
+                            Effect.DestroyWhenAnimationCompletes = true;
+                            Effect.DrawAbove = true;
+
+                            auto& EffectUnit =
+                                EM.AddComponent<Components::UnitComponent>(
+                                    EffectID);
+                            EffectUnit.ChkUnitID = -1;
+                            EffectUnit.HitPoints = 0;
+                            EffectUnit.MaxHitPoints = 1;
+                            EffectUnit.SupplyCost = 0;
+                            if (HasMinePlayer)
+                            {
+                                EM.AddComponent<Components::PlayerComponent>(
+                                    EffectID) = MinePlayerCopy;
+                            }
+                        }
+
+                        const float RadiusSquared =
+                            kSpiderMineExplosionRadius *
+                            kSpiderMineExplosionRadius;
+                        const int MinePlayerID =
+                            HasMinePlayer ? MinePlayerCopy.PlayerID : -1;
+                        const auto Targets = EM.GetEntitiesWith<
+                            Components::TransformComponent,
+                            Components::UnitComponent,
+                            Components::PlayerComponent>();
+                        for (int TargetID : Targets)
+                        {
+                            if (TargetID == MineEntityID)
+                                continue;
+                            const auto* TargetUnit =
+                                EM.GetComponent<Components::UnitComponent>(
+                                    TargetID);
+                            const auto* TargetPosition =
+                                EM.GetComponent<Components::TransformComponent>(
+                                    TargetID);
+                            const auto* TargetPlayer =
+                                EM.GetComponent<Components::PlayerComponent>(
+                                    TargetID);
+                            const auto* TargetPath =
+                                EM.GetComponent<Components::PathfindingComponent>(
+                                    TargetID);
+                            if (!TargetUnit || TargetUnit->HitPoints <= 0 ||
+                                !TargetPosition || !TargetPlayer ||
+                                (MinePlayerID >= 0 &&
+                                 TargetPlayer->PlayerID == MinePlayerID) ||
+                                (TargetPath && TargetPath->IsAir))
+                            {
+                                continue;
+                            }
+                            const Core::Math::Vec2 Delta =
+                                TargetPosition->Position - ExplosionPosition;
+                            if (Delta.X * Delta.X + Delta.Y * Delta.Y >
+                                RadiusSquared)
+                            {
+                                continue;
+                            }
+                            CombatSystem::ApplyDamage(
+                                EM, TargetID, combat, MineEntityID,
+                                kSpiderMineDamage);
+                        }
+
+                        EM.DestroyEntity(MineEntityID);
                         it = mMines.erase(it);
                         continue;
                     }

@@ -26,3 +26,9 @@ tests/
 
 # Temporary preview/debug artifacts
 tmp_*
+
+# Build/runtime binary artifacts
+StormLib.dll
+bz2.dll
+zlib1.dll
+/artifacts/

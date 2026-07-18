@@ -109,13 +109,28 @@ inline void UpdateGameRuntimeFrame(
         Runtime.App.Gui,
         Runtime.Client.Hud);
 
-    UpdateCampaignAndSimulationRuntime(
-        Runtime.Session.Campaign,
-        Runtime.Session.Game,
-        Runtime.App.Audio,
-        Runtime.Client.Runtime,
-        Runtime.Client.Hud,
-        SimulationDt);
+    // Fast observer playback must advance the complete simulation in bounded
+    // steps. Passing Dt*16 once made bullets jump across several IScript
+    // frames while AnimationSystem emitted every intermediate effect at the
+    // final position (most visibly, clustered Lurker spines and missed line
+    // damage). Keep rendering at the host frame rate, but advance every game
+    // system in at most one classic 24 Hz simulation frame per substep.
+    constexpr float kMaximumSimulationStep = 1.0f / 24.0f;
+    float RemainingSimulationTime = SimulationDt;
+    while (RemainingSimulationTime > 0.000001f)
+    {
+        const float Step = RemainingSimulationTime > kMaximumSimulationStep
+            ? kMaximumSimulationStep
+            : RemainingSimulationTime;
+        UpdateCampaignAndSimulationRuntime(
+            Runtime.Session.Campaign,
+            Runtime.Session.Game,
+            Runtime.App.Audio,
+            Runtime.Client.Runtime,
+            Runtime.Client.Hud,
+            Step);
+        RemainingSimulationTime -= Step;
+    }
 
     RefreshGui();
 }

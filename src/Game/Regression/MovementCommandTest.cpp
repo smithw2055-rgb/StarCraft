@@ -122,10 +122,11 @@ namespace
         return UnitID;
     }
 
-    bool CollisionBoundsOverlap(const Game::Components::TransformComponent& ATrans,
-                                const Game::Components::PathfindingComponent& APath,
-                                const Game::Components::TransformComponent& BTrans,
-                                const Game::Components::PathfindingComponent& BPath)
+    float CollisionBoundsOverlapArea(
+        const Game::Components::TransformComponent& ATrans,
+        const Game::Components::PathfindingComponent& APath,
+        const Game::Components::TransformComponent& BTrans,
+        const Game::Components::PathfindingComponent& BPath)
     {
         const float ALeft = ATrans.Position.X - (float)APath.CollisionLeft;
         const float ARight = ATrans.Position.X + (float)APath.CollisionRight + 1.0f;
@@ -135,8 +136,17 @@ namespace
         const float BRight = BTrans.Position.X + (float)BPath.CollisionRight + 1.0f;
         const float BTop = BTrans.Position.Y - (float)BPath.CollisionUp;
         const float BBottom = BTrans.Position.Y + (float)BPath.CollisionDown + 1.0f;
-        return ALeft < BRight && ARight > BLeft &&
-               ATop < BBottom && ABottom > BTop;
+        const float OverlapX = std::min(ARight, BRight) - std::max(ALeft, BLeft);
+        const float OverlapY = std::min(ABottom, BBottom) - std::max(ATop, BTop);
+        return std::max(0.0f, OverlapX) * std::max(0.0f, OverlapY);
+    }
+
+    bool CollisionBoundsOverlap(const Game::Components::TransformComponent& ATrans,
+                                const Game::Components::PathfindingComponent& APath,
+                                const Game::Components::TransformComponent& BTrans,
+                                const Game::Components::PathfindingComponent& BPath)
+    {
+        return CollisionBoundsOverlapArea(ATrans, APath, BTrans, BPath) > 0.0f;
     }
 }
 
@@ -679,6 +689,359 @@ int main()
     Require(DatMoverTrans && DatMoverTrans->Position.X <= 40.1f,
         "ground units use units.dat asymmetric building bounds for static blockers");
 
+    // Reproduce the Meltdown mineral-row geometry: the exact expanded DAT
+    // rectangle reaches y=116, while this 32-pixel path row is sampled at
+    // y=112.  A center-only A* route therefore looks clear even though the
+    // real segment hits the mineral.  Movement must use the reported static
+    // blocker to request a genuine lateral detour.
+    Game::Map::GameMap ExactStaticMap;
+    ExactStaticMap.Generate(12, 8);
+    Core::ECS::SystemManager ExactStaticSysMgr;
+    auto& ExactStaticEM = ExactStaticSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem ExactStaticMovement(
+        ExactStaticSysMgr, &ExactStaticMap);
+    const int ExactStaticMover = CreateMovableUnit(
+        ExactStaticEM, {171.0f, 123.0f}, {48.0f, 123.0f},
+        64, Game::Components::UnitSize::Small, 11);
+    auto* ExactStaticMoverPath =
+        ExactStaticEM.GetComponent<Game::Components::PathfindingComponent>(
+            ExactStaticMover);
+    Require(ExactStaticMoverPath, "exact static detour mover has path state");
+    SetCollisionBounds(*ExactStaticMoverPath, 11, 11, 11, 11);
+
+    const int ExactMineral = ExactStaticEM.CreateEntity();
+    auto& ExactMineralTransform =
+        ExactStaticEM.AddComponent<Game::Components::TransformComponent>(ExactMineral);
+    ExactMineralTransform.Position = {128.0f, 144.0f};
+    auto& ExactMineralUnit =
+        ExactStaticEM.AddComponent<Game::Components::UnitComponent>(ExactMineral);
+    ExactMineralUnit.ChkUnitID = 176;
+    ExactMineralUnit.Speed = 0.0f;
+    ExactStaticEM.AddComponent<Game::Components::ResourceComponent>(ExactMineral).Type =
+        Game::Components::ResourceType::Minerals;
+    auto& ExactMineralPath =
+        ExactStaticEM.AddComponent<Game::Components::PathfindingComponent>(ExactMineral);
+    SetCollisionBounds(ExactMineralPath, 32, 16, 31, 15);
+
+    float LargestExactDetour = 0.0f;
+    for (int Step = 0; Step < 240; ++Step)
+    {
+        ExactStaticMovement.Update(0.05f);
+        const auto* MoverTransform =
+            ExactStaticEM.GetComponent<Game::Components::TransformComponent>(
+                ExactStaticMover);
+        Require(MoverTransform &&
+                !CollisionBoundsOverlap(
+                    *MoverTransform, *ExactStaticMoverPath,
+                    ExactMineralTransform, ExactMineralPath),
+            "strict static reroute never enters the mineral DAT footprint");
+        LargestExactDetour = std::max(
+            LargestExactDetour, std::fabs(MoverTransform->Position.Y - 123.0f));
+    }
+    const auto* ExactStaticMoverTransform =
+        ExactStaticEM.GetComponent<Game::Components::TransformComponent>(ExactStaticMover);
+    Require(ExactStaticMoverTransform && ExactStaticMoverTransform->Position.X < 72.0f,
+        "unit crosses behind a static mineral instead of retrying the blocked straight segment");
+    Require(LargestExactDetour > 16.0f,
+        "static collision recovery contains a real map-backed lateral detour");
+
+    // If strict padding seals the only corridor exit, movement must preserve
+    // the exact blocker and mark the request failed instead of rebuilding the
+    // known-colliding one-node route. HarvestSystem consumes this evidence on
+    // its next update and can adopt the live blocking mineral.
+    Game::Map::GameMap SealedStaticMap;
+    SealedStaticMap.Generate(8, 5);
+    for (int Y = 0; Y < SealedStaticMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < SealedStaticMap.GetWidth(); ++X)
+        {
+            auto Tile = SealedStaticMap.GetTile(X, Y);
+            Tile.Walkable = false;
+            SealedStaticMap.SetTile(X, Y, Tile);
+        }
+    }
+    for (int X = 1; X <= 5; ++X)
+    {
+        auto Tile = SealedStaticMap.GetTile(X, 3);
+        Tile.Walkable = true;
+        SealedStaticMap.SetTile(X, 3, Tile);
+    }
+    Core::ECS::SystemManager SealedStaticSysMgr;
+    auto& SealedStaticEM = SealedStaticSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem SealedStaticMovement(
+        SealedStaticSysMgr, &SealedStaticMap);
+    const int SealedMover = CreateMovableUnit(
+        SealedStaticEM, {171.0f, 123.0f}, {48.0f, 123.0f},
+        64, Game::Components::UnitSize::Small, 11);
+    auto* SealedMoverPath =
+        SealedStaticEM.GetComponent<Game::Components::PathfindingComponent>(SealedMover);
+    Require(SealedMoverPath, "sealed static mover has path state");
+    SetCollisionBounds(*SealedMoverPath, 11, 11, 11, 11);
+    auto* SealedMoverCommand =
+        SealedStaticEM.GetComponent<Game::Components::CommandComponent>(SealedMover);
+    Require(SealedMoverCommand, "sealed static mover has command state");
+    SealedMoverCommand->CurrentCommand = Game::Components::CommandType::Harvest;
+
+    const int SealingMineral = SealedStaticEM.CreateEntity();
+    SealedStaticEM.AddComponent<Game::Components::TransformComponent>(SealingMineral).Position =
+        {128.0f, 144.0f};
+    auto& SealingMineralUnit =
+        SealedStaticEM.AddComponent<Game::Components::UnitComponent>(SealingMineral);
+    SealingMineralUnit.ChkUnitID = 178;
+    SealedStaticEM.AddComponent<Game::Components::ResourceComponent>(SealingMineral).Type =
+        Game::Components::ResourceType::Minerals;
+    auto& SealingMineralPath =
+        SealedStaticEM.AddComponent<Game::Components::PathfindingComponent>(SealingMineral);
+    SetCollisionBounds(SealingMineralPath, 32, 16, 31, 15);
+
+    const int SealedTargetMineral = SealedStaticEM.CreateEntity();
+    SealedStaticEM.AddComponent<Game::Components::TransformComponent>(
+        SealedTargetMineral).Position = {48.0f, 144.0f};
+    auto& SealedTargetUnit =
+        SealedStaticEM.AddComponent<Game::Components::UnitComponent>(SealedTargetMineral);
+    SealedTargetUnit.ChkUnitID = 176;
+    SealedStaticEM.AddComponent<Game::Components::ResourceComponent>(
+        SealedTargetMineral).Type = Game::Components::ResourceType::Minerals;
+    auto& SealedTargetPath =
+        SealedStaticEM.AddComponent<Game::Components::PathfindingComponent>(
+            SealedTargetMineral);
+    SetCollisionBounds(SealedTargetPath, 32, 16, 31, 15);
+    auto& SealedHarvest =
+        SealedStaticEM.AddComponent<Game::Components::HarvestComponent>(SealedMover);
+    SealedHarvest.State = Game::Components::HarvestState::MovingToResource;
+    SealedHarvest.TargetResourceID = SealedTargetMineral;
+    SealedHarvest.DesiredResourceID = SealedTargetMineral;
+    SealedMoverPath->RequestedIgnoreEntityID = SealedTargetMineral;
+
+    for (int Step = 0; Step < 120 && !SealedMoverPath->HasRecentMoveFailure; ++Step)
+        SealedStaticMovement.Update(0.05f);
+    Require(SealedMoverPath->Path.empty() &&
+            SealedMoverPath->HasRecentMoveFailure &&
+            SealedMoverPath->BlockedByEntityID == SealingMineral &&
+            SealedMoverPath->RequestedIgnoreEntityID == SealedTargetMineral,
+        "strict no-route movement preserves mineral blocker evidence without fallback cycling");
+
+    Core::ECS::SystemManager FriendlyBaseSysMgr;
+    auto& FriendlyBaseEM = FriendlyBaseSysMgr.GetEntityManager();
+    Game::Map::GameMap FriendlyBaseMap;
+    FriendlyBaseMap.Generate(16, 8);
+    Game::Systems::MovementSystem FriendlyBaseMovement(
+        FriendlyBaseSysMgr, &FriendlyBaseMap);
+    const int BaseMover = CreateMovableUnit(
+        FriendlyBaseEM, {260.0f, 111.0f}, {80.0f, 111.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* BaseMoverPath =
+        FriendlyBaseEM.GetComponent<Game::Components::PathfindingComponent>(BaseMover);
+    Require(BaseMoverPath, "friendly-base mover has path state");
+    SetCollisionBounds(*BaseMoverPath, 8, 9, 8, 10);
+    FriendlyBaseEM.AddComponent<Game::Components::PlayerComponent>(BaseMover).PlayerID = 0;
+
+    const int FriendlyBuilding = FriendlyBaseEM.CreateEntity();
+    auto& FriendlyBuildingTransform =
+        FriendlyBaseEM.AddComponent<Game::Components::TransformComponent>(FriendlyBuilding);
+    FriendlyBuildingTransform.Position = {192.0f, 128.0f};
+    auto& FriendlyBuildingUnit =
+        FriendlyBaseEM.AddComponent<Game::Components::UnitComponent>(FriendlyBuilding);
+    FriendlyBuildingUnit.ChkUnitID = 111;
+    FriendlyBuildingUnit.Speed = 0.0f;
+    auto& FriendlyBuildingState =
+        FriendlyBaseEM.AddComponent<Game::Components::BuildingComponent>(FriendlyBuilding);
+    FriendlyBuildingState.IsBuilding = true;
+    FriendlyBuildingState.IsLifted = false;
+    auto& FriendlyBuildingPath =
+        FriendlyBaseEM.AddComponent<Game::Components::PathfindingComponent>(FriendlyBuilding);
+    SetCollisionBounds(FriendlyBuildingPath, 48, 32, 56, 32);
+    FriendlyBaseEM.AddComponent<Game::Components::PlayerComponent>(FriendlyBuilding).PlayerID = 0;
+
+    float BaseDetour = 0.0f;
+    for (int Step = 0; Step < 320; ++Step)
+    {
+        FriendlyBaseMovement.Update(0.05f);
+        const auto* MoverTransform =
+            FriendlyBaseEM.GetComponent<Game::Components::TransformComponent>(BaseMover);
+        Require(MoverTransform &&
+                !CollisionBoundsOverlap(
+                    *MoverTransform, *BaseMoverPath,
+                    FriendlyBuildingTransform, FriendlyBuildingPath),
+            "ordinary allied unit never passes through a friendly building footprint");
+        BaseDetour = std::max(
+            BaseDetour, std::fabs(MoverTransform->Position.Y - 111.0f));
+    }
+    const auto* BaseMoverTransform =
+        FriendlyBaseEM.GetComponent<Game::Components::TransformComponent>(BaseMover);
+    Require(BaseMoverTransform && BaseMoverTransform->Position.X < 112.0f,
+        "ordinary allied unit reaches the far side of its own base building");
+    Require(BaseDetour > 20.0f,
+        "friendly-base traversal uses a lateral building detour");
+
+    Core::ECS::SystemManager EmbeddedUnitSysMgr;
+    auto& EmbeddedUnitEM = EmbeddedUnitSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem EmbeddedUnitMovement(EmbeddedUnitSysMgr);
+    const int EmbeddedMover = CreateMovableUnit(
+        EmbeddedUnitEM, {48.0f, 96.0f}, {256.0f, 96.0f},
+        65, Game::Components::UnitSize::Small, 8);
+    auto* EmbeddedMoverPath =
+        EmbeddedUnitEM.GetComponent<Game::Components::PathfindingComponent>(EmbeddedMover);
+    Require(EmbeddedMoverPath, "embedded ground unit has movement bounds");
+    SetCollisionBounds(*EmbeddedMoverPath, 8, 9, 8, 10);
+    EmbeddedUnitEM.AddComponent<Game::Components::PlayerComponent>(EmbeddedMover).PlayerID = 2;
+
+    const int EmbeddedBuilding = EmbeddedUnitEM.CreateEntity();
+    EmbeddedUnitEM.AddComponent<Game::Components::TransformComponent>(EmbeddedBuilding).Position =
+        {96.0f, 96.0f};
+    auto& EmbeddedBuildingUnit =
+        EmbeddedUnitEM.AddComponent<Game::Components::UnitComponent>(EmbeddedBuilding);
+    EmbeddedBuildingUnit.ChkUnitID = 160; // Protoss Gateway.
+    EmbeddedBuildingUnit.Speed = 0.0f;
+    auto& EmbeddedBuildingState =
+        EmbeddedUnitEM.AddComponent<Game::Components::BuildingComponent>(EmbeddedBuilding);
+    EmbeddedBuildingState.IsBuilding = true;
+    EmbeddedBuildingState.IsLifted = false;
+    auto& EmbeddedBuildingPath =
+        EmbeddedUnitEM.AddComponent<Game::Components::PathfindingComponent>(EmbeddedBuilding);
+    SetCollisionBounds(EmbeddedBuildingPath, 48, 40, 56, 32);
+    EmbeddedUnitEM.AddComponent<Game::Components::PlayerComponent>(EmbeddedBuilding).PlayerID = 2;
+
+    EmbeddedUnitMovement.Update(0.05f);
+    const auto* EmbeddedMoverTrans =
+        EmbeddedUnitEM.GetComponent<Game::Components::TransformComponent>(EmbeddedMover);
+    Require(EmbeddedMoverTrans && EmbeddedMoverTrans->Position.X <= 39.1f,
+        "a non-harvest unit spawned inside a building takes the shortest escape even when it is backward");
+
+    Core::ECS::SystemManager TargetBuildingSysMgr;
+    auto& TargetBuildingEM = TargetBuildingSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem TargetBuildingMovement(TargetBuildingSysMgr);
+    const int TargetBuildingMover = CreateMovableUnit(
+        TargetBuildingEM, {0.0f, 288.0f}, {96.0f, 288.0f},
+        0, Game::Components::UnitSize::Small, 8);
+    auto* TargetBuildingMoverPath =
+        TargetBuildingEM.GetComponent<Game::Components::PathfindingComponent>(
+            TargetBuildingMover);
+    SetCollisionBounds(*TargetBuildingMoverPath, 8, 9, 8, 10);
+    TargetBuildingEM.AddComponent<Game::Components::PlayerComponent>(
+        TargetBuildingMover).PlayerID = 0;
+
+    const int TargetBuilding = TargetBuildingEM.CreateEntity();
+    auto& TargetBuildingTransform =
+        TargetBuildingEM.AddComponent<Game::Components::TransformComponent>(TargetBuilding);
+    TargetBuildingTransform.Position = {96.0f, 288.0f};
+    auto& TargetBuildingUnit =
+        TargetBuildingEM.AddComponent<Game::Components::UnitComponent>(TargetBuilding);
+    TargetBuildingUnit.ChkUnitID = 111;
+    TargetBuildingUnit.Speed = 0.0f;
+    auto& TargetBuildingState =
+        TargetBuildingEM.AddComponent<Game::Components::BuildingComponent>(TargetBuilding);
+    TargetBuildingState.IsBuilding = true;
+    TargetBuildingState.IsLifted = false;
+    auto& TargetBuildingPath =
+        TargetBuildingEM.AddComponent<Game::Components::PathfindingComponent>(TargetBuilding);
+    SetCollisionBounds(TargetBuildingPath, 48, 40, 56, 32);
+    TargetBuildingEM.AddComponent<Game::Components::PlayerComponent>(TargetBuilding).PlayerID = 1;
+
+    auto* TargetBuildingCommand =
+        TargetBuildingEM.GetComponent<Game::Components::CommandComponent>(TargetBuildingMover);
+    TargetBuildingCommand->CurrentCommand = Game::Components::CommandType::Attack;
+    TargetBuildingCommand->TargetEntityID = TargetBuilding;
+    TargetBuildingMoverPath->RequestedTargetEntityID = TargetBuilding;
+    TargetBuildingMoverPath->RequestedIgnoreEntityID = TargetBuilding;
+    for (int I = 0; I < 80; ++I)
+    {
+        TargetBuildingMovement.Update(0.05f);
+        const auto* MoverTransform =
+            TargetBuildingEM.GetComponent<Game::Components::TransformComponent>(
+                TargetBuildingMover);
+        Require(MoverTransform &&
+                !CollisionBoundsOverlap(
+                    *MoverTransform, *TargetBuildingMoverPath,
+                    TargetBuildingTransform, TargetBuildingPath),
+            "a planning-only target ignore never permits runtime building overlap");
+    }
+    const auto* TargetBuildingMoverTransform =
+        TargetBuildingEM.GetComponent<Game::Components::TransformComponent>(
+            TargetBuildingMover);
+    Require(TargetBuildingMoverTransform &&
+            TargetBuildingMoverTransform->Position.X <= 39.1f,
+        "a unit approaches an ignored target building at its footprint edge instead of passing through");
+
+    Core::ECS::SystemManager RallyEscapeSysMgr;
+    auto& RallyEscapeEM = RallyEscapeSysMgr.GetEntityManager();
+    Game::Systems::MovementSystem RallyEscapeMovement(RallyEscapeSysMgr);
+    const int RallyBuilding = RallyEscapeEM.CreateEntity();
+    auto& RallyBuildingTransform =
+        RallyEscapeEM.AddComponent<Game::Components::TransformComponent>(RallyBuilding);
+    RallyBuildingTransform.Position = {96.0f, 448.0f};
+    auto& RallyBuildingUnit =
+        RallyEscapeEM.AddComponent<Game::Components::UnitComponent>(RallyBuilding);
+    RallyBuildingUnit.ChkUnitID = 160; // Allied Protoss Gateway producer.
+    RallyBuildingUnit.Speed = 0.0f;
+    auto& RallyBuildingState =
+        RallyEscapeEM.AddComponent<Game::Components::BuildingComponent>(RallyBuilding);
+    RallyBuildingState.IsBuilding = true;
+    RallyBuildingState.IsLifted = false;
+    auto& RallyBuildingPath =
+        RallyEscapeEM.AddComponent<Game::Components::PathfindingComponent>(RallyBuilding);
+    SetCollisionBounds(RallyBuildingPath, 48, 40, 56, 32);
+    RallyEscapeEM.AddComponent<Game::Components::PlayerComponent>(RallyBuilding).PlayerID = 3;
+
+    const std::vector<Core::Math::Vec2> RallyStarts{
+        {48.0f, 430.0f}, {60.0f, 440.0f},
+        {48.0f, 452.0f}, {60.0f, 462.0f}};
+    const std::vector<Core::Math::Vec2> RallyTargets{
+        {-96.0f, 412.0f}, {-96.0f, 436.0f},
+        {-96.0f, 460.0f}, {-96.0f, 484.0f}};
+    std::vector<int> RallyUnits;
+    std::vector<float> RallyBuildingOverlap;
+    for (size_t I = 0; I < RallyStarts.size(); ++I)
+    {
+        const int RallyUnitID = CreateMovableUnit(
+            RallyEscapeEM, RallyStarts[I], RallyTargets[I],
+            65, Game::Components::UnitSize::Small, 8);
+        auto* UnitPath =
+            RallyEscapeEM.GetComponent<Game::Components::PathfindingComponent>(RallyUnitID);
+        SetCollisionBounds(*UnitPath, 8, 9, 8, 10);
+        RallyEscapeEM.AddComponent<Game::Components::PlayerComponent>(RallyUnitID).PlayerID = 3;
+        const auto* UnitTransform =
+            RallyEscapeEM.GetComponent<Game::Components::TransformComponent>(RallyUnitID);
+        RallyUnits.push_back(RallyUnitID);
+        RallyBuildingOverlap.push_back(CollisionBoundsOverlapArea(
+            *UnitTransform, *UnitPath, RallyBuildingTransform, RallyBuildingPath));
+        Require(RallyBuildingOverlap.back() > 0.0f,
+            "rally escape coverage starts each allied unit inside its producer footprint");
+    }
+
+    for (int Step = 0; Step < 180; ++Step)
+    {
+        RallyEscapeMovement.Update(0.05f);
+        for (size_t I = 0; I < RallyUnits.size(); ++I)
+        {
+            const auto* UnitTransform =
+                RallyEscapeEM.GetComponent<Game::Components::TransformComponent>(RallyUnits[I]);
+            const auto* UnitPath =
+                RallyEscapeEM.GetComponent<Game::Components::PathfindingComponent>(RallyUnits[I]);
+            const float Overlap = CollisionBoundsOverlapArea(
+                *UnitTransform, *UnitPath, RallyBuildingTransform, RallyBuildingPath);
+            Require(Overlap <= RallyBuildingOverlap[I] + 0.01f,
+                "rally units only reduce an existing producer overlap while escaping");
+            RallyBuildingOverlap[I] = Overlap;
+        }
+    }
+    for (size_t I = 0; I < RallyUnits.size(); ++I)
+    {
+        const auto* UnitTransform =
+            RallyEscapeEM.GetComponent<Game::Components::TransformComponent>(RallyUnits[I]);
+        Require(UnitTransform && UnitTransform->Position.X < -48.0f &&
+                RallyBuildingOverlap[I] == 0.0f,
+            "a crowded allied production group exits the footprint instead of permanently blocking");
+        for (size_t J = I + 1; J < RallyUnits.size(); ++J)
+        {
+            const auto* OtherTransform =
+                RallyEscapeEM.GetComponent<Game::Components::TransformComponent>(RallyUnits[J]);
+            Require(OtherTransform &&
+                    UnitTransform->Position.DistanceTo(OtherTransform->Position) > 4.0f,
+                "crowded rally units do not collapse into one coordinate while escaping");
+        }
+    }
+
     Core::ECS::SystemManager IgnoredTargetSysMgr;
     auto& IgnoredTargetEM = IgnoredTargetSysMgr.GetEntityManager();
     Game::Systems::MovementSystem IgnoredTargetMovement(IgnoredTargetSysMgr);
@@ -702,6 +1065,10 @@ int main()
         IgnoredTargetEM.GetComponent<Game::Components::TransformComponent>(HarvestMover);
     Require(HarvestMoverPath && HarvestMoverTrans,
         "harvest approach mover has pathing and transform state");
+    auto& HarvestMoverState =
+        IgnoredTargetEM.AddComponent<Game::Components::HarvestComponent>(HarvestMover);
+    HarvestMoverState.State = Game::Components::HarvestState::MovingToResource;
+    HarvestMoverState.TargetResourceID = HarvestTarget;
     HarvestMoverPath->RequestedIgnoreEntityID = HarvestTarget;
     for (int I = 0; I < 45; ++I)
         IgnoredTargetMovement.Update(0.05f);

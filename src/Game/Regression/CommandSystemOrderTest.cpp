@@ -4,11 +4,16 @@
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/BurrowState.h"
+#include "Game/Systems/HarvestSystem.h"
 #include "Main/GameLoop/InputHandler.h"
 #include "Game/Systems/MovementSystem.h"
+#include "Game/Systems/UpgradeSystem.h"
+#include "Game/Races/RaceDef.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -50,6 +55,37 @@ namespace
         Unit.ChkUnitID = ChkUnitID;
         Unit.Speed = Speed;
         return EntityID;
+    }
+
+    void SetCollisionBounds(Game::Components::PathfindingComponent& Path,
+                            int Left,
+                            int Up,
+                            int Right,
+                            int Down)
+    {
+        Path.HasCollisionBounds = true;
+        Path.CollisionLeft = Left;
+        Path.CollisionUp = Up;
+        Path.CollisionRight = Right;
+        Path.CollisionDown = Down;
+        Path.CollisionRadius =
+            std::max(4, std::max(Left + Right + 1, Up + Down + 1) / 2);
+    }
+
+    bool CollisionBoundsOverlap(
+        const Game::Components::TransformComponent& ATrans,
+        const Game::Components::PathfindingComponent& APath,
+        const Game::Components::TransformComponent& BTrans,
+        const Game::Components::PathfindingComponent& BPath)
+    {
+        return ATrans.Position.X - (float)APath.CollisionLeft <
+                   BTrans.Position.X + (float)BPath.CollisionRight + 1.0f &&
+               ATrans.Position.X + (float)APath.CollisionRight + 1.0f >
+                   BTrans.Position.X - (float)BPath.CollisionLeft &&
+               ATrans.Position.Y - (float)APath.CollisionUp <
+                   BTrans.Position.Y + (float)BPath.CollisionDown + 1.0f &&
+               ATrans.Position.Y + (float)APath.CollisionDown + 1.0f >
+                   BTrans.Position.Y - (float)BPath.CollisionUp;
     }
 }
 
@@ -157,6 +193,30 @@ int main()
         "sieged tanks reject move orders and clear stale paths");
     Require(!EM.GetComponent<Game::Components::CommandComponent>(SiegedTank),
         "sieged tanks do not receive a move command component");
+
+    constexpr int SiegeUpgradePlayerID = 17;
+    auto& SiegeUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(SiegeUpgradePlayerID);
+    SiegeUpgrades.Levels.fill(0);
+    SiegeUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Terran_SiegeMode)] = 1;
+    const int MobileTank = CreateUnit(EM, 5, 2.3f, {96.0f, 128.0f});
+    EM.AddComponent<Game::Components::PlayerComponent>(MobileTank).PlayerID =
+        SiegeUpgradePlayerID;
+    auto& MobileTankCombat =
+        EM.AddComponent<Game::Components::CombatComponent>(MobileTank);
+    Game::Races::ApplyCombatDefinition(
+        MobileTankCombat, Game::Races::GetUnitDefByName("SiegeTank"), false);
+    Require(Game::Systems::CommandSystem::SetSiegeMode(EM, MobileTank, true),
+        "researched tank begins its siege transition");
+    const auto* SiegeTransition =
+        EM.GetComponent<Game::Components::SiegeTransitionComponent>(MobileTank);
+    Require(SiegeTransition &&
+            SiegeTransition->TargetCombat.GroundDamage == 70 &&
+            SiegeTransition->TargetCombat.GroundDamageBonus == 5 &&
+            SiegeTransition->TargetCombat.MinimumAttackRange == 2.0f &&
+            SiegeTransition->TargetCombat.GroundAttackRange == 12.0f,
+        "siege transition carries classic damage, upgrade step, range, and dead zone");
 
     int Lurker = CreateUnit(
         EM,
@@ -440,6 +500,41 @@ int main()
         "campaign movement restores its requested destination after UnBurrow");
     Require(!TriggerBurrowedPath.Path.empty(),
         "campaign movement resumes pathing after the UnBurrow signal completes");
+
+    const int DirectUnburrowZergling = CreateUnit(
+        TriggerBurrowEM, 37, 3.4f, {64.0f, 128.0f});
+    auto& DirectUnburrowPath =
+        TriggerBurrowEM.AddComponent<Game::Components::PathfindingComponent>(
+            DirectUnburrowZergling);
+    auto& DirectUnburrowState =
+        TriggerBurrowEM.AddComponent<Game::Components::BurrowComponent>(
+            DirectUnburrowZergling);
+    DirectUnburrowState.CanBurrow = true;
+    DirectUnburrowState.IsBurrowed = true;
+    DirectUnburrowState.Phase = Game::Components::BurrowPhase::Burrowed;
+    Require(Game::Systems::BurrowState::BeginTransition(
+                TriggerBurrowEM, DirectUnburrowZergling, false),
+        "direct UnBurrow transition starts without a rich order");
+    Game::Components::Order DirectResumeAdvance;
+    DirectResumeAdvance.Type = Game::Components::OrderType::AttackMove;
+    DirectResumeAdvance.TargetPosition = {256.0f, 128.0f};
+    Game::Systems::CommandSystem::IssueOrder(
+        TriggerBurrowEM, DirectUnburrowZergling, DirectResumeAdvance, true);
+    auto* DirectUnburrowCommand =
+        TriggerBurrowEM.GetComponent<Game::Components::CommandComponent>(
+            DirectUnburrowZergling);
+    Require(DirectUnburrowCommand && DirectUnburrowCommand->Orders.size() == 2 &&
+            DirectUnburrowCommand->GetCurrentOrder() &&
+            DirectUnburrowCommand->GetCurrentOrder()->Type ==
+                Game::Components::OrderType::Unburrow,
+        "movement queues behind a directly-started UnBurrow transition");
+    DirectUnburrowState.IsBurrowed = false;
+    DirectUnburrowState.Phase = Game::Components::BurrowPhase::Surface;
+    TriggerBurrowCommands.Update(0.05f);
+    Require(DirectUnburrowCommand->CurrentCommand ==
+                Game::Components::CommandType::AttackMove &&
+            !DirectUnburrowPath.Path.empty(),
+        "direct UnBurrow transition releases its queued attack-move at surface");
     Game::Systems::CommandSystem::SetMap(nullptr);
 
     int DeadScv = CreateUnit(
@@ -670,6 +765,471 @@ int main()
     Require(FollowPath && !FollowPath->Path.empty(),
         "movement follow refresh generates a new path to the moving target");
 
+    Core::ECS::SystemManager LongMoveSysMgr;
+    auto& LongMoveEM = LongMoveSysMgr.GetEntityManager();
+    Game::Map::GameMap LongMoveMap;
+    LongMoveMap.Generate(128, 16);
+    Game::Systems::CommandSystem::SetMap(&LongMoveMap);
+    const Core::Math::Vec2 LongMoveStart = LongMoveMap.TileToWorld(2, 8);
+    const Core::Math::Vec2 LongMoveTarget = LongMoveMap.TileToWorld(118, 8);
+    const int LongMoveMarine = CreateUnit(
+        LongMoveEM, 0, 4.0f, LongMoveStart);
+    Game::Components::Order LongAttackMove;
+    LongAttackMove.Type = Game::Components::OrderType::AttackMove;
+    LongAttackMove.TargetPosition = LongMoveTarget;
+    Game::Systems::CommandSystem::IssueOrder(
+        LongMoveEM, LongMoveMarine, LongAttackMove, false);
+    auto* LongMovePath =
+        LongMoveEM.GetComponent<Game::Components::PathfindingComponent>(LongMoveMarine);
+    Require(LongMovePath && !LongMovePath->Path.empty(),
+        "long attack-move creates its first bounded path leg");
+    Require(LongMovePath->RequestedDestination.DistanceTo(LongMoveTarget) < 0.1f &&
+            LongMovePath->Path.back().DistanceTo(LongMoveTarget) > 32.0f,
+        "long attack-move keeps the final destination while staging its local A* leg");
+    Game::Systems::MovementSystem LongMoveMovement(LongMoveSysMgr, &LongMoveMap);
+    auto* LongMoveTransform =
+        LongMoveEM.GetComponent<Game::Components::TransformComponent>(LongMoveMarine);
+    for (int Step = 0;
+         Step < 1600 && LongMoveTransform->Position.DistanceTo(LongMoveTarget) > 20.0f;
+         ++Step)
+    {
+        LongMoveMovement.Update(0.05f);
+    }
+    Require(LongMoveTransform->Position.DistanceTo(LongMoveTarget) <= 20.0f,
+        "long attack-move continues through staged legs to the final destination");
+
+    Core::ECS::SystemManager DetourMoveSysMgr;
+    auto& DetourMoveEM = DetourMoveSysMgr.GetEntityManager();
+    Game::Map::GameMap DetourMoveMap;
+    DetourMoveMap.Generate(128, 64);
+    for (int Y = 0; Y <= 58; ++Y)
+    {
+        auto Wall = DetourMoveMap.GetTile(16, Y);
+        Wall.Walkable = false;
+        Wall.Buildable = false;
+        DetourMoveMap.SetTile(16, Y, Wall);
+    }
+    Game::Systems::CommandSystem::SetMap(&DetourMoveMap);
+    const Core::Math::Vec2 DetourStart = DetourMoveMap.TileToWorld(2, 8);
+    const Core::Math::Vec2 DetourTarget = DetourMoveMap.TileToWorld(118, 8);
+    const int DetourMarine = CreateUnit(
+        DetourMoveEM, 0, 4.0f, DetourStart);
+    Game::Components::Order DetourAttackMove;
+    DetourAttackMove.Type = Game::Components::OrderType::AttackMove;
+    DetourAttackMove.TargetPosition = DetourTarget;
+    Game::Systems::CommandSystem::IssueOrder(
+        DetourMoveEM, DetourMarine, DetourAttackMove, false);
+    auto* DetourPath =
+        DetourMoveEM.GetComponent<Game::Components::PathfindingComponent>(DetourMarine);
+    Require(DetourPath && !DetourPath->Path.empty(),
+        "long attack-move resolves a bounded stage beyond a deep wall detour");
+    Game::Systems::MovementSystem DetourMovement(DetourMoveSysMgr, &DetourMoveMap);
+    auto* DetourTransform =
+        DetourMoveEM.GetComponent<Game::Components::TransformComponent>(DetourMarine);
+    for (int Step = 0;
+         Step < 3000 && DetourTransform->Position.DistanceTo(DetourTarget) > 20.0f;
+         ++Step)
+    {
+        DetourMovement.Update(0.05f);
+    }
+    Require(DetourTransform->Position.DistanceTo(DetourTarget) <= 20.0f,
+        "staged attack-move crosses a long detour without abandoning its final destination");
+
+    Core::ECS::SystemManager BasePassageSysMgr;
+    auto& BasePassageEM = BasePassageSysMgr.GetEntityManager();
+    Game::Map::GameMap BasePassageMap;
+    BasePassageMap.Generate(26, 18);
+    Game::Systems::CommandSystem::SetMap(&BasePassageMap);
+
+    const int UpperGateway = CreateUnit(
+        BasePassageEM, 160, 0.0f, {400.0f, 208.0f});
+    auto& UpperGatewayBuilding =
+        BasePassageEM.AddComponent<Game::Components::BuildingComponent>(UpperGateway);
+    UpperGatewayBuilding.IsBuilding = true;
+    UpperGatewayBuilding.IsLifted = false;
+    UpperGatewayBuilding.UnderConstruction = false;
+    auto& UpperGatewayPath =
+        BasePassageEM.AddComponent<Game::Components::PathfindingComponent>(UpperGateway);
+    SetCollisionBounds(UpperGatewayPath, 48, 40, 56, 32);
+    BasePassageEM.AddComponent<Game::Components::PlayerComponent>(UpperGateway).PlayerID = 0;
+
+    const int LowerGateway = CreateUnit(
+        BasePassageEM, 160, 0.0f, {400.0f, 336.0f});
+    auto& LowerGatewayBuilding =
+        BasePassageEM.AddComponent<Game::Components::BuildingComponent>(LowerGateway);
+    LowerGatewayBuilding.IsBuilding = true;
+    LowerGatewayBuilding.IsLifted = false;
+    LowerGatewayBuilding.UnderConstruction = false;
+    auto& LowerGatewayPath =
+        BasePassageEM.AddComponent<Game::Components::PathfindingComponent>(LowerGateway);
+    SetCollisionBounds(LowerGatewayPath, 48, 40, 56, 32);
+    BasePassageEM.AddComponent<Game::Components::PlayerComponent>(LowerGateway).PlayerID = 0;
+
+    const std::vector<Core::Math::Vec2> PassageStarts{
+        {64.0f, 264.0f}, {80.0f, 280.0f},
+        {80.0f, 264.0f}, {96.0f, 280.0f}};
+    std::vector<int> PassageUnits;
+    for (const auto& Start : PassageStarts)
+    {
+        const int PassageUnit = CreateUnit(BasePassageEM, 0, 4.0f, Start);
+        auto& PassagePath =
+            BasePassageEM.AddComponent<Game::Components::PathfindingComponent>(PassageUnit);
+        SetCollisionBounds(PassagePath, 8, 9, 8, 10);
+        BasePassageEM.AddComponent<Game::Components::PlayerComponent>(PassageUnit).PlayerID = 0;
+        PassageUnits.push_back(PassageUnit);
+    }
+
+    const Core::Math::Vec2 PassageTarget{720.0f, 272.0f};
+    Game::Systems::CommandSystem::IssueMove(
+        BasePassageEM, PassageUnits, PassageTarget);
+    std::vector<Core::Math::Vec2> PassageFinalTargets;
+    for (int PassageUnit : PassageUnits)
+    {
+        const auto* PassagePath =
+            BasePassageEM.GetComponent<Game::Components::PathfindingComponent>(PassageUnit);
+        const auto* PassageCommand =
+            BasePassageEM.GetComponent<Game::Components::CommandComponent>(PassageUnit);
+        Require(PassagePath && !PassagePath->Path.empty() && PassageCommand,
+            "a crowded group receives paths through a valid allied-building gap");
+        PassageFinalTargets.push_back(PassageCommand->TargetPosition);
+    }
+
+    const auto* UpperGatewayTransform =
+        BasePassageEM.GetComponent<Game::Components::TransformComponent>(UpperGateway);
+    const auto* LowerGatewayTransform =
+        BasePassageEM.GetComponent<Game::Components::TransformComponent>(LowerGateway);
+    std::vector<bool> PassageCrossedGap(PassageUnits.size(), false);
+    Game::Systems::MovementSystem BasePassageMovement(
+        BasePassageSysMgr, &BasePassageMap);
+    for (int Step = 0; Step < 1200; ++Step)
+    {
+        BasePassageMovement.Update(0.05f);
+        bool AllArrived = true;
+        for (size_t I = 0; I < PassageUnits.size(); ++I)
+        {
+            const auto* PassageTransform =
+                BasePassageEM.GetComponent<Game::Components::TransformComponent>(
+                    PassageUnits[I]);
+            const auto* PassagePath =
+                BasePassageEM.GetComponent<Game::Components::PathfindingComponent>(
+                    PassageUnits[I]);
+            Require(PassageTransform && PassagePath &&
+                    !CollisionBoundsOverlap(
+                        *PassageTransform, *PassagePath,
+                        *UpperGatewayTransform, UpperGatewayPath) &&
+                    !CollisionBoundsOverlap(
+                        *PassageTransform, *PassagePath,
+                        *LowerGatewayTransform, LowerGatewayPath),
+                "group pathing through an allied base never crosses a building footprint");
+            if (PassageTransform->Position.X >= 344.0f &&
+                PassageTransform->Position.X <= 464.0f)
+            {
+                PassageCrossedGap[I] = true;
+                Require(PassageTransform->Position.Y >= 250.0f &&
+                        PassageTransform->Position.Y <= 286.0f,
+                    "the allied-building gap keeps the unit inside the collision-safe corridor");
+            }
+            AllArrived = AllArrived &&
+                PassageTransform->Position.DistanceTo(PassageFinalTargets[I]) <= 20.0f;
+        }
+        if (AllArrived)
+            break;
+    }
+    for (size_t I = 0; I < PassageUnits.size(); ++I)
+    {
+        const auto* PassageTransform =
+            BasePassageEM.GetComponent<Game::Components::TransformComponent>(
+                PassageUnits[I]);
+        Require(PassageCrossedGap[I] && PassageTransform &&
+                PassageTransform->Position.DistanceTo(PassageFinalTargets[I]) <= 20.0f,
+            "multiple allied units leave a narrow base passage without a permanent mutual block");
+    }
+
+    // A strict retry for a proven static blocker reuses the avoid parameter
+    // that normally represents a dynamic unit. It must rasterize only that
+    // static entity, not every stopped friendly unit elsewhere on the map.
+    Core::ECS::SystemManager StrictStaticSysMgr;
+    auto& StrictStaticEM = StrictStaticSysMgr.GetEntityManager();
+    Game::Map::GameMap StrictStaticMap;
+    StrictStaticMap.Generate(16, 8);
+    Game::Systems::CommandSystem::SetMap(&StrictStaticMap);
+
+    const int StrictMover = CreateUnit(
+        StrictStaticEM, 64, 2.8f, {299.0f, 123.0f});
+    auto& StrictMoverPath =
+        StrictStaticEM.AddComponent<Game::Components::PathfindingComponent>(StrictMover);
+    SetCollisionBounds(StrictMoverPath, 11, 11, 11, 11);
+    StrictStaticEM.AddComponent<Game::Components::PlayerComponent>(StrictMover).PlayerID = 0;
+
+    const int StrictMineral = CreateUnit(
+        StrictStaticEM, 176, 0.0f, {192.0f, 144.0f});
+    StrictStaticEM.AddComponent<Game::Components::ResourceComponent>(StrictMineral).Type =
+        Game::Components::ResourceType::Minerals;
+    auto& StrictMineralPath =
+        StrictStaticEM.AddComponent<Game::Components::PathfindingComponent>(StrictMineral);
+    SetCollisionBounds(StrictMineralPath, 32, 16, 31, 15);
+
+    // The first route must run the same exact DAT segment preflight as runtime
+    // collision. At y=123 the route enters the expanded mineral rectangle, but
+    // its A* row is sampled at y=112 and would otherwise be returned as one
+    // straight waypoint. Keep the requested mineral as the harvest exception
+    // while strictly rerouting only around the adjacent mineral.
+    const int RequestedMineral = CreateUnit(
+        StrictStaticEM, 176, 0.0f, {64.0f, 144.0f});
+    StrictStaticEM.AddComponent<Game::Components::ResourceComponent>(RequestedMineral).Type =
+        Game::Components::ResourceType::Minerals;
+    auto& RequestedMineralPath =
+        StrictStaticEM.AddComponent<Game::Components::PathfindingComponent>(RequestedMineral);
+    SetCollisionBounds(RequestedMineralPath, 32, 16, 31, 15);
+
+    const int PreflightMover = CreateUnit(
+        StrictStaticEM, 64, 2.8f, {267.0f, 123.0f});
+    auto& PreflightMoverPath =
+        StrictStaticEM.AddComponent<Game::Components::PathfindingComponent>(PreflightMover);
+    SetCollisionBounds(PreflightMoverPath, 11, 11, 11, 11);
+    PreflightMoverPath.TargetSpeed = 96.0f;
+    PreflightMoverPath.Acceleration = 1000.0f;
+    PreflightMoverPath.NodeTolerance = 4.0f;
+    StrictStaticEM.AddComponent<Game::Components::PlayerComponent>(PreflightMover).PlayerID = 0;
+    auto& PreflightHarvest =
+        StrictStaticEM.AddComponent<Game::Components::HarvestComponent>(PreflightMover);
+    PreflightHarvest.State = Game::Components::HarvestState::MovingToResource;
+    PreflightHarvest.TargetResourceID = RequestedMineral;
+    PreflightHarvest.DesiredResourceID = RequestedMineral;
+
+    Require(Game::Systems::CommandSystem::RequestMovementPath(
+                StrictStaticEM,
+                PreflightMover,
+                &StrictStaticMap,
+                {64.0f, 123.0f},
+                RequestedMineral),
+        "initial Meltdown-shaped mineral route is corrected before movement starts");
+    Require(PreflightMoverPath.RequestedIgnoreEntityID == RequestedMineral,
+        "exact route preflight preserves the requested harvest mineral ignore");
+    bool HasInitialLateralDetour = false;
+    for (const auto& Waypoint : PreflightMoverPath.Path)
+    {
+        HasInitialLateralDetour = HasInitialLateralDetour ||
+            std::fabs(Waypoint.Y - 123.0f) > 16.0f;
+    }
+    Require(HasInitialLateralDetour,
+        "initial exact static preflight replaces the one-node collision route with a detour");
+
+    Game::Systems::MovementSystem StrictStaticMovement(
+        StrictStaticSysMgr, &StrictStaticMap);
+    bool PreflightArrived = false;
+    for (int Step = 0; Step < 240; ++Step)
+    {
+        StrictStaticMovement.Update(0.05f);
+        const auto* PreflightTransform =
+            StrictStaticEM.GetComponent<Game::Components::TransformComponent>(PreflightMover);
+        Require(PreflightTransform &&
+                PreflightMoverPath.BlockedByEntityID != StrictMineral &&
+                PreflightMoverPath.RepathFailCount == 0 &&
+                !CollisionBoundsOverlap(
+                    *PreflightTransform, PreflightMoverPath,
+                    *StrictStaticEM.GetComponent<Game::Components::TransformComponent>(
+                        StrictMineral),
+                    StrictMineralPath),
+            "preflighted mineral route has zero first-collision stall or DAT overlap");
+        if (PreflightTransform->Position.DistanceTo({64.0f, 123.0f}) <= 20.0f)
+        {
+            PreflightArrived = true;
+            break;
+        }
+    }
+    Require(PreflightArrived,
+        "preflighted Probe reaches its requested mineral on the first route");
+    StrictStaticEM.DestroyEntity(PreflightMover);
+    StrictStaticEM.DestroyEntity(RequestedMineral);
+
+    const int RemoteStoppedFriend = CreateUnit(
+        StrictStaticEM, 0, 4.0f, {2048.0f, 2048.0f});
+    auto& RemoteStoppedPath =
+        StrictStaticEM.AddComponent<Game::Components::PathfindingComponent>(RemoteStoppedFriend);
+    SetCollisionBounds(RemoteStoppedPath, 4096, 4096, 4096, 4096);
+    RemoteStoppedPath.CurrentVelocity = {0.0f, 0.0f};
+    StrictStaticEM.AddComponent<Game::Components::PlayerComponent>(RemoteStoppedFriend).PlayerID = 0;
+
+    Require(Game::Systems::CommandSystem::RequestMovementPath(
+                StrictStaticEM,
+                StrictMover,
+                &StrictStaticMap,
+                {64.0f, 123.0f},
+                -1,
+                StrictMineral),
+        "strict static retry ignores unrelated stopped friendlies when building its route");
+    Require(!StrictMoverPath.Path.empty() &&
+            StrictMoverPath.RequestedIgnoreEntityID == -1,
+        "strict static retry preserves interaction-ignore semantics while finding a detour");
+
+    // A Probe already touching a mineral in a one-tile lane can have no exit
+    // after the proven blocker receives strict half-tile raster padding. The
+    // requester must return a real failure and preserve the blocking mineral;
+    // accepting the original straight route here creates the observed
+    // repath=0/1/2/0 harvest loop.
+    Core::ECS::SystemManager SealedHarvestSysMgr;
+    auto& SealedHarvestEM = SealedHarvestSysMgr.GetEntityManager();
+    Game::Map::GameMap SealedHarvestMap;
+    SealedHarvestMap.Generate(8, 5);
+    for (int Y = 0; Y < SealedHarvestMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < SealedHarvestMap.GetWidth(); ++X)
+        {
+            auto Tile = SealedHarvestMap.GetTile(X, Y);
+            Tile.Walkable = false;
+            SealedHarvestMap.SetTile(X, Y, Tile);
+        }
+    }
+    for (int X = 1; X <= 5; ++X)
+    {
+        auto Tile = SealedHarvestMap.GetTile(X, 3);
+        Tile.Walkable = true;
+        SealedHarvestMap.SetTile(X, 3, Tile);
+    }
+    Game::Systems::CommandSystem::SetMap(&SealedHarvestMap);
+
+    const int SealedProbe = CreateUnit(
+        SealedHarvestEM, 64, 2.8f, {171.0f, 123.0f});
+    auto& SealedProbePath =
+        SealedHarvestEM.AddComponent<Game::Components::PathfindingComponent>(SealedProbe);
+    SetCollisionBounds(SealedProbePath, 11, 11, 11, 11);
+    SealedHarvestEM.AddComponent<Game::Components::PlayerComponent>(SealedProbe).PlayerID = 0;
+
+    const int SealingMineral = CreateUnit(
+        SealedHarvestEM, 178, 0.0f, {128.0f, 144.0f});
+    auto& SealingResource =
+        SealedHarvestEM.AddComponent<Game::Components::ResourceComponent>(SealingMineral);
+    SealingResource.Type = Game::Components::ResourceType::Minerals;
+    SealingResource.Amount = 1500;
+    SealingResource.MaxAmount = 1500;
+    auto& SealingMineralPath =
+        SealedHarvestEM.AddComponent<Game::Components::PathfindingComponent>(SealingMineral);
+    SetCollisionBounds(SealingMineralPath, 32, 16, 31, 15);
+
+    const int SealedRequestedMineral = CreateUnit(
+        SealedHarvestEM, 176, 0.0f, {48.0f, 144.0f});
+    auto& SealedRequestedResource =
+        SealedHarvestEM.AddComponent<Game::Components::ResourceComponent>(
+            SealedRequestedMineral);
+    SealedRequestedResource.Type = Game::Components::ResourceType::Minerals;
+    SealedRequestedResource.Amount = 1500;
+    SealedRequestedResource.MaxAmount = 1500;
+    auto& SealedRequestedPath =
+        SealedHarvestEM.AddComponent<Game::Components::PathfindingComponent>(
+            SealedRequestedMineral);
+    SetCollisionBounds(SealedRequestedPath, 32, 16, 31, 15);
+
+    const int ExistingGatherer = SealedHarvestEM.CreateEntity();
+    SealingResource.ActiveGathererEntityID = ExistingGatherer;
+    auto& SealedHarvest =
+        SealedHarvestEM.AddComponent<Game::Components::HarvestComponent>(SealedProbe);
+    SealedHarvest.State = Game::Components::HarvestState::MovingToResource;
+    SealedHarvest.TargetResourceID = SealedRequestedMineral;
+    SealedHarvest.DesiredResourceID = SealedRequestedMineral;
+    auto& SealedCommand =
+        SealedHarvestEM.AddComponent<Game::Components::CommandComponent>(SealedProbe);
+    SealedCommand.CurrentCommand = Game::Components::CommandType::Harvest;
+    SealedCommand.TargetEntityID = SealedRequestedMineral;
+    SealedCommand.TargetPosition = {48.0f, 144.0f};
+
+    Require(!Game::Systems::CommandSystem::RequestMovementPath(
+                SealedHarvestEM,
+                SealedProbe,
+                &SealedHarvestMap,
+                {48.0f, 123.0f},
+                SealedRequestedMineral),
+        "sealed strict static preflight rejects the known-colliding fallback route");
+    Require(SealedProbePath.Path.empty() &&
+            SealedProbePath.HasRecentMoveFailure &&
+            SealedProbePath.BlockedByEntityID == SealingMineral &&
+            SealedProbePath.RequestedIgnoreEntityID == SealedRequestedMineral,
+        "sealed harvest failure immediately records failure, blocker, and requested ignore");
+
+    Game::Systems::MovementSystem SealedMovement(
+        SealedHarvestSysMgr, &SealedHarvestMap);
+    Game::Systems::HarvestSystem SealedHarvestSystem(SealedHarvestSysMgr);
+    SealedMovement.Update(0.05f);
+    Require(SealedProbePath.BlockedByEntityID == SealingMineral,
+        "Movement preserves initial strict-no-route blocker until Harvest consumes it");
+    SealedHarvestSystem.Update(0.05f);
+    Require(SealedHarvest.TargetResourceID == SealingMineral &&
+            SealedHarvest.DesiredResourceID == SealingMineral &&
+            SealedHarvest.State == Game::Components::HarvestState::QueuedAtResource &&
+            SealedProbePath.Path.empty() &&
+            !SealedProbePath.HasRecentMoveFailure &&
+            SealedProbePath.RequestedIgnoreEntityID == SealingMineral &&
+            std::find(SealingResource.QueuedGatherers.begin(),
+                      SealingResource.QueuedGatherers.end(), SealedProbe) !=
+                SealingResource.QueuedGatherers.end(),
+        "real Command-Movement-Harvest cycle queues at the blocking mineral without retrying");
+    for (int Step = 0; Step < 10; ++Step)
+    {
+        SealedMovement.Update(0.05f);
+        SealedHarvestSystem.Update(0.05f);
+    }
+    Require(SealedHarvest.TargetResourceID == SealingMineral &&
+            SealedHarvest.State == Game::Components::HarvestState::QueuedAtResource &&
+            SealedProbePath.Path.empty() &&
+            SealedProbePath.RepathFailCount == 0,
+        "queued blocker adoption remains stable without a repath retry cycle");
+
+    // An interrupted worker can still be inside the resource contact box for
+    // one frame. Exact preflight must preserve a route that exits that initial
+    // overlap; otherwise construction repeatedly picks and refunds the same
+    // trapped worker.
+    Core::ECS::SystemManager ContactEscapeSysMgr;
+    auto& ContactEscapeEM = ContactEscapeSysMgr.GetEntityManager();
+    Game::Map::GameMap ContactEscapeMap;
+    ContactEscapeMap.Generate(9, 5);
+    for (int Y = 0; Y < ContactEscapeMap.GetHeight(); ++Y)
+    {
+        for (int X = 0; X < ContactEscapeMap.GetWidth(); ++X)
+        {
+            auto Tile = ContactEscapeMap.GetTile(X, Y);
+            Tile.Walkable = Y == 3;
+            ContactEscapeMap.SetTile(X, Y, Tile);
+        }
+    }
+    Game::Systems::CommandSystem::SetMap(&ContactEscapeMap);
+    const int ContactWorker = CreateUnit(
+        ContactEscapeEM, 41, 2.8f, {144.0f, 123.0f});
+    auto& ContactWorkerPath =
+        ContactEscapeEM.AddComponent<Game::Components::PathfindingComponent>(
+            ContactWorker);
+    SetCollisionBounds(ContactWorkerPath, 11, 11, 11, 11);
+    auto& ContactWorkerCommand =
+        ContactEscapeEM.AddComponent<Game::Components::CommandComponent>(
+            ContactWorker);
+    ContactWorkerCommand.CurrentCommand = Game::Components::CommandType::Build;
+
+    const int ContactMineral = CreateUnit(
+        ContactEscapeEM, 178, 0.0f, {128.0f, 144.0f});
+    ContactEscapeEM.AddComponent<Game::Components::ResourceComponent>(
+        ContactMineral).Type = Game::Components::ResourceType::Minerals;
+    auto& ContactMineralPath =
+        ContactEscapeEM.AddComponent<Game::Components::PathfindingComponent>(
+            ContactMineral);
+    SetCollisionBounds(ContactMineralPath, 32, 16, 31, 15);
+
+    Require(Game::Systems::CommandSystem::RequestMovementPath(
+                ContactEscapeEM,
+                ContactWorker,
+                &ContactEscapeMap,
+                {240.0f, 123.0f},
+                -1),
+        "construction worker can path outward from an interrupted resource contact");
+    Game::Systems::MovementSystem ContactEscapeMovement(
+        ContactEscapeSysMgr, &ContactEscapeMap);
+    for (int Step = 0; Step < 20; ++Step)
+        ContactEscapeMovement.Update(0.05f);
+    const auto* ContactWorkerTransform =
+        ContactEscapeEM.GetComponent<Game::Components::TransformComponent>(
+            ContactWorker);
+    Require(ContactWorkerTransform && ContactWorkerTransform->Position.X > 171.0f &&
+            !ContactWorkerPath.HasRecentMoveFailure,
+        "construction worker leaves the resource DAT rectangle without a retry loop");
+
     Core::ECS::SystemManager RepairSysMgr;
     auto& RepairEM = RepairSysMgr.GetEntityManager();
     Game::Map::GameMap RepairMap;
@@ -677,6 +1237,11 @@ int main()
     Game::Systems::CommandSystem::SetMap(&RepairMap);
     Game::Systems::CommandSystem RepairCommands;
     RepairCommands.Init(&RepairSysMgr);
+    Game::Systems::MovementSystem RepairMovement(RepairSysMgr, &RepairMap);
+    auto& RepairResources =
+        Game::Systems::HarvestSystem::GetResources(0);
+    RepairResources.Minerals = 400;
+    RepairResources.VespeneGas = 100;
 
     const int RepairTarget = CreateUnit(
         RepairEM, 106, 0.0f, {160.0f, 96.0f});
@@ -708,17 +1273,101 @@ int main()
     Game::Systems::CommandSystem::IssueOrder(
         RepairEM, RepairScv, RepairOrder, false);
     RepairCommands.Update(0.05f);
-    Require(RepairTargetUnit->HitPoints == 60,
+    Require(RepairTargetUnit->HitPoints == 50,
+        "SCV repair rate is elapsed-time based instead of adding HP every update");
+    for (int Step = 0; Step < 39; ++Step)
+        RepairCommands.Update(0.05f);
+    Require(RepairTargetUnit->HitPoints == 51,
         "SCV repairs a damaged friendly Terran building from its collision edge");
 
     RepairTargetUnit->HitPoints = 95;
-    RepairCommands.Update(0.05f);
+    for (int Step = 0; Step < 200 &&
+         RepairTargetUnit->HitPoints < RepairTargetUnit->MaxHitPoints; ++Step)
+    {
+        RepairCommands.Update(0.05f);
+    }
     const auto* RepairCommand =
         RepairEM.GetComponent<Game::Components::CommandComponent>(RepairScv);
     Require(RepairTargetUnit->HitPoints == RepairTargetUnit->MaxHitPoints &&
             RepairCommand &&
             RepairCommand->CurrentCommand == Game::Components::CommandType::Stop,
         "repair completes at full health and releases the SCV");
+    Require(RepairResources.Minerals < 400,
+        "SCV repair consumes the owner's resources instead of restoring HP for free");
+
+    const int RepairDebtTankA = CreateUnit(
+        RepairEM, 5, 2.8f, {320.0f, 192.0f});
+    auto* RepairDebtTankAUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(RepairDebtTankA);
+    RepairDebtTankAUnit->UnitRace = Game::Components::Race::Terran;
+    RepairDebtTankAUnit->HitPoints = 130;
+    RepairDebtTankAUnit->MaxHitPoints = 150;
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(RepairDebtTankA).PlayerID = 0;
+
+    const int RepairDebtTankB = CreateUnit(
+        RepairEM, 5, 2.8f, {384.0f, 192.0f});
+    auto* RepairDebtTankBUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(RepairDebtTankB);
+    RepairDebtTankBUnit->UnitRace = Game::Components::Race::Terran;
+    RepairDebtTankBUnit->HitPoints = 130;
+    RepairDebtTankBUnit->MaxHitPoints = 150;
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(RepairDebtTankB).PlayerID = 0;
+
+    const int RepairDebtScv = CreateUnit(
+        RepairEM, 7, 2.8f, {352.0f, 192.0f});
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(RepairDebtScv).PlayerID = 0;
+    Game::Components::Order RepairDebtOrder;
+    RepairDebtOrder.Type = Game::Components::OrderType::Repair;
+    RepairDebtOrder.TargetEntityID = RepairDebtTankA;
+    RepairDebtOrder.TargetPosition = {320.0f, 192.0f};
+    RepairDebtOrder.PathingIgnoreEntityID = RepairDebtTankA;
+    const int RepairDebtStartMinerals = RepairResources.Minerals;
+    const int RepairDebtStartGas = RepairResources.VespeneGas;
+    Game::Systems::CommandSystem::IssueOrder(
+        RepairEM, RepairDebtScv, RepairDebtOrder, false);
+    for (int Step = 0; Step < 7; ++Step)
+        RepairCommands.Update(0.05f);
+    Require(RepairDebtTankAUnit->HitPoints == 131,
+        "repair debt regression starts with exactly one repaired tank hit point");
+
+    const auto* RepairDebtScvUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(RepairDebtScv);
+    const float MineralDebtAfterFirstPoint =
+        RepairDebtScvUnit->RepairMineralCostAccumulator;
+    const float GasDebtAfterFirstPoint =
+        RepairDebtScvUnit->RepairGasCostAccumulator;
+    Game::Components::Order CancelRepairDebt;
+    CancelRepairDebt.Type = Game::Components::OrderType::Stop;
+    Game::Systems::CommandSystem::IssueOrder(
+        RepairEM, RepairDebtScv, CancelRepairDebt, false);
+    RepairCommands.Update(0.05f);
+    Require(NearlyEqual(
+                RepairDebtScvUnit->RepairMineralCostAccumulator,
+                MineralDebtAfterFirstPoint) &&
+            NearlyEqual(
+                RepairDebtScvUnit->RepairGasCostAccumulator,
+                GasDebtAfterFirstPoint),
+        "cancelling repair preserves fractional mineral and gas debt");
+
+    for (int RepairIndex = 1; RepairIndex < 5; ++RepairIndex)
+    {
+        const bool RepairA = (RepairIndex % 2) == 0;
+        RepairDebtOrder.TargetEntityID =
+            RepairA ? RepairDebtTankA : RepairDebtTankB;
+        RepairDebtOrder.TargetPosition =
+            RepairA ? Core::Math::Vec2{320.0f, 192.0f}
+                    : Core::Math::Vec2{384.0f, 192.0f};
+        RepairDebtOrder.PathingIgnoreEntityID = RepairDebtOrder.TargetEntityID;
+        Game::Systems::CommandSystem::IssueOrder(
+            RepairEM, RepairDebtScv, RepairDebtOrder, false);
+        for (int Step = 0; Step < 7; ++Step)
+            RepairCommands.Update(0.05f);
+    }
+    Require(RepairDebtTankAUnit->HitPoints + RepairDebtTankBUnit->HitPoints == 265,
+        "switching repair targets applies five independently timed hit points");
+    Require(RepairResources.Minerals == RepairDebtStartMinerals - 1 &&
+            RepairResources.VespeneGas == RepairDebtStartGas - 1,
+        "cancel-and-switch repair pays accumulated fractional mineral and gas costs");
 
     const int DamagedTank = CreateUnit(
         RepairEM, 5, 2.8f, {304.0f, 96.0f});
@@ -736,9 +1385,58 @@ int main()
     auto* RepairScvTransform =
         RepairEM.GetComponent<Game::Components::TransformComponent>(RepairScv);
     RepairScvTransform->Position = {280.0f, 96.0f};
-    RepairCommands.Update(0.05f);
-    Require(DamagedTankUnit->HitPoints == 90,
+    for (int Step = 0; Step < 7; ++Step)
+        RepairCommands.Update(0.05f);
+    Require(DamagedTankUnit->HitPoints == 81,
         "SCV repair order supports damaged friendly Terran mechanical units");
+
+    const int MovingRepairTarget = CreateUnit(
+        RepairEM, 5, 2.8f, {160.0f, 320.0f});
+    auto* MovingRepairUnit =
+        RepairEM.GetComponent<Game::Components::UnitComponent>(MovingRepairTarget);
+    MovingRepairUnit->UnitRace = Game::Components::Race::Terran;
+    MovingRepairUnit->HitPoints = 40;
+    MovingRepairUnit->MaxHitPoints = 150;
+    auto& MovingRepairTargetPath =
+        RepairEM.AddComponent<Game::Components::PathfindingComponent>(MovingRepairTarget);
+    MovingRepairTargetPath.CollisionRadius = 16;
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(MovingRepairTarget).PlayerID = 0;
+
+    const int ChasingRepairScv = CreateUnit(
+        RepairEM, 7, 2.8f, {48.0f, 320.0f});
+    RepairEM.AddComponent<Game::Components::PlayerComponent>(ChasingRepairScv).PlayerID = 0;
+    Game::Components::Order MovingRepairOrder;
+    MovingRepairOrder.Type = Game::Components::OrderType::Repair;
+    MovingRepairOrder.TargetEntityID = MovingRepairTarget;
+    MovingRepairOrder.TargetPosition = {160.0f, 320.0f};
+    MovingRepairOrder.PathingIgnoreEntityID = MovingRepairTarget;
+    Game::Systems::CommandSystem::IssueOrder(
+        RepairEM, ChasingRepairScv, MovingRepairOrder, false);
+
+    auto* MovingRepairTransform =
+        RepairEM.GetComponent<Game::Components::TransformComponent>(MovingRepairTarget);
+    MovingRepairTransform->Position = {416.0f, 320.0f};
+    RepairCommands.Update(0.05f);
+    auto* ChasingRepairPath =
+        RepairEM.GetComponent<Game::Components::PathfindingComponent>(ChasingRepairScv);
+    Require(ChasingRepairPath && !ChasingRepairPath->Path.empty() &&
+            ChasingRepairPath->RequestedTargetEntityID == MovingRepairTarget &&
+            ChasingRepairPath->RequestedDestination.DistanceTo(
+                MovingRepairTransform->Position) < 0.1f,
+        "SCV repair refreshes its entity-target destination when the target moves");
+
+    for (int Step = 0; Step < 900 && MovingRepairUnit->HitPoints < MovingRepairUnit->MaxHitPoints;
+         ++Step)
+    {
+        RepairMovement.Update(0.05f);
+        RepairCommands.Update(0.05f);
+    }
+    auto* ChasingRepairTransform =
+        RepairEM.GetComponent<Game::Components::TransformComponent>(ChasingRepairScv);
+    Require(MovingRepairUnit->HitPoints == MovingRepairUnit->MaxHitPoints &&
+            ChasingRepairTransform->Position.DistanceTo(
+                MovingRepairTransform->Position) < 48.0f,
+        "SCV follows a moved mechanical target and completes its repair");
 
     std::printf("CommandSystemOrderTest passed\n");
     return 0;

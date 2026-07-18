@@ -26,4 +26,14 @@ inline bool IsProtectedResourceNode(Core::ECS::EntityManager& EM, int EntityID)
            !IsAttackableClaimedGeyser(EM, EntityID);
 }
 
+inline bool IsMeleeStructureEntity(Core::ECS::EntityManager& EM, int EntityID)
+{
+    const auto* Unit =
+        EM.GetComponent<Game::Components::UnitComponent>(EntityID);
+    const auto* Building =
+        EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+    return Unit && Unit->HitPoints > 0 && Building &&
+           Building->BuildingDefID >= 0;
+}
+
 } // namespace Game::Systems

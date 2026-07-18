@@ -140,6 +140,38 @@ namespace
     }
 }
 
+const char* GetIScriptInstructionSpec(int Opcode)
+{
+    if (Opcode < 0 || Opcode >= IScriptOpcodes::kCount)
+        return nullptr;
+    return InstructionSpecs()[(size_t)Opcode];
+}
+
+const char* GetIScriptOpcodeName(int Opcode)
+{
+    static const std::array<const char*, IScriptOpcodes::kCount> Names =
+    {
+        "playfram", "playfram_tile", "sethorpos", "setvertpos", "setpos",
+        "wait", "waitrand", "goto", "imgol", "imgul", "imgolorig",
+        "switchul", "unknown_0c", "imgoluselow", "imgulselow", "sprol",
+        "highsprol", "lowsprul", "uflunstable", "spruluselow", "sprul",
+        "sproluselo", "end", "setflipstate", "playsnd", "playsndrand",
+        "playsndbtwn", "domissiledmg", "attackmelee", "followmaingraphic",
+        "randcondjmp", "turnccwise", "turncwise", "turn1cwise", "turnrand",
+        "setspawnframe", "sigorder", "attackwith", "attack", "castspell",
+        "useweapon", "move", "gotorepeatattk", "engframe", "engset",
+        "unknown_2d", "nobrkcodestart", "nobrkcodeend", "ignorerest",
+        "attkshiftproj", "tmprmgraphicstart", "tmprmgraphicend", "setfldirect",
+        "call", "return", "setflspeed", "creategasoverlays", "pwrupcondjmp",
+        "trgtrangecondjmp", "trgtarccondjmp", "curdirectcondjmp", "imgulnextid",
+        "unknown_3e", "liftoffcondjmp", "warpoverlay", "orderdone", "grdsprol",
+        "unknown_43", "dogrddamage"
+    };
+    if (Opcode < 0 || Opcode >= IScriptOpcodes::kCount)
+        return "unknown";
+    return Names[(size_t)Opcode];
+}
+
 bool IScriptDatabase::Load(const std::string& IScriptPath, const std::string& ImagesDatPath)
 {
     mLoaded = false;
@@ -173,11 +205,13 @@ bool IScriptDatabase::LoadImagesDat(const std::string& ImagesDatPath)
     mImages.assign(Count, {});
     const size_t DirectionalOffset = Count * 4;
     const size_t HasIScriptOffset = Count * 4 + Count * 2;
+    const size_t AlwaysVisibleOffset = Count * 7;
     const size_t IScriptIDOffset = Count * 10;
     for (size_t I = 0; I < Count; ++I)
     {
         mImages[I].HasDirectionalFrames = Data[DirectionalOffset + I] != 0;
         mImages[I].HasIScriptAnimations = Data[HasIScriptOffset + I] != 0;
+        mImages[I].AlwaysVisible = Data[AlwaysVisibleOffset + I] != 0;
         mImages[I].IScriptID = (int)ReadU32(Data, IScriptIDOffset + I * 4);
     }
     return true;
@@ -422,6 +456,15 @@ void IScriptVM::SkipVectorArgs()
     AdvanceArgs(Count + 1);
 }
 
+uint32_t IScriptVM::NextRandom()
+{
+    // Keep script-side choices deterministic without invoking signed-overflow
+    // undefined behaviour.  The state is preserved across animation entries,
+    // so repeated attack/death loops do not always select the first sound.
+    mSprite.RandomSeed = mSprite.RandomSeed * 22695477u + 1u;
+    return (mSprite.RandomSeed >> 16) & 0x7fffu;
+}
+
 void IScriptVM::Emit(IScriptEventType Type, int A, int B, int C, int D)
 {
     mEvents.push_back({Type, A, B, C, D});
@@ -482,7 +525,10 @@ void IScriptVM::RegisterDefaultOpcodes()
         return false;
     };
     mOpcodeHandlers[Opc_Wait] = [](IScriptVM& VM) {
-        VM.mWaitRemaining = VM.PeekArg();
+        const int Frames = VM.PeekArg();
+        // Brood War stores wait N as N-1 because the opcode's current frame
+        // already counts toward the requested duration.
+        VM.mWaitRemaining = Frames > 0 ? Frames - 1 : 0;
         VM.AdvanceArgs(1);
         return true;
     };
@@ -490,7 +536,9 @@ void IScriptVM::RegisterDefaultOpcodes()
         int Min = VM.PeekArg(1);
         int Max = VM.PeekArg(2);
         int Range = Max > Min ? Max - Min + 1 : 1;
-        VM.mWaitRemaining = Min + ((VM.mSprite.PC * 17 + 13) % Range);
+        const int Frames = Min +
+            (int)((VM.NextRandom() & 0xffu) % (uint32_t)Range);
+        VM.mWaitRemaining = Frames > 0 ? Frames - 1 : 0;
         VM.AdvanceArgs(2);
         return true;
     };
@@ -528,6 +576,14 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return false;
     };
+    mOpcodeHandlers[Opc_AttkShiftProj] = [](IScriptVM& VM) {
+        // Firebat-style attacks author several shifted projectile positions.
+        // The aggregate combat model resolves one attack request, so emit the
+        // first live request immediately and carry the authored launch offset.
+        VM.Emit(IScriptEventType::Attack, VM.PeekArg(1), 1);
+        VM.AdvanceArgs(1);
+        return false;
+    };
     mOpcodeHandlers[Opc_OrderDone] = [](IScriptVM& VM) {
         const int Signal = VM.PeekArg();
         VM.mSprite.OrderSignal &= ~Signal;
@@ -554,7 +610,7 @@ void IScriptVM::RegisterDefaultOpcodes()
 
     for (int Op : {Opc_SetHorPos, Opc_SetVertPos, Opc_Wait, Opc_SetFlipState, Opc_TurnCCWise,
                    Opc_TurnCWise, Opc_TurnRand, Opc_SetSpawnFrame, Opc_SigOrder,
-                   Opc_Move, Opc_EngFrame, Opc_EngSet, Opc_AttkShiftProj,
+                   Opc_Move, Opc_EngFrame, Opc_EngSet,
                    Opc_OrderDone, Opc_UflUnstable})
         if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip1;
 
@@ -587,14 +643,27 @@ void IScriptVM::RegisterDefaultOpcodes()
     };
     mOpcodeHandlers[Opc_ImgOl] = ImageOverlay3Above;
     mOpcodeHandlers[Opc_ImgUl] = ImageOverlay3Below;
-    mOpcodeHandlers[Opc_ImgOlUseLo] = ImageOverlay3Above;
-    mOpcodeHandlers[Opc_ImgUlUseLo] = ImageOverlay3Below;
+    mOpcodeHandlers[Opc_ImgOlUseLo] = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateImageOverlayLo,
+                VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 1);
+        VM.AdvanceArgs(3);
+        return false;
+    };
+    mOpcodeHandlers[Opc_ImgUlUseLo] = [](IScriptVM& VM) {
+        VM.Emit(IScriptEventType::CreateImageOverlayLo,
+                VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 0);
+        VM.AdvanceArgs(3);
+        return false;
+    };
     mOpcodeHandlers[Opc_HighSprOl] = SpriteOverlay3Above;
     mOpcodeHandlers[Opc_LowSprUl] = SpriteOverlay3Below;
+    // Despite its historical name, spruluselo carries explicit x/y offsets;
+    // only sproluselo resolves a launch-offset table.
     mOpcodeHandlers[Opc_SprUlUseLo] = SpriteOverlay3Below;
     mOpcodeHandlers[Opc_SprUl] = SpriteOverlay3Below;
     mOpcodeHandlers[Opc_SprOlUseLo] = [](IScriptVM& VM) {
-        VM.Emit(IScriptEventType::CreateSpriteOverlay, VM.PeekArg(1), 0, 0, 1);
+        VM.Emit(IScriptEventType::CreateSpriteOverlayLo,
+                VM.PeekArg(1), VM.PeekArg(2), 0, 1);
         VM.AdvanceArgs(2);
         return false;
     };
@@ -623,7 +692,9 @@ void IScriptVM::RegisterDefaultOpcodes()
     };
     mOpcodeHandlers[Opc_PlaySndRand] = [](IScriptVM& VM) {
         int Count = VM.PeekArg(1);
-        int SoundID = Count > 0 ? VM.PeekArg(2) : -1;
+        int SoundID = Count > 0
+            ? VM.PeekArg(2 + (int)(VM.NextRandom() % (uint32_t)Count))
+            : -1;
         VM.Emit(IScriptEventType::PlayRandomSound, SoundID, Count);
         VM.SkipVectorArgs();
         return false;
@@ -632,13 +703,18 @@ void IScriptVM::RegisterDefaultOpcodes()
         int MinID = VM.PeekArg(1);
         int MaxID = VM.PeekArg(2);
         int Range = MaxID >= MinID ? MaxID - MinID + 1 : 1;
-        int SoundID = MinID + ((VM.mSprite.PC * 17 + 5) % Range);
+        int SoundID = MinID + (int)(VM.NextRandom() % (uint32_t)Range);
         VM.Emit(IScriptEventType::PlaySoundBetween, SoundID, MinID, MaxID);
         VM.AdvanceArgs(2);
         return false;
     };
     mOpcodeHandlers[Opc_AttackMelee] = [](IScriptVM& VM) {
-        VM.Emit(IScriptEventType::AttackMelee, VM.PeekArg(1), VM.PeekArg(2));
+        const int Count = VM.PeekArg(1);
+        const int SoundID = Count > 0
+            ? VM.PeekArg(2 + (int)(VM.NextRandom() % (uint32_t)Count))
+            : -1;
+        VM.Emit(IScriptEventType::AttackMelee);
+        VM.Emit(IScriptEventType::PlayRandomSound, SoundID, Count);
         VM.SkipVectorArgs();
         return false;
     };
@@ -697,9 +773,8 @@ void IScriptVM::RegisterDefaultOpcodes()
     mOpcodeHandlers[Opc_RandCondJmp] = [](IScriptVM& VM) {
         int Chance = VM.PeekArg(1);
         int Target = VM.PeekArg(2);
-        VM.mSprite.RandomSeed = VM.mSprite.RandomSeed * 1103515245 + 12345;
-        int Roll = (VM.mSprite.RandomSeed >> 16) & 0xff;
-        VM.mSprite.PC = Roll < Chance ? Target : VM.mSprite.PC + 3;
+        int Roll = (int)(VM.NextRandom() & 0xffu);
+        VM.mSprite.PC = Roll <= Chance ? Target : VM.mSprite.PC + 3;
         return false;
     };
     mOpcodeHandlers[Opc_PwrUpCondJmp] = [](IScriptVM& VM) {

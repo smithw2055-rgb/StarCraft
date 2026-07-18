@@ -6,10 +6,12 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
+#include "Game/AI/AIDifficulty.h"
 #include "Game/AI/AIBrain.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
@@ -19,6 +21,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/FogOfWarSystem.h"
+#include "Game/Systems/GeyserState.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/NukeAndSpiderMineSystem.h"
@@ -115,6 +118,48 @@ inline const char* StartRaceName(StartRace Race)
         case StartRace::Protoss: return "Protoss";
         default: return "Terran";
     }
+}
+
+inline Game::Systems::AIDifficulty GlobalAIDifficulty()
+{
+    const char* Value = std::getenv("STARCRAFT_AI_DIFFICULTY");
+    return Game::Systems::ParseAIDifficulty(
+        Value ? std::string_view(Value) : std::string_view(),
+        Game::Systems::AIDifficulty::Medium);
+}
+
+inline Game::Systems::AIDifficulty ApplyPlayerDifficultyList(
+    const std::string& DifficultyList,
+    int PlayerId,
+    Game::Systems::AIDifficulty Fallback)
+{
+    if (PlayerId < 0 || DifficultyList.empty())
+        return Fallback;
+
+    size_t Begin = 0;
+    for (int Index = 0;; ++Index)
+    {
+        const size_t End = DifficultyList.find(',', Begin);
+        if (Index == PlayerId)
+        {
+            const std::string_view Item(
+                DifficultyList.data() + Begin,
+                (End == std::string::npos ? DifficultyList.size() : End) - Begin);
+            return Game::Systems::ParseAIDifficulty(Item, Fallback);
+        }
+        if (End == std::string::npos)
+            return Fallback;
+        Begin = End + 1u;
+    }
+}
+
+inline Game::Systems::AIDifficulty AIDifficultyForPlayer(int PlayerId)
+{
+    const auto Fallback = GlobalAIDifficulty();
+    const char* Value = std::getenv("STARCRAFT_AI_DIFFICULTIES");
+    return Value && Value[0] != '\0'
+        ? ApplyPlayerDifficultyList(Value, PlayerId, Fallback)
+        : Fallback;
 }
 
 inline size_t ScriptPlayerDataIndex(const GameSession& Session, int PlayerId)
@@ -301,13 +346,14 @@ public:
             auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Eid);
             auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
             if (!Unit || !Player || Unit->HitPoints <= 0 ||
-                Player->PlayerID < 0 || Player->PlayerID >= 8 ||
-                EM.GetComponent<Game::Components::ResourceComponent>(Eid))
+                Player->PlayerID < 0 || Player->PlayerID >= 8)
             {
                 continue;
             }
             ++UnitCounts[(size_t)Player->PlayerID];
-            if (EM.GetComponent<Game::Components::BuildingComponent>(Eid))
+            // Unit eggs reuse BuildingComponent for morph progress but do not
+            // satisfy the melee "destroy all structures" victory condition.
+            if (Game::Systems::IsMeleeStructureEntity(EM, Eid))
                 ++BuildingCounts[(size_t)Player->PlayerID];
             auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(Eid);
             if (Combat && (Combat->GroundDamage > 0 || Combat->AirDamage > 0))
@@ -318,7 +364,7 @@ public:
         int Winner = -1;
         for (int PlayerID : mParticipants)
         {
-            const bool AliveNow = UnitCounts[(size_t)PlayerID] > 0;
+            const bool AliveNow = BuildingCounts[(size_t)PlayerID] > 0;
             if (mElapsed >= 10.0f && mAlive[(size_t)PlayerID] && !AliveNow)
             {
                 mAlive[(size_t)PlayerID] = false;
@@ -326,7 +372,7 @@ public:
                     "AiObserverMatch", "player " + std::to_string(PlayerID) +
                     " eliminated at simulated_seconds=" + std::to_string((int)mElapsed));
             }
-            if (AliveNow)
+            if (mAlive[(size_t)PlayerID] && AliveNow)
             {
                 ++AliveCount;
                 Winner = PlayerID;
@@ -388,7 +434,8 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     auto BulletSys = std::make_unique<Game::Systems::BulletSystem>(SysMgr);
     auto* BulletSysRaw = BulletSys.get();
     SysMgr.RegisterSystem(std::move(BulletSys));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::CombatSystem>(SysMgr, *BulletSysRaw));
+    SysMgr.RegisterSystem(std::make_unique<Game::Systems::CombatSystem>(
+        SysMgr, *BulletSysRaw, &Session.MutableEcsMap()));
 
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::UpgradeSystem>(SysMgr));
     auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, &Session.MutableEcsMap());
@@ -404,6 +451,7 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::TransportSystem>(SysMgr));
 
     Game::Systems::CommandSystem::SetMap(&Session.MutableEcsMap());
+    Game::Systems::BuildingSystem::ResetPendingBuildOrders();
     Game::Systems::BuildingSystem::SetMap(&Session.MutableEcsMap());
     Game::Systems::ProductionSystem::SetMap(&Session.MutableEcsMap());
 }
@@ -593,13 +641,15 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
     if (RunShowcase)
     {
         const int ShowcasePlayerId = Session.GetLocalPlayerID();
+        const auto Difficulty = Detail::AIDifficultyForPlayer(ShowcasePlayerId);
         SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
             SysMgr, ShowcasePlayerId, ShowcasePlayerId, true,
-            &Session.MutableEcsMap()));
+            &Session.MutableEcsMap(), Difficulty, Session.GetFogSystem()));
         Core::Utils::Logger::Info(
             "GameController",
             "Registered real-progression showcase AIBrain for local player " +
-                std::to_string(ShowcasePlayerId));
+                std::to_string(ShowcasePlayerId) + " difficulty=" +
+                std::string(Game::Systems::AIDifficultyName(Difficulty)));
     }
 
     if (!RegisterGenericAi)
@@ -625,13 +675,15 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
         {
             const int PlayerId = Participants[I];
             const int TargetPlayerId = Participants[(I + 1u) % Participants.size()];
+            const auto Difficulty = Detail::AIDifficultyForPlayer(PlayerId);
             SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
                 SysMgr, PlayerId, TargetPlayerId, false,
-                &Session.MutableEcsMap()));
+                &Session.MutableEcsMap(), Difficulty, Session.GetFogSystem()));
             Core::Utils::Logger::Info(
-                "AiObserverMatch", "registered simple AIBrain player=" +
+                "AiObserverMatch", "registered AIBrain player=" +
                 std::to_string(PlayerId) + " initial_target=" +
-                std::to_string(TargetPlayerId));
+                std::to_string(TargetPlayerId) + " difficulty=" +
+                std::string(Game::Systems::AIDifficultyName(Difficulty)));
         }
         SysMgr.RegisterSystem(std::make_unique<AiObserverMatchMonitor>(
             SysMgr, Participants));
@@ -648,9 +700,15 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
             continue;
         if (HasPlayerUnits[PlayerId] && Detail::IsComputerPlayer(Session, PlayerId))
         {
+            const auto Difficulty = Detail::AIDifficultyForPlayer(PlayerId);
             SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
                 SysMgr, PlayerId, TargetPlayerId, false,
-                &Session.MutableEcsMap()));
+                &Session.MutableEcsMap(), Difficulty, Session.GetFogSystem()));
+            Core::Utils::Logger::Info(
+                "GameController", "Registered AIBrain player=" +
+                std::to_string(PlayerId) + " target=" +
+                std::to_string(TargetPlayerId) + " difficulty=" +
+                std::string(Game::Systems::AIDifficultyName(Difficulty)));
         }
     }
 }

@@ -189,6 +189,8 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
 
     const auto IsFree = [&](const Core::Math::Vec2& Candidate)
     {
+        if (Candidate.X < 0.0f || Candidate.Y < 0.0f)
+            return false;
         if (gProductionMap)
         {
             int TileX = 0;
@@ -224,7 +226,10 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
 
         for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
         {
-            if (EntityID == ProducerID || EntityID == IgnoreEntityID)
+            // Ground units must also clear the producer footprint. The normal
+            // below-building candidate already does, but fallback rings cover
+            // every direction and may otherwise select a point inside it.
+            if (EntityID == IgnoreEntityID)
                 continue;
             const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
             const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
@@ -259,7 +264,37 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                 return Candidate;
         }
     }
-    return Preferred;
+
+    // A late-game base can fill the normal production lane with buildings and
+    // rallying units. Returning Preferred after the bounded search exhausted
+    // used to create the new unit inside that occupied lane. Once one unit was
+    // embedded in a Gateway, every later unit behind it could deadlock as
+    // well. Expand deterministically around the producer before admitting that
+    // there is no legal spawn point.
+    constexpr int MaxFallbackRings = 32;
+    for (int Ring = 1; Ring <= MaxFallbackRings; ++Ring)
+    {
+        for (int Offset = -Ring; Offset <= Ring; ++Offset)
+        {
+            const Core::Math::Vec2 Candidates[] = {
+                {ProducerTrans->Position.X + (float)Offset * Step,
+                 ProducerTrans->Position.Y - (float)Ring * Step},
+                {ProducerTrans->Position.X + (float)Offset * Step,
+                 ProducerTrans->Position.Y + (float)Ring * Step},
+                {ProducerTrans->Position.X - (float)Ring * Step,
+                 ProducerTrans->Position.Y + (float)Offset * Step},
+                {ProducerTrans->Position.X + (float)Ring * Step,
+                 ProducerTrans->Position.Y + (float)Offset * Step}
+            };
+            for (const auto& Candidate : Candidates)
+                if (IsFree(Candidate))
+                    return Candidate;
+        }
+    }
+
+    // Keep failure explicit. SpawnUnit refunds the reservation instead of
+    // manufacturing an overlap that movement cannot safely resolve.
+    return {-1.0f, -1.0f};
 }
 
 bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
@@ -300,6 +335,21 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
     {
         SetReason(OutReason, "building definitions cannot be trained");
         return false;
+    }
+    if (Def.RaceType == Race::Zerg)
+    {
+        constexpr int InfestedCommandCenterChkUnitID = 130;
+        const bool IsInfestedTerranProduction =
+            Def.Name == "Infested Terran" &&
+            ProducerUnit &&
+            ProducerUnit->ChkUnitID == InfestedCommandCenterChkUnitID;
+        if (!IsInfestedTerranProduction)
+        {
+            SetReason(
+                OutReason,
+                "zerg units must morph from larva or another unit");
+            return false;
+        }
     }
 
     int ProducerDefID = ResolveBuildingDefID(EM, BuildingID);
@@ -442,9 +492,95 @@ void ProductionSystem::Update(float DeltaTime)
         return;
 
     auto& EM = mSystemMgr.GetEntityManager();
+    // Existing payload production is advanced before building queues. A
+    // Carrier/Reaver that finishes in ProcessTraining below therefore remains
+    // empty until the next simulation update instead of inheriting the whole
+    // frame's elapsed time.
+    auto HangarEntities = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+    for (auto ID : HangarEntities)
+        ProcessHangarProduction(EM, ID, DeltaTime);
+
     auto Entities = EM.GetEntitiesWith<ProductionComponent>();
     for (auto ID : Entities)
         ProcessTraining(EM, ID, DeltaTime);
+}
+
+void ProductionSystem::ProcessHangarProduction(Core::ECS::EntityManager& EM,
+                                                int EntityID,
+                                                float DeltaTime)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+    if (!Unit || !Player || Unit->HitPoints <= 0)
+        return;
+
+    // Hallucinations copy their source unit's visible payload, but must never
+    // turn minerals into real interceptors/scarabs.
+    if (const auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+        Status && Status->HasEffect(StatusEffect::Hallucination))
+    {
+        Unit->HangarBuildProgress = 0.0f;
+        Unit->HangarBuildInProgress = false;
+        return;
+    }
+
+    // units.dat / CHK unit ids. Game::Data::UnitType is an internal compact
+    // enum and is not numerically interchangeable with these map ids.
+    constexpr int CarrierChkUnitID = 72;
+    constexpr int ReaverChkUnitID = 83;
+
+    int MineralCost = 0;
+    float BuildTimeSeconds = 0.0f;
+    if (Unit->ChkUnitID == CarrierChkUnitID)
+    {
+        MineralCost = 25;
+        BuildTimeSeconds = 20.0f;
+    }
+    else if (Unit->ChkUnitID == ReaverChkUnitID)
+    {
+        MineralCost = 15;
+        BuildTimeSeconds = 15.0f;
+    }
+    else
+    {
+        return;
+    }
+
+    // Normalize old runtime/save sentinels without disturbing a non-negative
+    // map-authored payload count.
+    Unit->HangarCount = std::max(0, Unit->HangarCount);
+    const int Capacity = UpgradeSystem::GetMaxHangarCount(EM, EntityID);
+    if (Capacity <= 0)
+        return;
+
+    if (Unit->HangarCount >= Capacity)
+    {
+        // A trigger may fill the last slot while automatic construction is in
+        // progress. Return the already-reserved payload cost in that case.
+        if (Unit->HangarBuildInProgress)
+            HarvestSystem::GetResources(Player->PlayerID).Minerals += MineralCost;
+        Unit->HangarBuildProgress = 0.0f;
+        Unit->HangarBuildInProgress = false;
+        return;
+    }
+
+    auto& Resources = HarvestSystem::GetResources(Player->PlayerID);
+    if (!Unit->HangarBuildInProgress)
+    {
+        if (Resources.Minerals < MineralCost)
+            return;
+        Resources.Minerals -= MineralCost;
+        Unit->HangarBuildProgress = 0.0f;
+        Unit->HangarBuildInProgress = true;
+    }
+
+    Unit->HangarBuildProgress += DeltaTime;
+    if (Unit->HangarBuildProgress < BuildTimeSeconds)
+        return;
+
+    ++Unit->HangarCount;
+    Unit->HangarBuildProgress = 0.0f;
+    Unit->HangarBuildInProgress = false;
 }
 
 void ProductionSystem::ProcessTraining(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime)
@@ -565,6 +701,8 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
     const auto UnitDef = Races::GetUnitDefByID(UnitDefID);
     const Core::Math::Vec2 SpawnPos =
         FindSpawnPosition(EM, BuildingID, UnitDef.ChkUnitID);
+    if (SpawnPos.X < 0.0f || SpawnPos.Y < 0.0f)
+        return -1;
     int PlayerID = 0;
     if (auto* SrcPlayer = EM.GetComponent<PlayerComponent>(BuildingID))
         PlayerID = SrcPlayer->PlayerID;

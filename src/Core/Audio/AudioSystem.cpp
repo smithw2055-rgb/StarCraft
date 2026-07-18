@@ -225,8 +225,8 @@ void AudioSystem::InitBuiltinSounds()
     }
 
     // Register as sound type IDs for the enum-based sounds
-    SoundType WpnType = {(uint32_t)SoundEffect::WeaponFire, 0, 0, 0, 127};
-    SoundType ExpType = {(uint32_t)SoundEffect::Explosion, 0, 0, 0, 127};
+    SoundType WpnType = {(uint32_t)SoundEffect::WeaponFire, 0, 0, 0, 100};
+    SoundType ExpType = {(uint32_t)SoundEffect::Explosion, 0, 0, 0, 100};
     SetSoundType((int)SoundEffect::WeaponFire, WpnType);
     SetSoundType((int)SoundEffect::Explosion, ExpType);
 }
@@ -264,7 +264,7 @@ void AudioSystem::Shutdown()
 
 void AudioSystem::Play(SoundEffect Effect)
 {
-    if (!mInitialized) return;
+    if (!mInitialized || mGlobalVolume == 0) return;
     int Idx = (int)Effect;
     if (Idx < 0 || Idx >= (int)SoundEffect::Count) return;
     if (!mImpl->BuiltinSounds[Idx].Loaded) return;
@@ -305,7 +305,9 @@ void AudioSystem::Play(SoundEffect Effect)
         return;
     }
 
-    ma_sound_set_volume(&Snd, (float)mGlobalVolume / 100.0f);
+    // The engine owns the master-volume multiplier.  Applying it here as well
+    // would square the configured volume.
+    ma_sound_set_volume(&Snd, 1.0f);
     ma_sound_start(&Snd);
     mImpl->ChannelSoundInit[ch] = true;
 
@@ -320,7 +322,13 @@ void AudioSystem::Play(SoundEffect Effect)
 int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
                             int Priority, int UnitType, SoundFlags Flags)
 {
-    if (!mInitialized) return -1;
+    if (!mInitialized || mGlobalVolume == 0) return -1;
+
+    const SoundType* Metadata = GetSoundType(SoundID);
+    const SoundPlaybackPolicy Policy =
+        ResolveSoundPlaybackPolicy(Metadata, Priority, Flags);
+    const int EffectivePriority = Policy.Priority;
+    const uint8_t F = Policy.Flags;
 
     // 80ms per-sound cooldown
     if (SoundID >= 0 && SoundID < (int)mLastPlayed.size())
@@ -332,14 +340,12 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
         mLastPlayed[SoundID] = Now;
     }
 
-    uint8_t F = static_cast<uint8_t>(Flags);
-
     // Sound type limiting
     if (CheckSoundLimits(SoundID, UnitType, F))
         return -1;
 
     // Channel allocation with priority preemption
-    int ch = FindFreeChannel(Priority, F);
+    int ch = FindFreeChannel(EffectivePriority, F);
     if (ch < 0) return -1;
 
     // Load WAV data
@@ -375,25 +381,14 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
     if (!WavData || WavData->empty()) return -1;
 
     // Distance attenuation
-    float Atten = CalculateAttenuation(SourceX, SourceY);
-    float Volume = (float)mGlobalVolume / 100.0f;
-
-    // Apply min_volume from sound type
-    if (SoundID >= 0 && SoundID < (int)mSoundTypes.size())
-    {
-        int MinVol = mSoundTypes[SoundID].MinVolume;
-        float MinVolF = (float)MinVol / 127.0f;
-        float DistVol = Atten * Volume;
-        if (DistVol < MinVolF) DistVol = MinVolF;
-        Volume = DistVol;
-    }
-    else
-    {
-        Volume = Atten * Volume;
-    }
-
-    constexpr float kMinVolume = 0.08f; // ~10/127
-    if (Volume < kMinVolume) return -1;
+    // Classic sound volume is the larger of the DAT floor and the
+    // screen-edge attenuation (classic 0..100 volume scale).  The engine applies
+    // the master-volume multiplier exactly once afterwards.
+    float Volume = CalculateAttenuation(SourceX, SourceY);
+    Volume = std::max(Volume,
+                      std::clamp((float)Policy.MinVolume / 100.0f, 0.0f, 1.0f));
+    constexpr float kAudibleVolume = 10.0f / 100.0f;
+    if (Volume <= kAudibleVolume) return -1;
 
     // Initialize ma_sound for this channel
     auto& Snd = mImpl->ChannelSounds[ch];
@@ -420,7 +415,8 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
         return -1;
     mImpl->ChannelDecoderInit[ch] = true;
 
-    // Init sound from the decoded game asset with full spatialization.
+    // OpenBW's classic path uses screen-edge attenuation and leaves panning
+    // disabled.  Miniaudio distance attenuation here would attenuate twice.
     ma_result Result = ma_sound_init_from_data_source(&mImpl->Engine, &Decoder, 0, nullptr, &Snd);
     if (Result != MA_SUCCESS)
     {
@@ -429,13 +425,7 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
         return -1;
     }
 
-    // Enable spatialization
-    ma_sound_set_positioning(&Snd, ma_positioning_absolute);
-    ma_sound_set_attenuation_model(&Snd, ma_attenuation_model_inverse);
-    ma_sound_set_position(&Snd, SourceX, SourceY, 0.0f);
-    ma_sound_set_rolloff(&Snd, 1.0f);
-    ma_sound_set_min_distance(&Snd, 10.0f);
-    ma_sound_set_max_distance(&Snd, 500.0f);
+    ma_sound_set_spatialization_enabled(&Snd, MA_FALSE);
     ma_sound_set_volume(&Snd, Volume);
     ma_sound_start(&Snd);
 
@@ -451,7 +441,7 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
     mImpl->ChannelSoundInit[ch] = true;
 
     mChannels[ch].Active = true;
-    mChannels[ch].Priority = Priority;
+    mChannels[ch].Priority = EffectivePriority;
     mChannels[ch].Flags = F;
     mChannels[ch].SoundID = SoundID;
     mChannels[ch].UnitTypeKey = UnitType;
@@ -464,7 +454,7 @@ int AudioSystem::PlaySound(int SoundID, float SourceX, float SourceY,
 int AudioSystem::PlayFile(const std::string& FilePath, float SourceX, float SourceY,
                           int Priority, SoundFlags Flags)
 {
-    if (!mInitialized || FilePath.empty())
+    if (!mInitialized || mGlobalVolume == 0 || FilePath.empty())
         return -1;
 
     const uint8_t F = static_cast<uint8_t>(Flags);
@@ -490,21 +480,16 @@ int AudioSystem::PlayFile(const std::string& FilePath, float SourceX, float Sour
     }
 
     ma_result Result = ma_sound_init_from_file(&mImpl->Engine, FilePath.c_str(),
-        MA_SOUND_FLAG_STREAM, nullptr, nullptr, &Snd);
+        MA_SOUND_FLAG_STREAM | MA_SOUND_FLAG_NO_SPATIALIZATION,
+        nullptr, nullptr, &Snd);
     if (Result != MA_SUCCESS)
     {
         Core::Utils::Logger::Warning("AudioSystem", "Failed to play audio file: " + FilePath);
         return -1;
     }
 
-    const float Volume = std::max(0.08f, CalculateAttenuation(SourceX, SourceY)) *
-        ((float)mGlobalVolume / 100.0f);
-    ma_sound_set_positioning(&Snd, ma_positioning_absolute);
-    ma_sound_set_attenuation_model(&Snd, ma_attenuation_model_inverse);
-    ma_sound_set_position(&Snd, SourceX, SourceY, 0.0f);
-    ma_sound_set_rolloff(&Snd, 1.0f);
-    ma_sound_set_min_distance(&Snd, 10.0f);
-    ma_sound_set_max_distance(&Snd, 500.0f);
+    const float Volume = std::max(10.0f / 100.0f,
+                                  CalculateAttenuation(SourceX, SourceY));
     ma_sound_set_volume(&Snd, Volume);
     ma_sound_start(&Snd);
 
@@ -519,6 +504,7 @@ int AudioSystem::PlayFile(const std::string& FilePath, float SourceX, float Sour
 
 int AudioSystem::FindFreeChannel(int Priority, uint8_t Flags)
 {
+    (void)Flags;
     // Pass 1: find idle or finished channel
     for (int i = 0; i < kMaxChannels; ++i)
     {
@@ -569,7 +555,7 @@ bool AudioSystem::CheckSoundLimits(int SoundID, int UnitType, uint8_t Flags) con
         }
     }
 
-    if (Flags & static_cast<uint8_t>(SoundFlags::PerUnitType) && UnitType >= 0)
+    else if (Flags & static_cast<uint8_t>(SoundFlags::PerUnitType) && UnitType >= 0)
     {
         for (int i = 0; i < kMaxChannels; ++i)
         {
@@ -614,7 +600,7 @@ float AudioSystem::CalculateAttenuation(float SourceX, float SourceY) const
     int distVolume = 99 - 99 * distance / 512;
     if (distVolume < 0) return 0.0f;
 
-    return (float)distVolume / 99.0f;
+    return (float)distVolume / 100.0f;
 }
 
 // ── Stop / Update ───────────────────────────────────────────

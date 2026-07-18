@@ -3,7 +3,9 @@
 #include "Resource/GrpDecoder.h"
 #include "Resource/LightTable.h"
 #include "Resource/GrpToGpu.h"
+#include "Resource/TblDecoder.h"
 
+#include "Core/Audio/AudioSystem.h"
 #include "Game/DataEnums.h"
 #include "Game/IScriptVM.h"
 
@@ -63,8 +65,10 @@ namespace
             for (const auto& Event : VM.ConsumeEvents())
             {
                 if (Event.Type == Game::IScriptEventType::CreateImageOverlay ||
+                    Event.Type == Game::IScriptEventType::CreateImageOverlayLo ||
                     Event.Type == Game::IScriptEventType::CreateImageOverlaySpecialOffset ||
-                    Event.Type == Game::IScriptEventType::CreateSpriteOverlay)
+                    Event.Type == Game::IScriptEventType::CreateSpriteOverlay ||
+                    Event.Type == Game::IScriptEventType::CreateSpriteOverlayLo)
                 {
                     if (Result.FirstVisualImage < 0)
                         Result.FirstVisualImage = Event.A;
@@ -78,6 +82,43 @@ namespace
             }
         }
         Result.StillRunning = VM.IsRunning();
+        return Result;
+    }
+
+    std::vector<int> ProbeAnimationSounds(const Game::IScriptDatabase& Scripts,
+                                          uint32_t ImageID,
+                                          int AnimationID)
+    {
+        std::vector<int> Result;
+        const auto* Image = Scripts.FindImageInfo((int)ImageID);
+        const auto* Script = Image && Image->IScriptID >= 0
+            ? Scripts.FindScript(Image->IScriptID)
+            : nullptr;
+        if (!Script || AnimationID < 0 ||
+            AnimationID >= (int)Script->AnimationPC.size() ||
+            Script->AnimationPC[(size_t)AnimationID] <= 0)
+        {
+            return Result;
+        }
+
+        Game::IScriptVM VM;
+        VM.LoadScript(AnimationID, &Scripts.GetProgram().ProgramData,
+                      Script->AnimationPC[(size_t)AnimationID]);
+        VM.GetContext().ImageID = (int)ImageID;
+        VM.GetContext().HasDirectionalFrames = Image->HasDirectionalFrames;
+        for (int Step = 0; Step < 512 && VM.IsRunning(); ++Step)
+        {
+            VM.ExecuteFrame();
+            for (const auto& Event : VM.ConsumeEvents())
+            {
+                if (Event.Type == Game::IScriptEventType::PlaySound ||
+                    Event.Type == Game::IScriptEventType::PlayRandomSound ||
+                    Event.Type == Game::IScriptEventType::PlaySoundBetween)
+                {
+                    Result.push_back(Event.A);
+                }
+            }
+        }
         return Result;
     }
 
@@ -97,6 +138,69 @@ namespace
         return std::vector<uint8_t>(
             std::istreambuf_iterator<char>(File),
             std::istreambuf_iterator<char>());
+    }
+
+    void RequireUnitBalance(const Resource::GameDataLoader& Loader,
+                            uint32_t ChkUnitID,
+                            uint32_t HitPoints,
+                            uint16_t ShieldAmount,
+                            uint16_t Armor,
+                            uint8_t ArmorUpgrade,
+                            uint16_t UnitSize,
+                            uint16_t GroundWeapon,
+                            uint8_t MaxGroundHits,
+                            uint16_t AirWeapon,
+                            uint8_t MaxAirHits,
+                            const char* Label)
+    {
+        const auto* Unit = Loader.FindUnitByID(ChkUnitID);
+        const std::string EntryMessage = std::string(Label) + " units.dat entry";
+        Require(Unit != nullptr, EntryMessage.c_str());
+
+        const std::string BalanceMessage = std::string(Label) + " units.dat balance sentinel";
+        Require(Unit->HitPoints == HitPoints &&
+                Unit->ShieldAmount == ShieldAmount &&
+                Unit->Armor == Armor &&
+                Unit->ArmorUpgrade == ArmorUpgrade &&
+                Unit->UnitSize == UnitSize &&
+                Unit->GroundWeapon == GroundWeapon &&
+                Unit->MaxGroundHits == MaxGroundHits &&
+                Unit->AirWeapon == AirWeapon &&
+                Unit->MaxAirHits == MaxAirHits,
+            BalanceMessage.c_str());
+    }
+
+    void RequireWeaponBalance(const Resource::GameDataLoader& Loader,
+                              uint32_t WeaponID,
+                              uint16_t DamageAmount,
+                              uint16_t DamageBonus,
+                              uint16_t DamageFactor,
+                              uint8_t DamageUpgrade,
+                              uint8_t DamageType,
+                              uint16_t WeaponBehavior,
+                              uint16_t SplashType,
+                              uint16_t InnerSplashRadius,
+                              uint16_t MediumSplashRadius,
+                              uint16_t OuterSplashRadius,
+                              const char* Label)
+    {
+        const auto* Weapon = Loader.FindWeaponByID(WeaponID);
+        const std::string EntryMessage = std::string(Label) + " weapons.dat entry";
+        Require(Weapon != nullptr, EntryMessage.c_str());
+
+        const std::string BalanceMessage = std::string(Label) + " weapons.dat balance sentinel";
+        Require(Weapon->DamageAmount == DamageAmount &&
+                Weapon->DamageBonus == DamageBonus &&
+                Weapon->DamageFactor == DamageFactor &&
+                Weapon->BulletCount == DamageFactor &&
+                Weapon->DamageUpgrade == DamageUpgrade &&
+                Weapon->DamageType == DamageType &&
+                Weapon->WeaponBehavior == WeaponBehavior &&
+                Weapon->SplashType == SplashType &&
+                Weapon->InnerSplashRadius == InnerSplashRadius &&
+                Weapon->MediumSplashRadius == MediumSplashRadius &&
+                Weapon->OuterSplashRadius == OuterSplashRadius,
+            BalanceMessage.c_str());
     }
 
     std::optional<std::vector<uint8_t>> TryReadAll(const std::string& Path)
@@ -343,9 +447,15 @@ namespace
 int main()
 {
     Resource::GameDataLoader Loader;
-    Require(Loader.LoadUnitDataRaw(ReadAll("assets/arr/units.dat")),
+    const auto UnitsDat = ReadAll("assets/arr/units.dat");
+    const auto WeaponsDat = ReadAll("assets/arr/weapons.dat");
+    Require(UnitsDat.size() == 19876,
+        "project units.dat has the complete Brood War column layout");
+    Require(WeaponsDat.size() == 5460,
+        "project weapons.dat has the complete Brood War column layout");
+    Require(Loader.LoadUnitDataRaw(UnitsDat),
         "load units.dat");
-    Require(Loader.LoadWeaponDataRaw(ReadAll("assets/arr/weapons.dat")),
+    Require(Loader.LoadWeaponDataRaw(WeaponsDat),
         "load weapons.dat");
     Require(Loader.LoadFlingyDataRaw(ReadAll("assets/arr/flingy.dat")),
         "load flingy.dat");
@@ -357,6 +467,53 @@ int main()
         "load images.tbl");
     Require(Loader.LoadImageRelationDataRaw(ReadAll("assets/images.rel")),
         "load images.rel");
+
+    RequireUnitBalance(Loader, 0, 40, 0, 0, 0, 1, 0, 1, 0, 1, "Marine");
+    RequireUnitBalance(Loader, 3, 125, 0, 1, 1, 3, 130, 0, 130, 0, "Goliath");
+    const auto* Goliath = Loader.FindUnitByID(3);
+    const auto* GoliathTurret = Goliath ? Loader.FindUnitByID(Goliath->Subunit1ID) : nullptr;
+    Require(Goliath && Goliath->Subunit1ID == 4 && GoliathTurret &&
+            GoliathTurret->GroundWeapon == 7 && GoliathTurret->MaxGroundHits == 1 &&
+            GoliathTurret->AirWeapon == 8 && GoliathTurret->MaxAirHits == 1,
+        "Goliath resolves ground and air weapons through subunit 4");
+    RequireUnitBalance(Loader, 58, 200, 0, 2, 2, 3, 130, 0, 103, 4, "Valkyrie");
+    RequireUnitBalance(Loader, 65, 100, 60, 1, 5, 1, 64, 2, 130, 0, "Zealot");
+    RequireUnitBalance(Loader, 103, 125, 0, 1, 3, 2, 109, 1, 130, 0, "Lurker");
+    RequireUnitBalance(Loader, 72, 300, 150, 4, 6, 3, 130, 0, 130, 0, "Carrier");
+    RequireUnitBalance(Loader, 73, 40, 40, 0, 6, 1, 79, 1, 79, 1, "Interceptor");
+    RequireUnitBalance(Loader, 83, 100, 80, 0, 5, 3, 130, 0, 130, 0, "Reaver");
+    RequireUnitBalance(Loader, 85, 20, 10, 0, 5, 1, 82, 1, 130, 0, "Scarab");
+    RequireUnitBalance(Loader, 50, 60, 0, 0, 3, 1, 54, 1, 130, 0, "Infested Terran");
+    RequireUnitBalance(Loader, 62, 250, 0, 2, 4, 3, 130, 0, 104, 1, "Devourer");
+    RequireUnitBalance(Loader, 131, 1250, 0, 1, 60, 3, 130, 0, 130, 0, "Hatchery");
+    RequireUnitBalance(Loader, 133, 2500, 0, 1, 60, 3, 130, 0, 130, 0, "Hive");
+    RequireUnitBalance(Loader, 154, 750, 750, 1, 60, 3, 130, 0, 130, 0, "Nexus");
+    RequireUnitBalance(Loader, 146, 300, 0, 2, 60, 3, 53, 1, 130, 0, "Sunken Colony");
+
+    RequireWeaponBalance(Loader, 0, 6, 1, 1, 7, 3, 2, 1, 0, 0, 0,
+        "Gauss Rifle");
+    RequireWeaponBalance(Loader, 7, 12, 1, 1, 8, 3, 2, 1, 0, 0, 0,
+        "Goliath Twin Autocannons");
+    RequireWeaponBalance(Loader, 8, 10, 2, 2, 8, 1, 1, 1, 0, 0, 0,
+        "Goliath Hellfire Missiles");
+    RequireWeaponBalance(Loader, 103, 6, 1, 2, 9, 1, 8, 24, 5, 50, 100,
+        "Valkyrie Halo Rockets");
+    RequireWeaponBalance(Loader, 64, 8, 1, 1, 13, 3, 5, 1, 0, 0, 0,
+        "Zealot Psi Blades");
+    RequireWeaponBalance(Loader, 109, 20, 2, 1, 11, 3, 9, 3, 20, 20, 20,
+        "Lurker Subterranean Spines");
+    RequireWeaponBalance(Loader, 79, 6, 1, 1, 14, 3, 0, 1, 0, 0, 0,
+        "Interceptor Pulse Cannon");
+    RequireWeaponBalance(Loader, 82, 100, 25, 1, 35, 3, 5, 3, 20, 40, 60,
+        "Reaver Scarab");
+    RequireWeaponBalance(Loader, 54, 500, 0, 1, 60, 1, 5, 2, 20, 40, 60,
+        "Infested Terran Suicide");
+    RequireWeaponBalance(Loader, 104, 25, 2, 1, 12, 1, 0, 18, 0, 0, 0,
+        "Devourer Corrosive Acid");
+    RequireWeaponBalance(Loader, 53, 40, 0, 1, 60, 1, 2, 1, 0, 0, 0,
+        "Sunken Colony Tentacle");
+    Require(Loader.FindWeaponByID(130) == nullptr,
+        "weapon id 130 remains the units.dat no-weapon sentinel");
 
     Game::IScriptDatabase Scripts;
     Require(Scripts.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
@@ -801,8 +958,34 @@ int main()
             GaussRifle->DamageType == 3 &&
             GaussRifle->WeaponBehavior == 2 &&
             GaussRifle->SplashType == 1 &&
-            GaussRifle->BulletCount == 1,
+            GaussRifle->DamageFactor == 1 &&
+            GaussRifle->BulletCount == GaussRifle->DamageFactor &&
+            GaussRifle->Lifetime == 255 &&
+            GaussRifle->AttackAngle == 16 &&
+            GaussRifle->BulletHeadingOffset == 0 &&
+            GaussRifle->ForwardOffset == 0 &&
+            GaussRifle->UpwardOffset == 0,
         "Gauss Rifle decodes from column-major weapons.dat");
+    const auto* HellfireMissiles = Loader.FindWeaponByID(8);
+    Require(HellfireMissiles && HellfireMissiles->WeaponBehavior == 1 &&
+            HellfireMissiles->Lifetime == 30 &&
+            HellfireMissiles->BulletCount == 2 &&
+            HellfireMissiles->AttackAngle == 32 &&
+            HellfireMissiles->BulletHeadingOffset == 64 &&
+            HellfireMissiles->ForwardOffset == 5 &&
+            HellfireMissiles->UpwardOffset == 0,
+        "Goliath missiles preserve DAT tracking, lifetime, twin-shot, and launch offsets");
+    Require(Goliath && Goliath->AirWeapon == 130 && GoliathTurret &&
+            GoliathTurret->AirWeapon == 8 &&
+            (int)GoliathTurret->MaxAirHits *
+                    (int)HellfireMissiles->BulletCount == 2,
+        "projectile resolver must follow Goliath body to turret and emit two missiles");
+    const auto* Valkyrie = Loader.FindUnitByID(58);
+    const auto* HaloRockets = Loader.FindWeaponByID(103);
+    Require(Valkyrie && HaloRockets && Valkyrie->AirWeapon == 103 &&
+            Valkyrie->MaxAirHits == 4 && HaloRockets->BulletCount == 2 &&
+            (int)Valkyrie->MaxAirHits * (int)HaloRockets->BulletCount == 8,
+        "Valkyrie DAT attack-event and bullet counts resolve to eight distinct rockets");
     const auto* GaussFlingy = Loader.FindFlingyByID(GaussRifle->FlingyID);
     Require(GaussFlingy, "Gauss Rifle resolves weapons.dat to flingy.dat");
     const auto* GaussSprite = GaussFlingy
@@ -823,6 +1006,90 @@ int main()
          Game::IScriptAnims::Anim_GndAttkInit,
          Game::IScriptAnims::Anim_Death},
         "project Gauss Rifle projectile exposes flight and impact animations");
+    Require(ProbeAnimationSounds(
+                Scripts, Loader.ResolveUnitImageID(0),
+                Game::IScriptAnims::Anim_GndAttkInit) ==
+            std::vector<int>{69} &&
+            ProbeAnimationSounds(
+                Scripts, Loader.ResolveUnitImageID(0),
+                Game::IScriptAnims::Anim_AirAttkInit) ==
+            std::vector<int>{69},
+        "Marine ground and air attack scripts emit the authored sound 69");
+    Require(ProbeAnimationSounds(
+                Scripts, GaussSprite->ImageID,
+                Game::IScriptAnims::Anim_Init).empty(),
+        "Marine sound belongs to the unit firing frame, not its impact projectile");
+
+    const auto* Dragoon = Loader.FindUnitByID(66);
+    const auto* DragoonWeapon = Dragoon
+        ? Loader.FindWeaponByID(Dragoon->GroundWeapon)
+        : nullptr;
+    const auto* DragoonFlingy = DragoonWeapon
+        ? Loader.FindFlingyByID(DragoonWeapon->FlingyID)
+        : nullptr;
+    const auto* DragoonProjectileSprite = DragoonFlingy
+        ? Loader.FindSpriteByID(DragoonFlingy->SpriteID)
+        : nullptr;
+    Require(Dragoon && DragoonWeapon && DragoonFlingy && DragoonProjectileSprite,
+        "Dragoon Phase Disruptor resolves to a projectile image");
+    Require(ProbeAnimationSounds(
+                Scripts, DragoonProjectileSprite->ImageID,
+                Game::IScriptAnims::Anim_Init) == std::vector<int>{99},
+        "Dragoon projectile Init emits the authored launch sound 99");
+    Require(ProbeAnimationSounds(
+                Scripts, Loader.ResolveUnitImageID(66),
+                Game::IScriptAnims::Anim_GndAttkInit).empty(),
+        "Dragoon launch sound belongs to the projectile Init, not the unit body");
+
+    const auto* Hydralisk = Loader.FindUnitByID(38);
+    const auto* HydraliskWeapon = Hydralisk
+        ? Loader.FindWeaponByID(Hydralisk->GroundWeapon)
+        : nullptr;
+    const auto* HydraliskFlingy = HydraliskWeapon
+        ? Loader.FindFlingyByID(HydraliskWeapon->FlingyID)
+        : nullptr;
+    const auto* HydraliskProjectileSprite = HydraliskFlingy
+        ? Loader.FindSpriteByID(HydraliskFlingy->SpriteID)
+        : nullptr;
+    Require(Hydralisk && HydraliskWeapon && HydraliskFlingy &&
+            HydraliskProjectileSprite,
+        "Hydralisk Needle Spines resolve to a projectile image");
+    Require(ProbeAnimationSounds(
+                Scripts, Loader.ResolveUnitImageID(38),
+                Game::IScriptAnims::Anim_GndAttkInit) ==
+            std::vector<int>{64} &&
+            ProbeAnimationSounds(
+                Scripts, Loader.ResolveUnitImageID(38),
+                Game::IScriptAnims::Anim_AirAttkInit) ==
+            std::vector<int>{64},
+        "Hydralisk ground and air attack scripts emit the authored sound 64");
+    Require(ProbeAnimationSounds(
+                Scripts, HydraliskProjectileSprite->ImageID,
+                Game::IScriptAnims::Anim_Init).empty(),
+        "Hydralisk sound belongs to the unit firing frame, not its projectile");
+
+    const auto SoundPaths = Resource::TblDecoder::DecodeStrings(
+        ReadAll("assets/arr/sfxdata.tbl"));
+    const auto SoundDat = ReadAll("assets/arr/sfxdata.dat");
+    const auto ResolveSoundID = [&](uint32_t SoundID)
+    {
+        Require(SoundID * 4 + 4 <= SoundDat.size(),
+            "sound id fits the sfxdata filename-index column");
+        const size_t Offset = (size_t)SoundID * 4;
+        const uint32_t OneBasedPathIndex =
+            (uint32_t)SoundDat[Offset] |
+            ((uint32_t)SoundDat[Offset + 1] << 8) |
+            ((uint32_t)SoundDat[Offset + 2] << 16) |
+            ((uint32_t)SoundDat[Offset + 3] << 24);
+        return Core::Audio::ResolveArchiveSoundPath(
+            SoundPaths, OneBasedPathIndex);
+    };
+    Require(ResolveSoundID(69) == "sound/Bullet/TMaFir00.wav",
+        "Marine sound 69 resolves through the one-based TBL index");
+    Require(ResolveSoundID(99) == "sound/Bullet/DragBull.wav",
+        "Dragoon sound 99 resolves through the one-based TBL index");
+    Require(ResolveSoundID(64) == "sound/Bullet/SpoogHit.wav",
+        "Hydralisk sound 64 resolves through the one-based TBL index");
 
     constexpr uint32_t ScvMiningWeaponID = 14;
     const auto* ScvWeapon = Loader.FindWeaponByID(ScvMiningWeaponID);

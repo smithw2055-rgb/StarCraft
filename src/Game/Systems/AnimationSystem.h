@@ -49,6 +49,7 @@ public:
     using OverlayOffsetResolver = std::function<std::optional<Core::Math::Vec2>(
         uint32_t, size_t, size_t, size_t, bool)>;
     using WeaponImageResolver = std::function<std::optional<uint32_t>(int)>;
+    using SpriteImageResolver = std::function<std::optional<uint32_t>(int)>;
     // Images.rel marks only shadows and glow overlays as static attachments.
     // Transition images created by Init must be allowed to finish and disappear.
     using ImageAttachmentPersistenceResolver = std::function<bool(uint32_t)>;
@@ -69,9 +70,14 @@ public:
                                         const std::string& ImagesDatPath);
     static void SetOverlayOffsetResolver(OverlayOffsetResolver Resolver);
     static void SetWeaponImageResolver(WeaponImageResolver Resolver);
+    static void SetSpriteImageResolver(SpriteImageResolver Resolver);
     static void SetImageAttachmentPersistenceResolver(
         ImageAttachmentPersistenceResolver Resolver);
     static bool HasIScriptAnimationForImage(int ImageID, int AnimID);
+    static int ComputeDamageOverlaySteps(int HitPoints,
+                                         int HitPointSubDamage,
+                                         int MaxHitPoints,
+                                         int DamageSlotCount);
     static int ResolvePlayableIScriptAnimation(int AnimID,
                                                const std::function<bool(int)>& HasAnim);
     static int SelectIScriptAnimationForState(AnimState DesiredState,
@@ -109,6 +115,7 @@ private:
         bool WasConstructing = false;
         bool WasUnderConstruction = false;
         bool WasWalking = false;
+        bool WasPendingAttack = false;
         bool HasPlayedBuilt = false;
         float StepAccumulator = 0.0f;
     };
@@ -124,6 +131,7 @@ private:
     static std::string sImagesDatPath;
     static OverlayOffsetResolver sOverlayOffsetResolver;
     static WeaponImageResolver sWeaponImageResolver;
+    static SpriteImageResolver sSpriteImageResolver;
     static ImageAttachmentPersistenceResolver sImageAttachmentPersistenceResolver;
 
     Core::ECS::SystemManager& mSystemMgr;
@@ -138,6 +146,7 @@ private:
                                      bool HasDirectionalFrames,
                                      bool* OutFlipped = nullptr);
     void UpdateScriptEffects(float DeltaTime);
+    void UpdateShieldImpactOverlays();
     void UpdateImageTrees(float DeltaTime);
     void UpdateCarriedResourceOverlay(int EntityID,
                                       Components::ImageTreeComponent& Tree,
@@ -145,6 +154,9 @@ private:
                                       const Components::HarvestComponent* Harvest);
     void EnsureUnitSubunitNode(int EntityID,
                                const Components::RenderComponent& Render);
+    void UpdateUnitSubunitAttackLifecycle(
+        int EntityID,
+        const Components::CombatComponent* Combat);
     void UpdateAddonConnectorOverlay(
         int EntityID,
         const Components::RenderComponent& Render);
@@ -203,6 +215,14 @@ private:
                              int OffsetY,
                              float Lifetime,
                              bool FollowParent);
+    bool SpawnIScriptSpriteEffect(
+        int ParentEntityID,
+        const Components::TransformComponent& ParentTrans,
+        int SpriteID,
+        Core::Math::Vec2 WorldOffset,
+        bool DrawAbove,
+        const Components::PlayerComponent* Player,
+        int IScriptDirection = -1);
     void ConsumeIScriptEvents(int EntityID,
                               EntityScriptState& State,
                               const Components::TransformComponent& Trans,
@@ -226,7 +246,7 @@ private:
                                 const Components::StatusEffectComponent* Status,
                                 const Components::ProductionComponent* Prod,
                                 const Components::HarvestComponent* Harvest,
-                                const Components::BulletComponent* Bullet);
+                                Components::BulletComponent* Bullet);
 };
 
 inline int AnimationSystem::ResolvePlayableIScriptAnimation(
@@ -244,6 +264,34 @@ inline int AnimationSystem::ResolvePlayableIScriptAnimation(
     }
 
     return -1;
+}
+
+inline int AnimationSystem::ComputeDamageOverlaySteps(
+    int HitPoints,
+    int HitPointSubDamage,
+    int MaxHitPoints,
+    int DamageSlotCount)
+{
+    if (MaxHitPoints <= 0 || DamageSlotCount <= 0)
+        return 0;
+
+    constexpr int kSubPointsPerPoint = 256;
+    const int64_t MaxRaw = (int64_t)MaxHitPoints * kSubPointsPerPoint;
+    const int64_t HitPointsRaw = std::clamp<int64_t>(
+        (int64_t)HitPoints * kSubPointsPerPoint -
+            std::clamp(HitPointSubDamage, 0, kSubPointsPerPoint - 1),
+        0, MaxRaw);
+    const int DamageStates = DamageSlotCount * 2;
+    const int64_t TwoThirdsMaxRaw = MaxRaw - MaxRaw / 3;
+    const int64_t HitPointsPerState =
+        std::max<int64_t>(1, TwoThirdsMaxRaw / (DamageStates + 1));
+    const int64_t Numerator =
+        HitPointsRaw - TwoThirdsMaxRaw % HitPointsPerState -
+        MaxRaw / 3 - 1;
+    const int DamageState = std::clamp(
+        Numerator > 0 ? (int)(Numerator / HitPointsPerState) : 0,
+        0, DamageStates);
+    return DamageStates - DamageState;
 }
 
 inline int AnimationSystem::SelectIScriptAnimationForState(
@@ -357,9 +405,14 @@ inline bool AnimationSystem::ShouldClearImageTreeForAnimRestart(
     bool IsBuilding,
     bool ImageOrScriptChanged,
     int /*PreviousAnim*/,
-    int /*TargetAnim*/,
+    int TargetAnim,
     bool /*UnderConstruction*/)
 {
+    // OpenBW's sprite_run_anim(Death) sends Death to every image already
+    // attached to the sprite (turrets, shadows, flames, carried graphics).
+    // Preserve that tree even on the freshly-created presentation entity.
+    if (TargetAnim == Game::IScriptAnims::Anim_Death)
+        return false;
     if (ImageOrScriptChanged)
         return true;
 
@@ -418,7 +471,12 @@ inline AnimState AnimationSystem::GetAnimStateFromComponents(
         if (Path->CurrentSpeed > 0.1f || Path->CurrentVelocity.Length() > 0.1f)
             return AnimState::Walking;
     }
-    if (Combat && Combat->CooldownRemaining > Combat->AttackCooldown * 0.5f)
+    // CombatSystem clears TargetEntityID as soon as the target becomes
+    // invalid.  While a valid target or an authored pending shot remains, an
+    // otherwise stationary unit must stay in its attack pose across the whole
+    // cooldown.  Movement still wins above so AttackMove/chasing units walk.
+    if (Combat &&
+        (Combat->PendingAttackFrame || Combat->TargetEntityID >= 0))
         return AnimState::Attacking;
     if (Cmd && Cmd->CurrentCommand == Components::CommandType::Attack)
         return AnimState::Attacking;

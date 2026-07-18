@@ -56,7 +56,9 @@ struct BuildOrder
     int ParentBuildingID = -1;
     BuildTarget Target;
     int ApproachAttempt = 0;
+    int ConsecutiveApproachFailures = 0;
     float ApproachSeconds = 0.0f;
+    float TotalApproachSeconds = 0.0f;
     float NoProgressSeconds = 0.0f;
     float BestFootprintDistance = 0.0f;
     bool HasBestFootprintDistance = false;
@@ -75,6 +77,7 @@ public:
     std::string_view GetName() const override { return "BuildingSystem"; }
 
     static void SetMap(const Game::Map::GameMap* Map);
+    static void ResetPendingBuildOrders();
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetSubunitImageResolver(ImageIDResolver Resolver);
     static void SetConstructionImageResolver(ImageIDResolver Resolver);
@@ -106,6 +109,8 @@ public:
                            const BuildTarget& Target);
     static int CountPendingBuilds(int PlayerID, int BuildingDefID);
     static bool IsBuilderCommitted(Core::ECS::EntityManager& EM, int BuilderID);
+    static bool WasRecentlyUnreachable(int PlayerID, int BuildingDefID,
+                                       const Core::Math::Vec2& Position);
 
     static bool AssistConstruction(Core::ECS::EntityManager& EM,
                                    const std::vector<int>& BuilderIDs,

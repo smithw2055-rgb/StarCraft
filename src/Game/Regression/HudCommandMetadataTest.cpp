@@ -61,6 +61,7 @@ void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
                                int,
                                const Game::Components::CombatComponent&,
                                int,
+                               int,
                                int)
 {
 }
@@ -859,13 +860,15 @@ int main()
         Hud.GetPendingBuildDefID(),
         EmptyClickTarget,
         ValidHatcheryPlacement),
-        "Zerg valid building placement starts a real Drone morph");
-    Require(!EM.IsAlive(DroneEntity),
-        "Zerg valid building placement consumes the Drone");
+        "Zerg valid building placement queues a real Drone morph approach");
+    Require(EM.IsAlive(DroneEntity) &&
+            Game::Systems::BuildingSystem::IsBuilderCommitted(EM, DroneEntity),
+        "Zerg valid building placement keeps the Drone alive while it approaches");
     Require(Resources.Minerals == ZergMineralsBefore - Hatchery.MineralCost,
         "Zerg valid building placement spends the building mineral cost");
-    Require(CountBuildingsByDef(EM, HatcheryDef) == ZergBuildingsBefore + 1,
-        "Zerg valid building placement creates an under-construction Hatchery");
+    Require(CountBuildingsByDef(EM, HatcheryDef) == ZergBuildingsBefore &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(0, HatcheryDef) == 1,
+        "Zerg Hatchery remains pending until its Drone reaches the footprint");
 
     Resources.Minerals = 500;
     const int ExtractorDef = Game::Races::GetUnitDefID("Extractor");
@@ -916,17 +919,17 @@ int main()
         ZergGeyserTarget,
         Map.TileToWorld(26, 20)),
         "Zerg Extractor target click claims a geyser");
-    Require(!EM.IsAlive(ExtractorDrone),
-        "Zerg Extractor target click consumes the Drone");
+    Require(EM.IsAlive(ExtractorDrone) &&
+            Game::Systems::BuildingSystem::IsBuilderCommitted(EM, ExtractorDrone),
+        "Zerg Extractor target keeps the Drone alive during its approach");
     Require(Resources.Minerals == ExtractorMineralsBefore - Extractor.MineralCost,
         "Zerg Extractor target click spends the mineral cost");
-    Require(Resources.SupplyUsed == 0,
-        "Zerg Extractor target click releases the consumed Drone supply");
+    Require(Resources.SupplyUsed == ExtractorDroneSupplyCost,
+        "pending Zerg Extractor keeps the moving Drone supply reserved");
     auto* ExtractorBuilding = EM.GetComponent<Game::Components::BuildingComponent>(ZergGeyser);
-    Require(ExtractorBuilding &&
-            ExtractorBuilding->BuildingDefID == ExtractorDef &&
-            ExtractorBuilding->UnderConstruction,
-        "Zerg Extractor target click converts the geyser into an under-construction Extractor");
+    Require(ExtractorBuilding && ExtractorBuilding->BuildingDefID != ExtractorDef &&
+            Game::Systems::BuildingSystem::CountPendingBuilds(0, ExtractorDef) == 1,
+        "Zerg Extractor leaves the geyser intact until its Drone arrives");
 
     Resources.Minerals = 500;
     const int ProbeDef = Game::Races::GetUnitDefID("Probe");
@@ -1088,10 +1091,17 @@ int main()
     const int HydraliskDen = CreateCompletedRaceBuilding(
         EM, HydraliskDenDef, 0, Map.TileToWorld(14, 28));
     Hud.UpdateContext(EM, {HydraliskDen});
+    const auto& LockedLurkerButton = RequireButton(Hud, 2, "Lurker");
+    Require(LockedLurkerButton.Kind == Game::Client::UI::ActionKind::Research &&
+            !LockedLurkerButton.Enabled,
+        "Zerg Hydralisk Den keeps Lurker Aspect locked before Lair technology");
+    CreateCompletedRaceBuilding(
+        EM, Game::Races::GetUnitDefID("Lair"), 0, Map.TileToWorld(16, 26));
+    Hud.UpdateContext(EM, {HydraliskDen});
     const auto& LurkerButton = RequireButton(Hud, 2, "Lurker");
     Require(LurkerButton.Kind == Game::Client::UI::ActionKind::Research &&
             LurkerButton.Enabled,
-        "Zerg Hydralisk Den exposes Lurker Aspect as research");
+        "completed Lair unlocks Lurker Aspect at the Hydralisk Den");
 
     const int DragoonDef = Game::Races::GetUnitDefID("Dragoon");
     const int DragoonEntity =
@@ -1245,6 +1255,60 @@ int main()
             EM.GetComponent<Game::Components::RenderComponent>(SecondPassenger)->Visible &&
             EM.GetComponent<Game::Components::UnitComponent>(Passenger)->Speed > 0.0f,
         "sequential unloading eventually restores passenger visibility and movement speed");
+
+    const int Shuttle = CreateProtossUnit(
+        EM, Game::Races::GetUnitDefID("Shuttle"), 0,
+        Map.TileToWorld(20, 18));
+    const int ShuttlePassenger = CreateTerranUnit(
+        EM, TransportMarineDef, 0);
+    EM.GetComponent<Game::Components::TransformComponent>(ShuttlePassenger)->Position =
+        Map.TileToWorld(21, 18);
+    Require(Game::Systems::TransportSystem::IsTransport(EM, Shuttle) &&
+            Game::Systems::TransportSystem::CanLoad(
+                EM, Shuttle, ShuttlePassenger),
+        "Protoss Shuttle CHK 69 is recognized as a passenger transport");
+
+    auto SavedTransportUpgrades =
+        Game::Systems::UpgradeSystem::GetUpgrades(0);
+    auto& TransportUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(0);
+    TransportUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_VentralSacs)] = 0;
+    const int TransportOverlord = CreateZergUnit(
+        EM, Game::Races::GetUnitDefID("Overlord"), 0,
+        Map.TileToWorld(22, 18));
+    Require(!Game::Systems::TransportSystem::IsTransport(
+                EM, TransportOverlord),
+        "Overlord cannot transport units before Ventral Sacs");
+    TransportUpgrades.Levels[static_cast<size_t>(
+        Game::Systems::ResearchId::Zerg_VentralSacs)] = 1;
+    Require(Game::Systems::TransportSystem::IsTransport(
+                EM, TransportOverlord),
+        "Ventral Sacs enables Overlord CHK 42 passenger transport");
+    Game::Systems::UpgradeSystem::GetUpgrades(0) = SavedTransportUpgrades;
+
+    const int NydusEntrance = CreateCompletedRaceBuilding(
+        EM, Game::Races::GetUnitDefID("Nydus Canal"), 0,
+        Map.TileToWorld(24, 18));
+    const int NydusExit = CreateCompletedRaceBuilding(
+        EM, Game::Races::GetUnitDefID("Nydus Canal"), 0,
+        Map.TileToWorld(28, 18));
+    const int NydusPassenger = CreateZergUnit(
+        EM, Game::Races::GetUnitDefID("Zergling"), 0,
+        Map.TileToWorld(24, 18));
+    Require(!Game::Systems::TransportSystem::IsNydusCanal(EM, MachineShop) &&
+            Game::Systems::TransportSystem::IsNydusCanal(EM, NydusEntrance) &&
+            Game::Systems::TransportSystem::EnterNydusCanal(
+                EM, NydusPassenger, NydusEntrance),
+        "Nydus uses CHK 134 and never aliases Machine Shop CHK 120");
+    const auto* NydusPassengerTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(NydusPassenger);
+    const auto* NydusExitTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(NydusExit);
+    Require(NydusPassengerTransform && NydusExitTransform &&
+            NydusPassengerTransform->Position.DistanceTo(
+                Core::Math::Vec2(NydusExitTransform->Position.X + 24.0f,
+                                 NydusExitTransform->Position.Y)) < 0.1f,
+        "Nydus passenger exits beside the paired completed canal");
 
     auto& SiegePlayerUpgrades = Game::Systems::UpgradeSystem::GetUpgrades(0);
     SiegePlayerUpgrades.Levels[static_cast<size_t>(

@@ -1,7 +1,10 @@
+#include "Core/Audio/AudioSystem.h"
 #include "Game/IScriptVM.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <set>
 #include <vector>
 
 namespace
@@ -56,10 +59,72 @@ namespace
         Require(!Events.empty(), "overlay opcode emits an event");
         return Events.front();
     }
+
+    Game::IScriptEvent RunOverlayOpcode2(int Opcode, int A, int B)
+    {
+        std::vector<int> Program = {
+            Opcode, A, B,
+            Game::IScriptOpcodes::Opc_End
+        };
+        Game::IScriptVM VM;
+        VM.LoadScript(0, &Program, 0);
+        VM.ExecuteFrame();
+        auto Events = VM.ConsumeEvents();
+        Require(!Events.empty(), "two-operand overlay opcode emits an event");
+        return Events.front();
+    }
 }
 
 int main()
 {
+    const std::string ProjectileSoundPath =
+        Core::Audio::NormalizeArchiveSoundPath("bullet\\blastcan.wav");
+    Require(ProjectileSoundPath == "sound/bullet/blastcan.wav",
+        "sfxdata relative paths are rooted in the classic sound directory");
+    Require(std::filesystem::exists(
+                std::filesystem::path("assets") / ProjectileSoundPath),
+        "normalized projectile sound resolves to an extracted archive asset");
+
+    Core::Audio::SoundType SoundMetadata;
+    SoundMetadata.Priority = 47;
+    SoundMetadata.Flags =
+        static_cast<uint8_t>(Core::Audio::SoundFlags::PerUnitType);
+    SoundMetadata.MinVolume = 12;
+    const auto PlaybackPolicy = Core::Audio::ResolveSoundPlaybackPolicy(
+        &SoundMetadata, 3, Core::Audio::SoundFlags::None);
+    Require(PlaybackPolicy.Priority == 47 &&
+            PlaybackPolicy.Flags == SoundMetadata.Flags &&
+            PlaybackPolicy.MinVolume == 12,
+        "archive priority flags and minimum volume drive sound playback");
+
+    std::vector<int> RandomSoundProgram = {
+        Game::IScriptOpcodes::Opc_PlaySndRand,
+        4, 101, 202, 303, 404,
+        Game::IScriptOpcodes::Opc_AttackMelee,
+        3, 501, 502, 503,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM RandomSoundVM;
+    RandomSoundVM.LoadScript(0, &RandomSoundProgram, 0);
+    RandomSoundVM.GetContext().RandomSeed = 1;
+    RandomSoundVM.ExecuteFrame();
+    const auto RandomSoundEvents = RandomSoundVM.ConsumeEvents();
+    Require(RandomSoundEvents.size() == 3,
+        "playsndrand and attackmelee emit their authored sound events");
+    Require(RandomSoundEvents[0].Type ==
+                Game::IScriptEventType::PlayRandomSound &&
+            RandomSoundEvents[0].A == 303 &&
+            RandomSoundEvents[0].B == 4,
+        "playsndrand selects deterministically across the complete vector");
+    Require(RandomSoundEvents[1].Type ==
+                Game::IScriptEventType::AttackMelee &&
+            RandomSoundEvents[2].Type ==
+                Game::IScriptEventType::PlayRandomSound &&
+            RandomSoundEvents[2].A >= 501 &&
+            RandomSoundEvents[2].A <= 503 &&
+            RandomSoundEvents[2].B == 3,
+        "attackmelee preserves damage ordering and its complete sound vector");
+
     Game::IScriptDatabase Database;
     Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
         "load iscript database");
@@ -222,6 +287,80 @@ int main()
     Require(LowSprite.A == 322 && LowSprite.B == -5 && LowSprite.C == 6 && LowSprite.D == 0,
         "LowSprUl preserves sprite overlay id, offset, and draw-below flag");
 
+    const auto ImageLo = RunOverlayOpcode(
+        Game::IScriptOpcodes::Opc_ImgOlUseLo, 401, 2, 7);
+    Require(ImageLo.Type == Game::IScriptEventType::CreateImageOverlayLo &&
+            ImageLo.A == 401 && ImageLo.B == 2 && ImageLo.C == 7 &&
+            ImageLo.D == 1,
+        "ImgOlUseLo preserves LO table type/index instead of treating them as x/y");
+
+    const auto ImageUnderLo = RunOverlayOpcode(
+        Game::IScriptOpcodes::Opc_ImgUlUseLo, 402, 3, 5);
+    Require(ImageUnderLo.Type == Game::IScriptEventType::CreateImageOverlayLo &&
+            ImageUnderLo.A == 402 && ImageUnderLo.B == 3 &&
+            ImageUnderLo.C == 5 && ImageUnderLo.D == 0,
+        "ImgUlUseLo preserves LO table type/index and draw-below ordering");
+
+    const auto SpriteUnderLo = RunOverlayOpcode(
+        Game::IScriptOpcodes::Opc_SprUlUseLo, 403, 4, 6);
+    Require(SpriteUnderLo.Type == Game::IScriptEventType::CreateSpriteOverlay &&
+            SpriteUnderLo.A == 403 && SpriteUnderLo.B == 4 &&
+            SpriteUnderLo.C == 6 && SpriteUnderLo.D == 0,
+        "SprUlUseLo preserves its explicit x/y offset and draw-below ordering");
+
+    const auto SpriteOverLo = RunOverlayOpcode2(
+        Game::IScriptOpcodes::Opc_SprOlUseLo, 404, 1);
+    Require(SpriteOverLo.Type == Game::IScriptEventType::CreateSpriteOverlayLo &&
+            SpriteOverLo.A == 404 && SpriteOverLo.B == 1 &&
+            SpriteOverLo.C == 0 && SpriteOverLo.D == 1,
+        "SprOlUseLo retains its LO table type and canonical index zero");
+
+    bool SawRealLoOverlay = false;
+    std::set<std::pair<int, int>> AuditedScriptAnimations;
+    for (int ImageID = 0; ImageID < 999 && !SawRealLoOverlay; ++ImageID)
+    {
+        const auto* LoImageInfo = Database.FindImageInfo(ImageID);
+        const auto* LoScript = LoImageInfo && LoImageInfo->IScriptID >= 0
+            ? Database.FindScript(LoImageInfo->IScriptID)
+            : nullptr;
+        if (!LoScript)
+            continue;
+        for (int Anim = 0;
+             Anim < (int)LoScript->AnimationPC.size() && !SawRealLoOverlay;
+             ++Anim)
+        {
+            const int EntryPC = LoScript->AnimationPC[(size_t)Anim];
+            if (EntryPC <= 0 ||
+                !AuditedScriptAnimations.emplace(
+                    LoImageInfo->IScriptID, Anim).second)
+            {
+                continue;
+            }
+            Game::IScriptVM VM;
+            VM.LoadScript(Anim, &Database.GetProgram().ProgramData, EntryPC);
+            VM.GetContext().ImageID = ImageID;
+            VM.GetContext().HasDirectionalFrames =
+                LoImageInfo->HasDirectionalFrames;
+            for (int Step = 0; Step < 256 && VM.IsRunning(); ++Step)
+            {
+                VM.ExecuteFrame();
+                for (const auto& Event : VM.ConsumeEvents())
+                {
+                    if (Event.Type ==
+                            Game::IScriptEventType::CreateImageOverlayLo ||
+                        Event.Type ==
+                            Game::IScriptEventType::CreateSpriteOverlayLo)
+                    {
+                        SawRealLoOverlay = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Require(SawRealLoOverlay,
+        "real Brood War IScript emits an LO-indexed weapon/effect overlay");
+
     std::vector<int> NextImageProgram = {
         Game::IScriptOpcodes::Opc_ImgUlNextId, -4, 7,
         Game::IScriptOpcodes::Opc_End
@@ -332,13 +471,12 @@ int main()
             TemporaryEvents.front().A == 1,
         "tmprmgraphicstart reports temporary removal without owning renderer visibility");
     TemporaryGraphicVM.ExecuteFrame();
-    TemporaryGraphicVM.ExecuteFrame();
     TemporaryEvents = TemporaryGraphicVM.ConsumeEvents();
     Require(!TemporaryEvents.empty() &&
             TemporaryEvents.front().Type == Game::IScriptEventType::TemporaryGraphicState &&
             TemporaryEvents.front().A == 0 &&
             TemporaryGraphicVM.GetContext().BaseFrameIndex == 11,
-        "tmprmgraphicend reports restoration and preserves subsequent script execution");
+        "wait 1 resumes on the next frame before tmprmgraphicend restores the image");
 
     const int GoliathEast = WalkingFrameSignatureForDirection(Database, 234, 0);
     const int GoliathWest = WalkingFrameSignatureForDirection(Database, 234, 128);

@@ -86,6 +86,11 @@ namespace IScriptOpcodes
     };
 }
 
+// Shared metadata used by the native VM and source exporters. The returned
+// pointers refer to static strings and remain valid for the process lifetime.
+const char* GetIScriptOpcodeName(int Opcode);
+const char* GetIScriptInstructionSpec(int Opcode);
+
 namespace IScriptAnims
 {
     enum : int
@@ -138,6 +143,7 @@ struct IScriptImageInfo
 {
     bool HasIScriptAnimations = false;
     bool HasDirectionalFrames = false;
+    bool AlwaysVisible = false;
     int IScriptID = -1;
 };
 
@@ -147,8 +153,10 @@ enum class IScriptEventType : uint8_t
     PlayRandomSound,
     PlaySoundBetween,
     CreateImageOverlay,
+    CreateImageOverlayLo,
     CreateImageOverlaySpecialOffset,
     CreateSpriteOverlay,
+    CreateSpriteOverlayLo,
     CreateGasOverlays,
     WarpOverlay,
     Attack,
@@ -215,7 +223,7 @@ public:
         bool FollowMainGraphic = false;
         int TargetRangePixels = 0;
         int TargetArc = 0;
-        int RandomSeed = 1;
+        uint32_t RandomSeed = 42;
         bool IsWalking = false;
         bool IsAttacking = false;
         bool IsPowered = true;
@@ -252,6 +260,7 @@ private:
     int PeekArg(int Offset = 1) const;
     void AdvanceArgs(int Count);
     void SkipVectorArgs();
+    uint32_t NextRandom();
     void Emit(IScriptEventType Type, int A = 0, int B = 0, int C = 0, int D = 0);
     void RegisterDefaultOpcodes();
 

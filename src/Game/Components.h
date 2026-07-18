@@ -50,15 +50,17 @@ enum class DamageType : uint8_t
 {
     Normal,      // 100% vs all sizes
     Concussive,  // 100% vs Small, 50% vs Medium, 25% vs Large
-    Explosive    // 50% vs Small, 75% vs Medium, 100% vs Large
+    Explosive,   // 50% vs Small, 75% vs Medium, 100% vs Large
+    IgnoreArmor  // spell damage: no armor or size reduction
 };
 
 enum class SplashType : uint8_t
 {
     None,
-    Radial,   // circular area around target
-    Line,     // line area from attacker through target
-    Air       // radial but only hits air units
+    Radial,       // circular area; classic radial splash can hurt allies
+    Line,         // enemy-only line from attacker through target
+    Air,          // enemy-only radial splash against air units
+    EnemyRadial   // circular area that only damages enemies
 };
 
 enum class WeaponBehavior : uint8_t
@@ -68,7 +70,8 @@ enum class WeaponBehavior : uint8_t
     Lob,            // 5: lobbed projectile (no tracking)
     Melee,          // 7: melee instant hit
     Persist,        // 8: stay near target and deal damage over time
-    Missile         // 11: fly and track target
+    Missile,        // 11: fly and track target
+    Bounce          // 7: Mutalisk-style tracked projectile with two follow-up hits
 };
 
 enum class StatusEffect : uint8_t
@@ -233,6 +236,26 @@ struct EffectComponent
     int ParentEntityID = -1;
     Core::Math::Vec2 Offset;
     bool FollowParent = false;
+    // Root IScript animation requested for this independent visual.  A
+    // negative value keeps the ordinary component-derived animation state.
+    int InitialAnimation = -1;
+    // Authored death/explosion visuals live until their root and child
+    // scripts finish. LifetimeRemaining remains a safety ceiling for malformed
+    // or intentionally looping scripts.
+    bool DestroyWhenAnimationCompletes = false;
+    bool AnimationStarted = false;
+    // sprol/highsprol are independent thingies above the source sprite while
+    // lowsprul/sprul may be authored below it.
+    bool DrawAbove = true;
+    // Explicit ECS render band for effects that retain the dead sprite's
+    // original ground/air elevation. Negative derives 0/3 from DrawAbove.
+    int RenderBand = -1;
+    // Presentation-only 0..255 iscript direction. Keeping it here avoids
+    // adding PathfindingComponent to short-lived effects, which would make
+    // them participate in movement initialization and collision scans.
+    int IScriptDirection = -1;
+    int SpawnSoundID = -1;
+    bool SpawnSoundPlayed = false;
 };
 
 struct ImageSubnode
@@ -254,8 +277,15 @@ struct ImageSubnode
     // copies the main image frame, whose flip state is already absolute.
     bool FollowsMainGraphic = false;
     bool PersistentSpriteAttachment = false;
+    // images.dat marks sprite layers that remain visible while the owning unit
+    // is cloaked or burrowed. Shadows are deliberately not always-visible.
+    bool AlwaysVisible = false;
+    // A persistent attachment hidden specifically by Burrow is restored only
+    // when UnBurrow completes. Ordinary expired/transient nodes stay hidden.
+    bool HiddenByBurrow = false;
     bool UseSpecialOffset = false;
     bool IsDamageOverlay = false;
+    bool IsAcidSporeOverlay = false;
     int OverlayOffsetType = -1;
     int OverlayOffsetIndex = 0;
     bool UseSpriteID = false;
@@ -272,6 +302,10 @@ struct ImageSubnode
     // units.dat Subunit1 (Goliath head, Tank turret, Siege Tank turret) is a
     // real independently-scripted image, not a copy of the body frame.
     bool IsUnitSubunit = false;
+    // A CombatComponent keeps PendingAttackFrame asserted until the authored
+    // attack opcode fires.  Subunit images therefore need their own edge
+    // latch so one shot request cannot restart the turret IScript every frame.
+    bool AttackRequestLatched = false;
     // Terran add-on bridges are real sprite images with their own Init,
     // Working, LiftOff, and Landing scripts. Keep the runtime-owned bridge in
     // the image tree so animation state changes reach it like every other
@@ -304,17 +338,42 @@ struct UnitComponent
     int ShieldPoints = 0;
     int MaxShieldPoints = 0;
     float ShieldRegenAccumulator = 0.0f;
+    // Brood War stores HP and shields in 1/256 increments. Public values stay
+    // integer/ceiling-rounded for UI compatibility; these fields retain the
+    // sub-point damage already applied to that visible point (0..255).
+    int HitPointSubDamage = 0;
+    int ShieldSubDamage = 0;
+    float HealthRegenAccumulator = 0.0f;
+    float RepairHitPointAccumulator = 0.0f;
+    float RepairMineralCostAccumulator = 0.0f;
+    float RepairGasCostAccumulator = 0.0f;
+    int RepairTargetEntityID = -1;
     float PlagueDamageAccumulator = 0.0f;
     float IrradiateDamageAccumulator = 0.0f;
+    int AcidSporeCount = 0;
+    std::array<float, 9> AcidSporeTimers{};
     int EnergyPoints = 0;
     int MaxEnergyPoints = 0;
     int Armor = 0;
     float Speed = 2.0f;
     int SightRange = 8;
     int SupplyCost = 1;
+    // Carrier interceptors and Reaver scarabs are constructed payloads. New
+    // runtime units start empty; CHK/trigger-authored values overwrite this.
     int HangarCount = 0;
+    float HangarBuildProgress = 0.0f;
+    bool HangarBuildInProgress = false;
     bool IsInvincible = false;
     bool IsDetector = false;
+};
+
+// Zergling and Scourge hatch in pairs while reserving one shared supply unit.
+// Keep the reservation attached to both siblings so the final surviving unit
+// releases it exactly once, independent of their death order.
+struct SharedSupplyComponent
+{
+    int PartnerEntityID = -1;
+    int ReservedSupply = 0;
 };
 
 struct PlayerComponent
@@ -442,14 +501,25 @@ struct CombatComponent
 {
     int GroundDamage = 0;
     int AirDamage = 0;
+    int GroundDamageBonus = 0;
+    int AirDamageBonus = 0;
+    int GroundHitCount = 1;
+    int AirHitCount = 1;
     DamageType GroundDmgType = DamageType::Normal;
     DamageType AirDmgType = DamageType::Normal;
     float AttackRange = 1.0f;
+    float GroundAttackRange = 0.0f;
+    float AirAttackRange = 0.0f;
+    float MinimumAttackRange = 0.0f;
     float AttackCooldown = 1.0f;
+    float GroundAttackCooldown = 0.0f;
+    float AirAttackCooldown = 0.0f;
     float CooldownRemaining = 0.0f;
     int TargetEntityID = -1;
     WeaponBehavior WeaponBeh = WeaponBehavior::Melee;
     SplashType Splash = SplashType::None;
+    float SplashInnerRadius = 0.0f;
+    float SplashMediumRadius = 0.0f;
     float SplashRadius = 0.0f;
     Elevation MyElevation = Elevation::Ground;
     bool CanTargetAir = false;
@@ -460,11 +530,14 @@ struct CombatComponent
     Core::Math::Vec2 PendingAttackTargetPos;
     int PendingAttackDamage = 0;
     int PendingAttackUpgradeBonus = 0;
+    int PendingAttackHitCount = 1;
     float PendingAttackRangePixels = 0.0f;
     float PendingAttackElapsed = 0.0f;
+    bool PendingAttackMissedAtLaunch = false;
     int AutoTargetEntityID = -1;
     int LastDamagerEntityID = -1;
     float AutoTargetLockSeconds = 0.0f;
+    bool SelfDestructOnAttack = false;
 };
 
 struct SiegeTransitionComponent
@@ -505,6 +578,11 @@ struct BuildingComponent
     bool IsBuilding = true;
     float BuildProgress = 0.0f;
     float TotalBuildTime = 60.0f;
+    // Fractional vitality generated by construction. Keep this separate from
+    // current HP/shields so incoming damage is never healed by recomputing an
+    // absolute progress curve on the next tick.
+    float ConstructionHitPointAccumulator = 0.0f;
+    float ConstructionShieldAccumulator = 0.0f;
     bool IsAddon = false;
     bool CanLiftOff = false;
     bool IsLifted = false;
@@ -680,24 +758,77 @@ struct RevealAreaComponent
     bool ProvidesDetection = false;
 };
 
+struct SpellAreaComponent
+{
+    StatusEffect Effect = StatusEffect::None;
+    float Radius = 0.0f;
+    float DurationRemaining = 0.0f;
+    int SourceEntityID = -1;
+};
+
+// Weapon hits that leave Protoss shields above zero create an authored shield
+// overlay at a direction-specific LO* offset. Combat queues the 32-way impact
+// indices and AnimationSystem consumes them after the target root has advanced.
+struct ShieldImpactRequest
+{
+    uint8_t DirectionIndex = 0;
+    uint32_t SourceImageID = 0;
+    int SourceFrame = 0;
+    bool SourceFlipped = false;
+};
+
+struct ShieldImpactComponent
+{
+    std::vector<ShieldImpactRequest> Impacts;
+};
+
 struct BulletComponent
 {
     int SourceEntityID = -1;
     WeaponBehavior Behavior = WeaponBehavior::FlyDirect;
     SplashType Splash = SplashType::None;
+    float SplashInnerRadius = 0.0f;
+    float SplashMediumRadius = 0.0f;
     float SplashRadius = 0.0f;
     int BaseDamage = 0;
     DamageType DamageKind = DamageType::Normal;
     float Speed = 10.0f;
     float MaxLifetime = 5.0f;
     float LifetimeRemaining = 5.0f;
+    float DamageTickAccumulator = 0.0f;
     Core::Math::Vec2 Velocity;
     Core::Math::Vec2 TargetPos;
+    Core::Math::Vec2 TargetPositionOffset;
+    Core::Math::Vec2 SplashLineStart;
+    Core::Math::Vec2 SplashLineEnd;
     int TargetEntityID = -1;
+    int PreviousBounceTargetEntityID = -1;
+    int RemainingBounces = 0;
+    int BounceDamageDivisor = 1;
+    bool CanTargetGround = true;
+    bool CanTargetAir = false;
     bool HasHit = false;
     int DamageUpgradeBonus = 0;
+    int HitCount = 1;
     bool IsRangedAttack = false;
+    bool MissedAtLaunch = false;
     bool PlayImpactAnimation = false;
+    bool AppliesAcidSpores = false;
+    bool SelfDestructSourceOnHit = false;
+    bool ImpactAtProjectilePosition = false;
+    bool FollowTargetPositionOffset = false;
+    // Subterranean Spines applies damage from each authored dogrddamage
+    // event as the invisible controller advances. The per-projectile hit
+    // list prevents later spine segments and the terminal impact from
+    // damaging the same unit again.
+    bool DamageDrivenByIScript = false;
+    std::vector<int> IScriptHitEntityIDs;
+    bool ReachedIScriptDamageEndpoint = false;
+    float IScriptEndpointGraceRemaining = 0.0f;
+    // Projectile movement and DAT lifetime begin only after the authored Init
+    // animation raises sigorder 1. Images without Init launch immediately.
+    bool AwaitingLaunchSignal = false;
+    int VisualAnimationOverride = -1;
 };
 
 struct StatusEffectComponent
@@ -810,6 +941,12 @@ struct NukeComponent
     bool Detonated = false;
     bool HasNukeDot = false;
     int NukeDotEntityID = -1;
+};
+
+struct VultureMineInventoryComponent
+{
+    int MaxMines = 3;
+    int RemainingMines = 3;
 };
 
 struct SpiderMineComponent

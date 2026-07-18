@@ -74,7 +74,9 @@ enum class TerranResearchId : uint8_t
     ProtossMindControl = static_cast<uint8_t>(ResearchId::Protoss_MindControl),
     ProtossMaelstrom = static_cast<uint8_t>(ResearchId::Protoss_Maelstrom),
     ProtossReaverCapacity = static_cast<uint8_t>(ResearchId::Protoss_ReaverCapacity),
-    ProtossCarrierCapacity = static_cast<uint8_t>(ResearchId::Protoss_CarrierCapacity)
+    ProtossCarrierCapacity = static_cast<uint8_t>(ResearchId::Protoss_CarrierCapacity),
+    ProtossGraviticBoosters = static_cast<uint8_t>(ResearchId::Protoss_GraviticBoosters),
+    ProtossGraviticThrusters = static_cast<uint8_t>(ResearchId::Protoss_GraviticThrusters)
 };
 
 inline ResearchId ToResearchId(TerranResearchId ID)
@@ -119,6 +121,7 @@ enum class HudCommandId : uint8_t
     UnloadAll,
     Siege,
     Unsiege,
+    LaySpiderMine,
     RechargeShields,
     Burrow,
     PsionicStorm,
@@ -222,6 +225,7 @@ enum PanelPage : int
     PageZergDroneBuild,
     PageZergDroneBuild2,
     PageZergUnitCommands,
+    PageZergLarva,
     PageZergHatchery,
     PageZergHatcheryCommands,
     PageZergCreepColony,

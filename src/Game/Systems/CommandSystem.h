@@ -46,6 +46,16 @@ public:
                                     const Core::Math::Vec2& Target,
                                     int PathingIgnoreEntityID = -1);
 
+    // Shared movement path request used both when an order is first issued and
+    // when MovementSystem must continue or rebuild a route. Long ground moves
+    // are deliberately staged so every local A* search stays bounded.
+    static bool RequestMovementPath(Core::ECS::EntityManager& EM,
+                                    Core::ECS::EntityID EntityID,
+                                    const Game::Map::GameMap* Map,
+                                    const Core::Math::Vec2& Target,
+                                    int PathingIgnoreEntityID = -1,
+                                    int AvoidDynamicEntityID = -1);
+
     static void IssueAttackMove(Core::ECS::EntityManager& EM,
                                  const std::vector<int>& Units,
                                  Core::Math::Vec2 Target);

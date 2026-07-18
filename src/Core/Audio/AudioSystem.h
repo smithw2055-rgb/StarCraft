@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -40,8 +42,62 @@ struct SoundType
     int Priority = 0;
     uint8_t Flags = 0;
     int Race = 0;
-    int MinVolume = 0;  // minimum volume floor (0-127)
+    int MinVolume = 0;  // classic minimum-volume floor (0-100 scale)
 };
+
+struct SoundPlaybackPolicy
+{
+    int Priority = 0;
+    uint8_t Flags = 0;
+    int MinVolume = 0;
+};
+
+// sfxdata.tbl stores paths relative to the classic "sound" directory, while
+// archive readers expect a path rooted at the game data directory.
+inline std::string NormalizeArchiveSoundPath(std::string Path)
+{
+    std::replace(Path.begin(), Path.end(), '\\', '/');
+    while (!Path.empty() && Path.front() == '/')
+        Path.erase(Path.begin());
+
+    constexpr char Prefix[] = "sound/";
+    bool HasPrefix = Path.size() >= sizeof(Prefix) - 1;
+    for (size_t I = 0; HasPrefix && I < sizeof(Prefix) - 1; ++I)
+    {
+        HasPrefix = std::tolower((unsigned char)Path[I]) == Prefix[I];
+    }
+    return Path.empty() || HasPrefix ? Path : std::string(Prefix) + Path;
+}
+
+// sfxdata.dat stores a one-based index into sfxdata.tbl.  TblDecoder exposes
+// the table as a normal zero-based vector, so consuming the DAT value directly
+// selects the next sound (for example Marine 69 became Goliath fire, and
+// Dragoon 99 became the projectile hit sound).
+inline std::string ResolveArchiveSoundPath(
+    const std::vector<std::string>& TblPaths,
+    uint32_t OneBasedTblIndex)
+{
+    if (OneBasedTblIndex == 0 || OneBasedTblIndex > TblPaths.size())
+        return {};
+    return NormalizeArchiveSoundPath(TblPaths[OneBasedTblIndex - 1]);
+}
+
+inline SoundPlaybackPolicy ResolveSoundPlaybackPolicy(
+    const SoundType* Metadata,
+    int RequestedPriority,
+    SoundFlags RequestedFlags)
+{
+    SoundPlaybackPolicy Policy;
+    Policy.Priority = RequestedPriority;
+    Policy.Flags = static_cast<uint8_t>(RequestedFlags);
+    if (Metadata)
+    {
+        Policy.Priority = std::max(Policy.Priority, Metadata->Priority);
+        Policy.Flags |= Metadata->Flags;
+        Policy.MinVolume = Metadata->MinVolume;
+    }
+    return Policy;
+}
 
 struct AudioChannel
 {

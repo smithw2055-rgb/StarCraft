@@ -723,6 +723,53 @@ namespace
             IsWithinHarvestRange(EM, HarvesterID, TargetResourceID);
     }
 
+    bool RefreshResourceCollisionIgnoreAfterDepotDeparture(
+        Core::ECS::EntityManager& EM,
+        int HarvesterID,
+        int TargetResourceID)
+    {
+        auto* Path = EM.GetComponent<PathfindingComponent>(HarvesterID);
+        if (!Path || TargetResourceID < 0 ||
+            Path->RequestedIgnoreEntityID < 0 ||
+            Path->RequestedIgnoreEntityID == TargetResourceID)
+        {
+            return false;
+        }
+
+        const int DepartureDepotID = Path->RequestedIgnoreEntityID;
+        if (!EM.GetComponent<BuildingComponent>(DepartureDepotID))
+            return false;
+
+        const auto* HarvesterTrans =
+            EM.GetComponent<TransformComponent>(HarvesterID);
+        if (!HarvesterTrans)
+            return false;
+
+        // A worker which has just deposited can still be inside its depot's
+        // delivery footprint. Keep ignoring that depot until the worker has
+        // cleared it completely, then make the actual resource the collision
+        // exception. Leaving the depot as the only ignored entity makes the
+        // worker repeatedly collide with its mineral field at the final
+        // approach point.
+        const float DepartureClearance =
+            WorkerContactRange(EM, HarvesterID, Path, 2.0f);
+        if (EntityEdgeDistance(
+                EM, HarvesterTrans->Position, DepartureDepotID) <=
+            DepartureClearance)
+        {
+            return false;
+        }
+
+        const auto* ResourceTrans =
+            EM.GetComponent<TransformComponent>(TargetResourceID);
+        if (!ResourceTrans)
+            return false;
+
+        IssueHarvestMove(
+            EM, HarvesterID, TargetResourceID, ResourceTrans->Position);
+        return true;
+    }
+
     void RemoveQueuedGatherer(ResourceComponent& Resource, int HarvesterID)
     {
         Resource.QueuedGatherers.erase(
@@ -882,6 +929,88 @@ namespace
             return;
         RemoveQueuedGatherer(*Resource, HarvesterID);
         Resource->ActiveGathererEntityID = HarvesterID;
+    }
+
+    bool RetargetBlockedMineralApproach(Core::ECS::EntityManager& EM,
+                                        int HarvesterID,
+                                        HarvestComponent& Harvest,
+                                        PathfindingComponent* Path)
+    {
+        if (!Path || Path->BlockedByEntityID < 0 ||
+            Path->BlockedByEntityID == Harvest.TargetResourceID)
+        {
+            return false;
+        }
+
+        const int BlockingMineralID = Path->BlockedByEntityID;
+        const auto* TargetResource =
+            EM.GetComponent<ResourceComponent>(Harvest.TargetResourceID);
+        auto* BlockingResource =
+            EM.GetComponent<ResourceComponent>(BlockingMineralID);
+        const auto* BlockingTransform =
+            EM.GetComponent<TransformComponent>(BlockingMineralID);
+        if (!TargetResource || TargetResource->Type != ResourceType::Minerals ||
+            !BlockingResource ||
+            BlockingResource->Type != ResourceType::Minerals ||
+            BlockingResource->IsDepleted || BlockingResource->Amount <= 0 ||
+            !BlockingTransform ||
+            !IsWithinHarvestRange(EM, HarvesterID, BlockingMineralID))
+        {
+            return false;
+        }
+
+        // The tile pathfinder can accept a pixel target whose tile center is
+        // clear even though the exact segment intersects an adjacent mineral's
+        // DAT collision bounds. Movement reports that precise blocker. Do not
+        // make every mineral non-colliding; gather (or wait) at the live patch
+        // the worker has actually reached instead of retrying the unreachable
+        // patch behind it forever.
+        const int PreviousResourceID = Harvest.TargetResourceID;
+        ReleaseResourceAssignment(EM, PreviousResourceID, HarvesterID);
+        Harvest.TargetResourceID = BlockingMineralID;
+        Harvest.DesiredResourceID = BlockingMineralID;
+        Harvest.QueuedAtResource = true;
+        QueueGathererForResource(EM, BlockingMineralID, HarvesterID);
+        PruneQueuedGatherers(EM, BlockingMineralID, *BlockingResource);
+        RestoreHarvestCommand(
+            EM, HarvesterID, BlockingMineralID, BlockingTransform->Position);
+
+        ClearMotion(EM, HarvesterID);
+        if (auto* UpdatedPath =
+                EM.GetComponent<PathfindingComponent>(HarvesterID))
+        {
+            const auto* HarvesterTransform =
+                EM.GetComponent<TransformComponent>(HarvesterID);
+            UpdatedPath->RequestedDestination = HarvesterTransform
+                ? HarvesterTransform->Position
+                : BlockingTransform->Position;
+            UpdatedPath->RequestedTargetEntityID = -1;
+            UpdatedPath->RequestedIgnoreEntityID = BlockingMineralID;
+            UpdatedPath->RepathFailCount = 0;
+            UpdatedPath->BlockedByEntityID = -1;
+            UpdatedPath->HasRecentMoveFailure = false;
+            UpdatedPath->RecentMoveFailureCooldown = 0.0f;
+            UpdatedPath->DestinationStallTimer = 0.0f;
+            UpdatedPath->HasLastDestinationDistance = false;
+        }
+
+        if (CanClaimResource(EM, BlockingMineralID, HarvesterID))
+        {
+            ClaimResource(EM, BlockingMineralID, HarvesterID);
+            Harvest.State = HarvestState::Mining;
+            Harvest.QueuedAtResource = false;
+            Harvest.MineTimer = 0.0f;
+        }
+        else
+        {
+            Harvest.State = HarvestState::QueuedAtResource;
+        }
+
+        DebugHarvestLog(
+            "blocked-mineral-reroute worker=" + std::to_string(HarvesterID) +
+            " old=" + std::to_string(PreviousResourceID) +
+            " blocker=" + std::to_string(BlockingMineralID));
+        return true;
     }
 
     bool IsOwnedGasTarget(Core::ECS::EntityManager& EM, int ResourceID, int PlayerID)
@@ -1377,6 +1506,13 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
             }
 
             auto* Path = EM.GetComponent<PathfindingComponent>(ID);
+            if (RefreshResourceCollisionIgnoreAfterDepotDeparture(
+                    EM, ID, Harvest->TargetResourceID))
+            {
+                Path = EM.GetComponent<PathfindingComponent>(ID);
+            }
+            if (RetargetBlockedMineralApproach(EM, ID, *Harvest, Path))
+                break;
             QueueGathererForResource(EM, Harvest->TargetResourceID, ID);
             PruneQueuedGatherers(EM, Harvest->TargetResourceID, *ResComp);
             const bool HasGatherTurn =
@@ -1486,6 +1622,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 // This keeps a mineral line spread across its patches while
                 // preserving a FIFO wait queue when every patch is occupied.
                 if (ResComp->Type == ResourceType::Minerals &&
+                    !Harvest->QueuedAtResource &&
                     IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID))
                 {
                     const int Alternative = FindAvailableNearbyMineral(

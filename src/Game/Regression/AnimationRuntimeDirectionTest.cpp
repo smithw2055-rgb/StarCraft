@@ -1,6 +1,7 @@
 #include "Core/Audio/AudioSystem.h"
 #include "Core/ECS/SystemManager.h"
 #include "Game/Systems/AnimationSystem.h"
+#include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/CombatSystem.h"
 
 #include <cmath>
@@ -21,11 +22,36 @@ namespace Core::Audio
 
 namespace Game::Systems
 {
-    bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager&,
-                                                 BulletSystem&,
-                                                 int)
+    bool gResolvePendingAttackFrameResult = false;
+    int gIScriptDamageFrameCalls = 0;
+
+    void BulletSystem::Update(float)
     {
-        return false;
+    }
+
+    bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
+    {
+        const auto* Bullet = mSystemMgr.GetEntityManager()
+            .GetComponent<Game::Components::BulletComponent>(BulletEntityID);
+        if (!Bullet || !Bullet->DamageDrivenByIScript)
+            return false;
+        ++gIScriptDamageFrameCalls;
+        return true;
+    }
+
+    bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
+                                                 BulletSystem&,
+                                                 int EntityID)
+    {
+        if (!gResolvePendingAttackFrameResult)
+            return false;
+        auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(EntityID);
+        if (!Combat || !Combat->PendingAttackFrame)
+            return false;
+        Combat->PendingAttackFrame = false;
+        Combat->PendingAttackTargetEntityID = -1;
+        Combat->PendingAttackDamage = 0;
+        return true;
     }
 }
 
@@ -41,6 +67,8 @@ namespace
     constexpr int kWraithShadowImage = 244;
     constexpr int kValkyrieImage = 939;
     constexpr int kValkyrieShadowImage = 940;
+    constexpr int kMarineImage = 239;
+    constexpr int kDragoonImage = 122;
     constexpr int kGaussProjectileImage = 527;
     constexpr int kScvImage = 247;
     constexpr int kScvGlowImage = 249;
@@ -61,6 +89,16 @@ namespace
     constexpr int kEngineeringBayMachineryImage = 323;
     constexpr int kComsatStationImage = 271;
     constexpr int kComsatConnectorImage = 272;
+    constexpr int kHydraliskImage = 29;
+    constexpr int kHydraliskShadowImage = 30;
+    constexpr int kHydraliskNeedleImage = 35;
+    constexpr int kHydraliskNeedleSprite = 332;
+    constexpr int kHydraliskNeedleHitImage = 504;
+    constexpr int kLurkerImage = 921;
+    constexpr int kLurkerShadowImage = 922;
+    constexpr int kLurkerSpineImage = 961;
+    constexpr int kLurkerSpineSprite = 511;
+    constexpr int kLurkerSpineControllerImage = 985;
 
     void Require(bool Value, const char* Message)
     {
@@ -100,34 +138,46 @@ namespace
         return -1;
     }
 
-    int FindBurrowImage()
+    struct TimedAnimationImage
+    {
+        int ImageID = -1;
+        int Frames = 0;
+    };
+
+    TimedAnimationImage FindFiniteAnimationImage(int AnimationID,
+                                                 int MinimumFrames)
     {
         Game::IScriptDatabase Database;
         Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
-                "load iscript database for burrow transition test");
-
+                "load iscript database for timed effect lifecycle test");
         for (int ImageID = 0; ImageID < 999; ++ImageID)
         {
-            const auto* ImageInfo = Database.FindImageInfo(ImageID);
-            if (!ImageInfo || ImageInfo->IScriptID < 0)
-                continue;
-            const auto* Script = Database.FindScript(ImageInfo->IScriptID);
-            if (!Script)
-                continue;
-            const auto HasAnimation = [Script](int AnimationID) {
-                return AnimationID >= 0 &&
-                       AnimationID < (int)Script->AnimationPC.size() &&
-                       Script->AnimationPC[(size_t)AnimationID] > 0;
-            };
-            if (HasAnimation(Game::IScriptAnims::Anim_Burrow) &&
-                HasAnimation(Game::IScriptAnims::Anim_UnBurrow))
+            const auto* Info = Database.FindImageInfo(ImageID);
+            const auto* Script = Info && Info->IScriptID >= 0
+                ? Database.FindScript(Info->IScriptID)
+                : nullptr;
+            if (!Script || AnimationID < 0 ||
+                AnimationID >= (int)Script->AnimationPC.size() ||
+                Script->AnimationPC[(size_t)AnimationID] <= 0)
             {
-                return ImageID;
+                continue;
             }
-        }
 
-        Require(false, "find project image with Burrow and UnBurrow iscript entries");
-        return -1;
+            Game::IScriptVM VM;
+            VM.LoadScript(AnimationID, &Database.GetProgram().ProgramData,
+                          Script->AnimationPC[(size_t)AnimationID]);
+            VM.GetContext().ImageID = ImageID;
+            int Frames = 0;
+            for (; Frames < 180 && VM.IsRunning(); ++Frames)
+            {
+                VM.ExecuteFrame();
+                VM.ConsumeEvents();
+            }
+            if (!VM.IsRunning() && Frames >= MinimumFrames)
+                return {ImageID, Frames};
+        }
+        Require(false, "find finite project iscript animation with requested duration");
+        return {};
     }
 
     bool AnimationEmitsOrderSignal(const Game::IScriptDatabase& Database,
@@ -154,6 +204,110 @@ namespace
                     return true;
         }
         return false;
+    }
+
+    struct DelayedProjectileLaunch
+    {
+        int ImageID = -1;
+        int SignalFrame = 0;
+    };
+
+    struct AuthoredAttackTrace
+    {
+        std::vector<int> Frames;
+        int AttackEventStep = -1;
+    };
+
+    AuthoredAttackTrace TraceRealGroundAttack(int ImageID, int AnimationID)
+    {
+        Game::IScriptDatabase Database;
+        Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+            "load real unit attack iscript");
+        const auto* ImageInfo = Database.FindImageInfo(ImageID);
+        const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+            ? Database.FindScript(ImageInfo->IScriptID) : nullptr;
+        Require(Script && AnimationID >= 0 &&
+                AnimationID < (int)Script->AnimationPC.size() &&
+                Script->AnimationPC[(size_t)AnimationID] > 0,
+            "real unit exposes requested ground attack animation");
+
+        Game::IScriptVM VM;
+        VM.LoadScript(AnimationID, &Database.GetProgram().ProgramData,
+                      Script->AnimationPC[(size_t)AnimationID]);
+        auto& Context = VM.GetContext();
+        Context.ImageID = ImageID;
+        Context.HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
+        Context.CurrentDirection = 64; // east in Brood War's 256-direction space
+        Context.FlDirect = 64;
+        VM.RefreshDirectionalFrame();
+
+        AuthoredAttackTrace Result;
+        for (int Step = 0; Step < 128 && VM.IsRunning(); ++Step)
+        {
+            VM.ExecuteFrame();
+            Result.Frames.push_back(VM.GetCurrentFrame());
+            for (const auto& Event : VM.ConsumeEvents())
+            {
+                if (Event.Type == Game::IScriptEventType::Attack ||
+                    Event.Type == Game::IScriptEventType::AttackMelee ||
+                    Event.Type == Game::IScriptEventType::UseWeapon)
+                {
+                    Result.AttackEventStep = Step;
+                }
+            }
+        }
+        Require(!Result.Frames.empty() && Result.AttackEventStep >= 0 &&
+                Result.AttackEventStep + 1 < (int)Result.Frames.size(),
+            "real attack has authored recovery frames after its fire opcode");
+        return Result;
+    }
+
+    DelayedProjectileLaunch FindDelayedProjectileLaunch()
+    {
+        Game::IScriptDatabase Database;
+        Require(Database.Load("assets/scripts/iscript.bin", "assets/arr/images.dat"),
+                "load iscript database for projectile Init launch gate test");
+
+        // 526..600 is the canonical weapon-image band beginning with Fusion
+        // Cutter/Gauss Rifle and containing the Terran, Zerg, and Protoss
+        // projectile sprites used by weapons.dat.
+        for (int ImageID = 526; ImageID <= 600; ++ImageID)
+        {
+            const auto* ImageInfo = Database.FindImageInfo(ImageID);
+            const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+                ? Database.FindScript(ImageInfo->IScriptID)
+                : nullptr;
+            if (!Script ||
+                Game::IScriptAnims::Anim_Init >=
+                    (int)Script->AnimationPC.size() ||
+                Script->AnimationPC[(size_t)Game::IScriptAnims::Anim_Init] <= 0)
+            {
+                continue;
+            }
+
+            Game::IScriptVM VM;
+            VM.LoadScript(Game::IScriptAnims::Anim_Init,
+                          &Database.GetProgram().ProgramData,
+                          Script->AnimationPC[
+                              (size_t)Game::IScriptAnims::Anim_Init]);
+            VM.GetContext().ImageID = ImageID;
+            for (int Frame = 1; Frame <= 128 && VM.IsRunning(); ++Frame)
+            {
+                VM.ExecuteFrame();
+                for (const auto& Event : VM.ConsumeEvents())
+                {
+                    if (Event.Type == Game::IScriptEventType::OrderSignal &&
+                        (Event.A & 1) != 0 && Frame > 1)
+                    {
+                        return {ImageID, Frame};
+                    }
+                }
+            }
+        }
+
+        Require(false,
+            "find a real projectile Init that waits before sigorder 1");
+        return {};
     }
 
     int FindFlightTransitionImage()
@@ -266,14 +420,240 @@ int main()
     const int EastIdle = SpawnIdleDirectionalUnit(EM, 0.0f);
     const int WestIdle = SpawnIdleDirectionalUnit(EM, 3.14159265359f);
 
-    Game::Systems::AnimationSystem Anim(SysMgr);
+    Game::Systems::BulletSystem Bullet(SysMgr);
+    Game::Systems::AnimationSystem Anim(SysMgr, nullptr, &Bullet);
+
+    const auto DelayedProjectile = FindDelayedProjectileLaunch();
+    const int LaunchGateBullet = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(LaunchGateBullet)
+        .Position = {48.0f, 48.0f};
+    auto& LaunchGateRender =
+        EM.AddComponent<Game::Components::RenderComponent>(LaunchGateBullet);
+    LaunchGateRender.ImageID = (uint32_t)DelayedProjectile.ImageID;
+    LaunchGateRender.TotalFrames = 256;
+    auto& LaunchGateState =
+        EM.AddComponent<Game::Components::BulletComponent>(LaunchGateBullet);
+    LaunchGateState.AwaitingLaunchSignal = true;
+    LaunchGateState.Behavior = Game::Components::WeaponBehavior::FlyDirect;
+    LaunchGateState.Velocity = {160.0f, 0.0f};
+    auto& LaunchGatePath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(LaunchGateBullet);
+    LaunchGatePath.CurrentVelocity = LaunchGateState.Velocity;
+    for (int Frame = 1; Frame < DelayedProjectile.SignalFrame; ++Frame)
+    {
+        Anim.Update(1.0f / 24.0f);
+        Require(LaunchGateState.AwaitingLaunchSignal,
+            "projectile remains launch-gated across every pre-sigorder Init frame");
+    }
+    Anim.Update(1.0f / 24.0f);
+    Require(!LaunchGateState.AwaitingLaunchSignal,
+        "real delayed projectile Init sigorder 1 releases the launch gate");
+    EM.DestroyEntity(LaunchGateBullet);
+
+    Game::Systems::AnimationSystem::SetSpriteImageResolver(
+        [](int SpriteID) -> std::optional<uint32_t> {
+            if (SpriteID == kLurkerSpineSprite)
+                return (uint32_t)kLurkerSpineImage;
+            if (SpriteID == kHydraliskNeedleSprite)
+                return (uint32_t)kHydraliskNeedleImage;
+            return std::nullopt;
+        });
+
+    // Subterranean Spines is a moving, invisible bullet controller. Its real
+    // Init entry releases movement with sigorder 1 and then authors one
+    // independent sprite 511 spike every two simulation frames.
+    const int LurkerSpineController = EM.CreateEntity();
+    auto& LurkerSpineTrans =
+        EM.AddComponent<Game::Components::TransformComponent>(LurkerSpineController);
+    LurkerSpineTrans.Position = {32.0f, 256.0f};
+    auto& LurkerSpineRender =
+        EM.AddComponent<Game::Components::RenderComponent>(LurkerSpineController);
+    LurkerSpineRender.ImageID = kLurkerSpineControllerImage;
+    LurkerSpineRender.TotalFrames = 256;
+    auto& LurkerSpineBullet =
+        EM.AddComponent<Game::Components::BulletComponent>(LurkerSpineController);
+    LurkerSpineBullet.AwaitingLaunchSignal = true;
+    LurkerSpineBullet.Behavior = Game::Components::WeaponBehavior::FlyDirect;
+    LurkerSpineBullet.Velocity = {450.0f, 0.0f};
+    LurkerSpineBullet.DamageDrivenByIScript = true;
+    Game::Systems::gIScriptDamageFrameCalls = 0;
+    auto& LurkerSpinePath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(LurkerSpineController);
+    LurkerSpinePath.CurrentVelocity = LurkerSpineBullet.Velocity;
+    std::set<int> SeenLurkerSpines;
+    std::vector<float> LurkerSpinePositions;
+    for (int Frame = 0; Frame < 16; ++Frame)
+    {
+        if (!LurkerSpineBullet.AwaitingLaunchSignal)
+            LurkerSpineTrans.Position = LurkerSpineTrans.Position +
+                LurkerSpineBullet.Velocity * (1.0f / 24.0f);
+        Anim.Update(1.0f / 24.0f);
+        for (int EffectID :
+             EM.GetEntitiesWith<Game::Components::EffectComponent,
+                                Game::Components::TransformComponent,
+                                Game::Components::RenderComponent>())
+        {
+            const auto* Effect =
+                EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+            if (!Effect || Effect->ParentEntityID != LurkerSpineController ||
+                !SeenLurkerSpines.insert(EffectID).second)
+            {
+                continue;
+            }
+            const auto* EffectTrans =
+                EM.GetComponent<Game::Components::TransformComponent>(EffectID);
+            const auto* EffectRender =
+                EM.GetComponent<Game::Components::RenderComponent>(EffectID);
+            Require(EffectTrans && EffectRender &&
+                    EffectRender->ImageID == (uint32_t)kLurkerSpineImage &&
+                    Effect->IScriptDirection == 64 && !Effect->FollowParent,
+                "Lurker controller creates east-facing independent authored spine effects");
+            LurkerSpinePositions.push_back(EffectTrans->Position.X);
+        }
+    }
+    Require(LurkerSpinePositions.size() >= 4,
+        "real Subterranean Spines Init emits a visible multi-segment attack chain");
+    Require(Game::Systems::gIScriptDamageFrameCalls >= 4,
+        "each authored Lurker dogrddamage event advances local damage with the spine chain");
+    for (size_t I = 1; I < LurkerSpinePositions.size(); ++I)
+        Require(LurkerSpinePositions[I] > LurkerSpinePositions[I - 1] + 20.0f,
+            "successive Lurker spikes advance along the attack ray");
+    for (int EffectID : SeenLurkerSpines)
+        if (EM.IsAlive(EffectID))
+            EM.DestroyEntity(EffectID);
+    EM.DestroyEntity(LurkerSpineController);
+
+    // Hydralisk Needle Spines are not a travelling bullet in Brood War.
+    // GndAttkInit first emits sprite 332 through the attack LO table, then
+    // weapon 38 creates image 504 directly on the target for its hit script.
+    int HydraliskMuzzleLoFrame = -1;
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+        [&HydraliskMuzzleLoFrame](uint32_t ImageID, size_t LoType,
+           size_t SourceFrame, size_t OffsetIndex, bool)
+            -> std::optional<Core::Math::Vec2> {
+            if (ImageID == (uint32_t)kHydraliskImage &&
+                LoType == 0 && OffsetIndex == 0)
+            {
+                HydraliskMuzzleLoFrame = (int)SourceFrame;
+                return Core::Math::Vec2{12.0f, -6.0f};
+            }
+            return std::nullopt;
+        });
+    const int HydraliskAttack = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(HydraliskAttack)
+        .Position = {96.0f, 304.0f};
+    auto& HydraliskRender =
+        EM.AddComponent<Game::Components::RenderComponent>(HydraliskAttack);
+    HydraliskRender.ImageID = kHydraliskImage;
+    HydraliskRender.TotalFrames = 256;
+    auto& HydraliskUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(HydraliskAttack);
+    HydraliskUnit.ChkUnitID = 38;
+    HydraliskUnit.HitPoints = 80;
+    HydraliskUnit.MaxHitPoints = 80;
+    auto& HydraliskCombat =
+        EM.AddComponent<Game::Components::CombatComponent>(HydraliskAttack);
+    HydraliskCombat.PendingAttackFrame = true;
+    HydraliskCombat.PendingAttackTargetPos = {224.0f, 304.0f};
+    HydraliskCombat.AttackCooldown = 0.625f;
+    int HydraliskNeedleEffect = -1;
+    for (int Frame = 0; Frame < 24 && HydraliskNeedleEffect < 0; ++Frame)
+    {
+        Anim.Update(1.0f / 24.0f);
+        for (int EffectID :
+             EM.GetEntitiesWith<Game::Components::EffectComponent,
+                                Game::Components::RenderComponent>())
+        {
+            const auto* Effect =
+                EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+            const auto* EffectRender =
+                EM.GetComponent<Game::Components::RenderComponent>(EffectID);
+            if (Effect && EffectRender &&
+                Effect->ParentEntityID == HydraliskAttack &&
+                EffectRender->ImageID == (uint32_t)kHydraliskNeedleImage)
+            {
+                HydraliskNeedleEffect = EffectID;
+                break;
+            }
+        }
+    }
+    const auto* HydraliskNeedle = HydraliskNeedleEffect >= 0
+        ? EM.GetComponent<Game::Components::EffectComponent>(HydraliskNeedleEffect)
+        : nullptr;
+    const auto* HydraliskNeedleTrans = HydraliskNeedleEffect >= 0
+        ? EM.GetComponent<Game::Components::TransformComponent>(HydraliskNeedleEffect)
+        : nullptr;
+    Require(HydraliskNeedle && HydraliskNeedleTrans &&
+            HydraliskMuzzleLoFrame == 76 &&
+            HydraliskNeedle->IScriptDirection == 64 &&
+            std::fabs(HydraliskNeedleTrans->Position.X - 108.0f) < 0.001f &&
+            std::fabs(HydraliskNeedleTrans->Position.Y - 298.0f) < 0.001f,
+        "Hydralisk GndAttkInit uses the freshly-authored frame for its directional LO offset");
+    if (HydraliskNeedleEffect >= 0 && EM.IsAlive(HydraliskNeedleEffect))
+        EM.DestroyEntity(HydraliskNeedleEffect);
+    EM.DestroyEntity(HydraliskAttack);
+
+    const int HydraliskHitBullet = EM.CreateEntity();
+    auto& HydraliskHitTrans =
+        EM.AddComponent<Game::Components::TransformComponent>(HydraliskHitBullet);
+    HydraliskHitTrans.Position = {208.0f, 304.0f};
+    auto& HydraliskHitRender =
+        EM.AddComponent<Game::Components::RenderComponent>(HydraliskHitBullet);
+    HydraliskHitRender.ImageID = kHydraliskNeedleHitImage;
+    HydraliskHitRender.TotalFrames = 256;
+    auto& HydraliskHitBulletState =
+        EM.AddComponent<Game::Components::BulletComponent>(HydraliskHitBullet);
+    HydraliskHitBulletState.AwaitingLaunchSignal = true;
+    HydraliskHitBulletState.Behavior =
+        Game::Components::WeaponBehavior::AppearOnTarget;
+    HydraliskHitBulletState.Velocity = {10.0f, 0.0f};
+    auto& HydraliskHitPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(HydraliskHitBullet);
+    HydraliskHitPath.CurrentVelocity = HydraliskHitBulletState.Velocity;
+    for (int Frame = 0;
+         Frame < 8 && HydraliskHitBulletState.AwaitingLaunchSignal; ++Frame)
+    {
+        Anim.Update(1.0f / 24.0f);
+    }
+    Require(!HydraliskHitBulletState.AwaitingLaunchSignal &&
+            HydraliskHitTrans.Position.X == 208.0f &&
+            HydraliskHitTrans.Position.Y == 304.0f,
+        "Needle Spine Hit Init holds at the target until its sigorder 1 launch signal");
+    const Core::Math::Vec2 HydraliskHitPosition = HydraliskHitTrans.Position;
+    EM.DestroyEntity(HydraliskHitBullet);
+
+    const int HydraliskHitDeath = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(HydraliskHitDeath)
+        .Position = HydraliskHitPosition;
+    auto& HydraliskHitDeathRender =
+        EM.AddComponent<Game::Components::RenderComponent>(HydraliskHitDeath);
+    HydraliskHitDeathRender.ImageID = kHydraliskNeedleHitImage;
+    HydraliskHitDeathRender.TotalFrames = 256;
+    auto& HydraliskHitDeathUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(HydraliskHitDeath);
+    HydraliskHitDeathUnit.ChkUnitID = -1;
+    HydraliskHitDeathUnit.HitPoints = 0;
+    HydraliskHitDeathUnit.MaxHitPoints = 1;
+    auto& HydraliskHitDeathEffect =
+        EM.AddComponent<Game::Components::EffectComponent>(HydraliskHitDeath);
+    HydraliskHitDeathEffect.LifetimeRemaining = 8.0f;
+    HydraliskHitDeathEffect.InitialAnimation = Game::IScriptAnims::Anim_Death;
+    HydraliskHitDeathEffect.DestroyWhenAnimationCompletes = true;
+    Anim.Update(1.0f / 24.0f);
+    Require(EM.IsAlive(HydraliskHitDeath),
+        "Needle Spine Hit impact enters its authored Death presentation state");
+    for (int Frame = 0; Frame < 32 && EM.IsAlive(HydraliskHitDeath); ++Frame)
+        Anim.Update(1.0f / 24.0f);
+    Require(!EM.IsAlive(HydraliskHitDeath),
+        "Needle Spine Hit Death completes without leaving a static projectile remnant");
 
     Game::Systems::AnimationSystem::SetImageAttachmentPersistenceResolver(
         [](uint32_t ImageID) {
             return ImageID == kBattlecruiserShadowImage ||
                    ImageID == kScienceVesselShadowImage ||
                    ImageID == kWraithShadowImage ||
-                   ImageID == kValkyrieShadowImage;
+                   ImageID == kValkyrieShadowImage ||
+                   ImageID == kLurkerShadowImage;
         });
 
     int ScvWeaponVisualResolves = 0;
@@ -283,6 +663,247 @@ int main()
                 "mineral mining resolves the Fusion Cutter visual");
             ++ScvWeaponVisualResolves;
             return (uint32_t)kScvSparkImage;
+        });
+
+    // A node iscript may append an overlay while UpdateImageTrees is visiting
+    // that source node. Force the append to reallocate so the regression proves
+    // the source is reacquired by index after the event rather than accessed
+    // through a dangling vector reference.
+    static const std::vector<int> GrowingOverlayProgram = {
+        Game::IScriptOpcodes::Opc_PlayFram, 0,
+        Game::IScriptOpcodes::Opc_ImgOl, 501, 3, -2,
+        Game::IScriptOpcodes::Opc_Wait, 2,
+        Game::IScriptOpcodes::Opc_End
+    };
+    const int GrowingOverlayEntity = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(GrowingOverlayEntity)
+        .Position = {64.0f, 64.0f};
+    auto& GrowingOverlayTree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(GrowingOverlayEntity);
+    GrowingOverlayTree.Nodes =
+        std::vector<Game::Components::ImageSubnode>(1);
+    {
+        auto& GrowingOverlaySource = GrowingOverlayTree.Nodes.front();
+        GrowingOverlaySource.ImageID = 500;
+        GrowingOverlaySource.Visible = true;
+        GrowingOverlaySource.AnimID = Game::IScriptAnims::Anim_Init;
+        GrowingOverlaySource.VM.LoadScript(
+            Game::IScriptAnims::Anim_Init, &GrowingOverlayProgram, 0);
+    }
+    const size_t GrowingCapacityBefore = GrowingOverlayTree.Nodes.capacity();
+    Require(GrowingCapacityBefore == GrowingOverlayTree.Nodes.size(),
+        "overlay growth regression starts with a tight image-node vector");
+    Anim.Update(1.0f / 24.0f);
+    Require(GrowingOverlayTree.Nodes.capacity() > GrowingCapacityBefore,
+        "node-created overlay forces image-tree vector storage to grow");
+    Require(GrowingOverlayTree.Nodes.size() == 2 &&
+                GrowingOverlayTree.Nodes[0].Visible &&
+                GrowingOverlayTree.Nodes[0].VM.IsRunning() &&
+                GrowingOverlayTree.Nodes[1].Visible &&
+                GrowingOverlayTree.Nodes[1].ImageID == 501u &&
+                GrowingOverlayTree.Nodes[1].ParentIndex == 0,
+        "source node remains valid after its overlay reallocates image-tree storage");
+    EM.DestroyEntity(GrowingOverlayEntity);
+
+    const auto FiniteInit = FindFiniteAnimationImage(
+        Game::IScriptAnims::Anim_Init, 2);
+    Game::Systems::AnimationSystem::SetSpriteImageResolver(
+        [FiniteInit](int SpriteID) -> std::optional<uint32_t> {
+            return (SpriteID == 777 || SpriteID == 778)
+                ? std::optional<uint32_t>{(uint32_t)FiniteInit.ImageID}
+                : std::nullopt;
+        });
+    static const std::vector<int> IndependentSpriteProgram = {
+        Game::IScriptOpcodes::Opc_SprOl, 777, 3, -2,
+        Game::IScriptOpcodes::Opc_LowSprUl, 778, -4, 1,
+        Game::IScriptOpcodes::Opc_Wait, 2,
+        Game::IScriptOpcodes::Opc_End
+    };
+    const int SpriteSource = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(SpriteSource)
+        .Position = {64.0f, 64.0f};
+    auto& SpriteSourceTree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(SpriteSource);
+    SpriteSourceTree.Nodes.resize(2);
+    SpriteSourceTree.Nodes[0].Offset = {4.0f, 6.0f};
+    SpriteSourceTree.Nodes[0].Visible = true;
+    SpriteSourceTree.Nodes[1].ParentIndex = 0;
+    SpriteSourceTree.Nodes[1].Offset = {7.0f, 8.0f};
+    SpriteSourceTree.Nodes[1].Visible = true;
+    SpriteSourceTree.Nodes[1].VM.LoadScript(
+        Game::IScriptAnims::Anim_Init, &IndependentSpriteProgram, 0);
+    Anim.Update(1.0f / 24.0f);
+    std::vector<int> IndependentEffects;
+    for (int EffectID : EM.GetEntitiesWith<Game::Components::EffectComponent,
+                                           Game::Components::RenderComponent,
+                                           Game::Components::UnitComponent>())
+    {
+        const auto* Effect =
+            EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+        if (Effect && Effect->ParentEntityID == SpriteSource)
+            IndependentEffects.push_back(EffectID);
+    }
+    Require(IndependentEffects.size() == 2,
+        "sprol and lowsprul create independent effect entities");
+    bool SawAboveSprite = false;
+    bool SawBelowSprite = false;
+    for (int EffectID : IndependentEffects)
+    {
+        const auto* Effect =
+            EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+        const auto* EffectTransform =
+            EM.GetComponent<Game::Components::TransformComponent>(EffectID);
+        const auto* EffectRender =
+            EM.GetComponent<Game::Components::RenderComponent>(EffectID);
+        Require(Effect && EffectTransform && EffectRender &&
+                EffectRender->ImageID == (uint32_t)FiniteInit.ImageID &&
+                Effect->InitialAnimation == Game::IScriptAnims::Anim_Init &&
+                Effect->DestroyWhenAnimationCompletes,
+            "independent sprite resolves to its main image and owns an Init script lifecycle");
+        if (Effect->DrawAbove)
+        {
+            SawAboveSprite = true;
+            Require(EffectTransform->Position.X == 78.0f &&
+                    EffectTransform->Position.Y == 76.0f,
+                "sprol world position includes every parent-image offset");
+        }
+        else
+        {
+            SawBelowSprite = true;
+            Require(EffectTransform->Position.X == 71.0f &&
+                    EffectTransform->Position.Y == 79.0f,
+                "lowsprul preserves its authored below-sprite offset");
+        }
+    }
+    Require(SawAboveSprite && SawBelowSprite,
+        "independent sprite effects preserve authored above/below ordering");
+    EM.GetComponent<Game::Components::TransformComponent>(SpriteSource)
+        ->Position = {160.0f, 160.0f};
+    Anim.Update(1.0f / 24.0f);
+    for (int EffectID : IndependentEffects)
+    {
+        const auto* Effect =
+            EM.GetComponent<Game::Components::EffectComponent>(EffectID);
+        const auto* EffectTransform =
+            EM.GetComponent<Game::Components::TransformComponent>(EffectID);
+        Require(Effect && EffectTransform && !Effect->FollowParent &&
+                EffectTransform->Position.X < 100.0f,
+            "thingy remains at its spawn position when the source moves");
+        EM.DestroyEntity(EffectID);
+    }
+    EM.DestroyEntity(SpriteSource);
+
+    const auto LongDeath = FindFiniteAnimationImage(
+        Game::IScriptAnims::Anim_Death, 30);
+    Game::Systems::AnimationSystem::SetSpriteImageResolver(
+        [FiniteInit](int) -> std::optional<uint32_t> {
+            return (uint32_t)FiniteInit.ImageID;
+        });
+    const int DeathEffect = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(DeathEffect)
+        .Position = {80.0f, 96.0f};
+    auto& DeathRender =
+        EM.AddComponent<Game::Components::RenderComponent>(DeathEffect);
+    DeathRender.ImageID = (uint32_t)LongDeath.ImageID;
+    auto& DeathUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(DeathEffect);
+    DeathUnit.HitPoints = 0;
+    DeathUnit.MaxHitPoints = 1;
+    auto& DeathLifecycle =
+        EM.AddComponent<Game::Components::EffectComponent>(DeathEffect);
+    DeathLifecycle.LifetimeRemaining = 8.0f;
+    DeathLifecycle.InitialAnimation = Game::IScriptAnims::Anim_Death;
+    DeathLifecycle.DestroyWhenAnimationCompletes = true;
+    auto& DeathTree =
+        EM.AddComponent<Game::Components::ImageTreeComponent>(DeathEffect);
+    DeathTree.Nodes.emplace_back();
+    DeathTree.Nodes.back().ImageID = (uint32_t)LongDeath.ImageID;
+    DeathTree.Nodes.back().Visible = true;
+    DeathTree.Nodes.back().PersistentSpriteAttachment = true;
+    Anim.Update(1.0f / 24.0f);
+    Require(DeathTree.Nodes.front().AnimID == Game::IScriptAnims::Anim_Death &&
+            !DeathTree.Nodes.front().PersistentSpriteAttachment,
+        "sprite_run_anim Death switches every copied child image out of its old animation");
+    for (int Step = 1; Step < 25; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    Require(EM.IsAlive(DeathEffect),
+        "long authored Death IScript is not truncated by the former one-second timer");
+    int DeathSteps = 25;
+    while (EM.IsAlive(DeathEffect) && DeathSteps < 192)
+    {
+        Anim.Update(1.0f / 24.0f);
+        ++DeathSteps;
+    }
+    Require(!EM.IsAlive(DeathEffect) && DeathSteps < 192,
+        "death visual is removed when root and child scripts finish before the safety ceiling");
+    Game::Systems::AnimationSystem::SetSpriteImageResolver({});
+
+    int ShieldResolverCalls = 0;
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+        [&ShieldResolverCalls](uint32_t ImageID, size_t LoType, size_t Frame,
+           size_t OffsetIndex, bool Flipped)
+            -> std::optional<Core::Math::Vec2> {
+            if (ImageID == 600u && LoType == 5u && Frame == 3u &&
+                OffsetIndex == 5u && !Flipped)
+            {
+                ++ShieldResolverCalls;
+                return Core::Math::Vec2{9.0f, -11.0f};
+            }
+            return std::nullopt;
+        });
+    const int ShieldVisualTarget = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(ShieldVisualTarget)
+        .Position = {112.0f, 112.0f};
+    auto& ShieldVisualRender =
+        EM.AddComponent<Game::Components::RenderComponent>(ShieldVisualTarget);
+    ShieldVisualRender.ImageID = 600u;
+    ShieldVisualRender.FrameIndex = 3;
+    auto& ShieldVisualUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(ShieldVisualTarget);
+    ShieldVisualUnit.HitPoints = ShieldVisualUnit.MaxHitPoints = 40;
+    Game::Components::ShieldImpactRequest ShieldRequest;
+    ShieldRequest.DirectionIndex = 5;
+    ShieldRequest.SourceImageID = 600u;
+    ShieldRequest.SourceFrame = 3;
+    ShieldRequest.SourceFlipped = false;
+    EM.AddComponent<Game::Components::ShieldImpactComponent>(ShieldVisualTarget)
+        .Impacts.push_back(ShieldRequest);
+    Anim.Update(1.0f / 24.0f);
+    const auto* ShieldTree =
+        EM.GetComponent<Game::Components::ImageTreeComponent>(ShieldVisualTarget);
+    const Game::Components::ImageSubnode* ShieldNode = nullptr;
+    if (ShieldTree)
+    {
+        for (const auto& Node : ShieldTree->Nodes)
+            if (Node.Visible && Node.ImageID == 424u)
+                ShieldNode = &Node;
+    }
+    Require(ShieldResolverCalls == 1 && ShieldNode &&
+            ShieldNode->Offset.X == 9.0f &&
+            ShieldNode->Offset.Y == -11.0f &&
+            ShieldNode->OverlayOffsetType == 5 &&
+            ShieldNode->OverlayOffsetIndex == 5 &&
+            ShieldNode->VM.GetContext().CurrentDirection == 40,
+        "shield damage spawns the directional authored overlay at the impact side");
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
+
+    int TankTurretOffsetCalls = 0;
+    size_t TankTurretOffsetFrame = 0;
+    bool TankTurretOffsetFlipped = false;
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+        [&](uint32_t ImageID, size_t LoType, size_t SourceFrame,
+            size_t OffsetIndex, bool Flipped)
+            -> std::optional<Core::Math::Vec2> {
+            if (ImageID != (uint32_t)kTankBaseImage ||
+                LoType != 2 || OffsetIndex != 0)
+            {
+                return std::nullopt;
+            }
+            ++TankTurretOffsetCalls;
+            TankTurretOffsetFrame = SourceFrame;
+            TankTurretOffsetFlipped = Flipped;
+            const float X = (float)(5 + SourceFrame);
+            return Core::Math::Vec2{Flipped ? -X : X, -3.0f};
         });
 
     const int Tank = EM.CreateEntity();
@@ -308,8 +929,32 @@ int main()
             TankTurret->ImageID == (uint32_t)kTankTurretImage &&
             TankTurret->VM.GetContext().HasDirectionalFrames,
         "Tank turret is an independently scripted directional subunit image");
+    Require(TankTurretOffsetCalls > 0 &&
+            TankTurretOffsetFrame == (size_t)TankRender.FrameIndex &&
+            TankTurretOffsetFlipped == TankRender.Flipped &&
+            TankTurret->OverlayOffsetType == 2 &&
+            TankTurret->OverlayOffsetIndex == 0 &&
+            TankTurret->Offset.X ==
+                (TankRender.Flipped
+                    ? -(float)(5 + TankRender.FrameIndex)
+                    : (float)(5 + TankRender.FrameIndex)) &&
+            TankTurret->Offset.Y == -3.0f,
+        "Tank turret attaches to the current body frame's LO(2, 0) offset");
+    const auto FindTankTurretNode = [&]()
+        -> Game::Components::ImageSubnode*
+    {
+        auto* CurrentTree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
+        if (!CurrentTree)
+            return nullptr;
+        for (auto& Node : CurrentTree->Nodes)
+            if (Node.IsUnitSubunit)
+                return &Node;
+        return nullptr;
+    };
     const int EastTurretFrame = TankTurret->FrameIndex;
     const bool EastTurretFlip = TankTurret->Flipped;
+    const int InitialTankTurretOffsetCalls = TankTurretOffsetCalls;
     TankPath.FacingAngle = 3.14159265359f;
     Anim.Update(1.0f / 24.0f);
     TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
@@ -323,10 +968,24 @@ int main()
     Require(TankTurret && (TankTurret->FrameIndex != EastTurretFrame ||
             TankTurret->Flipped != EastTurretFlip),
         "moving Tank turret follows chassis heading instead of reusing body animation frames");
+    Require(TankTurret && TankTurretOffsetCalls > InitialTankTurretOffsetCalls &&
+            TankTurretOffsetFrame == (size_t)TankRender.FrameIndex &&
+            TankTurretOffsetFlipped == TankRender.Flipped &&
+            TankTurret->Offset.X ==
+                (TankRender.Flipped
+                    ? -(float)(5 + TankRender.FrameIndex)
+                    : (float)(5 + TankRender.FrameIndex)),
+        "Tank turret LO attachment refreshes with the body frame and flip state");
 
+    const int TankTarget = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(TankTarget).Position =
+        {192.0f, 184.0f};
+    EM.AddComponent<Game::Components::UnitComponent>(TankTarget);
     auto& TankCombat = EM.AddComponent<Game::Components::CombatComponent>(Tank);
+    TankCombat.TargetEntityID = TankTarget;
     TankCombat.PendingAttackFrame = true;
-    TankCombat.PendingAttackTargetPos = {192.0f, 224.0f};
+    TankCombat.PendingAttackTargetEntityID = TankTarget;
+    TankCombat.PendingAttackTargetPos = {192.0f, 184.0f};
     TankCombat.AttackCooldown = 1.0f;
     TankTree = EM.GetComponent<Game::Components::ImageTreeComponent>(Tank);
     std::vector<bool> TankNodesVisibleBeforeAttack;
@@ -339,6 +998,7 @@ int main()
     bool SawTurretMuzzleOverlay = false;
     bool SawChassisMuzzleOverlay = false;
     bool SawMuzzleDirectionInheritedFromTurret = false;
+    bool SawThirtyTwoWayTurretAim = false;
     for (int Step = 0; Step < 48; ++Step)
     {
         Anim.Update(1.0f / 24.0f);
@@ -349,6 +1009,14 @@ int main()
         for (size_t I = 0; I < TankTree->Nodes.size(); ++I)
             if (TankTree->Nodes[I].IsUnitSubunit)
                 TurretIndex = (int)I;
+        if (TurretIndex >= 0)
+        {
+            const int TurretDirection =
+                TankTree->Nodes[(size_t)TurretIndex]
+                    .VM.GetContext().CurrentDirection & 0xff;
+            SawThirtyTwoWayTurretAim =
+                SawThirtyTwoWayTurretAim || (TurretDirection % 32) != 0;
+        }
         for (size_t I = 0; I < TankTree->Nodes.size(); ++I)
         {
             const auto& Node = TankTree->Nodes[I];
@@ -388,9 +1056,66 @@ int main()
         "Tank muzzle overlay is parented to the turret instead of the chassis root");
     Require(SawMuzzleDirectionInheritedFromTurret,
         "Tank muzzle directional frame inherits the turret heading on its first visible frame");
+    Require(SawThirtyTwoWayTurretAim,
+        "Tank turret preserves a 32-way diagonal aim instead of snapping to eight directions");
+
+    // PendingAttackFrame stays asserted until the turret's attack opcode.
+    // This test stub intentionally does not resolve it. Tank's authored Init
+    // deliberately loops, so the per-node latch, not VM termination, is what
+    // proves one pending request cannot restart the entry every frame.
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkInit &&
+            TankTurret->AttackRequestLatched && TankTurret->VM.IsRunning(),
+        "one Tank pending shot stays in its single latched GndAttkInit request");
+    for (int Step = 0; Step < 4; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret && TankTurret->AttackRequestLatched &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkInit,
+        "latched Tank request does not become a duplicate Init request");
+
     TankCombat.PendingAttackFrame = false;
-    TankCombat.PendingAttackTargetEntityID = -1;
     TankCombat.PendingAttackDamage = 0;
+    Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret && !TankTurret->AttackRequestLatched &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkInit,
+        "cleared pending edge rearms Tank turret while recovery continues");
+
+    TankCombat.PendingAttackFrame = true;
+    TankCombat.PendingAttackTargetEntityID = TankTarget;
+    Game::Systems::gResolvePendingAttackFrameResult = true;
+    Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkRpt,
+        "next Tank shot maps matching attack pose to GndAttkRpt");
+
+    for (int Guard = 0; TankCombat.PendingAttackFrame && Guard < 128; ++Guard)
+        Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret && !TankCombat.PendingAttackFrame &&
+            !TankTurret->AttackRequestLatched,
+        "Tank attack opcode immediately rearms the subunit request latch");
+    Game::Systems::gResolvePendingAttackFrameResult = false;
+
+    for (int Step = 0; Step < 8; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkRpt &&
+            TankTurret->VM.IsRunning(),
+        "Tank repeat script keeps authored recovery active with a live target");
+
+    TankCombat.TargetEntityID = -1;
+    TankCombat.AutoTargetEntityID = -1;
+    TankCombat.PendingAttackTargetEntityID = -1;
+    Anim.Update(1.0f / 24.0f);
+    TankTurret = FindTankTurretNode();
+    Require(TankTurret &&
+            TankTurret->AnimID == Game::IScriptAnims::Anim_GndAttkToIdle,
+        "Tank target loss enters the authored GndAttkToIdle transition");
 
     auto& TankSiege =
         EM.AddComponent<Game::Components::SiegeTransitionComponent>(Tank);
@@ -443,6 +1168,9 @@ int main()
             EM.GetComponent<Game::Components::UnitComponent>(Tank)->ChkUnitID == 5 &&
             UnsiegeFrames.size() > 1,
         "Tank keeps the sieged hull through authored SpecialState2 before restoring tank mode");
+    EM.DestroyEntity(TankTarget);
+    EM.DestroyEntity(Tank);
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
 
     const int Mineral = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(Mineral)
@@ -885,15 +1613,67 @@ int main()
     Require(ImpactFrames.size() > 1 || ImpactOverlayCount > 0,
             "real Gauss projectile Death iscript advances the transient impact visual");
 
-    const int BurrowImageID = FindBurrowImage();
     const int BurrowProbe = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(BurrowProbe).Position = {192.0f, 192.0f};
     auto& BurrowProbeRender = EM.AddComponent<Game::Components::RenderComponent>(BurrowProbe);
-    BurrowProbeRender.ImageID = (uint32_t)BurrowImageID;
+    BurrowProbeRender.ImageID = kLurkerImage;
     BurrowProbeRender.TotalFrames = 256;
-    EM.AddComponent<Game::Components::UnitComponent>(BurrowProbe).ChkUnitID = 37;
+    EM.AddComponent<Game::Components::UnitComponent>(BurrowProbe).ChkUnitID = 103;
     auto& BurrowProbeState = EM.AddComponent<Game::Components::BurrowComponent>(BurrowProbe);
     BurrowProbeState.CanBurrow = true;
+
+    Game::IScriptDatabase BurrowImageDatabase;
+    Require(BurrowImageDatabase.Load("assets/scripts/iscript.bin",
+                                     "assets/arr/images.dat"),
+        "load real images.dat flags for Lurker burrow visibility");
+    const auto* LurkerShadowInfo =
+        BurrowImageDatabase.FindImageInfo(kLurkerShadowImage);
+    const auto* AlwaysVisibleInfo =
+        BurrowImageDatabase.FindImageInfo(kLurkerSpineImage);
+    const auto* TransientInfo =
+        BurrowImageDatabase.FindImageInfo(kHydraliskShadowImage);
+    Require(LurkerShadowInfo && !LurkerShadowInfo->AlwaysVisible &&
+            AlwaysVisibleInfo && AlwaysVisibleInfo->AlwaysVisible &&
+            TransientInfo && !TransientInfo->AlwaysVisible,
+        "images.dat distinguishes ordinary shadows from always-visible layers");
+
+    // Let the real Lurker Init create its persistent shadow before requesting
+    // Burrow. This makes the regression cover restoration of the actual
+    // attachment instead of only constructing a synthetic tree.
+    Game::Components::ImageTreeComponent* BurrowProbeTree = nullptr;
+    Game::Components::ImageSubnode* BurrowProbeShadow = nullptr;
+    for (int Step = 0; Step < 32 && !BurrowProbeShadow; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        BurrowProbeTree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(BurrowProbe);
+        if (!BurrowProbeTree)
+            continue;
+        for (auto& Node : BurrowProbeTree->Nodes)
+            if (Node.ImageID == (uint32_t)kLurkerShadowImage)
+                BurrowProbeShadow = &Node;
+    }
+    Require(BurrowProbeTree && BurrowProbeShadow &&
+            BurrowProbeShadow->Visible &&
+            BurrowProbeShadow->PersistentSpriteAttachment &&
+            !BurrowProbeShadow->AlwaysVisible,
+        "real Lurker Init creates a non-always-visible persistent shadow");
+
+    BurrowProbeTree->Nodes.emplace_back();
+    auto& AlwaysVisibleNode = BurrowProbeTree->Nodes.back();
+    AlwaysVisibleNode.ImageID = kLurkerSpineImage;
+    AlwaysVisibleNode.Visible = true;
+    AlwaysVisibleNode.PersistentSpriteAttachment = true;
+    AlwaysVisibleNode.AlwaysVisible = AlwaysVisibleInfo->AlwaysVisible;
+    AlwaysVisibleNode.LifetimeRemaining = -1.0f;
+    BurrowProbeTree->Nodes.emplace_back();
+    auto& TransientBurrowNode = BurrowProbeTree->Nodes.back();
+    TransientBurrowNode.ImageID = kHydraliskShadowImage;
+    TransientBurrowNode.Visible = true;
+    TransientBurrowNode.PersistentSpriteAttachment = false;
+    TransientBurrowNode.AlwaysVisible = TransientInfo->AlwaysVisible;
+    TransientBurrowNode.LifetimeRemaining = -1.0f;
+
     BurrowProbeState.Phase = Game::Components::BurrowPhase::Burrowing;
 
     for (int Step = 0;
@@ -906,9 +1686,56 @@ int main()
     Require(BurrowProbeState.Phase == Game::Components::BurrowPhase::Burrowed &&
             BurrowProbeState.IsBurrowed && BurrowProbeCloak &&
             BurrowProbeCloak->IsBurrowed && BurrowProbeCloak->IsCloaked,
-            "real project Burrow iscript signal completes the burrow state transition");
+            "real Lurker Burrow iscript signal completes the burrow state transition");
+    Require(!BurrowProbeRender.Visible,
+        "fully buried Lurker hides its root instead of leaving a ground remnant");
+    auto FindBurrowNode = [&](uint32_t ImageID)
+        -> Game::Components::ImageSubnode* {
+        auto* Tree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(BurrowProbe);
+        if (!Tree)
+            return nullptr;
+        for (auto& Node : Tree->Nodes)
+            if (Node.ImageID == ImageID)
+                return &Node;
+        return nullptr;
+    };
+    BurrowProbeShadow = FindBurrowNode(kLurkerShadowImage);
+    auto* BurrowAlwaysVisible = FindBurrowNode(kLurkerSpineImage);
+    auto* BurrowTransient = FindBurrowNode(kHydraliskShadowImage);
+    Require(BurrowProbeShadow && !BurrowProbeShadow->Visible &&
+            BurrowProbeShadow->HiddenByBurrow,
+        "fully buried Lurker hides and marks its persistent shadow");
+    Require(BurrowAlwaysVisible && BurrowAlwaysVisible->Visible &&
+            !BurrowAlwaysVisible->HiddenByBurrow,
+        "fully buried Lurker preserves images.dat always-visible layers");
+    Require(!BurrowTransient ||
+            (!BurrowTransient->Visible && !BurrowTransient->HiddenByBurrow),
+        "Burrow hides transient ground remnants without marking them for revival");
+
+    for (int Step = 0; Step < 24; ++Step)
+        Anim.Update(1.0f / 24.0f);
+    Require(!BurrowProbeRender.Visible &&
+            BurrowProbeState.Phase == Game::Components::BurrowPhase::Burrowed,
+        "buried Lurker holds the invisible state without replaying Burrow dust");
+    BurrowProbeShadow = FindBurrowNode(kLurkerShadowImage);
+    BurrowAlwaysVisible = FindBurrowNode(kLurkerSpineImage);
+    BurrowTransient = FindBurrowNode(kHydraliskShadowImage);
+    Require(BurrowProbeShadow && !BurrowProbeShadow->Visible &&
+            BurrowProbeShadow->HiddenByBurrow &&
+            BurrowAlwaysVisible && BurrowAlwaysVisible->Visible &&
+            (!BurrowTransient || !BurrowTransient->Visible),
+        "buried hold preserves the visibility markers without replaying dust");
 
     BurrowProbeState.Phase = Game::Components::BurrowPhase::Unburrowing;
+    Anim.Update(1.0f / 24.0f);
+    BurrowProbeShadow = FindBurrowNode(kLurkerShadowImage);
+    BurrowTransient = FindBurrowNode(kHydraliskShadowImage);
+    Require(BurrowProbeRender.Visible && BurrowProbeShadow &&
+            !BurrowProbeShadow->Visible &&
+            BurrowProbeShadow->HiddenByBurrow &&
+            (!BurrowTransient || !BurrowTransient->Visible),
+        "UnBurrow exposes its authored root before restoring hidden attachments");
     for (int Step = 0;
          Step < 240 && BurrowProbeState.Phase != Game::Components::BurrowPhase::Surface;
          ++Step)
@@ -917,8 +1744,17 @@ int main()
     }
     Require(BurrowProbeState.Phase == Game::Components::BurrowPhase::Surface &&
             !BurrowProbeState.IsBurrowed && BurrowProbeCloak &&
-            !BurrowProbeCloak->IsBurrowed && !BurrowProbeCloak->IsCloaked,
-            "real project UnBurrow iscript signal completes the surface transition");
+            !BurrowProbeCloak->IsBurrowed && !BurrowProbeCloak->IsCloaked &&
+            BurrowProbeRender.Visible,
+            "real Lurker UnBurrow iscript signal restores the visible surface state");
+    BurrowProbeShadow = FindBurrowNode(kLurkerShadowImage);
+    BurrowAlwaysVisible = FindBurrowNode(kLurkerSpineImage);
+    BurrowTransient = FindBurrowNode(kHydraliskShadowImage);
+    Require(BurrowProbeShadow && BurrowProbeShadow->Visible &&
+            !BurrowProbeShadow->HiddenByBurrow &&
+            BurrowAlwaysVisible && BurrowAlwaysVisible->Visible &&
+            (!BurrowTransient || !BurrowTransient->Visible),
+        "surface Lurker restores its persistent shadow without reviving transient remnants");
 
     const int FlightImageID = FindFlightTransitionImage();
     const int FlightProbe = EM.CreateEntity();
@@ -982,11 +1818,23 @@ int main()
     auto& DamageUnit = EM.AddComponent<Game::Components::UnitComponent>(DamageProbe);
     DamageUnit.ChkUnitID = 106;
     DamageUnit.MaxHitPoints = 1500;
-    DamageUnit.HitPoints = 500;
+    DamageUnit.HitPoints = 1499;
     auto& DamageBuilding = EM.AddComponent<Game::Components::BuildingComponent>(DamageProbe);
     DamageBuilding.UnderConstruction = false;
     Anim.Update(1.0f / 24.0f);
     auto* DamageTree = EM.GetComponent<Game::Components::ImageTreeComponent>(DamageProbe);
+    bool IgnitedAboveThreshold = false;
+    if (DamageTree)
+    {
+        for (const auto& Node : DamageTree->Nodes)
+            IgnitedAboveThreshold = IgnitedAboveThreshold ||
+                (Node.Visible && Node.IsDamageOverlay);
+    }
+    Require(!IgnitedAboveThreshold,
+        "one point of damage above the first damage_state threshold does not ignite a flame");
+    DamageUnit.HitPoints = 500;
+    Anim.Update(1.0f / 24.0f);
+    DamageTree = EM.GetComponent<Game::Components::ImageTreeComponent>(DamageProbe);
     Game::Components::ImageSubnode* DamageNode = nullptr;
     if (DamageTree)
     {
@@ -1004,6 +1852,20 @@ int main()
                 DamageNode->OverlayOffsetIndex == 0 &&
                 DamageNode->Offset.X == 14.0f && DamageNode->Offset.Y == -18.0f,
             "damaged completed building attaches the project large-flame image at its damage LO slot");
+    std::set<int> DamageFlameFrames;
+    for (int Step = 0; Step < 48; ++Step)
+    {
+        Anim.Update(1.0f / 24.0f);
+        DamageTree =
+            EM.GetComponent<Game::Components::ImageTreeComponent>(DamageProbe);
+        if (!DamageTree)
+            continue;
+        for (const auto& Node : DamageTree->Nodes)
+            if (Node.Visible && Node.IsDamageOverlay)
+                DamageFlameFrames.insert(Node.FrameIndex);
+    }
+    Require(DamageFlameFrames.size() > 1,
+        "unchanged damage_state preserves and advances the flame IScript instead of restarting it every frame");
     DamageUnit.HitPoints = DamageUnit.MaxHitPoints;
     Anim.Update(1.0f / 24.0f);
     bool HasVisibleDamageNode = false;
@@ -1350,6 +2212,109 @@ int main()
     Require(AttackEastRender->FrameIndex != AttackWestRender->FrameIndex ||
                 AttackEastRender->Flipped != AttackWestRender->Flipped,
             "pending attack animation uses target position direction when target entity is absent");
+
+    auto VerifyRealUnitAttackLifecycle =
+        [&](int ChkUnitID, int ImageID)
+    {
+        const auto Initial = TraceRealGroundAttack(
+            ImageID, Game::IScriptAnims::Anim_GndAttkInit);
+        const auto Repeat = TraceRealGroundAttack(
+            ImageID, Game::IScriptAnims::Anim_GndAttkRpt);
+
+        const int TargetID = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(TargetID)
+            .Position = {448.0f, 320.0f};
+        EM.AddComponent<Game::Components::UnitComponent>(TargetID);
+
+        const int EntityID = EM.CreateEntity();
+        auto& Trans =
+            EM.AddComponent<Game::Components::TransformComponent>(EntityID);
+        Trans.Position = {320.0f, 320.0f};
+        auto& Render =
+            EM.AddComponent<Game::Components::RenderComponent>(EntityID);
+        Render.ImageID = (uint32_t)ImageID;
+        Render.TotalFrames = 512;
+        EM.AddComponent<Game::Components::UnitComponent>(EntityID).ChkUnitID =
+            ChkUnitID;
+        auto& Path =
+            EM.AddComponent<Game::Components::PathfindingComponent>(EntityID);
+        Path.FacingAngle = 0.0f;
+        auto& Command =
+            EM.AddComponent<Game::Components::CommandComponent>(EntityID);
+        Command.CurrentCommand = Game::Components::CommandType::AttackMove;
+        Command.TargetEntityID = TargetID;
+        Command.TargetPosition = {640.0f, 320.0f};
+        auto& Combat =
+            EM.AddComponent<Game::Components::CombatComponent>(EntityID);
+        Combat.AttackCooldown = 1.0f;
+        Combat.CooldownRemaining = 0.0f;
+        Combat.TargetEntityID = TargetID;
+        Combat.PendingAttackTargetEntityID = TargetID;
+        Combat.PendingAttackTargetPos = {448.0f, 320.0f};
+
+        // Establish the real Init script before requesting the first shot.
+        Anim.Update(1.0f / 24.0f);
+        Combat.PendingAttackFrame = true;
+        for (int Step = 0; Step <= Initial.AttackEventStep; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            Require(Render.FrameIndex == Initial.Frames[(size_t)Step],
+                "real unit follows authored pre-fire attack frames");
+        }
+
+        // The real CombatSystem clears this flag at the attack opcode. The
+        // remainder of the body animation must continue from the same PC.
+        Combat.PendingAttackFrame = false;
+        for (int Step = Initial.AttackEventStep + 1;
+             Step < (int)Initial.Frames.size(); ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            Require(Render.FrameIndex == Initial.Frames[(size_t)Step],
+                "real unit keeps authored recoil frames after firing");
+        }
+        const int HeldInitialFrame = Render.FrameIndex;
+        Anim.Update(1.0f / 24.0f);
+        Require(Render.FrameIndex == HeldInitialFrame,
+            "completed attack holds its terminal pose until repeat or idle");
+
+        // OpenBW requests GndAttkRpt for the next cooldown while the unit is
+        // already in an attack pose; replaying GndAttkInit gives both units the
+        // visibly wrong wind-up on every shot.
+        Combat.PendingAttackFrame = true;
+        Combat.PendingAttackTargetEntityID = TargetID;
+        Anim.Update(1.0f / 24.0f);
+        Require(Render.FrameIndex == Repeat.Frames.front(),
+            "second shot begins at the real GndAttkRpt entry");
+        Combat.PendingAttackFrame = false;
+        for (size_t Step = 1; Step < Repeat.Frames.size(); ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            Require(Render.FrameIndex == Repeat.Frames[Step],
+                "repeat shot completes every authored recovery frame");
+        }
+
+        const int HeldRepeatFrame = Render.FrameIndex;
+        Combat.TargetEntityID = -1;
+        Combat.PendingAttackTargetEntityID = -1;
+        Command.TargetEntityID = -1;
+        Anim.Update(1.0f / 24.0f);
+        Require(Render.FrameIndex != HeldRepeatFrame,
+            "AttackMove target loss enters the real GndAttkToIdle transition");
+
+        std::set<int> RecoveryFrames;
+        for (int Step = 0; Step < 16; ++Step)
+        {
+            RecoveryFrames.insert(Render.FrameIndex);
+            Anim.Update(1.0f / 24.0f);
+        }
+        Require(RecoveryFrames.size() >= 3,
+            "attack-to-idle keeps advancing instead of freezing or restarting");
+
+        EM.DestroyEntity(TargetID);
+    };
+
+    VerifyRealUnitAttackLifecycle(0, kMarineImage);
+    VerifyRealUnitAttackLifecycle(66, kDragoonImage);
 
     const int FrozenIdleReference =
         SpawnIdleDirectionalUnit(EM, 0.0f, 256, DirectionalAttackImage);

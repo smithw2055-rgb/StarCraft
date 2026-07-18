@@ -6,6 +6,7 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BuildingSystem.h"
+#include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/BurrowState.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/DataEnums.h"
@@ -13,6 +14,7 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <limits>
@@ -25,6 +27,7 @@ using namespace Game::Components;
 
 const Game::Map::GameMap* gCmdMap = nullptr;
 static Game::Pathfinding::RegionPathfinder sRegionPathfinder;
+static const Game::Map::GameMap* sRegionPathfinderMap = nullptr;
 static CommandSystem::ImageIDResolver sCommandImageResolver;
 static CommandSystem::ImageIDResolver sCommandSubunitImageResolver;
 
@@ -34,26 +37,33 @@ static bool PathingDebugEnabled()
     return Value && Value[0] != '\0' && Value[0] != '0';
 }
 
+static void RebuildRegionPathfinder(const Game::Map::GameMap* Map)
+{
+    sRegionPathfinderMap = Map;
+    if (!Map)
+        return;
+
+    Game::Pathfinding::RegionPathfinder::MapContext Ctx;
+    Ctx.MapWidth = std::min(
+        Map->GetWidth(), Game::Pathfinding::RegionPathfinder::kMaxMapWidth);
+    Ctx.MapHeight = std::min(
+        Map->GetHeight(), Game::Pathfinding::RegionPathfinder::kMaxMapHeight);
+
+    for (int y = 0; y < Ctx.MapHeight; ++y)
+        for (int x = 0; x < Ctx.MapWidth; ++x)
+        {
+            Ctx.Walkable[x][y] = Map->IsWalkable(x, y);
+            Ctx.TileRegion[x][y] = -1;
+        }
+
+    sRegionPathfinder.BuildRegions(Ctx);
+}
+
 void CommandSystem::SetMap(const Game::Map::GameMap* Map)
 {
     gCmdMap = Map;
-
-    // Build region pathfinder from current map walkability.
-    if (Map)
-    {
-        Game::Pathfinding::RegionPathfinder::MapContext Ctx;
-        Ctx.MapWidth = Map->GetWidth();
-        Ctx.MapHeight = Map->GetHeight();
-
-        for (int y = 0; y < Ctx.MapHeight; ++y)
-            for (int x = 0; x < Ctx.MapWidth; ++x)
-            {
-                Ctx.Walkable[x][y] = Map->IsWalkable(x, y);
-                Ctx.TileRegion[x][y] = -1;
-            }
-
-        sRegionPathfinder.BuildRegions(Ctx);
-    }
+    RebuildRegionPathfinder(Map);
+    MovementSystem::SetPathRequestCallback(&CommandSystem::RequestMovementPath);
 }
 
 void CommandSystem::SetImageResolver(ImageIDResolver Resolver)
@@ -139,8 +149,9 @@ static bool CanQueueMovementAfterUnburrow(Core::ECS::EntityManager& EM,
     auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
     auto* Command = EM.GetComponent<CommandComponent>(EntityID);
     const Order* CurrentOrder = Command ? Command->GetCurrentOrder() : nullptr;
-    return Burrow && Burrow->CanBurrow && CurrentOrder &&
-           CurrentOrder->Type == OrderType::Unburrow;
+    return Burrow && Burrow->CanBurrow &&
+           (Burrow->Phase == BurrowPhase::Unburrowing ||
+            (CurrentOrder && CurrentOrder->Type == OrderType::Unburrow));
 }
 
 static bool IsStimTarget(Core::ECS::EntityManager& EM, Core::ECS::EntityID EntityID)
@@ -321,6 +332,130 @@ static StaticBlockerRect StaticBlockerRectForEntity(Core::ECS::EntityManager& EM
     return Rect;
 }
 
+static StaticBlockerRect ExpandedStaticBlockerRectForMover(
+    Core::ECS::EntityManager& EM,
+    Core::ECS::EntityID BlockerID,
+    const PathfindingComponent& MovingPath)
+{
+    auto Rect = StaticBlockerRectForEntity(EM, BlockerID);
+    // Directional Minkowski expansion. A small asymmetric unit only needs its
+    // actual left/right/up/down clearance, not a circle based on its largest
+    // dimension. This keeps valid gaps between bunkers and tanks open for
+    // infantry.
+    if (MovingPath.HasCollisionBounds)
+    {
+        Rect.Left += (float)MovingPath.CollisionRight + 1.0f;
+        Rect.Top += (float)MovingPath.CollisionDown + 1.0f;
+        Rect.Right += (float)MovingPath.CollisionLeft;
+        Rect.Bottom += (float)MovingPath.CollisionUp;
+    }
+    else
+    {
+        const float Radius = (float)std::max(4, MovingPath.CollisionRadius);
+        Rect.Left += Radius;
+        Rect.Top += Radius;
+        Rect.Right += Radius;
+        Rect.Bottom += Radius;
+    }
+    return Rect;
+}
+
+static bool SegmentIntersectsStaticBlockerRect(
+    const Core::Math::Vec2& Start,
+    const Core::Math::Vec2& End,
+    const StaticBlockerRect& Rect)
+{
+    // Runtime collision treats an exact edge touch as clear. Shrink the open
+    // rectangle by a tiny epsilon so the path preflight uses the same rule.
+    constexpr float kOpenEdgeEpsilon = 0.01f;
+    const float MinX = Rect.Position.X - Rect.Left + kOpenEdgeEpsilon;
+    const float MaxX = Rect.Position.X + Rect.Right - kOpenEdgeEpsilon;
+    const float MinY = Rect.Position.Y - Rect.Top + kOpenEdgeEpsilon;
+    const float MaxY = Rect.Position.Y + Rect.Bottom - kOpenEdgeEpsilon;
+    if (MinX >= MaxX || MinY >= MaxY)
+        return false;
+
+    float Enter = 0.0f;
+    float Exit = 1.0f;
+    const Core::Math::Vec2 Delta = End - Start;
+    const auto ClipAxis = [&](float Origin, float Direction,
+                              float Minimum, float Maximum)
+    {
+        if (std::fabs(Direction) <= 0.0001f)
+            return Origin > Minimum && Origin < Maximum;
+
+        float Near = (Minimum - Origin) / Direction;
+        float Far = (Maximum - Origin) / Direction;
+        if (Near > Far)
+            std::swap(Near, Far);
+        Enter = std::max(Enter, Near);
+        Exit = std::min(Exit, Far);
+        return Enter <= Exit;
+    };
+
+    if (!ClipAxis(Start.X, Delta.X, MinX, MaxX) ||
+        !ClipAxis(Start.Y, Delta.Y, MinY, MaxY))
+    {
+        return false;
+    }
+
+    // A segment beginning exactly on an edge and moving away has Exit == 0;
+    // it is escaping a contact, not entering the blocker.
+    return Exit > 0.0001f && Enter < 1.0f;
+}
+
+static bool PointInsideStaticBlockerRect(const Core::Math::Vec2& Point,
+                                         const StaticBlockerRect& Rect)
+{
+    constexpr float kOpenEdgeEpsilon = 0.01f;
+    return Point.X > Rect.Position.X - Rect.Left + kOpenEdgeEpsilon &&
+           Point.X < Rect.Position.X + Rect.Right - kOpenEdgeEpsilon &&
+           Point.Y > Rect.Position.Y - Rect.Top + kOpenEdgeEpsilon &&
+           Point.Y < Rect.Position.Y + Rect.Bottom - kOpenEdgeEpsilon;
+}
+
+static Core::ECS::EntityID FindExactStaticBlockerOnPath(
+    Core::ECS::EntityManager& EM,
+    Core::ECS::EntityID MovingID,
+    const Core::Math::Vec2& Start,
+    const std::vector<Core::Math::Vec2>& Waypoints,
+    const PathfindingComponent& MovingPath,
+    Core::ECS::EntityID IgnoreEntityID)
+{
+    if (Waypoints.empty())
+        return -1;
+
+    const auto Entities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    Core::Math::Vec2 SegmentStart = Start;
+    for (const auto& Waypoint : Waypoints)
+    {
+        for (auto BlockerID : Entities)
+        {
+            if (BlockerID == MovingID || BlockerID == IgnoreEntityID ||
+                !IsStaticGroundBlocker(EM, BlockerID))
+            {
+                continue;
+            }
+
+            const auto Rect = ExpandedStaticBlockerRectForMover(
+                EM, BlockerID, MovingPath);
+            // Harvest contact can intentionally leave a worker slightly inside
+            // a mineral/geyser DAT rectangle. Once that job is interrupted,
+            // the first construction or move route must be allowed to leave
+            // the overlap. Re-entry is still caught on every later segment.
+            if (PointInsideStaticBlockerRect(SegmentStart, Rect))
+                continue;
+            if (SegmentIntersectsStaticBlockerRect(
+                    SegmentStart, Waypoint, Rect))
+            {
+                return BlockerID;
+            }
+        }
+        SegmentStart = Waypoint;
+    }
+    return -1;
+}
+
 static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
     Core::ECS::EntityManager& EM,
     Core::ECS::EntityID MovingID,
@@ -328,34 +463,57 @@ static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
     int StartTileX,
     int StartTileY,
     const PathfindingComponent& MovingPath,
-    int IgnoreEntityID = -1)
+    int IgnoreEntityID = -1,
+    int AvoidDynamicEntityID = -1)
 {
+    const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
+    const bool RequestedAvoidIsStatic =
+        AvoidDynamicEntityID >= 0 &&
+        IsStaticGroundBlocker(EM, AvoidDynamicEntityID);
     std::vector<StaticBlockerRect> Blockers;
     for (auto EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
     {
-        if (EntityID == IgnoreEntityID)
+        // The interaction target is normally omitted so A* can approach its
+        // footprint.  Movement can pass that same entity back as the explicit
+        // avoid target after exact pixel collision rejected the planned
+        // segment.  In that recovery request the physical blocker must win;
+        // keeping the planning ignore would reproduce the identical route.
+        if (EntityID == IgnoreEntityID && EntityID != AvoidDynamicEntityID)
             continue;
-        if (EntityID == MovingID || !IsStaticGroundBlocker(EM, EntityID))
+        if (EntityID == MovingID)
             continue;
-        auto Rect = StaticBlockerRectForEntity(EM, EntityID);
-        // Directional Minkowski expansion. A small asymmetric unit only needs
-        // its actual left/right/up/down clearance, not a circle based on its
-        // largest dimension. This keeps valid gaps between bunkers and tanks
-        // open for infantry.
-        if (MovingPath.HasCollisionBounds)
+        const bool IsStaticBlocker = IsStaticGroundBlocker(EM, EntityID);
+        const bool IsRequestedDynamicAvoid = EntityID == AvoidDynamicEntityID;
+        const auto* BlockerPlayer = EM.GetComponent<PlayerComponent>(EntityID);
+        const auto* BlockerPath = EM.GetComponent<PathfindingComponent>(EntityID);
+        const bool IsStoppedFriendlyDynamicAvoid =
+            AvoidDynamicEntityID >= 0 &&
+            !RequestedAvoidIsStatic &&
+            !IsStaticBlocker &&
+            MovingPlayer && BlockerPlayer &&
+            MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
+            BlockerPath && BlockerPath->CurrentVelocity.LengthSq() <= 0.01f;
+        if (!IsStaticBlocker &&
+            !IsRequestedDynamicAvoid &&
+            !IsStoppedFriendlyDynamicAvoid)
         {
-            Rect.Left += (float)MovingPath.CollisionRight + 1.0f;
-            Rect.Top += (float)MovingPath.CollisionDown + 1.0f;
-            Rect.Right += (float)MovingPath.CollisionLeft;
-            Rect.Bottom += (float)MovingPath.CollisionUp;
+            continue;
         }
-        else
+        auto Rect = ExpandedStaticBlockerRectForMover(
+            EM, EntityID, MovingPath);
+
+        if (IsStaticBlocker && EntityID == AvoidDynamicEntityID)
         {
-            const float Radius = (float)std::max(4, MovingPath.CollisionRadius);
-            Rect.Left += Radius;
-            Rect.Top += Radius;
-            Rect.Right += Radius;
-            Rect.Bottom += Radius;
+            // A* samples 32-pixel build-tile centers.  An exact DAT rectangle
+            // can cross a tile near its edge while every sampled center stays
+            // clear (for example y=2772 versus a row center at y=2768).  Add
+            // half a tile only for the blocker proven by runtime collision so
+            // the replacement route cannot smooth back through that sliver.
+            constexpr float kExactCollisionRasterPadding = 16.0f;
+            Rect.Left += kExactCollisionRasterPadding;
+            Rect.Top += kExactCollisionRasterPadding;
+            Rect.Right += kExactCollisionRasterPadding;
+            Rect.Bottom += kExactCollisionRasterPadding;
         }
         Blockers.push_back(Rect);
     }
@@ -382,6 +540,241 @@ static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
         }
         return false;
     };
+}
+
+static Core::Math::Vec2 LimitPathStageToLocalSearch(
+    const Game::Map::GameMap& Map,
+    int StartTileX,
+    int StartTileY,
+    const Core::Math::Vec2& Candidate)
+{
+    constexpr int kMaxStageTileSpan = 20;
+    int CandidateTileX = 0;
+    int CandidateTileY = 0;
+    Map.WorldToTile(Candidate, CandidateTileX, CandidateTileY);
+    const int DeltaX = CandidateTileX - StartTileX;
+    const int DeltaY = CandidateTileY - StartTileY;
+    const int Span = std::max(std::abs(DeltaX), std::abs(DeltaY));
+    if (Span <= kMaxStageTileSpan)
+        return Candidate;
+
+    const float Scale = (float)kMaxStageTileSpan / (float)Span;
+    const int StageTileX = std::clamp(
+        (int)std::lround((float)StartTileX + (float)DeltaX * Scale),
+        0, Map.GetWidth() - 1);
+    const int StageTileY = std::clamp(
+        (int)std::lround((float)StartTileY + (float)DeltaY * Scale),
+        0, Map.GetHeight() - 1);
+    return Map.TileToWorld(StageTileX, StageTileY);
+}
+
+bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
+                                        Core::ECS::EntityID EntityID,
+                                        const Game::Map::GameMap* Map,
+                                        const Core::Math::Vec2& Target,
+                                        int PathingIgnoreEntityID,
+                                        int AvoidDynamicEntityID)
+{
+    auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+    auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+    if (!Trans || !Path)
+        return false;
+
+    const bool DestinationChanged =
+        Path->RequestedDestination.DistanceTo(Target) > 1.0f ||
+        Path->RequestedIgnoreEntityID != PathingIgnoreEntityID;
+    Path->RequestedDestination = Target;
+    Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
+    Path->Path.clear();
+    Path->PathIndex = 0;
+    Path->BlockedByEntityID = -1;
+    if (DestinationChanged)
+    {
+        Path->DestinationStallTimer = 0.0f;
+        Path->HasLastDestinationDistance = false;
+        if (!Path->HasRecentMoveFailure ||
+            Path->RecentFailedMoveTarget.DistanceTo(Target) > 16.0f)
+        {
+            Path->HasRecentMoveFailure = false;
+            Path->RecentMoveFailureCooldown = 0.0f;
+        }
+    }
+
+    if (Path->IsAir || !Map)
+    {
+        Path->Path.push_back(Target);
+        return true;
+    }
+
+    if (sRegionPathfinderMap != Map)
+        RebuildRegionPathfinder(Map);
+
+    int StartTileX = 0;
+    int StartTileY = 0;
+    int EndTileX = 0;
+    int EndTileY = 0;
+    Map->WorldToTile(Trans->Position, StartTileX, StartTileY);
+    Map->WorldToTile(Target, EndTileX, EndTileY);
+    const auto ExtraBlockedTile = BuildStaticBlockerTilePredicate(
+        EM,
+        EntityID,
+        *Map,
+        StartTileX,
+        StartTileY,
+        *Path,
+        PathingIgnoreEntityID,
+        AvoidDynamicEntityID);
+
+    Core::Math::Vec2 StageTarget = Target;
+    const auto RegionPath = sRegionPathfinder.FindRegionPath(
+        StartTileX, StartTileY, EndTileX, EndTileY);
+    if (RegionPath.Found && RegionPath.RegionSequence.size() > 1)
+    {
+        const int NextRegionID = RegionPath.RegionSequence[1];
+        if (const auto* NextRegion = sRegionPathfinder.GetRegion(NextRegionID))
+        {
+            StageTarget = Map->TileToWorld(
+                NextRegion->CenterX, NextRegion->CenterY);
+        }
+    }
+
+    // A region center can still be farther away than one bounded tile search,
+    // and simple connected maps may collapse to a single large region. In both
+    // cases keep the local A* leg short and request the next leg on arrival.
+    StageTarget = LimitPathStageToLocalSearch(
+        *Map, StartTileX, StartTileY, StageTarget);
+
+    const auto FindRoute = [&](const std::function<bool(int, int)>& BlockedTile,
+                               bool& OutUsedExpandedFallback)
+    {
+        OutUsedExpandedFallback = false;
+        auto Candidate = Game::Pathfinding::AStar::FindPath(
+            *Map,
+            Trans->Position,
+            StageTarget,
+            1000,
+            TerrainClearanceForPath(*Path),
+            BlockedTile);
+        if (!Candidate.Found || Candidate.Waypoints.empty())
+        {
+            // A local stage can sit beyond a large wall or choke whose detour
+            // alone exceeds the short-search budget. Resolve that exceptional
+            // route once with a map-sized budget, then keep only a reachable
+            // local prefix when possible. This avoids repeating the identical
+            // 1000-node failure.
+            const int ExpandedNodeBudget = std::max(
+                1000, Map->GetWidth() * Map->GetHeight());
+            auto Expanded = Game::Pathfinding::AStar::FindPath(
+                *Map,
+                Trans->Position,
+                Target,
+                ExpandedNodeBudget,
+                TerrainClearanceForPath(*Path),
+                BlockedTile);
+            if (Expanded.Found && !Expanded.Waypoints.empty())
+            {
+                Core::Math::Vec2 PrefixTarget = LimitPathStageToLocalSearch(
+                    *Map, StartTileX, StartTileY, Expanded.Waypoints.front());
+                auto Prefix = Game::Pathfinding::AStar::FindPath(
+                    *Map,
+                    Trans->Position,
+                    PrefixTarget,
+                    1000,
+                    TerrainClearanceForPath(*Path),
+                    BlockedTile);
+                if (Prefix.Found && !Prefix.Waypoints.empty())
+                {
+                    StageTarget = PrefixTarget;
+                    Candidate = std::move(Prefix);
+                }
+                else
+                {
+                    // The expanded route itself is known reachable, so retain
+                    // it rather than blacklist a valid final destination.
+                    Candidate = std::move(Expanded);
+                }
+                OutUsedExpandedFallback = true;
+            }
+        }
+        return Candidate;
+    };
+
+    bool UsedExpandedFallback = false;
+    auto Result = FindRoute(ExtraBlockedTile, UsedExpandedFallback);
+    Core::ECS::EntityID ExactPreflightBlockerID = -1;
+    if (AvoidDynamicEntityID < 0 && Result.Found && !Result.Waypoints.empty())
+    {
+        ExactPreflightBlockerID = FindExactStaticBlockerOnPath(
+            EM,
+            EntityID,
+            Trans->Position,
+            Result.Waypoints,
+            *Path,
+            PathingIgnoreEntityID);
+        if (ExactPreflightBlockerID >= 0)
+        {
+            // Tile-center rasterization can miss a thin DAT collision sliver.
+            // Before motion begins, rebuild only around the exact static entity
+            // proven by segment preflight. The command's interaction ignore is
+            // still passed separately and remains unchanged.
+            const auto StrictBlockedTile = BuildStaticBlockerTilePredicate(
+                EM,
+                EntityID,
+                *Map,
+                StartTileX,
+                StartTileY,
+                *Path,
+                PathingIgnoreEntityID,
+                ExactPreflightBlockerID);
+            bool StrictUsedExpandedFallback = false;
+            auto StrictResult = FindRoute(
+                StrictBlockedTile, StrictUsedExpandedFallback);
+            if (StrictResult.Found && !StrictResult.Waypoints.empty())
+            {
+                Result = std::move(StrictResult);
+                UsedExpandedFallback = StrictUsedExpandedFallback;
+            }
+            else
+            {
+                // Do not commit the known-colliding route when the strict
+                // raster has no exit from the current tile. Preserve the exact
+                // blocker so HarvestSystem can adopt a live blocking mineral
+                // (or another order can report a genuine path failure) instead
+                // of immediately issuing the identical straight route again.
+                Result = std::move(StrictResult);
+                Path->BlockedByEntityID = ExactPreflightBlockerID;
+                Path->HasRecentMoveFailure = true;
+                Path->RecentFailedMoveTarget = Target;
+                Path->RecentMoveFailureCooldown = 1.0f;
+                Path->CurrentSpeed = 0.0f;
+                Path->TargetSpeed = 0.0f;
+                Path->CurrentVelocity = {0.0f, 0.0f};
+                UsedExpandedFallback = StrictUsedExpandedFallback;
+            }
+        }
+    }
+    if (Result.Found && !Result.Waypoints.empty())
+        Path->Path = std::move(Result.Waypoints);
+
+    if (PathingDebugEnabled())
+    {
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        Core::Utils::Logger::Info("Pathing",
+            "request entity=" + std::to_string(EntityID) +
+            " unit=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
+            " start=" + std::to_string((int)Trans->Position.X) + "," +
+                std::to_string((int)Trans->Position.Y) +
+            " target=" + std::to_string((int)Target.X) + "," +
+                std::to_string((int)Target.Y) +
+            " stage=" + std::to_string((int)StageTarget.X) + "," +
+                std::to_string((int)StageTarget.Y) +
+            " clearance=" + std::to_string(TerrainClearanceForPath(*Path)) +
+            " preflight_blocker=" + std::to_string(ExactPreflightBlockerID) +
+            " expanded=" + std::to_string(UsedExpandedFallback ? 1 : 0) +
+            " found=" + std::to_string(Result.Found ? 1 : 0) +
+            " nodes=" + std::to_string(Path->Path.size()));
+    }
+    return !Path->Path.empty();
 }
 
 static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
@@ -429,84 +822,12 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
         return;
     }
 
-    if (Path->IsAir)
-    {
-        Path->Path.push_back(InOrder.TargetPosition);
-    }
-    else if (gCmdMap)
-    {
-        auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
-        if (Trans)
-        {
-            int StartTileX = 0;
-            int StartTileY = 0;
-            int EndTileX = 0;
-            int EndTileY = 0;
-            gCmdMap->WorldToTile(Trans->Position, StartTileX, StartTileY);
-            gCmdMap->WorldToTile(InOrder.TargetPosition, EndTileX, EndTileY);
-            const auto ExtraBlockedTile = BuildStaticBlockerTilePredicate(
-                EM,
-                EntityID,
-                *gCmdMap,
-                StartTileX,
-                StartTileY,
-                *Path,
-                InOrder.PathingIgnoreEntityID);
-            Core::Math::Vec2 StageTarget = InOrder.TargetPosition;
-            const auto RegionPath = sRegionPathfinder.FindRegionPath(
-                StartTileX, StartTileY, EndTileX, EndTileY);
-            if (RegionPath.Found && RegionPath.RegionSequence.size() > 1)
-            {
-                const int NextRegionID = RegionPath.RegionSequence[1];
-                if (const auto* NextRegion = sRegionPathfinder.GetRegion(NextRegionID))
-                {
-                    StageTarget = gCmdMap->TileToWorld(
-                        NextRegion->CenterX, NextRegion->CenterY);
-                }
-            }
-            auto Result = Game::Pathfinding::AStar::FindPath(*gCmdMap,
-                Trans->Position, StageTarget,
-                1000, TerrainClearanceForPath(*Path), ExtraBlockedTile);
-            if ((!Result.Found || Result.Waypoints.empty()) &&
-                (StageTarget - InOrder.TargetPosition).LengthSq() > 1.0f)
-            {
-                Result = Game::Pathfinding::AStar::FindPath(
-                    *gCmdMap,
-                    Trans->Position,
-                    InOrder.TargetPosition,
-                    1000,
-                    TerrainClearanceForPath(*Path),
-                    ExtraBlockedTile);
-            }
-            if (Result.Found && !Result.Waypoints.empty())
-                Path->Path = std::move(Result.Waypoints);
-
-            if (PathingDebugEnabled())
-            {
-                const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-                Core::Utils::Logger::Info("Pathing",
-                    "order entity=" + std::to_string(EntityID) +
-                    " unit=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
-                    " start=" + std::to_string((int)Trans->Position.X) + "," +
-                        std::to_string((int)Trans->Position.Y) +
-                    " target=" + std::to_string((int)InOrder.TargetPosition.X) + "," +
-                        std::to_string((int)InOrder.TargetPosition.Y) +
-                    " stage=" + std::to_string((int)StageTarget.X) + "," +
-                        std::to_string((int)StageTarget.Y) +
-                    " clearance=" + std::to_string(TerrainClearanceForPath(*Path)) +
-                    " found=" + std::to_string(Result.Found ? 1 : 0) +
-                    " nodes=" + std::to_string(Path->Path.size()));
-            }
-        }
-        else
-        {
-            Path->Path.clear();
-        }
-    }
-    else
-    {
-        Path->Path.push_back(InOrder.TargetPosition);
-    }
+    CommandSystem::RequestMovementPath(
+        EM,
+        EntityID,
+        gCmdMap,
+        InOrder.TargetPosition,
+        InOrder.PathingIgnoreEntityID);
 }
 
 static float DistanceToRepairFootprint(Core::ECS::EntityManager& EM,
@@ -548,13 +869,29 @@ static bool IsTerranRepairableMechanicalUnit(const UnitComponent& Unit)
 {
     if (Unit.UnitRace != Race::Terran)
         return false;
-    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit.ChkUnitID);
+    const int DefID = Unit.ChkUnitID == 30
+        ? Game::Races::GetUnitDefID("SiegeTank")
+        : Game::Races::GetUnitDefIDByChkUnitID(Unit.ChkUnitID);
     if (DefID < 0)
         return false;
     const auto Def = Game::Races::GetUnitDefByID(DefID);
-    return !Def.IsBuilding && Def.Name != "SCV" && Def.Name != "Marine" &&
-           Def.Name != "Firebat" && Def.Name != "Medic" &&
-           Def.Name != "Ghost";
+    if (Def.IsBuilding)
+        return false;
+
+    return Def.Name == "SCV" ||
+           Def.Name == "Vulture" ||
+           Def.Name == "Goliath" ||
+           Def.Name == "SiegeTank" ||
+           Def.Name == "Wraith" ||
+           Def.Name == "Dropship" ||
+           Def.Name == "ScienceVessel" ||
+           Def.Name == "Battlecruiser" ||
+           Def.Name == "Valkyrie" ||
+           Def.Name == "JimRaynorVulture" ||
+           Def.Name == "EdmundDukeSiege" ||
+           Def.Name == "ArcturusMengsk" ||
+           Def.Name == "Hyperion" ||
+           Def.Name == "NoradII";
 }
 
 void CommandSystem::Update(float DeltaTime)
@@ -655,19 +992,31 @@ void CommandSystem::Update(float DeltaTime)
                     auto* MyPlayer = EM.GetComponent<PlayerComponent>(ID);
                     auto* MyUnit = EM.GetComponent<UnitComponent>(ID);
                     auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
+                    auto* TargetTrans =
+                        EM.GetComponent<TransformComponent>(Order->TargetEntityID);
 
                     const bool RepairableTarget = TargetUnit &&
                         ((TargetBuilding && !TargetBuilding->UnderConstruction) ||
                          (!TargetBuilding &&
                           IsTerranRepairableMechanicalUnit(*TargetUnit)));
                     if (RepairableTarget && TargetPlayer && MyPlayer &&
-                        MyUnit && MyUnit->ChkUnitID == 7 && MyTrans &&
+                        MyUnit && MyUnit->ChkUnitID == 7 && MyTrans && TargetTrans &&
                         TargetPlayer->PlayerID == MyPlayer->PlayerID &&
                         TargetUnit->UnitRace == Components::Race::Terran &&
                         TargetUnit->HitPoints > 0 &&
-                        TargetUnit->HitPoints < TargetUnit->MaxHitPoints)
+                        (TargetUnit->HitPoints < TargetUnit->MaxHitPoints ||
+                         TargetUnit->HitPointSubDamage > 0))
                     {
                         ContinueRepair = true;
+                        if (MyUnit->RepairTargetEntityID != Order->TargetEntityID)
+                        {
+                            MyUnit->RepairTargetEntityID = Order->TargetEntityID;
+                            MyUnit->RepairHitPointAccumulator = 0.0f;
+                            // Mineral/gas fractions are already-consumed repair
+                            // value. Keep that debt on the SCV across targets so
+                            // cancelling or repeatedly switching after one HP
+                            // cannot turn fractional repair costs into free work.
+                        }
                         const auto* MyPath = EM.GetComponent<PathfindingComponent>(ID);
                         const float WorkerRadius = MyPath
                             ? (float)std::max(4, MyPath->CollisionRadius)
@@ -678,22 +1027,149 @@ void CommandSystem::Update(float DeltaTime)
                         {
                             if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
                             {
+                                Path->RequestedDestination = TargetTrans->Position;
+                                Path->RequestedTargetEntityID = Order->TargetEntityID;
+                                Path->RequestedIgnoreEntityID = Order->PathingIgnoreEntityID;
                                 Path->Path.clear();
                                 Path->PathIndex = 0;
                                 Path->CurrentSpeed = 0.0f;
                                 Path->TargetSpeed = 0.0f;
                                 Path->CurrentVelocity = {0.0f, 0.0f};
                             }
-                            const int RepairAmount = std::min(
-                                10, TargetUnit->MaxHitPoints - TargetUnit->HitPoints);
-                            TargetUnit->HitPoints += RepairAmount;
-                            if (TargetUnit->HitPoints >= TargetUnit->MaxHitPoints)
+                            int TargetDefID = TargetBuilding &&
+                                TargetBuilding->BuildingDefID >= 0
+                                ? TargetBuilding->BuildingDefID
+                                : (TargetUnit->ChkUnitID == 30
+                                    ? Game::Races::GetUnitDefID("SiegeTank")
+                                    : Game::Races::GetUnitDefIDByChkUnitID(
+                                        TargetUnit->ChkUnitID));
+                            const auto TargetDef =
+                                Game::Races::GetUnitDefByID(TargetDefID);
+                            const float BuildSeconds =
+                                (float)std::max(1, TargetDef.BuildTime);
+                            // New units begin construction at 10% HP in BW;
+                            // repair advances by that same 90%-over-build-time
+                            // rate, independent of render/update frame rate.
+                            const float RepairRate = std::max(
+                                24.0f / 256.0f,
+                                0.9f * (float)TargetUnit->MaxHitPoints /
+                                    BuildSeconds);
+                            MyUnit->RepairHitPointAccumulator +=
+                                RepairRate * DeltaTime;
+
+                            auto& Resources = HarvestSystem::GetResources(
+                                MyPlayer->PlayerID);
+                            const float MineralCostPerPoint =
+                                TargetUnit->MaxHitPoints > 0
+                                ? (float)TargetDef.MineralCost /
+                                    (3.0f * (float)TargetUnit->MaxHitPoints)
+                                : 0.0f;
+                            const float GasCostPerPoint =
+                                TargetUnit->MaxHitPoints > 0
+                                ? (float)TargetDef.GasCost /
+                                    (3.0f * (float)TargetUnit->MaxHitPoints)
+                                : 0.0f;
+
+                            int RequestedPoints =
+                                (int)MyUnit->RepairHitPointAccumulator;
+                            int RepairedPoints = 0;
+                            while (RequestedPoints-- > 0 &&
+                                   (TargetUnit->HitPoints <
+                                        TargetUnit->MaxHitPoints ||
+                                    TargetUnit->HitPointSubDamage > 0))
+                            {
+                                if ((MineralCostPerPoint > 0.0f &&
+                                     Resources.Minerals <= 0) ||
+                                    (GasCostPerPoint > 0.0f &&
+                                     Resources.VespeneGas <= 0))
+                                {
+                                    ContinueRepair = false;
+                                    break;
+                                }
+
+                                const float NextMineral =
+                                    MyUnit->RepairMineralCostAccumulator +
+                                    MineralCostPerPoint;
+                                const float NextGas =
+                                    MyUnit->RepairGasCostAccumulator +
+                                    GasCostPerPoint;
+                                const int MineralCharge = (int)NextMineral;
+                                const int GasCharge = (int)NextGas;
+                                if (Resources.Minerals < MineralCharge ||
+                                    Resources.VespeneGas < GasCharge)
+                                {
+                                    ContinueRepair = false;
+                                    break;
+                                }
+
+                                Resources.Minerals -= MineralCharge;
+                                Resources.VespeneGas -= GasCharge;
+                                MyUnit->RepairMineralCostAccumulator =
+                                    NextMineral - (float)MineralCharge;
+                                MyUnit->RepairGasCostAccumulator =
+                                    NextGas - (float)GasCharge;
+                                TargetUnit->HitPoints = std::min(
+                                    TargetUnit->MaxHitPoints,
+                                    TargetUnit->HitPoints + 1);
+                                TargetUnit->HitPointSubDamage = 0;
+                                ++RepairedPoints;
+                            }
+                            MyUnit->RepairHitPointAccumulator -=
+                                (float)RepairedPoints;
+                            MyUnit->RepairHitPointAccumulator = std::max(
+                                0.0f, MyUnit->RepairHitPointAccumulator);
+
+                            if (TargetUnit->HitPoints >=
+                                    TargetUnit->MaxHitPoints &&
+                                TargetUnit->HitPointSubDamage == 0)
+                            {
                                 ContinueRepair = false;
+                            }
+                        }
+                        else if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                        {
+                            const bool TargetMoved =
+                                Path->RequestedDestination.DistanceTo(TargetTrans->Position) >
+                                    std::max(8.0f, WorkerRadius);
+                            const bool PathEnded =
+                                Path->Path.empty() ||
+                                Path->PathIndex >= (int)Path->Path.size();
+
+                            Cmd->TargetPosition = TargetTrans->Position;
+                            if (Cmd->CurrentOrderIndex >= 0 &&
+                                Cmd->CurrentOrderIndex < (int)Cmd->Orders.size())
+                            {
+                                auto& ActiveOrder = Cmd->Orders[Cmd->CurrentOrderIndex];
+                                ActiveOrder.TargetPosition = TargetTrans->Position;
+                            }
+                            Path->RequestedTargetEntityID = Order->TargetEntityID;
+
+                            if (TargetMoved ||
+                                (PathEnded && Path->LastRepathTime >= 0.25f))
+                            {
+                                RequestMovementPath(
+                                    EM,
+                                    ID,
+                                    gCmdMap,
+                                    TargetTrans->Position,
+                                    Order->PathingIgnoreEntityID);
+                                Path->RequestedTargetEntityID = Order->TargetEntityID;
+                                Path->LastRepathTime = 0.0f;
+                            }
                         }
                     }
                 }
                 if (!ContinueRepair)
+                {
+                    if (auto* Repairer = EM.GetComponent<UnitComponent>(ID))
+                    {
+                        Repairer->RepairTargetEntityID = -1;
+                        Repairer->RepairHitPointAccumulator = 0.0f;
+                        // Resource fractions remain unsettled until a later
+                        // repair crosses an integer mineral/gas boundary.
+                    }
                     AdvanceQueue(EM, ID);
+                }
                 break;
             }
 
@@ -713,7 +1189,23 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     {
         if (Queued && CanQueueMovementAfterUnburrow(EM, EntityID))
         {
-            EM.GetComponent<CommandComponent>(EntityID)->Orders.push_back(InOrder);
+            auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+            if (!Command)
+                Command = &EM.AddComponent<CommandComponent>(EntityID);
+
+            const Order* CurrentOrder = Command->GetCurrentOrder();
+            if (!CurrentOrder || CurrentOrder->Type != OrderType::Unburrow)
+            {
+                // A transition started directly through BurrowState has no rich
+                // order to act as a queue barrier. Install one so the queued
+                // movement becomes active only after the surface signal.
+                Command->Orders.clear();
+                Command->CurrentOrderIndex = -1;
+                Order TransitionBarrier;
+                TransitionBarrier.Type = OrderType::Unburrow;
+                Command->QueueOrder(TransitionBarrier);
+            }
+            Command->Orders.push_back(InOrder);
             return;
         }
         if (!IsFrozenByStatus(EM, EntityID))
@@ -748,12 +1240,23 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
 {
     struct GroupMove
     {
+        struct MemberFootprint
+        {
+            Core::Math::Vec2 Position;
+            float Left = 0.0f;
+            float Up = 0.0f;
+            float Right = 0.0f;
+            float Down = 0.0f;
+        };
+
         Core::Math::Vec2 Center;
         Core::Math::Vec2 Min;
         Core::Math::Vec2 Max;
+        std::vector<MemberFootprint> Members;
         int Count = 0;
         bool AnyGroundUnit = false;
         bool TargetInsideBounds = false;
+        bool HasOverlappingMembers = false;
         bool PreserveOffsets = false;
         bool CompressInfantryOffsets = false;
         float SlotSpacingX = 24.0f;
@@ -792,21 +1295,47 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
             Group.Center += Trans->Position;
             ++Group.Count;
             Group.AnyGroundUnit = Group.AnyGroundUnit || !ShouldMoveAsAir(EM, ID);
+            float Left = (float)CollisionRadiusForUnit(
+                EM.GetComponent<UnitComponent>(ID));
+            float Up = Left;
+            float Right = Left;
+            float Down = Left;
             if (auto* Path = EM.GetComponent<PathfindingComponent>(ID);
                 Path && Path->HasCollisionBounds)
             {
-                const float Width =
-                    (float)(Path->CollisionLeft + Path->CollisionRight + 1);
-                const float Height =
-                    (float)(Path->CollisionUp + Path->CollisionDown + 1);
+                Left = (float)Path->CollisionLeft;
+                Up = (float)Path->CollisionUp;
+                Right = (float)Path->CollisionRight + 1.0f;
+                Down = (float)Path->CollisionDown + 1.0f;
+                const float Width = Left + Right;
+                const float Height = Up + Down;
                 Group.SlotSpacingX = std::max(Group.SlotSpacingX, Width + 4.0f);
                 Group.SlotSpacingY = std::max(Group.SlotSpacingY, Height + 4.0f);
             }
+            Group.Members.push_back({Trans->Position, Left, Up, Right, Down});
         }
 
         if (Group.Count >= 2)
         {
             Group.Center = Group.Center / (float)Group.Count;
+            for (size_t I = 0;
+                 I < Group.Members.size() && !Group.HasOverlappingMembers;
+                 ++I)
+            {
+                const auto& A = Group.Members[I];
+                for (size_t J = I + 1; J < Group.Members.size(); ++J)
+                {
+                    const auto& B = Group.Members[J];
+                    if (A.Position.X - A.Left < B.Position.X + B.Right &&
+                        A.Position.X + A.Right > B.Position.X - B.Left &&
+                        A.Position.Y - A.Up < B.Position.Y + B.Down &&
+                        A.Position.Y + A.Down > B.Position.Y - B.Up)
+                    {
+                        Group.HasOverlappingMembers = true;
+                        break;
+                    }
+                }
+            }
             const float MaxSpan = Group.AnyGroundUnit ? 192.0f : 256.0f;
             const bool CompactSelection =
                 Group.Max.X - Group.Min.X <= MaxSpan &&
@@ -817,8 +1346,11 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                 InOrder.TargetPosition.X <= Group.Max.X &&
                 InOrder.TargetPosition.Y >= Group.Min.Y &&
                 InOrder.TargetPosition.Y <= Group.Max.Y;
-            Group.PreserveOffsets =
-                CompactSelection && !Group.TargetInsideBounds;
+            // Preserve a real formation, but do not preserve a spawn/rally
+            // pile-up. Compressing already-overlapping offsets creates
+            // overlapping destination slots and a permanent mutual block.
+            Group.PreserveOffsets = CompactSelection &&
+                !Group.TargetInsideBounds && !Group.HasOverlappingMembers;
             Group.CompressInfantryOffsets =
                 Group.PreserveOffsets &&
                 Group.SlotSpacingX <= 24.0f &&
@@ -1108,12 +1640,22 @@ bool CommandSystem::SetSiegeMode(Core::ECS::EntityManager& EM,
     {
         Transition->TargetCombat = *Combat;
         Game::Races::ApplyCombatDefinition(Transition->TargetCombat, TankDef, false);
+        Transition->TargetCombat.MinimumAttackRange = 0.0f;
         if (Siege)
         {
             Transition->TargetCombat.GroundDamage = 70;
+            Transition->TargetCombat.GroundDamageBonus = 5;
+            Transition->TargetCombat.GroundHitCount = 1;
+            Transition->TargetCombat.GroundDmgType = DamageType::Explosive;
             Transition->TargetCombat.AttackRange = 12.0f;
+            Transition->TargetCombat.GroundAttackRange = 12.0f;
+            Transition->TargetCombat.MinimumAttackRange = 2.0f;
+            Transition->TargetCombat.AttackCooldown = 75.0f / 24.0f;
+            Transition->TargetCombat.GroundAttackCooldown = 75.0f / 24.0f;
             Transition->TargetCombat.Splash = SplashType::Radial;
-            Transition->TargetCombat.SplashRadius = 2.0f;
+            Transition->TargetCombat.SplashInnerRadius = 10.0f / 32.0f;
+            Transition->TargetCombat.SplashMediumRadius = 25.0f / 32.0f;
+            Transition->TargetCombat.SplashRadius = 40.0f / 32.0f;
             Transition->TargetCombat.IsRanged = true;
             Transition->TargetCombat.CanTargetGround = true;
         }

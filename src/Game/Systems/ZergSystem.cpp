@@ -1,4 +1,5 @@
 #include "Game/Systems/ZergSystem.h"
+#include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/BurrowState.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/ProductionSystem.h"
@@ -27,6 +28,34 @@ namespace
     ZergSystem::CollisionBoundsResolver gCollisionBoundsResolver;
     ZergSystem::BurrowCapabilityResolver gBurrowCapabilityResolver;
 
+    std::pair<int, int> ZergBuildingFootprintTiles(int ChkUnitID)
+    {
+        switch (ChkUnitID)
+        {
+            case 131: // Hatchery
+            case 132: // Lair
+            case 133: // Hive
+                return {4, 3};
+            case 149: // Extractor
+                return {4, 2};
+            case 137: // Greater Spire
+            case 141: // Spire
+            case 143: // Creep Colony
+            case 144: // Spore Colony
+            case 146: // Sunken Colony
+                return {2, 2};
+            default:
+                return {3, 2};
+        }
+    }
+
+    bool IsCreepSpreadingBuilding(int ChkUnitID)
+    {
+        return ChkUnitID == 131 || ChkUnitID == 132 ||
+               ChkUnitID == 133 || ChkUnitID == 143 ||
+               ChkUnitID == 144 || ChkUnitID == 146;
+    }
+
     uint32_t ResolveImageID(int ChkUnitID)
     {
         return gImageResolver ? gImageResolver(ChkUnitID) : (uint32_t)ChkUnitID;
@@ -40,18 +69,7 @@ namespace
     bool HasCreepAcrossBuildingFootprint(int ChkUnitID,
                                          const Core::Math::Vec2& Position)
     {
-        int Width = 3;
-        int Height = 2;
-        if (ChkUnitID == 131 || ChkUnitID == 132 || ChkUnitID == 133)
-        {
-            Width = 4;
-            Height = 3;
-        }
-        else if (ChkUnitID == 137 || ChkUnitID == 141)
-        {
-            Width = 2;
-            Height = 2;
-        }
+        const auto [Width, Height] = ZergBuildingFootprintTiles(ChkUnitID);
         const int CenterX = (int)(Position.X / 32.0f);
         const int CenterY = (int)(Position.Y / 32.0f);
         const int Left = CenterX - Width / 2;
@@ -212,47 +230,90 @@ void ZergSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
 
+    // Authored Burrow/UnBurrow scripts normally finish through sigorder 4 in
+    // AnimationSystem. Keep a gameplay-side timeout so a missing/broken script
+    // cannot leave the unit permanently unable to move, attack, or advance its
+    // queued order.
+    for (int EntityID : EM.GetEntitiesWith<BurrowComponent>())
+    {
+        auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+        if (!Burrow || !Burrow->IsTransitioning())
+            continue;
+        Burrow->BurrowTransitionTime =
+            std::max(0.0f, Burrow->BurrowTransitionTime - DeltaTime);
+        if (Burrow->BurrowTransitionTime > 0.0f)
+            continue;
+        if (BurrowState::CompleteTransition(EM, EntityID))
+        {
+            Logger::Warning(
+                "ZergSystem", "Burrow transition timed out; completed fallback for entity " +
+                    std::to_string(EntityID));
+        }
+    }
+
     if (!mGridInitialized && sMap)
     {
         mMapWidth = sMap->GetWidth();
         mMapHeight = sMap->GetHeight();
         mCreepGrid.resize(mMapWidth * mMapHeight, 0);
+        mCreepRecedingGrid.resize(mCreepGrid.size(), 0);
+        for (int Y = 0; Y < mMapHeight; ++Y)
+            for (int X = 0; X < mMapWidth; ++X)
+                mCreepGrid[(size_t)Y * (size_t)mMapWidth + (size_t)X] =
+                    sMap->GetTile(X, Y).HasCreep ? 1u : 0u;
         mGridInitialized = true;
     }
 
-    if (!sMap || mCreepGrid.empty()) return;
+    if (!sMap || mCreepGrid.empty())
+    {
+        ProcessZergRegeneration(EM, DeltaTime);
+        return;
+    }
 
-    // Brood War creep sources are Hatchery/Lair/Hive (and Creep Colony), not
-    // every organic Zerg structure.  Keeping this source list explicit stops
-    // ordinary tech buildings from chaining creep across the entire map.
-    struct CreepSource
+    // Only Hatchery/Lair/Hive and the three colony forms expand creep. Every
+    // living grounded Zerg building is still a provider for the creep under
+    // its own footprint, matching OpenBW's creep_is_being_sustained query.
+    struct CreepProvider
     {
         int EntityID = -1;
         int TileX = 0;
         int TileY = 0;
+        int FootprintWidth = 0;
+        int FootprintHeight = 0;
+        bool SustainsFullEllipse = false;
         bool UnderConstruction = false;
     };
-    std::vector<CreepSource> CreepSources;
+    std::vector<CreepProvider> CreepProviders;
+    std::vector<CreepProvider> CreepSources;
     auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
-        if (!B || !T || !B->IsOrganic) continue;
-
         auto* U = EM.GetComponent<UnitComponent>(Eid);
-        if (!U || (U->ChkUnitID != 131 && U->ChkUnitID != 132 &&
-                   U->ChkUnitID != 133 && U->ChkUnitID != 143))
+        if (!B || !T || !U || U->HitPoints <= 0 ||
+            U->UnitRace != Race::Zerg || B->IsLifted)
+        {
             continue;
+        }
+
+        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(U->ChkUnitID);
+        if (DefID < 0 || !Game::Races::GetUnitDefByID(DefID).IsBuilding)
+            continue; // Eggs use BuildingComponent only as morph progress state.
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-
+        const auto [FootprintWidth, FootprintHeight] =
+            ZergBuildingFootprintTiles(U->ChkUnitID);
         const auto* Morph = EM.GetComponent<MorphComponent>(Eid);
         const bool IsExistingSourceUpgrade = Morph && Morph->IsMorphing &&
             Morph->SourceUnitID == Eid;
-        CreepSources.push_back({Eid, TX, TY,
-            B->UnderConstruction && !IsExistingSourceUpgrade});
+        const bool SpreadsCreep = IsCreepSpreadingBuilding(U->ChkUnitID);
+        CreepProvider Provider{Eid, TX, TY, FootprintWidth, FootprintHeight,
+            SpreadsCreep, B->UnderConstruction && !IsExistingSourceUpgrade};
+        CreepProviders.push_back(Provider);
+        if (SpreadsCreep)
+            CreepSources.push_back(Provider);
     }
 
     const auto InBounds = [&](int X, int Y)
@@ -283,17 +344,16 @@ void ZergSystem::Update(float DeltaTime)
                     ++Count;
         return Count;
     };
-    const auto SeedBuildingFootprint = [&](const CreepSource& Src)
+    const auto SeedBuildingFootprint = [&](const CreepProvider& Src)
     {
-        // Hatchery/Lair/Hive placement is 4x3 tiles. This mirrors
-        // set_creep_building_tiles before incremental SpreadCreep begins.
-        const int Left = Src.TileX - 2;
-        const int Top = Src.TileY - 1;
-        for (int Y = Top; Y < Top + 3; ++Y)
-            for (int X = Left; X < Left + 4; ++X)
+        // Seed the actual footprint before incremental spread begins.
+        const int Left = Src.TileX - Src.FootprintWidth / 2;
+        const int Top = Src.TileY - Src.FootprintHeight / 2;
+        for (int Y = Top; Y < Top + Src.FootprintHeight; ++Y)
+            for (int X = Left; X < Left + Src.FootprintWidth; ++X)
                 SetCreep(X, Y);
     };
-    const auto SpreadOne = [&](const CreepSource& Src, CreepSourceState& State)
+    const auto SpreadOne = [&](const CreepProvider& Src, CreepProviderState& State)
     {
         std::array<std::vector<size_t>, 8> Targets;
         // Exact OpenBW max creep bounding box: center +/- (320, 200) px.
@@ -327,14 +387,16 @@ void ZergSystem::Update(float DeltaTime)
         return false;
     };
 
-    std::vector<int> LiveSourceIDs;
-    LiveSourceIDs.reserve(CreepSources.size());
     constexpr float SpreadIntervalSeconds = 16.0f / 30.0f;
     for (const auto& Src : CreepSources)
     {
-        LiveSourceIDs.push_back(Src.EntityID);
-        auto [It, Inserted] = mCreepSourceStates.try_emplace(Src.EntityID);
+        auto [It, Inserted] = mCreepProviderStates.try_emplace(Src.EntityID);
         auto& State = It->second;
+        State.TileX = Src.TileX;
+        State.TileY = Src.TileY;
+        State.FootprintWidth = Src.FootprintWidth;
+        State.FootprintHeight = Src.FootprintHeight;
+        State.SustainsFullEllipse = true;
         if (Inserted)
         {
             SeedBuildingFootprint(Src);
@@ -362,48 +424,191 @@ void ZergSystem::Update(float DeltaTime)
             State.Frozen = true;
         }
     }
-    for (auto It = mCreepSourceStates.begin(); It != mCreepSourceStates.end();)
+
+    std::vector<int> LiveProviderIDs;
+    LiveProviderIDs.reserve(CreepProviders.size());
+    for (const auto& Provider : CreepProviders)
     {
-        if (std::find(LiveSourceIDs.begin(), LiveSourceIDs.end(), It->first) ==
-            LiveSourceIDs.end())
-            It = mCreepSourceStates.erase(It);
-        else
-            ++It;
+        LiveProviderIDs.push_back(Provider.EntityID);
+        auto [It, Inserted] =
+            mCreepProviderStates.try_emplace(Provider.EntityID);
+        auto& State = It->second;
+        State.TileX = Provider.TileX;
+        State.TileY = Provider.TileY;
+        State.FootprintWidth = Provider.FootprintWidth;
+        State.FootprintHeight = Provider.FootprintHeight;
+        State.SustainsFullEllipse = Provider.SustainsFullEllipse;
+        if (Inserted)
+        {
+            State.SelectionSequence =
+                (uint32_t)Provider.EntityID * 2654435761u;
+            State.Frozen = !Provider.SustainsFullEllipse;
+        }
     }
+
+    const auto VisitProviderTiles = [&](int TileX,
+                                        int TileY,
+                                        int FootprintWidth,
+                                        int FootprintHeight,
+                                        bool FullEllipse,
+                                        auto&& Visitor)
+    {
+        if (!FullEllipse)
+        {
+            const int Left = TileX - FootprintWidth / 2;
+            const int Top = TileY - FootprintHeight / 2;
+            for (int Y = Top; Y < Top + FootprintHeight; ++Y)
+                for (int X = Left; X < Left + FootprintWidth; ++X)
+                    if (InBounds(X, Y))
+                        Visitor(X, Y);
+            return;
+        }
+
+        for (int Y = std::max(0, TileY - 7);
+             Y <= std::min(mMapHeight - 1, TileY + 7); ++Y)
+        {
+            for (int X = std::max(0, TileX - 10);
+                 X <= std::min(mMapWidth - 1, TileX + 10); ++X)
+            {
+                const int DX = (X - TileX) * 32;
+                const int DY = (Y - TileY) * 32;
+                if (DX * DX * 25 + DY * DY * 64 <= 320 * 320 * 25)
+                    Visitor(X, Y);
+            }
+        }
+    };
+
+    // Expanding providers sustain their ellipse; every other living grounded
+    // Zerg building sustains only its occupied footprint. No ordinary tech
+    // building can chain new creep beyond the field that already exists.
+    std::vector<uint8_t> SustainedCreep(mCreepGrid.size(), 0);
+    for (const auto& Provider : CreepProviders)
+    {
+        VisitProviderTiles(
+            Provider.TileX, Provider.TileY,
+            Provider.FootprintWidth, Provider.FootprintHeight,
+            Provider.SustainsFullEllipse,
+            [&](int X, int Y)
+            {
+                const size_t Index =
+                    (size_t)Y * (size_t)mMapWidth + (size_t)X;
+                if (mCreepGrid[Index])
+                    SustainedCreep[Index] = 1;
+            });
+    }
+
+    // A source appearing over tiles that were already receding sustains them
+    // again. OpenBW clears the receding state instead of allowing those tiles
+    // to disappear underneath a new provider.
+    for (size_t Index = 0; Index < SustainedCreep.size(); ++Index)
+        if (SustainedCreep[Index])
+            mCreepRecedingGrid[Index] = 0;
+
+    // Only tiles inside a removed provider's maximum support area begin to
+    // recede. Pre-placed map creep outside that area remains untouched; creep
+    // inside it follows the same OpenBW removal rule as dynamically grown
+    // creep. A normal building's recorded footprint becomes eligible here
+    // after that building itself is destroyed.
+    for (auto It = mCreepProviderStates.begin();
+         It != mCreepProviderStates.end();)
+    {
+        if (std::find(LiveProviderIDs.begin(), LiveProviderIDs.end(), It->first) !=
+            LiveProviderIDs.end())
+        {
+            ++It;
+            continue;
+        }
+
+        const auto& RemovedProvider = It->second;
+        VisitProviderTiles(
+            RemovedProvider.TileX, RemovedProvider.TileY,
+            RemovedProvider.FootprintWidth, RemovedProvider.FootprintHeight,
+            RemovedProvider.SustainsFullEllipse,
+            [&](int X, int Y)
+            {
+                const size_t Index =
+                    (size_t)Y * (size_t)mMapWidth + (size_t)X;
+                if (mCreepGrid[Index] && !SustainedCreep[Index])
+                    mCreepRecedingGrid[Index] = 1;
+            });
+        It = mCreepProviderStates.erase(It);
+    }
+
+    const auto RecedeOneUnsupportedBoundaryTile = [&]()
+    {
+        int BestNeighborCount = 10;
+        std::vector<size_t> Candidates;
+        for (int Y = 0; Y < mMapHeight; ++Y)
+        {
+            for (int X = 0; X < mMapWidth; ++X)
+            {
+                const size_t Index =
+                    (size_t)Y * (size_t)mMapWidth + (size_t)X;
+                if (!mCreepGrid[Index] || !mCreepRecedingGrid[Index])
+                    continue;
+
+                const int Neighbors = NeighborCount(X, Y);
+                if (Neighbors < BestNeighborCount)
+                {
+                    BestNeighborCount = Neighbors;
+                    Candidates.clear();
+                }
+                if (Neighbors == BestNeighborCount)
+                    Candidates.push_back(Index);
+            }
+        }
+        if (Candidates.empty())
+            return false;
+
+        // OpenBW selects a tile from the least-supported bucket. Keep that
+        // choice deterministic for repeatable simulations and regression tests.
+        mCreepRegressionSequence =
+            mCreepRegressionSequence * 1103515245u + 12345u;
+        const size_t Candidate = Candidates[
+            (mCreepRegressionSequence >> 4u) % Candidates.size()];
+        mCreepGrid[Candidate] = 0;
+        mCreepRecedingGrid[Candidate] = 0;
+        return true;
+    };
 
     mCreepRegressionTimer += DeltaTime;
-    if (mCreepRegressionTimer >= 1.0f)
+    constexpr float RegressionIntervalSeconds = 3.0f / 30.0f;
+    constexpr int MaxRegressionStepsPerUpdate = 8;
+    int RegressionSteps = std::min(MaxRegressionStepsPerUpdate,
+        (int)(mCreepRegressionTimer / RegressionIntervalSeconds));
+    if (RegressionSteps > 0)
     {
-        mCreepRegressionTimer = 0.0f;
-        for (int Y = 0; Y < mMapHeight; Y++)
-            for (int X = 0; X < mMapWidth; X++)
-            {
-                if (mCreepGrid[Y * mMapWidth + X] == 0)
-                {
-                    auto Tile = sMap->GetTile(X, Y);
-                    if (Tile.HasCreep)
-                    {
-                        Tile.HasCreep = false;
-                        sMap->SetTile(X, Y, Tile);
-                    }
-                }
-            }
+        mCreepRegressionTimer -=
+            (float)RegressionSteps * RegressionIntervalSeconds;
+        // Do not accumulate an unbounded backlog after a large simulation
+        // step: regression must remain visibly progressive, never one-frame
+        // blanket removal.
+        mCreepRegressionTimer = std::min(
+            mCreepRegressionTimer, RegressionIntervalSeconds);
+        for (int Step = 0; Step < RegressionSteps; ++Step)
+            if (!RecedeOneUnsupportedBoundaryTile())
+                break;
     }
 
-    for (int Y = 0; Y < mMapHeight; Y++)
-        for (int X = 0; X < mMapWidth; X++)
+    for (int Y = 0; Y < mMapHeight; ++Y)
+        for (int X = 0; X < mMapWidth; ++X)
         {
-            if (mCreepGrid[Y * mMapWidth + X] > 0)
+            const bool HasCreepNow =
+                mCreepGrid[(size_t)Y * (size_t)mMapWidth + (size_t)X] != 0;
+            auto Tile = sMap->GetTile(X, Y);
+            if (Tile.HasCreep != HasCreepNow)
             {
-                auto Tile = sMap->GetTile(X, Y);
-                Tile.HasCreep = true;
+                Tile.HasCreep = HasCreepNow;
                 sMap->SetTile(X, Y, Tile);
             }
         }
 
     ProcessLarvae(EM, DeltaTime);
-    ProcessMorphs(EM, DeltaTime);
+    // Regenerate before morph completion. Otherwise a morph that finishes in
+    // this update receives the entire (potentially large) DeltaTime as if the
+    // target building had already been complete for the whole interval.
     ProcessZergRegeneration(EM, DeltaTime);
+    ProcessMorphs(EM, DeltaTime);
 }
 
 void ZergSystem::SpreadCreep(Core::ECS::EntityManager& EM)
@@ -420,7 +625,7 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
         if (!B || !B->IsOrganic || B->UnderConstruction) continue;
 
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
-        if (!Unit) continue;
+        if (!Unit || Unit->HitPoints <= 0) continue;
         const int BuildingDefID =
             Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         const auto BuildingDef = Game::Races::GetUnitDefByID(BuildingDefID);
@@ -530,9 +735,15 @@ bool ZergSystem::CanMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
         if (OutReason) *OutReason = "drone is dead";
         return false;
     }
+    if (BuildingSystem::IsBuilderCommitted(EM, DroneID))
+    {
+        if (OutReason) *OutReason = "drone is already committed to construction";
+        return false;
+    }
 
     const auto& BldgDef = Game::Races::GetUnitDefByID(BuildingDefID);
-    if (BldgDef.Name.empty() || !BldgDef.IsBuilding)
+    if (BldgDef.Name.empty() || !BldgDef.IsBuilding ||
+        BldgDef.RaceType != Race::Zerg)
     {
         if (OutReason) *OutReason = "not a building";
         return false;
@@ -564,9 +775,6 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    auto* Player = EM.GetComponent<PlayerComponent>(DroneID);
-    int PlayerID = Player ? Player->PlayerID : 0;
-
     const auto& BldgDef = Game::Races::GetUnitDefByID(BuildingDefID);
 
     // Keep the rule at the actual morph boundary as well as in placement
@@ -578,68 +786,12 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    // Deduct costs
-    auto& Res = HarvestSystem::GetResources(PlayerID);
-    Res.Minerals -= BldgDef.MineralCost;
-    Res.VespeneGas -= BldgDef.GasCost;
-    if (auto* DroneUnit = EM.GetComponent<UnitComponent>(DroneID))
-        Res.SupplyUsed = std::max(0, Res.SupplyUsed - DroneUnit->SupplyCost);
-
-    // Create building entity
-    int BldgID = EM.CreateEntity();
-    auto& BTrans = EM.AddComponent<TransformComponent>(BldgID);
-    auto& BUnit = EM.AddComponent<UnitComponent>(BldgID);
-    auto& BPlayer = EM.AddComponent<PlayerComponent>(BldgID);
-    auto& BBuild = EM.AddComponent<BuildingComponent>(BldgID);
-    auto& BPath = EM.AddComponent<PathfindingComponent>(BldgID);
-    auto& BRender = EM.AddComponent<RenderComponent>(BldgID);
-
-    BTrans.Position = Position;
-    BPlayer.PlayerID = PlayerID;
-
-    BUnit.ChkUnitID = BldgDef.ChkUnitID;
-    BUnit.UnitRace = Race::Zerg;
-    BUnit.HitPoints = std::max(1, BldgDef.HitPoints / 10); // 10% HP while building
-    BUnit.MaxHitPoints = BldgDef.HitPoints;
-    BUnit.ShieldPoints = BldgDef.ShieldPoints;
-    BUnit.MaxShieldPoints = BldgDef.ShieldPoints;
-    BUnit.EnergyPoints = BldgDef.EnergyPoints;
-    BUnit.MaxEnergyPoints = BldgDef.EnergyPoints;
-    BUnit.Armor = BldgDef.Armor;
-    BUnit.SupplyCost = 0;
-    BUnit.Speed = 0.0f;
-    BUnit.SightRange = 4;
-    BUnit.SizeType = BldgDef.SizeType;
-    BRender.ImageID = ResolveImageID(BUnit.ChkUnitID);
-
-    BBuild.IsBuilding = true;
-    BBuild.UnderConstruction = true;
-    BBuild.BuildProgress = 0.0f;
-    BBuild.TotalBuildTime = (float)BldgDef.BuildTime;
-    BBuild.RequiresCreep = BldgDef.RequiresCreep;
-    BBuild.RequiresPylon = BldgDef.RequiresPylon;
-    BBuild.IsOrganic = true; // Zerg buildings are organic
-    BBuild.BuildingDefID = BuildingDefID;
-    BBuild.BuildTimeRemaining = (float)BldgDef.BuildTime;
-    ApplyCollisionBounds(BPath, ResolveCollisionBounds(BldgDef.ChkUnitID));
-
-    // Add morph component so ProcessMorphs handles completion
-    auto& DroneMorph = EM.AddComponent<MorphComponent>(BldgID);
-    DroneMorph.MorphTargetDefID = BuildingDefID;
-    DroneMorph.MorphDuration = (float)BldgDef.BuildTime;
-    DroneMorph.MorphTimer = (float)BldgDef.BuildTime;
-    DroneMorph.IsMorphing = true;
-    DroneMorph.SourceUnitID = DroneID;
-
-    // Consume the Drone (destroy it)
-    EM.DestroyEntity(DroneID);
-
-    Logger::Info("ZergSystem",
-        "Player " + std::to_string(PlayerID) + " started morphing " +
-        BldgDef.Name + " at (" + std::to_string((int)Position.X) + "," +
-        std::to_string((int)Position.Y) + "), drone consumed");
-
-    return true;
+    // Keep the Drone as a targetable moving unit until it actually reaches
+    // the chosen footprint. The shared pending-build flow provides bounded
+    // repathing, cancellation/refund, and consumes the Drone only after a
+    // successful placement starts the autonomous Zerg construction.
+    return BuildingSystem::StartBuild(
+        EM, DroneID, BuildingDefID, BuildTarget::FromPosition(Position));
 }
 
 // ============================================================
@@ -676,8 +828,21 @@ bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    // Larva and egg are source/intermediate forms, not larva morph targets.
-    if (UnitDef.Name == "Larva" || UnitDef.Name == "Egg")
+    // Only these canonical units hatch from a Larva. Guardian and Devourer
+    // morph from Mutalisks, Lurkers morph from Hydralisks, Broodlings are
+    // spell-created, and Infested Terrans are trained by an Infested Command
+    // Center.
+    const bool IsCanonicalLarvaProduct =
+        UnitDef.Name == "Drone" ||
+        UnitDef.Name == "Overlord" ||
+        UnitDef.Name == "Zergling" ||
+        UnitDef.Name == "Hydralisk" ||
+        UnitDef.Name == "Mutalisk" ||
+        UnitDef.Name == "Scourge" ||
+        UnitDef.Name == "Queen" ||
+        UnitDef.Name == "Ultralisk" ||
+        UnitDef.Name == "Defiler";
+    if (!IsCanonicalLarvaProduct)
     {
         if (OutReason) *OutReason = "this unit cannot morph from larva";
         return false;
@@ -716,6 +881,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     }
 
     auto* Player = EM.GetComponent<PlayerComponent>(LarvaID);
+    auto* SourceUnit = EM.GetComponent<UnitComponent>(LarvaID);
     auto* LarvaTrans = EM.GetComponent<TransformComponent>(LarvaID);
     auto* LarvaOwner = EM.GetComponent<LarvaComponent>(LarvaID);
     int PlayerID = Player ? Player->PlayerID : 0;
@@ -744,15 +910,22 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     ELarva.ParentHatcheryEntityID =
         LarvaOwner ? LarvaOwner->ParentHatcheryEntityID : -1;
 
-    EUnit.ChkUnitID = 0x24; // Egg
+    constexpr int EggChkUnitID = 36;
+    constexpr int EggHitPoints = 200;
+    constexpr int EggArmor = 10;
+    EUnit.ChkUnitID = EggChkUnitID;
     EUnit.UnitRace = Race::Zerg;
-    EUnit.HitPoints = (int)((float)UnitDef.HitPoints * 0.5f);
-    EUnit.MaxHitPoints = UnitDef.HitPoints;
-    EUnit.ShieldPoints = UnitDef.ShieldPoints;
-    EUnit.MaxShieldPoints = UnitDef.ShieldPoints;
-    EUnit.EnergyPoints = UnitDef.EnergyPoints;
-    EUnit.MaxEnergyPoints = UnitDef.EnergyPoints;
-    EUnit.Armor = UnitDef.Armor;
+    EUnit.MaxHitPoints = EggHitPoints;
+    EUnit.HitPoints = SourceUnit && SourceUnit->MaxHitPoints > 0
+        ? std::clamp(SourceUnit->HitPoints * EggHitPoints /
+                         SourceUnit->MaxHitPoints,
+                     1, EggHitPoints)
+        : EggHitPoints;
+    EUnit.ShieldPoints = 0;
+    EUnit.MaxShieldPoints = 0;
+    EUnit.EnergyPoints = 0;
+    EUnit.MaxEnergyPoints = 0;
+    EUnit.Armor = EggArmor;
     EUnit.SupplyCost = 0;
     EUnit.Speed = 0.0f;
     EUnit.SightRange = 2;
@@ -781,6 +954,158 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
         "Player " + std::to_string(PlayerID) + " started morphing " +
         UnitDef.Name + " from larva (egg " + std::to_string(EggID) + ")");
 
+    return true;
+}
+
+// ============================================================
+// Hydralisk morph into Lurker
+// ============================================================
+
+bool ZergSystem::CanMorphHydraliskIntoLurker(
+    Core::ECS::EntityManager& EM, int HydraliskID, std::string* OutReason)
+{
+    auto* Unit = EM.GetComponent<UnitComponent>(HydraliskID);
+    auto* Player = EM.GetComponent<PlayerComponent>(HydraliskID);
+    if (!Unit || !Player)
+    {
+        if (OutReason) *OutReason = "missing Hydralisk unit or owner";
+        return false;
+    }
+    if (Unit->ChkUnitID != 38)
+    {
+        if (OutReason) *OutReason = "not a Hydralisk";
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        if (OutReason) *OutReason = "Hydralisk is dead";
+        return false;
+    }
+    if (!EM.GetComponent<TransformComponent>(HydraliskID))
+    {
+        if (OutReason) *OutReason = "Hydralisk is missing transform";
+        return false;
+    }
+    if (const auto* Morph = EM.GetComponent<MorphComponent>(HydraliskID);
+        Morph && Morph->IsMorphing)
+    {
+        if (OutReason) *OutReason = "Hydralisk is already morphing";
+        return false;
+    }
+    if (!UpgradeSystem::HasResearch(
+            Player->PlayerID, ResearchId::Zerg_LurkerMorph))
+    {
+        if (OutReason) *OutReason = "Lurker Aspect is not researched";
+        return false;
+    }
+
+    // Lurker Aspect is the durable prerequisite. OpenBW's Hydralisk morph
+    // action does not require the Lair or Hydralisk Den to remain alive after
+    // the research has completed.
+    const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
+    const auto& LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < LurkerDef.MineralCost ||
+        Res.VespeneGas < LurkerDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    const int AdditionalSupply =
+        std::max(0, LurkerDef.SupplyCost - Unit->SupplyCost);
+    if (Res.SupplyUsed + AdditionalSupply > Res.SupplyMax)
+    {
+        if (OutReason) *OutReason = "not enough supply";
+        return false;
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphHydraliskIntoLurker(
+    Core::ECS::EntityManager& EM, int HydraliskID)
+{
+    std::string Reason;
+    if (!CanMorphHydraliskIntoLurker(EM, HydraliskID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph Hydralisk: " + Reason);
+        return false;
+    }
+
+    auto* SourceUnit = EM.GetComponent<UnitComponent>(HydraliskID);
+    auto* SourcePlayer = EM.GetComponent<PlayerComponent>(HydraliskID);
+    auto* SourceTransform = EM.GetComponent<TransformComponent>(HydraliskID);
+    if (!SourceUnit || !SourcePlayer || !SourceTransform)
+        return false;
+
+    const int PlayerID = SourcePlayer->PlayerID;
+    const int SourceSupply = SourceUnit->SupplyCost;
+    const Core::Math::Vec2 MorphPosition = SourceTransform->Position;
+    const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
+    const auto& LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
+
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= LurkerDef.MineralCost;
+    Res.VespeneGas -= LurkerDef.GasCost;
+    Res.SupplyUsed +=
+        std::max(0, LurkerDef.SupplyCost - SourceSupply);
+
+    constexpr int LurkerEggChkUnitID = 97;
+    constexpr int LurkerEggHitPoints = 200;
+    constexpr int LurkerEggArmor = 10;
+    const int EggID = EM.CreateEntity();
+    auto& EggTransform = EM.AddComponent<TransformComponent>(EggID);
+    auto& EggUnit = EM.AddComponent<UnitComponent>(EggID);
+    auto& EggPlayer = EM.AddComponent<PlayerComponent>(EggID);
+    auto& EggBuilding = EM.AddComponent<BuildingComponent>(EggID);
+    auto& EggMorph = EM.AddComponent<MorphComponent>(EggID);
+    auto& EggPath = EM.AddComponent<PathfindingComponent>(EggID);
+    auto& EggRender = EM.AddComponent<RenderComponent>(EggID);
+
+    EggTransform.Position = MorphPosition;
+    EggPlayer.PlayerID = PlayerID;
+
+    EggUnit.ChkUnitID = LurkerEggChkUnitID;
+    EggUnit.UnitRace = Race::Zerg;
+    EggUnit.MaxHitPoints = LurkerEggHitPoints;
+    EggUnit.HitPoints = SourceUnit->MaxHitPoints > 0
+        ? std::clamp(SourceUnit->HitPoints * LurkerEggHitPoints /
+                         SourceUnit->MaxHitPoints,
+                     1, LurkerEggHitPoints)
+        : LurkerEggHitPoints;
+    EggUnit.Armor = LurkerEggArmor;
+    EggUnit.SupplyCost = 0;
+    EggUnit.Speed = 0.0f;
+    EggUnit.SightRange = 2;
+    EggUnit.SizeType = UnitSize::Medium;
+
+    EggBuilding.IsBuilding = true;
+    EggBuilding.UnderConstruction = true;
+    EggBuilding.BuildProgress = 0.0f;
+    EggBuilding.TotalBuildTime = (float)LurkerDef.BuildTime;
+    EggBuilding.BuildingDefID = -1;
+    EggBuilding.BuildTimeRemaining = (float)LurkerDef.BuildTime;
+    EggBuilding.IsOrganic = true;
+
+    EggMorph.MorphTargetDefID = LurkerDefID;
+    EggMorph.MorphDuration = (float)LurkerDef.BuildTime;
+    EggMorph.MorphTimer = (float)LurkerDef.BuildTime;
+    EggMorph.IsMorphing = true;
+    EggMorph.SourceUnitID = HydraliskID;
+
+    EggPath.IsAir = false;
+    ApplyCollisionBounds(
+        EggPath, ResolveCollisionBounds(LurkerEggChkUnitID));
+    EggRender.ImageID = ResolveImageID(LurkerEggChkUnitID);
+
+    EM.DestroyEntity(HydraliskID);
+
+    Logger::Info(
+        "ZergSystem", "Player " + std::to_string(PlayerID) +
+        " started Hydralisk -> Lurker morph (Lurker Egg " +
+        std::to_string(EggID) + ")");
     return true;
 }
 
@@ -947,9 +1272,16 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         // Update the existing building entity to the new type
         if (Unit)
         {
+            const int SourceHitPoints = Unit->HitPoints;
+            const int SourceMaxHitPoints = Unit->MaxHitPoints;
             Unit->ChkUnitID = TargetDef.ChkUnitID;
             Unit->MaxHitPoints = TargetDef.HitPoints;
-            Unit->HitPoints = TargetDef.HitPoints;
+            // OpenBW preserves the source building's missing HP across a
+            // Hatchery/Lair/Spire/Colony upgrade rather than granting a free
+            // full heal when the target type completes.
+            Unit->HitPoints = std::clamp(
+                SourceHitPoints + TargetDef.HitPoints - SourceMaxHitPoints,
+                1, TargetDef.HitPoints);
             Unit->MaxShieldPoints = TargetDef.ShieldPoints;
             Unit->ShieldPoints = TargetDef.ShieldPoints;
             Unit->Armor = TargetDef.Armor;
@@ -998,9 +1330,14 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             Larva && Larva->ParentHatcheryEntityID >= 0 &&
             EM.IsAlive(Larva->ParentHatcheryEntityID))
         {
-            SpawnPos = ProductionSystem::FindSpawnPosition(
+            const Core::Math::Vec2 Candidate = ProductionSystem::FindSpawnPosition(
                 EM, Larva->ParentHatcheryEntityID, TargetDef.ChkUnitID,
                 MorphEntityID);
+            // A saturated hatchery exit may have no free replacement point.
+            // In that case keep the egg's already-reserved position instead of
+            // propagating FindSpawnPosition's explicit failure sentinel.
+            if (Candidate.X >= 0.0f && Candidate.Y >= 0.0f)
+                SpawnPos = Candidate;
         }
 
         int PlayerID = Player->PlayerID;
@@ -1061,12 +1398,78 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
             NBurrow.BurrowTransitionTime = 0.0f;
         }
 
+        int PairedUnitID = -1;
+        if (TargetDef.Name == "Zergling" || TargetDef.Name == "Scourge")
+        {
+            // One larva/egg produces two Zerglings or two Scourge for the
+            // listed pair cost and one shared supply reservation.
+            Core::Math::Vec2 PairSpawnPos = SpawnPos + Core::Math::Vec2{24.0f, 0.0f};
+            if (const auto* Larva = EM.GetComponent<LarvaComponent>(MorphEntityID);
+                Larva && Larva->ParentHatcheryEntityID >= 0 &&
+                EM.IsAlive(Larva->ParentHatcheryEntityID))
+            {
+                const Core::Math::Vec2 Candidate = ProductionSystem::FindSpawnPosition(
+                    EM, Larva->ParentHatcheryEntityID, TargetDef.ChkUnitID,
+                    MorphEntityID);
+                if (Candidate.X >= 0.0f && Candidate.Y >= 0.0f)
+                    PairSpawnPos = Candidate;
+            }
+
+            // Snapshot before growing any component pool; AddComponent for
+            // the sibling may invalidate references held for the first unit.
+            const TransformComponent FirstTransformCopy = NTrans;
+            const UnitComponent FirstUnitCopy = NUnit;
+            const PlayerComponent FirstPlayerCopy = NPlayer;
+            const CommandComponent FirstCommandCopy = NCmd;
+            const PathfindingComponent FirstPathCopy = NPath;
+            const RenderComponent FirstRenderCopy = NRender;
+            const auto* FirstCombat = EM.GetComponent<CombatComponent>(NewUnitID);
+            const auto* FirstBurrow = EM.GetComponent<BurrowComponent>(NewUnitID);
+            const bool HasFirstCombat = FirstCombat != nullptr;
+            const bool HasFirstBurrow = FirstBurrow != nullptr;
+            const CombatComponent FirstCombatCopy =
+                FirstCombat ? *FirstCombat : CombatComponent{};
+            const BurrowComponent FirstBurrowCopy =
+                FirstBurrow ? *FirstBurrow : BurrowComponent{};
+
+            PairedUnitID = EM.CreateEntity();
+            auto& PairTransform = EM.AddComponent<TransformComponent>(PairedUnitID);
+            auto& PairUnit = EM.AddComponent<UnitComponent>(PairedUnitID);
+            auto& PairPlayer = EM.AddComponent<PlayerComponent>(PairedUnitID);
+            auto& PairCommand = EM.AddComponent<CommandComponent>(PairedUnitID);
+            auto& PairPath = EM.AddComponent<PathfindingComponent>(PairedUnitID);
+            auto& PairRender = EM.AddComponent<RenderComponent>(PairedUnitID);
+            PairTransform = FirstTransformCopy;
+            PairTransform.Position = PairSpawnPos;
+            PairUnit = FirstUnitCopy;
+            PairPlayer = FirstPlayerCopy;
+            PairCommand = FirstCommandCopy;
+            PairPath = FirstPathCopy;
+            PairRender = FirstRenderCopy;
+            if (HasFirstCombat)
+                EM.AddComponent<CombatComponent>(PairedUnitID) = FirstCombatCopy;
+            if (HasFirstBurrow)
+                EM.AddComponent<BurrowComponent>(PairedUnitID) = FirstBurrowCopy;
+
+            EM.GetComponent<UnitComponent>(NewUnitID)->SupplyCost = 0;
+            PairUnit.SupplyCost = 0;
+            auto& FirstShared = EM.AddComponent<SharedSupplyComponent>(NewUnitID);
+            FirstShared.PartnerEntityID = PairedUnitID;
+            FirstShared.ReservedSupply = TargetDef.SupplyCost;
+            auto& SecondShared = EM.AddComponent<SharedSupplyComponent>(PairedUnitID);
+            SecondShared.PartnerEntityID = NewUnitID;
+            SecondShared.ReservedSupply = TargetDef.SupplyCost;
+        }
+
         // Destroy the egg
         EM.DestroyEntity(MorphEntityID);
 
         Logger::Info("ZergSystem",
             "Unit morph complete: " + TargetDef.Name +
-            " (entity " + std::to_string(NewUnitID) + ")");
+            " (entity " + std::to_string(NewUnitID) +
+            (PairedUnitID >= 0
+                ? ", paired entity " + std::to_string(PairedUnitID)
+                : std::string()) + ")");
     }
 }
 
@@ -1089,27 +1492,58 @@ bool ZergSystem::BurrowUnit(Core::ECS::EntityManager& EM, int EntityID)
 
 void ZergSystem::ProcessZergRegeneration(Core::ECS::EntityManager& EM, float DeltaTime)
 {
-    auto Units = EM.GetEntitiesWith<UnitComponent, TransformComponent>();
+    constexpr int HitPointSubPointsPerSecond = 4 * 24;
+
+    auto Units = EM.GetEntitiesWith<UnitComponent>();
     for (int Eid : Units)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
-        auto* Trans = EM.GetComponent<TransformComponent>(Eid);
-        if (!Unit || !Trans) continue;
-        if (Unit->UnitRace != Race::Zerg) continue;
-        if (Unit->HitPoints <= 0 || Unit->HitPoints >= Unit->MaxHitPoints) continue;
+        if (!Unit || Unit->UnitRace != Race::Zerg)
+            continue;
 
-        // Check if on creep (buildings or ground units on creep tiles regen)
-        bool OnCreep = false;
-        int TX = (int)(Trans->Position.X / 32.0f);
-        int TY = (int)(Trans->Position.Y / 32.0f);
-        if (HasCreep(TX, TY)) OnCreep = true;
-
-        if (OnCreep)
+        // OpenBW only regenerates completed units. Zerg eggs and buildings
+        // under construction use BuildingComponent for their completion state.
+        const auto* Building = EM.GetComponent<BuildingComponent>(Eid);
+        if (Unit->HitPoints <= 0 || Unit->MaxHitPoints <= 0 ||
+            (Building && Building->UnderConstruction))
         {
-            // Zerg regen: ~4 HP/sec on creep
-            float RegenAmount = 4.0f * DeltaTime;
-            Unit->HitPoints = std::min(Unit->MaxHitPoints,
-                Unit->HitPoints + (int)std::ceil(RegenAmount));
+            Unit->HealthRegenAccumulator = 0.0f;
+            continue;
+        }
+
+        const int MaxHitPointsRaw = Unit->MaxHitPoints * 256;
+        int HitPointsRaw = std::max(
+            0, Unit->HitPoints * 256 -
+               std::clamp(Unit->HitPointSubDamage, 0, 255));
+        if (HitPointsRaw >= MaxHitPointsRaw)
+        {
+            Unit->HitPoints = Unit->MaxHitPoints;
+            Unit->HitPointSubDamage = 0;
+            Unit->HealthRegenAccumulator = 0.0f;
+            continue;
+        }
+
+        // Brood War restores 4/256 HP every game tick at 24 Hz. Accumulate
+        // raw 1/256 sub-points so the result is independent of frame slicing.
+        Unit->HealthRegenAccumulator +=
+            DeltaTime * (float)HitPointSubPointsPerSecond;
+        const int RegenRaw =
+            (int)(Unit->HealthRegenAccumulator + 0.0001f);
+        if (RegenRaw <= 0)
+            continue;
+
+        Unit->HealthRegenAccumulator -= (float)RegenRaw;
+        if (Unit->HealthRegenAccumulator < 0.0f)
+            Unit->HealthRegenAccumulator = 0.0f;
+
+        HitPointsRaw = std::min(MaxHitPointsRaw, HitPointsRaw + RegenRaw);
+        Unit->HitPoints = (HitPointsRaw + 255) / 256;
+        Unit->HitPointSubDamage = Unit->HitPoints * 256 - HitPointsRaw;
+        if (HitPointsRaw >= MaxHitPointsRaw)
+        {
+            Unit->HitPoints = Unit->MaxHitPoints;
+            Unit->HitPointSubDamage = 0;
+            Unit->HealthRegenAccumulator = 0.0f;
         }
     }
 }

@@ -41,8 +41,14 @@ public:
     bool IsVisible(int TileX, int TileY, int PlayerID = 0) const;
     bool IsExplored(int TileX, int TileY, int PlayerID = 0) const;
 
+    // Simulation consumers such as AI must not inherit the local observer's
+    // presentation-only reveal-all state.
+    FogState GetGameplayFog(int TileX, int TileY, int PlayerID = 0) const;
+    bool IsGameplayVisible(int TileX, int TileY, int PlayerID = 0) const;
+
     // Detector visibility
     bool IsDetected(int TileX, int TileY, int PlayerID = 0) const;
+    bool IsGameplayDetected(int TileX, int TileY, int PlayerID = 0) const;
 
     // Last-seen snapshots for ghost rendering
     const std::vector<LastSeenSnapshot>& GetLastSeenSnapshots() const { return mLastSeen; }

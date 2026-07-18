@@ -176,6 +176,7 @@ inline int CommandIconForResearch(Game::Systems::TerranResearchId ResearchId)
         case TerranResearchId::ProtossAirWeapons:
         case TerranResearchId::ProtossAirArmor:
         case TerranResearchId::ProtossApialSensors:
+        case TerranResearchId::ProtossGraviticThrusters:
             return IconForDef(Game::Races::GetUnitDefID("Scout"));
         case TerranResearchId::ProtossSingularityCharge:
             return IconForDef(Game::Races::GetUnitDefID("Dragoon"));
@@ -185,6 +186,7 @@ inline int CommandIconForResearch(Game::Systems::TerranResearchId ResearchId)
         case TerranResearchId::ProtossReaverCapacity:
             return IconForDef(Game::Races::GetUnitDefID("Reaver"));
         case TerranResearchId::ProtossSensorArray:
+        case TerranResearchId::ProtossGraviticBoosters:
             return IconForDef(Game::Races::GetUnitDefID("Observer"));
         case TerranResearchId::ProtossKhaydarinAmulet:
         case TerranResearchId::ProtossPsionicStorm:

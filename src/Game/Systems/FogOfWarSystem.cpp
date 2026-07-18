@@ -59,12 +59,17 @@ bool FogOfWarSystem::AreAllied(int PlayerA, int PlayerB) const
 
 FogState FogOfWarSystem::GetFog(int TileX, int TileY, int PlayerID) const
 {
+    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
+        return FogState::Visible;
+    return GetGameplayFog(TileX, TileY, PlayerID);
+}
+
+FogState FogOfWarSystem::GetGameplayFog(int TileX, int TileY, int PlayerID) const
+{
     if (TileX < 0 || TileX >= mMapWidth || TileY < 0 || TileY >= mMapHeight)
         return FogState::Unexplored;
     if (PlayerID < 0 || PlayerID >= mMaxPlayers)
         return FogState::Unexplored;
-    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
-        return FogState::Visible;
 
     // Check own visibility
     size_t Idx = (size_t)PlayerID * mMapWidth * mMapHeight + (size_t)TileY * mMapWidth + (size_t)TileX;
@@ -90,6 +95,11 @@ bool FogOfWarSystem::IsVisible(int TileX, int TileY, int PlayerID) const
     return GetFog(TileX, TileY, PlayerID) == FogState::Visible;
 }
 
+bool FogOfWarSystem::IsGameplayVisible(int TileX, int TileY, int PlayerID) const
+{
+    return GetGameplayFog(TileX, TileY, PlayerID) == FogState::Visible;
+}
+
 bool FogOfWarSystem::IsExplored(int TileX, int TileY, int PlayerID) const
 {
     return GetFog(TileX, TileY, PlayerID) >= FogState::Explored;
@@ -97,12 +107,17 @@ bool FogOfWarSystem::IsExplored(int TileX, int TileY, int PlayerID) const
 
 bool FogOfWarSystem::IsDetected(int TileX, int TileY, int PlayerID) const
 {
+    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
+        return true;
+    return IsGameplayDetected(TileX, TileY, PlayerID);
+}
+
+bool FogOfWarSystem::IsGameplayDetected(int TileX, int TileY, int PlayerID) const
+{
     if (TileX < 0 || TileX >= mMapWidth || TileY < 0 || TileY >= mMapHeight)
         return false;
     if (PlayerID < 0 || PlayerID >= mMaxPlayers)
         return false;
-    if (mObserverRevealAll && PlayerID == mLocalPlayerID)
-        return true;
 
     size_t Idx = (size_t)PlayerID * mMapWidth * mMapHeight + (size_t)TileY * mMapWidth + (size_t)TileX;
 

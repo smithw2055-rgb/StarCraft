@@ -47,6 +47,12 @@ public:
     static bool StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
                                         int LarvaID, int UnitDefID);
 
+    static bool CanMorphHydraliskIntoLurker(Core::ECS::EntityManager& EM,
+                                             int HydraliskID,
+                                             std::string* OutReason = nullptr);
+    static bool StartMorphHydraliskIntoLurker(Core::ECS::EntityManager& EM,
+                                               int HydraliskID);
+
     static bool CanMorphBuilding(Core::ECS::EntityManager& EM,
                                  int BuildingID, int TargetDefID,
                                  std::string* OutReason = nullptr);
@@ -64,20 +70,27 @@ private:
     static Game::Map::GameMap* sMap;
 
     std::vector<uint8_t> mCreepGrid;
+    std::vector<uint8_t> mCreepRecedingGrid;
     int mMapWidth = 0;
     int mMapHeight = 0;
     float mCreepTimer = 0.0f;
     float mCreepInterval = 1.0f;
     float mCreepRegressionTimer = 0.0f;
+    uint32_t mCreepRegressionSequence = 0;
     bool mGridInitialized = false;
 
-    struct CreepSourceState
+    struct CreepProviderState
     {
         float SpreadTimer = 0.0f;
         uint32_t SelectionSequence = 0;
+        int TileX = 0;
+        int TileY = 0;
+        int FootprintWidth = 0;
+        int FootprintHeight = 0;
+        bool SustainsFullEllipse = false;
         bool Frozen = false;
     };
-    std::unordered_map<int, CreepSourceState> mCreepSourceStates;
+    std::unordered_map<int, CreepProviderState> mCreepProviderStates;
 };
 
 } // namespace Game::Systems

@@ -10,6 +10,7 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/MovementSystem.h"
@@ -38,6 +39,11 @@ namespace Core::Audio
 
 namespace Game::Systems
 {
+
+bool BulletSystem::ResolveIScriptDamageFrame(int)
+{
+    return false;
+}
 
 bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager&,
                                              BulletSystem&,

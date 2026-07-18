@@ -3,6 +3,7 @@
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
@@ -15,6 +16,28 @@ using Core::Utils::Logger;
 
 namespace
 {
+    bool IsTransportUnit(Core::ECS::EntityManager& EM,
+                         int EntityID,
+                         const UnitComponent* Unit = nullptr,
+                         const PlayerComponent* Player = nullptr)
+    {
+        if (!Unit)
+            Unit = EM.GetComponent<UnitComponent>(EntityID);
+        if (!Player)
+            Player = EM.GetComponent<PlayerComponent>(EntityID);
+        if (!Unit)
+            return false;
+        if (Unit->ChkUnitID == 11 ||  // Dropship
+            Unit->ChkUnitID == 69 ||  // Shuttle
+            Unit->ChkUnitID == 125)   // Bunker
+        {
+            return true;
+        }
+        return Unit->ChkUnitID == 42 && Player && // Overlord
+            UpgradeSystem::HasResearch(
+                Player->PlayerID, ResearchId::Zerg_VentralSacs);
+    }
+
     bool ValidateLoadTarget(Core::ECS::EntityManager& EM, int TransportID,
                             int PassengerID, bool RequireRange,
                             std::string* OutReason)
@@ -33,7 +56,7 @@ namespace
         auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
         if (!TU || !TP || !TT || !PU || !PP || !PT || PassengerID == TransportID)
             return Fail("invalid transport or passenger");
-        if (TU->ChkUnitID != 11 && TU->ChkUnitID != 125)
+        if (!IsTransportUnit(EM, TransportID, TU, TP))
             return Fail("unit cannot transport passengers");
         if (TP->PlayerID != PP->PlayerID)
             return Fail("cannot load enemy unit");
@@ -125,7 +148,8 @@ namespace
 bool TransportSystem::IsTransport(Core::ECS::EntityManager& EM, int EntityID)
 {
     const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-    return Unit && (Unit->ChkUnitID == 11 || Unit->ChkUnitID == 125);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+    return IsTransportUnit(EM, EntityID, Unit, Player);
 }
 
 bool TransportSystem::CanLoad(Core::ECS::EntityManager& EM, int TransportID, int PassengerID,
@@ -166,7 +190,8 @@ bool TransportSystem::IssueBoard(Core::ECS::EntityManager& EM,
         return false;
 
     const auto* TransportUnit = EM.GetComponent<UnitComponent>(TransportID);
-    const bool CanRendezvous = TransportUnit && TransportUnit->ChkUnitID == 11;
+    const bool CanRendezvous =
+        TransportUnit && TransportUnit->ChkUnitID != 125;
     const size_t Capacity = TransportUnit && TransportUnit->ChkUnitID == 125
         ? static_cast<size_t>(kMaxBunkerCapacity)
         : static_cast<size_t>(kMaxTransportCapacity);
@@ -326,7 +351,8 @@ bool TransportSystem::IsNydusCanal(Core::ECS::EntityManager& EM, int EntityID)
 {
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     auto* Bldg = EM.GetComponent<BuildingComponent>(EntityID);
-    return Unit && Bldg && Unit->ChkUnitID == 0x78; // Nydus Canal
+    return Unit && Bldg && !Bldg->UnderConstruction &&
+           Unit->ChkUnitID == 0x86; // Nydus Canal (CHK 134)
 }
 
 bool TransportSystem::EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, int NydusID)
@@ -354,7 +380,7 @@ bool TransportSystem::EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, 
         if (!B || !P || !T || Bid == NydusID) continue;
         if (P->PlayerID != NPlayer->PlayerID) continue;
         if (auto* BU = EM.GetComponent<UnitComponent>(Bid))
-            if (BU->ChkUnitID == 0x78 && !B->UnderConstruction)
+            if (BU->ChkUnitID == 0x86 && !B->UnderConstruction)
             {
                 auto* UT = EM.GetComponent<TransformComponent>(UnitID);
                 if (UT) UT->Position = Core::Math::Vec2(T->Position.X + 24.0f, T->Position.Y);

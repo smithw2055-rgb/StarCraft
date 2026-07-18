@@ -29,9 +29,11 @@ namespace
         int MineralStep = 0;
         int GasStep = 0;
         int MaxLevel = 1;
-        int TimeCost = 30;       // seconds per level
-        int TimeStep = 10;       // extra time per additional level
+        int TimeCostFrames = 0;
+        int TimeStepFrames = 0;
     };
+
+    constexpr int kBroodWarLogicFramesPerSecond = 24;
 
     PlayerUpgrades gUpgrades[kPlayerResourceSlots];
     std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>,
@@ -40,76 +42,79 @@ namespace
     constexpr ResearchDef kResearchDefs[] =
     {
         // Terran
-        {ResearchId::Terran_InfantryWeapons, "Infantry Weapons", "EngineeringBay", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_InfantryArmor,   "Infantry Armor",   "EngineeringBay", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_VehicleWeapons,  "Vehicle Weapons",  "Armory",         100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_VehicleArmor,    "Vehicle Armor",    "Armory",         100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_ShipWeapons,     "Ship Weapons",     "Armory",         100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_ShipArmor,       "Ship Armor",       "Armory",         100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Terran_StimPacks,       "Stim Packs",       "Academy",        100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Terran_U238Shells,      "U-238 Shells",     "Academy",        150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Terran_SiegeMode,       "Siege Mode",       "MachineShop",    150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_SpiderMines,     "Spider Mines",     "MachineShop",    100, 100, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_CloakingField,   "Cloaking Field",   "ControlTower",   150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_IonThrusters,    "Ion Thrusters",    "ControlTower",   100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Terran_Lockdown,        "Lockdown",         "CovertOps",      200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_MoebiusReactor,  "Moebius Reactor",  "CovertOps",      100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Terran_OcularImplants,  "Ocular Implants",  "CovertOps",      100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Terran_ApolloReactor,   "Apollo Reactor",   "ControlTower",   200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_TitanReactor,    "Titan Reactor",    "ScienceFacility",150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_CaduceusReactor, "Caduceus Reactor", "Academy",        150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_YamatoGun,       "Yamato Gun",       "PhysicsLab",     100, 100, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_ColossusReactor, "Colossus Reactor", "PhysicsLab",     150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Terran_CharonBoosters,  "Charon Boosters",  "MachineShop",    100, 100, 0,  0,  1, 40, 0},
+        {ResearchId::Terran_InfantryWeapons, "Infantry Weapons", "EngineeringBay", 100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Terran_InfantryArmor,   "Infantry Armor",   "EngineeringBay", 100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Terran_VehicleWeapons,  "Vehicle Weapons",  "Armory",         100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Terran_VehicleArmor,    "Vehicle Armor",    "Armory",         100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Terran_ShipWeapons,     "Ship Weapons",     "Armory",         100, 100, 50, 50, 3, 4000, 480},
+        {ResearchId::Terran_ShipArmor,       "Ship Armor",       "Armory",         150, 150, 75, 75, 3, 4000, 480},
+        {ResearchId::Terran_StimPacks,       "Stim Packs",       "Academy",        100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_U238Shells,      "U-238 Shells",     "Academy",        150, 150, 0,  0,  1, 1500, 0},
+        {ResearchId::Terran_SiegeMode,       "Siege Mode",       "MachineShop",    150, 150, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_SpiderMines,     "Spider Mines",     "MachineShop",    100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_CloakingField,   "Cloaking Field",   "ControlTower",   150, 150, 0,  0,  1, 1500, 0},
+        {ResearchId::Terran_IonThrusters,    "Ion Thrusters",    "MachineShop",    100, 100, 0,  0,  1, 1500, 0},
+        {ResearchId::Terran_Lockdown,        "Lockdown",         "CovertOps",      200, 200, 0,  0,  1, 1500, 0},
+        {ResearchId::Terran_MoebiusReactor,  "Moebius Reactor",  "CovertOps",      100, 100, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_OcularImplants,  "Ocular Implants",  "CovertOps",      100, 100, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_ApolloReactor,   "Apollo Reactor",   "ControlTower",   200, 200, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_TitanReactor,    "Titan Reactor",    "ScienceFacility",150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_CaduceusReactor, "Caduceus Reactor", "Academy",        150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_YamatoGun,       "Yamato Gun",       "PhysicsLab",     100, 100, 0,  0,  1, 1800, 0},
+        {ResearchId::Terran_ColossusReactor, "Colossus Reactor", "PhysicsLab",     150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Terran_CharonBoosters,  "Charon Boosters",  "MachineShop",    100, 100, 0,  0,  1, 2000, 0},
 
         // Zerg
-        {ResearchId::Zerg_MeleeAttacks,      "Melee Attacks",      "Evolution Chamber", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Zerg_MissileAttacks,    "Missile Attacks",    "Evolution Chamber", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Zerg_Carapace,          "Carapace",           "Evolution Chamber", 150, 150, 75, 75, 3, 30, 10},
-        {ResearchId::Zerg_FlyerAttacks,      "Flyer Attacks",      "Spire",            100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Zerg_FlyerCarapace,     "Flyer Carapace",     "Spire",            150, 150, 75, 75, 3, 30, 10},
-        {ResearchId::Zerg_AdrenalGlands,     "Adrenal Glands",     "Spawning Pool",    200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Zerg_MetabolicBoost,    "Metabolic Boost",    "Spawning Pool",    100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_AnabolicSynthesis, "Anabolic Synthesis", "Ultralisk Cavern", 200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Zerg_ChitinousPlating,  "Chitinous Plating",  "Ultralisk Cavern", 150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Zerg_MuscularAugments,  "Muscular Augments",  "Hydralisk Den",    150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_GroovedSpines,     "Grooved Spines",     "Hydralisk Den",    150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_VentralSacs,       "Ventral Sacs",       "Lair",             200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Zerg_Antennae,          "Antennae",           "Lair",             150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_PneumatizedCarapace,"Pneumatized Carapace","Lair",           150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_Burrow,            "Burrow",             "Lair",             100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_Consume,           "Consume",            "Defiler Mound",    100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_Ensnare,           "Ensnare",            "Queen's Nest",     100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_Plague,            "Plague",             "Defiler Mound",    200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Zerg_SpawnBroodling,    "Spawn Broodling",    "Queen's Nest",     100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_QueenEnergy,       "Gamete Meiosis",     "Queen's Nest",     150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_DefilerEnergy,     "Metasynaptic Node",  "Defiler Mound",    150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Zerg_LurkerMorph,       "Lurker Aspect",      "Hydralisk Den",    200, 200, 0,  0,  1, 45, 0},
+        {ResearchId::Zerg_MeleeAttacks,      "Melee Attacks",      "Evolution Chamber", 100, 100, 50, 50, 3, 4000, 480},
+        {ResearchId::Zerg_MissileAttacks,    "Missile Attacks",    "Evolution Chamber", 100, 100, 50, 50, 3, 4000, 480},
+        {ResearchId::Zerg_Carapace,          "Carapace",           "Evolution Chamber", 150, 150, 75, 75, 3, 4000, 480},
+        {ResearchId::Zerg_FlyerAttacks,      "Flyer Attacks",      "Spire",            100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Zerg_FlyerCarapace,     "Flyer Carapace",     "Spire",            150, 150, 75, 75, 3, 4000, 480},
+        {ResearchId::Zerg_AdrenalGlands,     "Adrenal Glands",     "Spawning Pool",    200, 200, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_MetabolicBoost,    "Metabolic Boost",    "Spawning Pool",    100, 100, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_AnabolicSynthesis, "Anabolic Synthesis", "Ultralisk Cavern", 200, 200, 0,  0,  1, 2000, 0},
+        {ResearchId::Zerg_ChitinousPlating,  "Chitinous Plating",  "Ultralisk Cavern", 150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Zerg_MuscularAugments,  "Muscular Augments",  "Hydralisk Den",    150, 150, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_GroovedSpines,     "Grooved Spines",     "Hydralisk Den",    150, 150, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_VentralSacs,       "Ventral Sacs",       "Lair",             200, 200, 0,  0,  1, 2400, 0},
+        {ResearchId::Zerg_Antennae,          "Antennae",           "Lair",             150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Zerg_PneumatizedCarapace,"Pneumatized Carapace","Lair",           150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Zerg_Burrow,            "Burrow",             "Hatchery",         100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Zerg_Consume,           "Consume",            "Defiler Mound",    100, 100, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_Ensnare,           "Ensnare",            "Queen's Nest",     100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Zerg_Plague,            "Plague",             "Defiler Mound",    200, 200, 0,  0,  1, 1500, 0},
+        {ResearchId::Zerg_SpawnBroodling,    "Spawn Broodling",    "Queen's Nest",     100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Zerg_QueenEnergy,       "Gamete Meiosis",     "Queen's Nest",     150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Zerg_DefilerEnergy,     "Metasynaptic Node",  "Defiler Mound",    150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Zerg_LurkerMorph,       "Lurker Aspect",      "Hydralisk Den",    200, 200, 0,  0,  1, 1800, 0},
 
         // Protoss
-        {ResearchId::Protoss_GroundWeapons,   "Ground Weapons",    "Forge",            100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Protoss_GroundArmor,     "Ground Armor",      "Forge",            100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Protoss_PlasmaShields,   "Plasma Shields",    "Forge",            200, 200, 100,100,3, 30, 10},
-        {ResearchId::Protoss_AirWeapons,      "Air Weapons",       "Cybernetics Core", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Protoss_AirArmor,        "Air Armor",         "Cybernetics Core", 100, 100, 75, 75, 3, 30, 10},
-        {ResearchId::Protoss_SingularityCharge,"Singularity Charge","Cybernetics Core",150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_GraviticDrive,   "Gravitic Drive",    "Robotics Support Bay",100,100,0,  0,  1, 30, 0},
-        {ResearchId::Protoss_ScarabDamage,    "Scarab Damage",     "Robotics Support Bay",200,200,0,  0,  1, 40, 0},
-        {ResearchId::Protoss_ZealotSpeed,     "Leg Enhancement",   "Citadel of Adun",  150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_SensorArray,     "Sensor Array",      "Observatory",      150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_ApialSensors,    "Apial Sensors",     "Fleet Beacon",     100, 100, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_KhaydarinAmulet, "Khaydarin Amulet",  "Templar Archives", 150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_ArgusJewel,      "Argus Jewel",       "Fleet Beacon",     150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_ArgusTalisman,   "Argus Talisman",    "Templar Archives", 150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_KhaydarinCore,   "Khaydarin Core",    "Arbiter Tribunal", 150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_PsionicStorm,    "Psionic Storm",     "Templar Archives", 200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_Hallucination,   "Hallucination",     "Templar Archives", 200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_Recall,          "Recall",            "Arbiter Tribunal", 150, 150, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_StasisField,     "Stasis Field",      "Arbiter Tribunal", 150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_MindControl,     "Mind Control",      "Templar Archives", 200, 200, 0,  0,  1, 40, 0},
-        {ResearchId::Protoss_Maelstrom,       "Maelstrom",         "Templar Archives", 150, 150, 0,  0,  1, 30, 0},
-        {ResearchId::Protoss_ReaverCapacity,  "Reaver Capacity",   "Robotics Support Bay",200,200,0,  0,  1, 30, 0},
-        {ResearchId::Protoss_CarrierCapacity, "Carrier Capacity",  "Fleet Beacon",     200, 200, 0,  0,  1, 30, 0},
+        {ResearchId::Protoss_GroundWeapons,   "Ground Weapons",    "Forge",            100, 100, 50, 50, 3, 4000, 480},
+        {ResearchId::Protoss_GroundArmor,     "Ground Armor",      "Forge",            100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Protoss_PlasmaShields,   "Plasma Shields",    "Forge",            200, 200, 100,100,3, 4000, 480},
+        {ResearchId::Protoss_AirWeapons,      "Air Weapons",       "Cybernetics Core", 100, 100, 75, 75, 3, 4000, 480},
+        {ResearchId::Protoss_AirArmor,        "Air Armor",         "Cybernetics Core", 150, 150, 75, 75, 3, 4000, 480},
+        {ResearchId::Protoss_SingularityCharge,"Singularity Charge","Cybernetics Core",150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_GraviticDrive,   "Gravitic Drive",    "Robotics Support Bay",200,200,0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_ScarabDamage,    "Scarab Damage",     "Robotics Support Bay",200,200,0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_ZealotSpeed,     "Leg Enhancement",   "Citadel of Adun",  150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Protoss_SensorArray,     "Sensor Array",      "Observatory",      150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Protoss_ApialSensors,    "Apial Sensors",     "Fleet Beacon",     100, 100, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_KhaydarinAmulet, "Khaydarin Amulet",  "Templar Archives", 150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_ArgusJewel,      "Argus Jewel",       "Fleet Beacon",     100, 100, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_ArgusTalisman,   "Argus Talisman",    "Templar Archives", 150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_KhaydarinCore,   "Khaydarin Core",    "Arbiter Tribunal", 150, 150, 0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_PsionicStorm,    "Psionic Storm",     "Templar Archives", 200, 200, 0,  0,  1, 1800, 0},
+        {ResearchId::Protoss_Hallucination,   "Hallucination",     "Templar Archives", 150, 150, 0,  0,  1, 1200, 0},
+        {ResearchId::Protoss_Recall,          "Recall",            "Arbiter Tribunal", 150, 150, 0,  0,  1, 1800, 0},
+        {ResearchId::Protoss_StasisField,     "Stasis Field",      "Arbiter Tribunal", 150, 150, 0,  0,  1, 1500, 0},
+        {ResearchId::Protoss_MindControl,     "Mind Control",      "Templar Archives", 200, 200, 0,  0,  1, 1800, 0},
+        {ResearchId::Protoss_Maelstrom,       "Maelstrom",         "Templar Archives", 100, 100, 0,  0,  1, 1500, 0},
+        {ResearchId::Protoss_DisruptionWeb,   "Disruption Web",    "Fleet Beacon",     200, 200, 0,  0,  1, 1200, 0},
+        {ResearchId::Protoss_ReaverCapacity,  "Reaver Capacity",   "Robotics Support Bay",200,200,0,  0,  1, 2500, 0},
+        {ResearchId::Protoss_CarrierCapacity, "Carrier Capacity",  "Fleet Beacon",     100, 100, 0,  0,  1, 1500, 0},
+        {ResearchId::Protoss_GraviticBoosters,"Gravitic Boosters", "Observatory",      150, 150, 0,  0,  1, 2000, 0},
+        {ResearchId::Protoss_GraviticThrusters,"Gravitic Thrusters","Fleet Beacon",    200, 200, 0,  0,  1, 2500, 0},
     };
 
     void SetReason(std::string* OutReason, const std::string& Reason)
@@ -140,22 +145,145 @@ namespace
                 return Building->BuildingDefID;
         }
         if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
+        {
+            // Siege mode is a separate units.dat entry but shares the tank's
+            // vehicle weapon/armor upgrade family in Brood War.
+            if (Unit->ChkUnitID == 30)
+                return Game::Races::GetUnitDefID("SiegeTank");
             return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+        }
         return -1;
     }
 
-    int GetPlayerRace(const Core::ECS::EntityManager& EM, int EntityID)
+    bool PlayerHasCompletedBuilding(const Core::ECS::EntityManager& EM,
+                                    int PlayerID,
+                                    const char* RequiredName)
     {
         auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-        if (auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
-            return (int)Unit->UnitRace;
-        return 0;
+        const int RequiredDefID = Game::Races::GetUnitDefID(RequiredName);
+        if (RequiredDefID < 0)
+            return false;
+
+        for (int EntityID : MutableEM.GetEntitiesWith<BuildingComponent,
+                                                       UnitComponent,
+                                                       PlayerComponent>())
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
+            const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+            if (!Player || Player->PlayerID != PlayerID || !Building ||
+                Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+            {
+                continue;
+            }
+
+            if (Game::Races::BuildingDefSatisfiesRequirement(
+                    ResolveDefID(EM, EntityID), RequiredDefID))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool PlayerHasOwnedBuilding(const Core::ECS::EntityManager& EM,
+                                int PlayerID,
+                                const char* RequiredName)
+    {
+        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
+        const int RequiredDefID = Game::Races::GetUnitDefID(RequiredName);
+        if (RequiredDefID < 0)
+            return false;
+
+        for (int EntityID : MutableEM.GetEntitiesWith<BuildingComponent,
+                                                       UnitComponent,
+                                                       PlayerComponent>())
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+            if (Player && Player->PlayerID == PlayerID && Unit &&
+                Unit->HitPoints > 0 && ResolveDefID(EM, EntityID) == RequiredDefID)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool IsZergMultiLevelUpgrade(ResearchId ResearchId)
+    {
+        switch (ResearchId)
+        {
+            case ResearchId::Zerg_MeleeAttacks:
+            case ResearchId::Zerg_MissileAttacks:
+            case ResearchId::Zerg_Carapace:
+            case ResearchId::Zerg_FlyerAttacks:
+            case ResearchId::Zerg_FlyerCarapace:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    const char* GetRequiredTechnology(ResearchId ResearchId, int CurrentLevel)
+    {
+        switch (ResearchId)
+        {
+            case ResearchId::Terran_InfantryWeapons:
+            case ResearchId::Terran_InfantryArmor:
+            case ResearchId::Terran_VehicleWeapons:
+            case ResearchId::Terran_VehicleArmor:
+            case ResearchId::Terran_ShipWeapons:
+            case ResearchId::Terran_ShipArmor:
+                return CurrentLevel > 0 ? "ScienceFacility" : nullptr;
+
+            case ResearchId::Zerg_MeleeAttacks:
+            case ResearchId::Zerg_MissileAttacks:
+            case ResearchId::Zerg_Carapace:
+            case ResearchId::Zerg_FlyerAttacks:
+            case ResearchId::Zerg_FlyerCarapace:
+                if (CurrentLevel == 1)
+                    return "Lair";
+                if (CurrentLevel == 2)
+                    return "Hive";
+                return nullptr;
+
+            case ResearchId::Protoss_GroundWeapons:
+            case ResearchId::Protoss_GroundArmor:
+                return CurrentLevel > 0 ? "Templar Archives" : nullptr;
+            case ResearchId::Protoss_AirWeapons:
+            case ResearchId::Protoss_AirArmor:
+                return CurrentLevel > 0 ? "Fleet Beacon" : nullptr;
+            case ResearchId::Protoss_PlasmaShields:
+                return CurrentLevel > 0 ? "Cybernetics Core" : nullptr;
+
+            case ResearchId::Zerg_AdrenalGlands:
+                return "Hive";
+            case ResearchId::Zerg_LurkerMorph:
+                return "Lair";
+            case ResearchId::Terran_CharonBoosters:
+                return "Armory";
+            default:
+                return nullptr;
+        }
+    }
+
+    int GetResearchTimeFrames(const ResearchDef& Research, int CurrentLevel)
+    {
+        return Research.TimeCostFrames + CurrentLevel * Research.TimeStepFrames;
+    }
+
+    float GetResearchTimeSeconds(const ResearchDef& Research, int CurrentLevel)
+    {
+        return static_cast<float>(GetResearchTimeFrames(Research, CurrentLevel)) /
+               static_cast<float>(kBroodWarLogicFramesPerSecond);
     }
 
     bool IsTerranInfantry(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
-        return D.Name == "Marine" || D.Name == "Firebat" || D.Name == "Medic" || D.Name == "Ghost";
+        return D.Name == "SCV" || D.Name == "Marine" || D.Name == "Firebat" ||
+               D.Name == "Medic" || D.Name == "Ghost";
     }
 
     bool IsTerranVehicle(int DefID)
@@ -174,7 +302,10 @@ namespace
     bool IsZergGround(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
-        return D.RaceType == Race::Zerg && !D.Name.empty() && D.RaceType != Race{};
+        return D.RaceType == Race::Zerg && !D.IsBuilding &&
+               D.Name != "Mutalisk" && D.Name != "Guardian" &&
+               D.Name != "Devourer" && D.Name != "Scourge" &&
+               D.Name != "Queen" && D.Name != "Overlord";
     }
 
     bool IsZergMelee(int DefID)
@@ -202,7 +333,7 @@ namespace
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
         return D.Name == "Scout" || D.Name == "Corsair" || D.Name == "Carrier" ||
-               D.Name == "Arbiter" || D.Name == "Shuttle";
+               D.Name == "Arbiter" || D.Name == "Shuttle" || D.Name == "Observer";
     }
 
     ResearchId GetEnergyUpgradeForDef(const Game::Races::UnitDef& Def)
@@ -367,7 +498,9 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
     }
 
     const int ProducerDefID = ResolveDefID(EM, BuildingID);
-    if (ProducerDefID != Game::Races::GetUnitDefID(Research->ProducerName))
+    const int RequiredProducerDefID = Game::Races::GetUnitDefID(Research->ProducerName);
+    if (!Game::Races::BuildingDefSatisfiesRequirement(
+            ProducerDefID, RequiredProducerDefID))
     {
         SetReason(OutReason, "wrong producer for research");
         return false;
@@ -380,6 +513,27 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
     {
         SetReason(OutReason, "research already maxed");
         return false;
+    }
+
+    if (const char* RequiredTechnology =
+            GetRequiredTechnology(ResearchId, CurrentLevel))
+    {
+        bool HasRequiredTechnology =
+            PlayerHasCompletedBuilding(EM, PlayerID, RequiredTechnology);
+        // During a Lair -> Hive morph OpenBW no longer counts a completed
+        // Lair, but it does accept the owned (not-yet-complete) Hive for +2.
+        if (!HasRequiredTechnology && CurrentLevel == 1 &&
+            IsZergMultiLevelUpgrade(ResearchId))
+        {
+            HasRequiredTechnology = PlayerHasOwnedBuilding(EM, PlayerID, "Hive");
+        }
+        if (!HasRequiredTechnology)
+        {
+            SetReason(OutReason,
+                      "missing required technology: " +
+                          std::string(RequiredTechnology));
+            return false;
+        }
     }
     if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots &&
         gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)])
@@ -426,7 +580,7 @@ bool UpgradeSystem::StartResearch(Core::ECS::EntityManager& EM,
     auto* Bldg = EM.GetComponent<BuildingComponent>(BuildingID);
     if (Bldg)
     {
-        Bldg->BuildTimeRemaining = (float)(Research->TimeCost + CurrentLevel * Research->TimeStep);
+        Bldg->BuildTimeRemaining = GetResearchTimeSeconds(*Research, CurrentLevel);
         Bldg->IsResearching = true;
         Bldg->ResearchingID = static_cast<int>(ResearchId);
         Bldg->ResearchPlayer = PlayerID;
@@ -539,6 +693,8 @@ bool UpgradeSystem::IsUpgradeType(ResearchId ResearchId)
         case ResearchId::Protoss_KhaydarinCore:
         case ResearchId::Protoss_ReaverCapacity:
         case ResearchId::Protoss_CarrierCapacity:
+        case ResearchId::Protoss_GraviticBoosters:
+        case ResearchId::Protoss_GraviticThrusters:
             return true;
         default:
             return false;
@@ -559,7 +715,9 @@ int UpgradeSystem::GetResearchTimeCost(ResearchId ResearchId, int PlayerID)
         return 0;
 
     const int CurrentLevel = GetResearchLevel(PlayerID, ResearchId);
-    return Research->TimeCost + CurrentLevel * Research->TimeStep;
+    const int Frames = GetResearchTimeFrames(*Research, CurrentLevel);
+    return (Frames + kBroodWarLogicFramesPerSecond - 1) /
+           kBroodWarLogicFramesPerSecond;
 }
 
 bool UpgradeSystem::GetResearchCost(ResearchId ResearchId,
@@ -583,40 +741,68 @@ bool UpgradeSystem::GetResearchCost(ResearchId ResearchId,
 
 int UpgradeSystem::GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID)
 {
+    return GetWeaponBonusForTarget(EM, EntityID, false);
+}
+
+int UpgradeSystem::GetWeaponBonusForTarget(const Core::ECS::EntityManager& EM,
+                                           int EntityID,
+                                           bool TargetIsAir)
+{
     auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
     auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
+    if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+        Unit && Unit->ChkUnitID == 30 && !TargetIsAir)
+    {
+        return 5 * GetResearchLevel(
+            PlayerID, ResearchId::Terran_VehicleWeapons);
+    }
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0) return 0;
 
-    int RaceVal = GetPlayerRace(EM, EntityID);
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.IsBuilding)
+        return 0;
 
-    if (RaceVal == 0) // Terran
+    const int DamageBonusPerLevel = TargetIsAir
+        ? Def.AirDamageBonus
+        : Def.GroundDamageBonus;
+    if (DamageBonusPerLevel <= 0)
+        return 0;
+
+    ResearchId WeaponUpgrade = ResearchId::None;
+
+    if (Def.RaceType == Race::Terran)
     {
         if (IsTerranInfantry(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_InfantryWeapons);
-        if (IsTerranVehicle(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_VehicleWeapons);
-        if (IsTerranShip(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_ShipWeapons);
+            WeaponUpgrade = ResearchId::Terran_InfantryWeapons;
+        else if (IsTerranVehicle(DefID))
+            WeaponUpgrade = ResearchId::Terran_VehicleWeapons;
+        else if (IsTerranShip(DefID))
+            WeaponUpgrade = ResearchId::Terran_ShipWeapons;
     }
-    else if (RaceVal == 1) // Zerg
+    else if (Def.RaceType == Race::Zerg)
     {
         if (IsZergMelee(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Zerg_MeleeAttacks);
-        if (IsZergFlyer(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Zerg_FlyerAttacks);
-        // Default: missile attacks for other zerg
-        return GetResearchLevel(PlayerID, ResearchId::Zerg_MissileAttacks);
+            WeaponUpgrade = ResearchId::Zerg_MeleeAttacks;
+        else if (IsZergFlyer(DefID))
+            WeaponUpgrade = ResearchId::Zerg_FlyerAttacks;
+        else
+            WeaponUpgrade = ResearchId::Zerg_MissileAttacks;
     }
-    else if (RaceVal == 2) // Protoss
+    else if (Def.RaceType == Race::Protoss)
     {
-        if (IsProtossGround(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Protoss_GroundWeapons);
-        if (IsProtossAir(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Protoss_AirWeapons);
+        if (!TargetIsAir && Def.Name == "Reaver")
+            WeaponUpgrade = ResearchId::Protoss_ScarabDamage;
+        else if (IsProtossGround(DefID))
+            WeaponUpgrade = ResearchId::Protoss_GroundWeapons;
+        else if (IsProtossAir(DefID))
+            WeaponUpgrade = ResearchId::Protoss_AirWeapons;
     }
-    return 0;
+
+    if (WeaponUpgrade == ResearchId::None)
+        return 0;
+    return DamageBonusPerLevel * GetResearchLevel(PlayerID, WeaponUpgrade);
 }
 
 int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID)
@@ -627,9 +813,11 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0) return 0;
 
-    int RaceVal = GetPlayerRace(EM, EntityID);
+    const auto& Def = Game::Races::GetUnitDefByID(DefID);
+    if (Def.IsBuilding)
+        return 0;
 
-    if (RaceVal == 0) // Terran
+    if (Def.RaceType == Race::Terran)
     {
         if (IsTerranInfantry(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Terran_InfantryArmor);
@@ -638,13 +826,14 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
         if (IsTerranShip(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Terran_ShipArmor);
     }
-    else if (RaceVal == 1) // Zerg
+    else if (Def.RaceType == Race::Zerg)
     {
         if (IsZergFlyer(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Zerg_FlyerCarapace);
 
+        if (!IsZergGround(DefID))
+            return 0;
         int Bonus = GetResearchLevel(PlayerID, ResearchId::Zerg_Carapace);
-        const auto& Def = Game::Races::GetUnitDefByID(DefID);
         if (Def.Name == "Ultralisk" &&
             HasResearch(PlayerID, ResearchId::Zerg_ChitinousPlating))
         {
@@ -652,7 +841,7 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
         }
         return Bonus;
     }
-    else if (RaceVal == 2) // Protoss
+    else if (Def.RaceType == Race::Protoss)
     {
         if (IsProtossGround(DefID))
             return GetResearchLevel(PlayerID, ResearchId::Protoss_GroundArmor);
@@ -749,10 +938,13 @@ float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& 
         return 1.0f;
 
     const auto& Def = Game::Races::GetUnitDefByID(DefID);
-    if (Def.Name == "Vulture" &&
+    // Brood War stores movement as 8.8 fixed-point values. Most upgrades add
+    // floor(base / 2), Overlords are clamped to the 853 raw minimum, and the
+    // Scout upgrade sets the special 1707 raw speed.
+    if ((Def.Name == "Vulture" || Def.Name == "JimRaynorVulture") &&
         HasResearch(PlayerID, ResearchId::Terran_IonThrusters))
     {
-        return 1.5f;
+        return 2560.0f / 1707.0f;
     }
     if (Def.Name == "Zergling" &&
         HasResearch(PlayerID, ResearchId::Zerg_MetabolicBoost))
@@ -773,6 +965,26 @@ float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& 
         HasResearch(PlayerID, ResearchId::Protoss_ZealotSpeed))
     {
         return 1.5f;
+    }
+    if (Def.Name == "Overlord" &&
+        HasResearch(PlayerID, ResearchId::Zerg_PneumatizedCarapace))
+    {
+        return 853.0f / 213.0f;
+    }
+    if (Def.Name == "Shuttle" &&
+        HasResearch(PlayerID, ResearchId::Protoss_GraviticDrive))
+    {
+        return 1699.0f / 1133.0f;
+    }
+    if (Def.Name == "Observer" &&
+        HasResearch(PlayerID, ResearchId::Protoss_GraviticBoosters))
+    {
+        return 1279.0f / 853.0f;
+    }
+    if (Def.Name == "Scout" &&
+        HasResearch(PlayerID, ResearchId::Protoss_GraviticThrusters))
+    {
+        return 1707.0f / 1280.0f;
     }
 
     return 1.0f;

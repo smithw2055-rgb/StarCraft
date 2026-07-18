@@ -93,6 +93,24 @@ set(GUI_CORE_LIB "${GUI_BIN_DIR}/Aero.lib")
 set(GUI_APP_DLL "${GUI_BIN_DIR}/AeroApp.dll")
 set(GUI_CORE_DLL "${GUI_BIN_DIR}/Aero.dll")
 
+# AngelScript (optional script runtime)
+option(BUILD_ANGELSCRIPT "Build AngelScript third-party scripting library" OFF)
+set(ANGELSCRIPT_TARGET "")
+set(HAS_ANGELSCRIPT FALSE)
+if(BUILD_ANGELSCRIPT)
+    set(ANGELSCRIPT_CMAKE_DIR "${CMAKE_SOURCE_DIR}/third_party/AngelScript/angelscript/projects/cmake")
+    if(EXISTS "${ANGELSCRIPT_CMAKE_DIR}/CMakeLists.txt")
+        add_subdirectory(
+            ${ANGELSCRIPT_CMAKE_DIR}
+            "${CMAKE_BINARY_DIR}/third_party/angelscript"
+        )
+        if(TARGET angelscript)
+            set(ANGELSCRIPT_TARGET angelscript)
+            set(HAS_ANGELSCRIPT TRUE)
+        endif()
+    endif()
+endif()
+
 if(EXISTS "${GUI_INCLUDE_DIR}"
     AND EXISTS "${GUI_APP_LIB}"
     AND EXISTS "${GUI_CORE_LIB}"
@@ -331,6 +349,68 @@ if(BUILD_MAP_RESOURCE_ANALYZER)
     endif()
 endif()
 
+option(BUILD_ISCRIPT_ANGELSCRIPT_TOOL "Build IScript to AngelScript source exporter" ON)
+if(BUILD_ISCRIPT_ANGELSCRIPT_TOOL)
+    add_executable(IScriptToAngelScript
+        src/Game/IScriptToAngelScript.cpp
+        src/Game/IScriptAngelScriptExporter.cpp
+        src/Game/IScriptVM.cpp
+        src/Core/Utils/Logger.cpp
+    )
+
+    target_include_directories(IScriptToAngelScript PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(IScriptToAngelScript PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(IScriptToAngelScript PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(IScriptToAngelScript PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_executable(IScriptAngelScriptExportTest
+        src/Game/Regression/IScriptAngelScriptExportTest.cpp
+        src/Game/IScriptAngelScriptExporter.cpp
+        src/Game/IScriptVM.cpp
+        src/Core/Utils/Logger.cpp
+    )
+
+    target_include_directories(IScriptAngelScriptExportTest PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(IScriptAngelScriptExportTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(IScriptAngelScriptExportTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(IScriptAngelScriptExportTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    if(HAS_ANGELSCRIPT)
+        add_executable(IScriptAngelScriptCompileTest
+            src/Game/Regression/IScriptAngelScriptCompileTest.cpp
+            src/Game/IScriptAngelScriptExporter.cpp
+            src/Game/IScriptVM.cpp
+            src/Core/Utils/Logger.cpp
+        )
+
+        target_include_directories(IScriptAngelScriptCompileTest PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${CMAKE_SOURCE_DIR}/third_party/AngelScript/angelscript/include)
+        target_link_libraries(IScriptAngelScriptCompileTest PRIVATE
+            ${ANGELSCRIPT_TARGET})
+
+        if(MSVC)
+            target_compile_options(IScriptAngelScriptCompileTest PRIVATE /W4 /utf-8 /permissive-)
+            target_compile_definitions(IScriptAngelScriptCompileTest PRIVATE
+                _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+        else()
+            target_compile_options(IScriptAngelScriptCompileTest PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+    endif()
+endif()
+
 option(BUILD_COMBAT_RULES_TEST "Build combat rule regression test" ON)
 if(BUILD_COMBAT_RULES_TEST)
     add_executable(CombatRulesTest
@@ -339,6 +419,8 @@ if(BUILD_COMBAT_RULES_TEST)
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BulletSystem.cpp
         src/Game/Systems/CombatSystem.cpp
@@ -501,6 +583,25 @@ if(BUILD_RACE_DEFINITION_MAPPING_TEST)
     endif()
 endif()
 
+option(BUILD_AI_BRAIN_STRATEGY_TEST "Build AI difficulty strategy regression test" ON)
+if(BUILD_AI_BRAIN_STRATEGY_TEST)
+    add_executable(AIBrainStrategyTest
+        src/Game/Regression/AIBrainStrategyTest.cpp
+    )
+
+    target_include_directories(AIBrainStrategyTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(AIBrainStrategyTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(AIBrainStrategyTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(AIBrainStrategyTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 option(BUILD_COMMAND_SYSTEM_ORDER_TEST "Build command system order legality regression test" ON)
 if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
     add_executable(CommandSystemOrderTest
@@ -513,6 +614,7 @@ if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Main/GameLoop/InputHandler.cpp
@@ -797,7 +899,10 @@ if(BUILD_PRODUCTION_ECONOMY_TEST)
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
+        src/Game/Systems/BuildingSystem.cpp
         src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/ProtossSystem.cpp
         src/Game/Systems/ProductionSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
@@ -814,6 +919,39 @@ if(BUILD_PRODUCTION_ECONOMY_TEST)
             _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
     else()
         target_compile_options(ProductionEconomyTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+option(BUILD_ZERG_CREEP_REGRESSION_TEST "Build Zerg creep regression test" ON)
+if(BUILD_ZERG_CREEP_REGRESSION_TEST)
+    add_executable(ZergCreepRegressionTest
+        src/Game/Regression/ZergCreepRegressionTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+    )
+
+    target_include_directories(ZergCreepRegressionTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(ZergCreepRegressionTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(ZergCreepRegressionTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(ZergCreepRegressionTest PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
 
@@ -850,6 +988,8 @@ if(BUILD_HARVEST_SYSTEM_COMMAND_TEST)
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
         src/Game/Races/RaceDef.cpp
     )
 
@@ -1093,6 +1233,8 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
 endif()
 
 foreach(_StarCraftRegressionTest IN ITEMS
+    IScriptAngelScriptExportTest
+    IScriptAngelScriptCompileTest
     AnimationStateTest
     AnimationRuntimeDirectionTest
     MovementCommandTest
@@ -1101,6 +1243,7 @@ foreach(_StarCraftRegressionTest IN ITEMS
     SpellVisualStateTest
     HarvestSystemCommandTest
     ProductionEconomyTest
+    ZergCreepRegressionTest
     BuildingPlacementTest
     SelectionFootprintTest
     SpriteImageDataTest
@@ -1117,6 +1260,7 @@ foreach(_StarCraftRegressionTest IN ITEMS
     SmartClickCommandTest
     SelectionInteractionTest
     RaceDefinitionMappingTest
+    AIBrainStrategyTest
     OggVorbisDecodeTest )
     if(TARGET ${_StarCraftRegressionTest})
         add_test(NAME ${_StarCraftRegressionTest} COMMAND ${_StarCraftRegressionTest})
@@ -1312,6 +1456,7 @@ if(BUILD_GAME_CLIENT)
             d3d11 dxgi d3dcompiler user32 gdi32 shell32 mfplat mfreadwrite mfuuid
             ${StormLib_TARGET}
             ${CascLib_TARGET}
+            ${ANGELSCRIPT_TARGET}
             ${LIBVPX_TARGET})
         if(ENABLE_GUI_UI AND HAS_GUI)
             target_link_libraries(StarCraft PRIVATE
@@ -1377,6 +1522,7 @@ if(BUILD_GAME_CLIENT)
             ${XCURSOR_LIBRARY}
             ${StormLib_TARGET}
             ${CascLib_TARGET}
+            ${ANGELSCRIPT_TARGET}
             ${LIBVPX_TARGET}
             dl pthread m asound)
     endif()
@@ -1412,6 +1558,7 @@ message(STATUS "================ Build Configuration ================")
 message(STATUS "  raylib:    ${HAS_RAYLIB}  (removed)")
 message(STATUS "  StormLib:  ${HAS_STORMLIB}  (MPQ)")
 message(STATUS "  CascLib:   ${HAS_CASCLIB}  (CASC)")
+message(STATUS "  AngelScript: ${HAS_ANGELSCRIPT}")
 message(STATUS "  Generator: ${CMAKE_GENERATOR}")
 message(STATUS "  C++:       ${CMAKE_CXX_STANDARD}")
 message(STATUS "=====================================================")

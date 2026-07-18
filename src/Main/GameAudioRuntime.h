@@ -63,9 +63,11 @@ public:
         for (size_t I = 0; I < Count; ++I)
         {
             const uint32_t PathIndex = ReadU32(FilenameOffset + I * 4);
-            if (PathIndex < Paths.size() && !Paths[PathIndex].empty())
+            const std::string SoundPath =
+                Core::Audio::ResolveArchiveSoundPath(Paths, PathIndex);
+            if (!SoundPath.empty())
             {
-                Audio.SetSoundPath((int)I, Paths[PathIndex]);
+                Audio.SetSoundPath((int)I, SoundPath);
                 ++ConfiguredPaths;
             }
 

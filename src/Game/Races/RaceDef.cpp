@@ -27,11 +27,11 @@ static void InitDefs()
     T.push_back({"Vulture",         Race::Terran, UnitSize::Medium, 80,  0,  0, 0,  2,  75,   0,  30, 20,  0, 5, 1, 3.0f, 8,  false});
     T.push_back({"Goliath",         Race::Terran, UnitSize::Large, 125,  0,  0, 1,  2, 100,  50,  37, 12, 20, 6, 1, 2.6f, 8,  false});
     T.push_back({"SiegeTank",       Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 150, 100,  45, 30,  0, 7, 1, 2.3f, 10, false});
-    T.push_back({"Wraith",          Race::Terran, UnitSize::Medium,120,  0,  0, 0,  2, 150, 100,  60,  8, 20, 5, 1, 3.2f, 9,  false});
+    T.push_back({"Wraith",          Race::Terran, UnitSize::Large, 120,  0,  0, 0,  2, 150, 100,  60,  8, 20, 5, 1, 3.2f, 9,  false});
     T.push_back({"Dropship",        Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 100, 100,  50,  0,  0, 0, 0, 3.0f, 8,  false});
     T.push_back({"ScienceVessel",   Race::Terran, UnitSize::Large, 200,  0,200, 1,  2, 100, 225,  80,  0,  0, 0, 0, 2.8f, 11, false});
     T.push_back({"Battlecruiser",   Race::Terran, UnitSize::Large, 500,  0,200, 3,  6, 400, 300,  90, 25, 25, 6, 1, 2.1f, 11, false});
-    T.push_back({"Valkyrie",        Race::Terran, UnitSize::Large, 200,  0,  0, 2,  3, 250, 125,  60,  0, 12, 6, 1, 3.0f, 9,  false});
+    T.push_back({"Valkyrie",        Race::Terran, UnitSize::Large, 200,  0,  0, 2,  3, 250, 125,  60,  0,  6, 6, 1, 3.0f, 9,  false});
 
     int CommandCenterID = (int)T.size();
     T.push_back({"CommandCenter",   Race::Terran, UnitSize::Large, 1500, 0,  0, 1, 10, 400,   0, 120,  0,  0, 0, 0, 0.0f, 11, true, true});
@@ -42,7 +42,7 @@ static void InitDefs()
     int SupplyDepotID = (int)T.size();
     T.push_back({"SupplyDepot",     Race::Terran, UnitSize::Large,  500, 0,  0, 1,  8, 100,   0,  40,  0,  0, 0, 0, 0.0f, 11, true});
     int RefineryID = (int)T.size();
-    T.push_back({"Refinery",        Race::Terran, UnitSize::Large,  500, 0,  0, 1,  0, 100,   0,  40,  0,  0, 0, 0, 0.0f, 11, true});
+    T.push_back({"Refinery",        Race::Terran, UnitSize::Large,  750, 0,  0, 1,  0, 100,   0,  40,  0,  0, 0, 0, 0.0f, 11, true});
     int BarracksID = (int)T.size();
     T.push_back({"Barracks",        Race::Terran, UnitSize::Large, 1000, 0,  0, 1,  0, 150,   0,  60,  0,  0, 0, 0, 0.0f, 11, true});
     int AcademyID = (int)T.size();
@@ -58,7 +58,7 @@ static void InitDefs()
     int CovertOpsID = (int)T.size();
     T.push_back({"CovertOps",       Race::Terran, UnitSize::Large,  750, 0,  0, 1,  0,  50,  50,  30,  0,  0, 0, 0, 0.0f, 11, true});
     int PhysicsLabID = (int)T.size();
-    T.push_back({"PhysicsLab",      Race::Terran, UnitSize::Large,  750, 0,  0, 1,  0,  50,  50,  30,  0,  0, 0, 0, 0.0f, 11, true});
+    T.push_back({"PhysicsLab",      Race::Terran, UnitSize::Large,  600, 0,  0, 1,  0,  50,  50,  30,  0,  0, 0, 0, 0.0f, 11, true});
     int MachineShopID = (int)T.size();
     T.push_back({"MachineShop",     Race::Terran, UnitSize::Large,  750, 0,  0, 1,  0,  50,  50,  30,  0,  0, 0, 0, 0.0f, 11, true});
     int EngineeringBayID = (int)T.size();
@@ -68,7 +68,7 @@ static void InitDefs()
     int BunkerID = (int)T.size();
     T.push_back({"Bunker",          Race::Terran, UnitSize::Large,  350, 0,  0, 1,  0, 100,   0,  30,  0,  0, 0, 0, 0.0f, 11, true});
     int MissileTurretID = (int)T.size();
-    T.push_back({"MissileTurret",   Race::Terran, UnitSize::Large,  200, 0,  0, 1,  0,  75,   0,  20,  0, 20, 7, 1, 0.0f, 11, true});
+    T.push_back({"MissileTurret",   Race::Terran, UnitSize::Large,  200, 0,  0, 0,  0,  75,   0,  20,  0, 20, 7, 1, 0.0f, 11, true});
 
     T[0].ProducedBy = CommandCenterID;
     T[1].ProducedBy = BarracksID;
@@ -76,10 +76,10 @@ static void InitDefs()
     T[3].ProducedBy = BarracksID; T[3].RequiredBuildings = {AcademyID};
     T[4].ProducedBy = BarracksID; T[4].RequiredBuildings = {AcademyID, CovertOpsID};
     T[5].ProducedBy = FactoryID;
-    T[6].ProducedBy = FactoryID;  T[6].RequiredBuildings = {MachineShopID};
+    T[6].ProducedBy = FactoryID;  T[6].RequiredBuildings = {ArmoryID};
     T[7].ProducedBy = FactoryID;  T[7].RequiredBuildings = {MachineShopID};
     T[8].ProducedBy = StarportID;
-    T[9].ProducedBy = StarportID;
+    T[9].ProducedBy = StarportID; T[9].RequiredBuildings = {ControlTowerID};
     T[10].ProducedBy = StarportID; T[10].RequiredBuildings = {ControlTowerID, ScienceFacilityID};
     T[11].ProducedBy = StarportID; T[11].RequiredBuildings = {ControlTowerID, PhysicsLabID};
     T[12].ProducedBy = StarportID; T[12].RequiredBuildings = {ControlTowerID, ArmoryID};
@@ -166,19 +166,18 @@ static void InitDefs()
 
     auto& Z = ZergDefs;
     int LarvaID = (int)Z.size();
-    Z.push_back({"Larva",            Race::Zerg, UnitSize::Small,  20,  0,  0, 0,  0,  0,   0,  1,   0,  0,  0, 0,  0,   0,   false});
+    Z.push_back({"Larva",            Race::Zerg, UnitSize::Small,  25,  0,  0,10,  0,  0,   0,  1,   0,  0,  0, 0,  0,   0,   false});
     int ZDroneID = (int)Z.size();
     Z.push_back({"Drone",            Race::Zerg, UnitSize::Small,  40,  0,  0, 0,  1,  50,  0,  17,  5,  0,  0, 1,  2.9f, 8,  false});
     int ZOverlordID = (int)Z.size();
     Z.push_back({"Overlord",         Race::Zerg, UnitSize::Large, 200,  0,  0, 0,  0,  100, 0,  25,  0,  0,  0, 0,  0.7f, 9,  false});
     int ZZerglingID = (int)Z.size();
-    // The current production flow morphs one Zergling at a time, so it must
-    // reserve supply instead of bypassing the population cap.
+    // One egg produces a pair; the pair shares this single supply reservation.
     Z.push_back({"Zergling",         Race::Zerg, UnitSize::Small,  35,  0,  0, 0,  1,  50,  0,  24,  5,  0,  1, 1,  3.4f, 7,  false});
     int ZHydraliskID = (int)Z.size();
     Z.push_back({"Hydralisk",        Race::Zerg, UnitSize::Medium, 80,  0,  0, 0,  1,  75,  25, 24,  10, 10, 4, 1,  2.5f, 6,  false});
     int ZMutaliskID = (int)Z.size();
-    Z.push_back({"Mutalisk",         Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  9,  9,  3, 1,  3.5f, 8,  false});
+    Z.push_back({"Mutalisk",         Race::Zerg, UnitSize::Small, 120,  0,  0, 0,  2,  100, 100,30,  9,  9,  3, 1,  3.5f, 8,  false});
     int ZScourgeID = (int)Z.size();
     Z.push_back({"Scourge",          Race::Zerg, UnitSize::Small,  25,  0,  0, 0,  1,  25,  75, 20,  0,110, 1, 1,  4.5f, 5,  false});
     int ZQueenID = (int)Z.size();
@@ -186,63 +185,63 @@ static void InitDefs()
     int ZUltraliskID = (int)Z.size();
     Z.push_back({"Ultralisk",        Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  4,  200, 200,39,  20, 0,  1, 1,  2.9f, 7,  false});
     int ZDefilerID = (int)Z.size();
-    Z.push_back({"Defiler",          Race::Zerg, UnitSize::Medium, 80,  0,  0, 1,  2,  50,  150,30,  0,  0,  0, 0,  2.0f, 9,  false});
+    Z.push_back({"Defiler",          Race::Zerg, UnitSize::Medium, 80,  0,200, 1,  2,  50,  150,30,  0,  0,  0, 0,  2.0f, 9,  false});
     int ZLurkerID = (int)Z.size();
     Z.push_back({"Lurker",           Race::Zerg, UnitSize::Medium,125,  0,  0, 1,  2,  50,  100,28,  20, 0,  6, 1,  2.5f, 8,  false});
     int ZBroodlingID = (int)Z.size();
     Z.push_back({"Broodling",        Race::Zerg, UnitSize::Small,  30,  0,  0, 0,  0,  0,   0,  1,   4,  0,  1, 1,  2.5f, 5,  false});
     int ZInfestedID = (int)Z.size();
-    Z.push_back({"Infested Terran",  Race::Zerg, UnitSize::Medium, 60,  0,  0, 0,  1,  0,   0,  20,  12, 0,  5, 1,  2.5f, 8,  false});
+    Z.push_back({"Infested Terran",  Race::Zerg, UnitSize::Small,  60,  0,  0, 0,  1,  0,   0,  20, 500, 0,  5, 1,  2.5f, 8,  false});
     int ZGuardianID = (int)Z.size();
-    Z.push_back({"Guardian",         Race::Zerg, UnitSize::Medium,150,  0,  0, 2,  2,  50,  100,33,  20, 0,  8, 1,  2.5f, 10, false});
+    Z.push_back({"Guardian",         Race::Zerg, UnitSize::Large, 150,  0,  0, 2,  2,  50,  100,33,  20, 0,  8, 1,  2.5f, 10, false});
     int ZDevourerID = (int)Z.size();
-    Z.push_back({"Devourer",         Race::Zerg, UnitSize::Medium,150,  0,  0, 0,  2,  100, 50, 33,  0, 25, 6, 1,  3.5f, 9,  false});
+    Z.push_back({"Devourer",         Race::Zerg, UnitSize::Large, 250,  0,  0, 2,  2,  150, 50, 33,  0, 25, 6, 1,  3.5f, 9,  false});
 
     // Zerg buildings
     int ZHatcheryID = (int)Z.size();
-    Z.push_back({"Hatchery",         Race::Zerg, UnitSize::Large, 1500, 0,  0, 1,  0, 300, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false});
+    Z.push_back({"Hatchery",         Race::Zerg, UnitSize::Large, 1250, 0,  0, 1,  0, 300, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false});
     int ZLairID = (int)Z.size();
     Z.push_back({"Lair",             Race::Zerg, UnitSize::Large, 1800, 0,  0, 1,  0, 150, 100,80,  0,  0,  0, 0,  0,   11, true, false, false});
     int ZHiveID = (int)Z.size();
-    Z.push_back({"Hive",             Race::Zerg, UnitSize::Large, 2000, 0,  0, 1,  0, 200, 150,80,  0,  0,  0, 0,  0,   11, true, false, false});
+    Z.push_back({"Hive",             Race::Zerg, UnitSize::Large, 2500, 0,  0, 1,  0, 200, 150,80,  0,  0,  0, 0,  0,   11, true, false, false});
     int ZExtractorID = (int)Z.size();
-    Z.push_back({"Extractor",        Race::Zerg, UnitSize::Large, 500,  0,  0, 1,  0, 50,  0,  40,  0,  0,  0, 0,  0,   11, true});
+    Z.push_back({"Extractor",        Race::Zerg, UnitSize::Large, 750,  0,  0, 1,  0, 50,  0,  40,  0,  0,  0, 0,  0,   11, true});
     int ZSpawningPoolID = (int)Z.size();
     Z.push_back({"Spawning Pool",    Race::Zerg, UnitSize::Large, 750,  0,  0, 1,  0, 200, 0,  60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZEvolutionChamberID = (int)Z.size();
-    Z.push_back({"Evolution Chamber",Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 75,  0,  40,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Evolution Chamber",Race::Zerg, UnitSize::Large, 750,  0,  0, 1,  0, 75,  0,  40,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZHydraliskDenID = (int)Z.size();
-    Z.push_back({"Hydralisk Den",    Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 75,  50, 40,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Hydralisk Den",    Race::Zerg, UnitSize::Large, 850,  0,  0, 1,  0, 100, 50, 40,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZSpireID = (int)Z.size();
-    Z.push_back({"Spire",            Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 100, 100,60,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Spire",            Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 200, 150,60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZNydusCanalID = (int)Z.size();
     Z.push_back({"Nydus Canal",      Race::Zerg, UnitSize::Large, 250,  0,  0, 1,  0, 150, 0,  40,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZQueensNestID = (int)Z.size();
-    Z.push_back({"Queen's Nest",     Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 75,  100,50,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Queen's Nest",     Race::Zerg, UnitSize::Large, 850,  0,  0, 1,  0, 150, 100,50,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZGreaterSpireID = (int)Z.size();
-    Z.push_back({"Greater Spire",    Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 100, 150,60,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Greater Spire",    Race::Zerg, UnitSize::Large,1000,  0,  0, 1,  0, 100, 150,60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZUltraliskCavernID = (int)Z.size();
     Z.push_back({"Ultralisk Cavern", Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 150, 200,60,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZDefilerMoundID = (int)Z.size();
-    Z.push_back({"Defiler Mound",    Race::Zerg, UnitSize::Large, 600,  0,  0, 1,  0, 100, 150,50,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Defiler Mound",    Race::Zerg, UnitSize::Large, 850,  0,  0, 1,  0, 100, 100,50,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZCreepColonyID = (int)Z.size();
-    Z.push_back({"Creep Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  0, 75,  0,  20,  0,  0,  0, 0,  0,   11, true, false, true});
+    Z.push_back({"Creep Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 0,  0, 75,  0,  20,  0,  0,  0, 0,  0,   11, true, false, true});
     int ZSporeColonyID = (int)Z.size();
-    Z.push_back({"Spore Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  0, 50,  0,  20,  15, 0,  7, 0,  0,   11, true, false, true});
+    Z.push_back({"Spore Colony",     Race::Zerg, UnitSize::Large, 400,  0,  0, 0,  0, 50,  0,  20,   0,15,  7, 0,  0,   11, true, false, true});
     int ZSunkenColonyID = (int)Z.size();
-    Z.push_back({"Sunken Colony",    Race::Zerg, UnitSize::Large, 300,  0,  0, 1,  0, 50,  0,  20,  40, 0,  7, 0,  0,   11, true, false, true});
+    Z.push_back({"Sunken Colony",    Race::Zerg, UnitSize::Large, 300,  0,  0, 2,  0, 50,  0,  20,  40, 0,  7, 0,  0,   11, true, false, true});
 
     // Assign production & requirements for Zerg
-    Z[ZDroneID].ProducedBy = ZHatcheryID;       // Drone from Hatchery
-    Z[ZOverlordID].ProducedBy = ZHatcheryID;    // Overlord from Hatchery
-    Z[ZZerglingID].ProducedBy = ZHatcheryID;    // Zergling from Hatchery
-    Z[ZHydraliskID].ProducedBy = ZHatcheryID;   // Hydralisk from Hatchery
-    Z[ZMutaliskID].ProducedBy = ZHatcheryID;    // Mutalisk from Hatchery
-    Z[ZScourgeID].ProducedBy = ZHatcheryID;     // Scourge from Hatchery
-    Z[ZQueenID].ProducedBy = ZHatcheryID;       // Queen from Hatchery
-    Z[ZUltraliskID].ProducedBy = ZHatcheryID;   // Ultralisk from Hatchery
-    Z[ZDefilerID].ProducedBy = ZHatcheryID;     // Defiler from Hatchery
-    Z[ZLurkerID].ProducedBy = ZHatcheryID;      // Lurker from Hatchery
+    Z[ZDroneID].ProducedBy = -1;                // Larva -> Egg -> Drone
+    Z[ZOverlordID].ProducedBy = -1;             // Larva -> Egg -> Overlord
+    Z[ZZerglingID].ProducedBy = -1;             // Larva -> Egg -> Zerglings
+    Z[ZHydraliskID].ProducedBy = -1;             // Larva -> Egg -> Hydralisk
+    Z[ZMutaliskID].ProducedBy = -1;              // Larva -> Egg -> Mutalisk
+    Z[ZScourgeID].ProducedBy = -1;               // Larva -> Egg -> Scourge
+    Z[ZQueenID].ProducedBy = -1;                 // Larva -> Egg -> Queen
+    Z[ZUltraliskID].ProducedBy = -1;             // Larva -> Egg -> Ultralisk
+    Z[ZDefilerID].ProducedBy = -1;               // Larva -> Egg -> Defiler
+    Z[ZLurkerID].ProducedBy = ZHydraliskID;     // Hydralisk -> Lurker Egg -> Lurker
 
     Z[ZDroneID].RequiredBuildings = {ZHatcheryID};
     Z[ZOverlordID].RequiredBuildings = {ZHatcheryID};
@@ -279,63 +278,63 @@ static void InitDefs()
     int PZealotID = (int)P.size();
     P.push_back({"Zealot",     Race::Protoss, UnitSize::Small, 100, 60, 0, 1,  2, 100,  0,  27,  8,  0,  1, 1,  2.5f, 7,  false});
     int PDragoonID = (int)P.size();
-    P.push_back({"Dragoon",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 125, 50, 30,  20, 20, 4, 1,  2.4f, 8,  false});
+    P.push_back({"Dragoon",    Race::Protoss, UnitSize::Large, 100, 80, 0, 1,  2, 125, 50, 30,  20, 20, 4, 1,  2.4f, 8,  false});
     int PHighTemplarID = (int)P.size();
-    P.push_back({"High Templar",Race::Protoss, UnitSize::Small, 40, 40, 0, 0,  2,  50, 150,30,  0,  0,  0, 0,  2.0f, 8,  false});
+    P.push_back({"High Templar",Race::Protoss, UnitSize::Small, 40, 40,200, 0,  2,  50, 150,30,  0,  0,  0, 0,  2.0f, 8,  false});
     int PDarkTemplarID = (int)P.size();
-    P.push_back({"Dark Templar",Race::Protoss, UnitSize::Small, 80, 40, 0, 1,  2, 125, 125,30,  40,  0,  1, 1,  2.5f, 7,  false});
+    P.push_back({"Dark Templar",Race::Protoss, UnitSize::Small, 80, 40, 0, 1,  2, 125, 100,30,  40,  0,  1, 1,  2.5f, 7,  false});
     int PArchonID = (int)P.size();
-    P.push_back({"Archon",     Race::Protoss, UnitSize::Medium, 10,350, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
+    P.push_back({"Archon",     Race::Protoss, UnitSize::Large,  10,350, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
     int PDarkArchonID = (int)P.size();
-    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Medium, 25,200, 0, 0,  4,  0,   0,  1,  0,  0,  0, 0,  2.0f,10,  false});
+    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Large,  25,200, 0, 1,  4,  0,   0,  1,  0,  0,  0, 0,  2.0f,10,  false});
     int PReaverID = (int)P.size();
-    P.push_back({"Reaver",     Race::Protoss, UnitSize::Large, 100, 80, 0, 0,  4, 200, 100,35,  20,  0,  8, 1,  2.0f, 9,  false});
+    P.push_back({"Reaver",     Race::Protoss, UnitSize::Large, 100, 80, 0, 0,  4, 200, 100,35, 100,  0,  8, 1,  2.0f, 9,  false});
     int PShuttleID = (int)P.size();
-    P.push_back({"Shuttle",    Race::Protoss, UnitSize::Medium, 80, 60, 0, 0,  2, 100,  0,  30,  0,  0,  0, 0,  3.0f, 8,  false});
+    P.push_back({"Shuttle",    Race::Protoss, UnitSize::Large,  80, 60, 0, 1,  2, 200,  0,  30,  0,  0,  0, 0,  3.0f, 8,  false});
     int PScoutID = (int)P.size();
-    P.push_back({"Scout",      Race::Protoss, UnitSize::Medium,150,100, 0, 0,  3, 275, 125,40,  8,  28, 4, 1,  3.5f, 8,  false});
+    P.push_back({"Scout",      Race::Protoss, UnitSize::Large, 150,100, 0, 0,  3, 275, 125,40,  8,  14, 4, 1,  3.5f, 8,  false});
     int PCorsairID = (int)P.size();
     P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 150, 100,30,  0,   5, 5, 1,  3.5f, 9,  false});
     int PCarrierID = (int)P.size();
-    P.push_back({"Carrier",    Race::Protoss, UnitSize::Large, 300,150, 0, 2,  6, 350, 250,60,  6,   0, 6, 1,  2.5f,11, false});
+    P.push_back({"Carrier",    Race::Protoss, UnitSize::Large, 300,150, 0, 4,  6, 350, 250,60,  6,   6, 6, 1,  2.5f,11, false});
     int PArbiterID = (int)P.size();
-    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 200, 150,50,  10, 10, 5, 1,  2.5f, 9, false});
+    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 100, 350,50,  10, 10, 5, 1,  2.5f, 9, false});
     int PObserverID = (int)P.size();
     P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  40, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 9,  false});
 
     // Protoss buildings
     int PNexusID = (int)P.size();
-    P.push_back({"Nexus",            Race::Protoss, UnitSize::Large, 1000,1000,0, 1,  0, 400, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false, false});
+    P.push_back({"Nexus",            Race::Protoss, UnitSize::Large, 750, 750,0, 1,  0, 400, 0,  120, 0,  0,  0, 0,  0,   11, true, false, false, false});
     int PPylonID = (int)P.size();
-    P.push_back({"Pylon",            Race::Protoss, UnitSize::Large, 300, 300, 0, 1,  0, 100, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, false});
+    P.push_back({"Pylon",            Race::Protoss, UnitSize::Large, 300, 300, 0, 0,  0, 100, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, false});
     int PAssimilatorID = (int)P.size();
     P.push_back({"Assimilator",      Race::Protoss, UnitSize::Large, 450, 450, 0, 1,  0, 100, 0,  40,  0,  0,  0, 0,  0,   11, true});
     int PGatewayID = (int)P.size();
-    P.push_back({"Gateway",          Race::Protoss, UnitSize::Large, 600, 600, 0, 1,  0, 150, 0,  60,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Gateway",          Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 150, 0,  60,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PForgeID = (int)P.size();
-    P.push_back({"Forge",            Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 150, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Forge",            Race::Protoss, UnitSize::Large, 550, 550, 0, 1,  0, 150, 0,  30,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PPhotonCannonID = (int)P.size();
-    P.push_back({"Photon Cannon",    Race::Protoss, UnitSize::Large, 100, 100, 0, 1,  0, 100, 0,  30,  20, 20, 6, 1,  0,   11, true, false, false, true});
+    P.push_back({"Photon Cannon",    Race::Protoss, UnitSize::Large, 100, 100, 0, 0,  0, 150, 0,  30,  20, 20, 7, 1,  0,   11, true, false, false, true});
     int PCyberneticsCoreID = (int)P.size();
-    P.push_back({"Cybernetics Core", Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 200, 0,  40,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Cybernetics Core", Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 200, 0,  40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PShieldBatteryID = (int)P.size();
     P.push_back({"Shield Battery",   Race::Protoss, UnitSize::Large, 200, 200, 0, 1,  0, 100, 0,  20,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PRoboticsFacilityID = (int)P.size();
-    P.push_back({"Robotics Facility",Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 200, 100,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Robotics Facility",Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 200, 200,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PStargateID = (int)P.size();
-    P.push_back({"Stargate",         Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 150, 150,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Stargate",         Race::Protoss, UnitSize::Large, 600, 600, 0, 1,  0, 150, 150,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PCitadelOfAdunID = (int)P.size();
-    P.push_back({"Citadel of Adun",  Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 150, 100,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Citadel of Adun",  Race::Protoss, UnitSize::Large, 450, 450, 0, 1,  0, 150, 100,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PTemplarArchivesID = (int)P.size();
-    P.push_back({"Templar Archives", Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 150, 200,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Templar Archives", Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 150, 200,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PRoboticsSupportBayID = (int)P.size();
-    P.push_back({"Robotics Support Bay",Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 100, 100,30,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Robotics Support Bay",Race::Protoss, UnitSize::Large, 450, 450, 0, 1,  0, 150, 100,30,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PFleetBeaconID = (int)P.size();
-    P.push_back({"Fleet Beacon",     Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 200, 150,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Fleet Beacon",     Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 300, 200,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PArbiterTribunalID = (int)P.size();
-    P.push_back({"Arbiter Tribunal", Race::Protoss, UnitSize::Large, 400, 400, 0, 1,  0, 200, 150,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Arbiter Tribunal", Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 200, 150,50,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PObservatoryID = (int)P.size();
-    P.push_back({"Observatory",      Race::Protoss, UnitSize::Large, 200, 200, 0, 1,  0, 50,  100,30,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Observatory",      Race::Protoss, UnitSize::Large, 250, 250, 0, 1,  0, 50,  100,30,  0,  0,  0, 0,  0,   11, true, false, false, true});
 
     // Protoss production & requirements
     P[PProbeID].ProducedBy = PNexusID;
@@ -359,7 +358,7 @@ static void InitDefs()
     P[PReaverID].RequiredBuildings = {PRoboticsFacilityID, PRoboticsSupportBayID};
     P[PShuttleID].RequiredBuildings = {PRoboticsFacilityID};
     P[PScoutID].RequiredBuildings = {PStargateID, PCyberneticsCoreID};
-    P[PCorsairID].RequiredBuildings = {PStargateID, PFleetBeaconID};
+    P[PCorsairID].RequiredBuildings = {PStargateID};
     P[PCarrierID].RequiredBuildings = {PStargateID, PFleetBeaconID};
     P[PArbiterID].RequiredBuildings = {PStargateID, PArbiterTribunalID};
     P[PObserverID].RequiredBuildings = {PRoboticsFacilityID, PObservatoryID};
@@ -513,14 +512,162 @@ static void InitDefs()
     ApplyDefaultWeaponMetadata(ZergDefs);
     ApplyDefaultWeaponMetadata(ProtossDefs);
 
-    for (auto& Def : ProtossDefs)
+    auto SetGroundWeapon = [](UnitDef& Def,
+                              int Damage,
+                              int DamageBonus,
+                              int HitCount,
+                              int CooldownFrames,
+                              Components::DamageType DamageType)
     {
-        if (Def.Name == "Archon")
-        {
-            Def.WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
-            break;
-        }
-    }
+        Def.GroundDamage = Damage;
+        Def.GroundDamageBonus = DamageBonus;
+        Def.GroundHitCount = HitCount;
+        Def.GroundAttackCooldown = (float)CooldownFrames / 24.0f;
+        Def.AttackCooldown = Def.GroundAttackCooldown;
+        Def.GroundDmgType = DamageType;
+    };
+    auto SetAirWeapon = [](UnitDef& Def,
+                           int Damage,
+                           int DamageBonus,
+                           int HitCount,
+                           int CooldownFrames,
+                           Components::DamageType DamageType)
+    {
+        Def.AirDamage = Damage;
+        Def.AirDamageBonus = DamageBonus;
+        Def.AirHitCount = HitCount;
+        Def.AirAttackCooldown = (float)CooldownFrames / 24.0f;
+        if (Def.GroundDamage <= 0)
+            Def.AttackCooldown = Def.AirAttackCooldown;
+        Def.AirDmgType = DamageType;
+    };
+    auto SetSplash = [](UnitDef& Def,
+                        Components::SplashType Splash,
+                        int InnerPixels,
+                        int MediumPixels,
+                        int OuterPixels)
+    {
+        Def.Splash = Splash;
+        Def.SplashInnerRadius = (float)InnerPixels / 32.0f;
+        Def.SplashMediumRadius = (float)MediumPixels / 32.0f;
+        Def.SplashRadius = (float)OuterPixels / 32.0f;
+    };
+
+    // Terran weapons.dat values.  Damage and bonuses are per projectile/strike;
+    // multi-projectile attacks carry their multiplier in the hit-count fields.
+    SetGroundWeapon(T[0], 5, 0, 1, 15, Components::DamageType::Normal); // SCV
+    T[0].AttackRange = 10.0f / 32.0f;
+    SetGroundWeapon(T[1], 6, 1, 1, 15, Components::DamageType::Normal); // Marine
+    SetAirWeapon(T[1], 6, 1, 1, 15, Components::DamageType::Normal);
+    T[1].AttackRange = 4.0f;
+    SetGroundWeapon(T[2], 8, 1, 2, 22, Components::DamageType::Concussive); // Firebat
+    T[2].AttackRange = 1.0f;
+    // Flame splash is delivered through the bullet system, but the weapon is
+    // still a close-range attack and must work under Dark Swarm.
+    T[2].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetSplash(T[2], Components::SplashType::Line, 15, 20, 25);
+    SetGroundWeapon(T[4], 10, 1, 1, 22, Components::DamageType::Concussive); // Ghost
+    SetAirWeapon(T[4], 10, 1, 1, 22, Components::DamageType::Concussive);
+    T[4].AttackRange = 7.0f;
+    SetGroundWeapon(T[5], 20, 2, 1, 30, Components::DamageType::Concussive); // Vulture
+    T[5].AttackRange = 5.0f;
+    SetGroundWeapon(T[6], 12, 1, 1, 22, Components::DamageType::Normal); // Goliath
+    SetAirWeapon(T[6], 10, 2, 2, 22, Components::DamageType::Explosive);
+    T[6].AttackRange = 6.0f;
+    T[6].GroundAttackRange = 6.0f;
+    T[6].AirAttackRange = 5.0f;
+    SetGroundWeapon(T[7], 30, 3, 1, 37, Components::DamageType::Explosive); // Tank mode
+    T[7].AttackRange = 7.0f;
+    SetGroundWeapon(T[8], 8, 1, 1, 30, Components::DamageType::Normal); // Wraith
+    SetAirWeapon(T[8], 20, 2, 1, 22, Components::DamageType::Explosive);
+    T[8].AttackRange = 5.0f;
+    SetGroundWeapon(T[11], 25, 3, 1, 30, Components::DamageType::Normal); // Battlecruiser
+    SetAirWeapon(T[11], 25, 3, 1, 30, Components::DamageType::Normal);
+    T[11].AttackRange = 6.0f;
+    SetAirWeapon(T[12], 6, 1, 8, 64, Components::DamageType::Explosive); // Valkyrie
+    T[12].AttackRange = 6.0f;
+    SetSplash(T[12], Components::SplashType::Air, 5, 50, 100);
+    SetAirWeapon(T[(size_t)MissileTurretID], 20, 0, 1, 15,
+                 Components::DamageType::Explosive);
+    T[(size_t)MissileTurretID].AttackRange = 7.0f;
+
+    // Zerg weapons.dat values.
+    SetGroundWeapon(Z[(size_t)ZDroneID], 5, 0, 1, 22, Components::DamageType::Normal);
+    Z[(size_t)ZDroneID].AttackRange = 1.0f;
+    SetGroundWeapon(Z[(size_t)ZZerglingID], 5, 1, 1, 8, Components::DamageType::Normal);
+    Z[(size_t)ZZerglingID].AttackRange = 15.0f / 32.0f;
+    SetGroundWeapon(Z[(size_t)ZHydraliskID], 10, 1, 1, 15, Components::DamageType::Explosive);
+    SetAirWeapon(Z[(size_t)ZHydraliskID], 10, 1, 1, 15, Components::DamageType::Explosive);
+    Z[(size_t)ZHydraliskID].AttackRange = 4.0f;
+    SetGroundWeapon(Z[(size_t)ZMutaliskID], 9, 1, 1, 30, Components::DamageType::Normal);
+    SetAirWeapon(Z[(size_t)ZMutaliskID], 9, 1, 1, 30, Components::DamageType::Normal);
+    Z[(size_t)ZMutaliskID].AttackRange = 3.0f;
+    Z[(size_t)ZMutaliskID].WeaponBeh = Components::WeaponBehavior::Bounce;
+    SetAirWeapon(Z[(size_t)ZScourgeID], 110, 0, 1, 1, Components::DamageType::Normal);
+    Z[(size_t)ZScourgeID].AttackRange = 3.0f / 32.0f;
+    Z[(size_t)ZScourgeID].SelfDestructOnAttack = true;
+    SetGroundWeapon(Z[(size_t)ZUltraliskID], 20, 3, 1, 15, Components::DamageType::Normal);
+    Z[(size_t)ZUltraliskID].AttackRange = 25.0f / 32.0f;
+    SetGroundWeapon(Z[(size_t)ZLurkerID], 20, 2, 1, 37, Components::DamageType::Normal);
+    Z[(size_t)ZLurkerID].AttackRange = 6.0f;
+    Z[(size_t)ZLurkerID].WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
+    SetSplash(Z[(size_t)ZLurkerID], Components::SplashType::Line, 20, 20, 20);
+    SetGroundWeapon(Z[(size_t)ZBroodlingID], 4, 1, 1, 15, Components::DamageType::Normal);
+    Z[(size_t)ZBroodlingID].AttackRange = 2.0f / 32.0f;
+    SetGroundWeapon(Z[(size_t)ZInfestedID], 500, 0, 1, 1, Components::DamageType::Explosive);
+    Z[(size_t)ZInfestedID].AttackRange = 3.0f / 32.0f;
+    Z[(size_t)ZInfestedID].WeaponBeh = Components::WeaponBehavior::Melee;
+    Z[(size_t)ZInfestedID].SelfDestructOnAttack = true;
+    SetSplash(Z[(size_t)ZInfestedID], Components::SplashType::Radial, 20, 40, 60);
+    SetGroundWeapon(Z[(size_t)ZGuardianID], 20, 2, 1, 30, Components::DamageType::Normal);
+    Z[(size_t)ZGuardianID].AttackRange = 8.0f;
+    SetAirWeapon(Z[(size_t)ZDevourerID], 25, 2, 1, 100, Components::DamageType::Explosive);
+    Z[(size_t)ZDevourerID].AttackRange = 6.0f;
+    SetAirWeapon(Z[(size_t)ZSporeColonyID], 15, 0, 1, 15, Components::DamageType::Normal);
+    Z[(size_t)ZSporeColonyID].AttackRange = 7.0f;
+    SetGroundWeapon(Z[(size_t)ZSunkenColonyID], 40, 0, 1, 32,
+                    Components::DamageType::Explosive);
+    Z[(size_t)ZSunkenColonyID].AttackRange = 7.0f;
+
+    // Protoss weapons.dat values.  Reavers model the launched Scarab's damage;
+    // carriers keep one modeled interceptor strike while retaining both target
+    // channels until fighter entities are represented explicitly.
+    SetGroundWeapon(P[(size_t)PProbeID], 5, 0, 1, 22, Components::DamageType::Normal);
+    P[(size_t)PProbeID].AttackRange = 1.0f;
+    SetGroundWeapon(P[(size_t)PZealotID], 8, 1, 2, 22, Components::DamageType::Normal);
+    P[(size_t)PZealotID].AttackRange = 15.0f / 32.0f;
+    SetGroundWeapon(P[(size_t)PDragoonID], 20, 2, 1, 30, Components::DamageType::Explosive);
+    SetAirWeapon(P[(size_t)PDragoonID], 20, 2, 1, 30, Components::DamageType::Explosive);
+    P[(size_t)PDragoonID].AttackRange = 4.0f;
+    SetGroundWeapon(P[(size_t)PDarkTemplarID], 40, 3, 1, 30, Components::DamageType::Normal);
+    P[(size_t)PDarkTemplarID].AttackRange = 15.0f / 32.0f;
+    SetGroundWeapon(P[(size_t)PArchonID], 30, 3, 1, 20, Components::DamageType::Normal);
+    SetAirWeapon(P[(size_t)PArchonID], 30, 3, 1, 20, Components::DamageType::Normal);
+    P[(size_t)PArchonID].AttackRange = 2.0f;
+    P[(size_t)PArchonID].WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
+    SetSplash(P[(size_t)PArchonID], Components::SplashType::EnemyRadial, 3, 15, 30);
+    SetGroundWeapon(P[(size_t)PReaverID], 100, 25, 1, 60, Components::DamageType::Normal);
+    P[(size_t)PReaverID].AttackRange = 8.0f;
+    P[(size_t)PReaverID].WeaponBeh = Components::WeaponBehavior::Lob;
+    SetSplash(P[(size_t)PReaverID], Components::SplashType::Radial, 20, 40, 60);
+    SetGroundWeapon(P[(size_t)PScoutID], 8, 1, 1, 30, Components::DamageType::Normal);
+    SetAirWeapon(P[(size_t)PScoutID], 14, 1, 2, 22, Components::DamageType::Explosive);
+    P[(size_t)PScoutID].AttackRange = 4.0f;
+    SetAirWeapon(P[(size_t)PCorsairID], 5, 1, 1, 8, Components::DamageType::Explosive);
+    P[(size_t)PCorsairID].AttackRange = 5.0f;
+    P[(size_t)PCorsairID].WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
+    SetSplash(P[(size_t)PCorsairID], Components::SplashType::Air, 5, 50, 100);
+    SetGroundWeapon(P[(size_t)PCarrierID], 6, 1, 1, 24, Components::DamageType::Normal);
+    SetAirWeapon(P[(size_t)PCarrierID], 6, 1, 1, 24, Components::DamageType::Normal);
+    P[(size_t)PCarrierID].AttackRange = 8.0f;
+    SetGroundWeapon(P[(size_t)PArbiterID], 10, 1, 1, 45, Components::DamageType::Explosive);
+    SetAirWeapon(P[(size_t)PArbiterID], 10, 1, 1, 45, Components::DamageType::Explosive);
+    P[(size_t)PArbiterID].AttackRange = 5.0f;
+    SetGroundWeapon(P[(size_t)PPhotonCannonID], 20, 0, 1, 22,
+                    Components::DamageType::Normal);
+    SetAirWeapon(P[(size_t)PPhotonCannonID], 20, 0, 1, 22,
+                 Components::DamageType::Normal);
+    P[(size_t)PPhotonCannonID].AttackRange = 7.0f;
 }
 
 const std::vector<UnitDef>& GetTerranDefs()  { InitDefs(); return TerranDefs; }

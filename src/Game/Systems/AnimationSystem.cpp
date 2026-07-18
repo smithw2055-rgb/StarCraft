@@ -1,6 +1,8 @@
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
+#include "Game/Systems/BurrowState.h"
+#include "Game/Systems/UpgradeSystem.h"
 #include "Game/Components.h"
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
@@ -19,6 +21,36 @@ namespace
     constexpr int kScvMiningWeaponID = 14;
     constexpr uint32_t kCommandCenterImageID = 275u;
     constexpr uint32_t kCommandCenterControlImageID = 276u;
+    constexpr int kTerranGoliathChkUnitID = 3;
+    constexpr int kTerranHeroGoliathChkUnitID = 17;
+    constexpr int kTerranMissileSmokeSpriteID = 309;
+    constexpr int kHaloRocketTrailSpriteID = 505;
+
+    int ResolveTerranMissileTrailSprite(Core::ECS::EntityManager& EM,
+                                        int EntityID,
+                                        int SpriteID)
+    {
+        if (SpriteID != kTerranMissileSmokeSpriteID)
+            return SpriteID;
+
+        const auto* Bullet = EM.GetComponent<BulletComponent>(EntityID);
+        if (!Bullet || Bullet->SourceEntityID < 0)
+            return SpriteID;
+        const auto* SourceUnit =
+            EM.GetComponent<UnitComponent>(Bullet->SourceEntityID);
+        const auto* SourcePlayer =
+            EM.GetComponent<PlayerComponent>(Bullet->SourceEntityID);
+        if (!SourceUnit || !SourcePlayer ||
+            (SourceUnit->ChkUnitID != kTerranGoliathChkUnitID &&
+             SourceUnit->ChkUnitID != kTerranHeroGoliathChkUnitID))
+        {
+            return SpriteID;
+        }
+        return UpgradeSystem::HasResearch(
+                   SourcePlayer->PlayerID, ResearchId::Terran_CharonBoosters)
+            ? kHaloRocketTrailSpriteID
+            : SpriteID;
+    }
 
     uint32_t CarriedResourceImageID(const UnitComponent* Unit,
                                     const HarvestComponent* Harvest)
@@ -82,6 +114,21 @@ namespace
         return Best;
     }
 
+    Core::Math::Vec2 AccumulatedImageNodeOffset(
+        const ImageTreeComponent& Tree, int NodeIndex)
+    {
+        Core::Math::Vec2 Result;
+        int Current = NodeIndex;
+        int Guard = 0;
+        while (Current >= 0 && Current < (int)Tree.Nodes.size() && Guard++ < 64)
+        {
+            const auto& Node = Tree.Nodes[(size_t)Current];
+            Result = Result + Node.Offset;
+            Current = Node.ParentIndex;
+        }
+        return Result;
+    }
+
     Core::Math::Vec2 ResolveMovementDirection(const TransformComponent& Trans,
                                               const PathfindingComponent* Path)
     {
@@ -136,13 +183,53 @@ namespace
         return {std::cos(0.0f), std::sin(0.0f)};
     }
 
+    void RefreshImageNodeDirection(
+        Core::ECS::EntityManager& EM,
+        ImageSubnode& Node,
+        const ImageTreeComponent& Tree,
+        const TransformComponent* Trans,
+        const PathfindingComponent* Path,
+        const CombatComponent* Combat,
+        const Game::IScriptVM::SpriteContext* RootContext)
+    {
+        if (!Node.InheritSpriteDirection)
+            return;
+
+        auto& NodeContext = Node.VM.GetContext();
+        if (Node.IsUnitSubunit && Trans)
+        {
+            const bool HasCombatAim = Combat &&
+                (Combat->PendingAttackFrame || Combat->TargetEntityID >= 0);
+            const auto Direction = HasCombatAim
+                ? ResolveAttackDirection(EM, *Trans, Combat)
+                : QuantizeDirectionToEightWay(
+                    ResolveMovementDirection(*Trans, Path));
+            NodeContext.CurrentDirection =
+                DirectionToIScriptDirection(Direction);
+            NodeContext.FlDirect = NodeContext.CurrentDirection;
+        }
+        else if (Node.ParentIndex >= 0 &&
+                 Node.ParentIndex < (int)Tree.Nodes.size())
+        {
+            const auto& ParentContext =
+                Tree.Nodes[(size_t)Node.ParentIndex].VM.GetContext();
+            NodeContext.CurrentDirection = ParentContext.CurrentDirection;
+            NodeContext.FlDirect = ParentContext.FlDirect;
+        }
+        else if (RootContext)
+        {
+            NodeContext.CurrentDirection = RootContext->CurrentDirection;
+            NodeContext.FlDirect = RootContext->FlDirect;
+        }
+        Node.VM.RefreshDirectionalFrame();
+    }
+
     void ApplyAttackDirection(Core::ECS::EntityManager& EM,
                               const TransformComponent& Trans,
                               const CombatComponent* Combat,
                               Game::IScriptVM::SpriteContext& Ctx)
     {
-        const auto Direction = QuantizeDirectionToEightWay(
-            ResolveAttackDirection(EM, Trans, Combat));
+        const auto Direction = ResolveAttackDirection(EM, Trans, Combat);
         Ctx.CurrentDirection = DirectionToIScriptDirection(Direction);
         Ctx.FlDirect = Ctx.CurrentDirection;
 
@@ -197,6 +284,7 @@ std::string AnimationSystem::sIScriptPath = "assets/scripts/iscript.bin";
 std::string AnimationSystem::sImagesDatPath = "assets/arr/images.dat";
 AnimationSystem::OverlayOffsetResolver AnimationSystem::sOverlayOffsetResolver;
 AnimationSystem::WeaponImageResolver AnimationSystem::sWeaponImageResolver;
+AnimationSystem::SpriteImageResolver AnimationSystem::sSpriteImageResolver;
 AnimationSystem::ImageAttachmentPersistenceResolver
     AnimationSystem::sImageAttachmentPersistenceResolver;
 
@@ -226,6 +314,11 @@ void AnimationSystem::SetOverlayOffsetResolver(OverlayOffsetResolver Resolver)
 void AnimationSystem::SetWeaponImageResolver(WeaponImageResolver Resolver)
 {
     sWeaponImageResolver = std::move(Resolver);
+}
+
+void AnimationSystem::SetSpriteImageResolver(SpriteImageResolver Resolver)
+{
+    sSpriteImageResolver = std::move(Resolver);
 }
 
 void AnimationSystem::SetImageAttachmentPersistenceResolver(
@@ -299,15 +392,122 @@ void AnimationSystem::UpdateScriptEffects(float DeltaTime)
         if (!Effect || !Trans)
             continue;
 
-        if (Effect->FollowParent && Effect->ParentEntityID > 0)
+        if (Effect->FollowParent && Effect->ParentEntityID >= 0)
         {
             if (auto* ParentTrans = EM.GetComponent<TransformComponent>(Effect->ParentEntityID))
+            {
                 Trans->Position = ParentTrans->Position + Effect->Offset;
+            }
+            else
+            {
+                EM.DestroyEntity(ID);
+                continue;
+            }
+        }
+
+        if (!Effect->SpawnSoundPlayed && Effect->SpawnSoundID >= 0)
+        {
+            Effect->SpawnSoundPlayed = true;
+            if (mAudio)
+            {
+                mAudio->PlaySound(Effect->SpawnSoundID,
+                                  Trans->Position.X, Trans->Position.Y,
+                                  0, -1, Core::Audio::SoundFlags::None);
+            }
         }
 
         Effect->LifetimeRemaining -= DeltaTime;
-        if (Effect->LifetimeRemaining <= 0.0f)
+        bool AnimationFinished = false;
+        if (Effect->DestroyWhenAnimationCompletes)
+        {
+            const auto StateIt = mScriptStates.find(ID);
+            if (StateIt != mScriptStates.end() &&
+                (Effect->InitialAnimation < 0 ||
+                 StateIt->second.AnimID == Effect->InitialAnimation))
+            {
+                Effect->AnimationStarted = true;
+                if (!StateIt->second.VM.IsRunning())
+                {
+                    bool HasRunningChild = false;
+                    if (const auto* Tree = EM.GetComponent<ImageTreeComponent>(ID))
+                    {
+                        for (const auto& Node : Tree->Nodes)
+                        {
+                            if (!Node.Visible)
+                                continue;
+                            if (Node.VM.IsRunning() || Node.UseSpriteID ||
+                                Node.LifetimeRemaining > 0.0f)
+                            {
+                                HasRunningChild = true;
+                                break;
+                            }
+                        }
+                    }
+                    AnimationFinished = !HasRunningChild;
+                }
+            }
+        }
+
+        if (AnimationFinished || Effect->LifetimeRemaining <= 0.0f)
+        {
             EM.DestroyEntity(ID);
+            mScriptStates.erase(ID);
+        }
+    }
+}
+
+void AnimationSystem::UpdateShieldImpactOverlays()
+{
+    if (!sOverlayOffsetResolver)
+        return;
+
+    auto& EM = mSystemMgr.GetEntityManager();
+    for (int EntityID : EM.GetEntitiesWith<ShieldImpactComponent,
+                                           TransformComponent,
+                                           RenderComponent>())
+    {
+        auto* Pending = EM.GetComponent<ShieldImpactComponent>(EntityID);
+        auto* Render = EM.GetComponent<RenderComponent>(EntityID);
+        if (!Pending || !Render || Pending->Impacts.empty())
+            continue;
+
+        for (const auto& Impact : Pending->Impacts)
+        {
+            const size_t Index = (size_t)(Impact.DirectionIndex & 31u);
+            const auto Offset = sOverlayOffsetResolver(
+                Impact.SourceImageID, 5u,
+                (size_t)std::max(0, Impact.SourceFrame), Index,
+                Impact.SourceFlipped);
+            if (!Offset)
+                continue;
+
+            constexpr int kShieldOverlayImageID = 424;
+            AddImageTreeNode(EntityID, -1, kShieldOverlayImageID, *Offset,
+                             true, false, -1.0f);
+            auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+            if (!Tree)
+                continue;
+            for (auto& Node : Tree->Nodes)
+            {
+                if (!Node.Visible || Node.ImageID != kShieldOverlayImageID ||
+                    Node.ParentIndex != -1 ||
+                    Node.CreationOffset.X != Offset->X ||
+                    Node.CreationOffset.Y != Offset->Y)
+                {
+                    continue;
+                }
+                Node.OverlayOffsetType = 5;
+                Node.OverlayOffsetIndex = (int)Index;
+                auto& Context = Node.VM.GetContext();
+                Context.CurrentDirection = (int)Index * 8;
+                Context.FlDirect = Context.CurrentDirection;
+                Node.VM.RefreshDirectionalFrame();
+                Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
+                Node.Flipped = Context.FlipState;
+                break;
+            }
+        }
+        Pending->Impacts.clear();
     }
 }
 
@@ -337,150 +537,141 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
         auto* Harvest = EM.GetComponent<HarvestComponent>(ID);
         auto* RootRender = EM.GetComponent<RenderComponent>(ID);
         const auto RootState = mScriptStates.find(ID);
+        const auto* RootContext = RootState != mScriptStates.end()
+            ? &RootState->second.VM.GetContext()
+            : nullptr;
         if (!Tree)
             continue;
         UpdateCarriedResourceOverlay(ID, *Tree, Unit, Harvest);
         const size_t InitialCount = Tree->Nodes.size();
         for (size_t I = 0; I < InitialCount && I < Tree->Nodes.size(); ++I)
         {
-            auto& Node = Tree->Nodes[I];
-            const auto RefreshNodeDirection = [&]()
+            bool ConsumeEvents = false;
+            bool HideNodeAfterEvents = false;
+            Core::Math::Vec2 NodeOffset;
+            float NodeLifetime = -1.0f;
             {
-                if (!Node.InheritSpriteDirection)
-                    return;
-                auto& NodeContext = Node.VM.GetContext();
-                if (Node.IsUnitSubunit && Trans)
+                // ConsumeImageNodeEvents may append to Tree->Nodes. Keep every
+                // reference to the current vector element inside this scope so
+                // no reference or capturing lambda survives a reallocation.
+                auto& Node = Tree->Nodes[I];
+                if (Node.Visible && RootRender && sOverlayOffsetResolver &&
+                    (Node.UseSpecialOffset || Node.OverlayOffsetType >= 0))
                 {
-                    const bool HasCombatAim = Combat &&
-                        (Combat->PendingAttackFrame || Combat->TargetEntityID >= 0);
-                    const auto Direction = HasCombatAim
-                        ? ResolveAttackDirection(EM, *Trans, Combat)
-                        : ResolveMovementDirection(*Trans, Path);
-                    NodeContext.CurrentDirection = DirectionToIScriptDirection(
-                        QuantizeDirectionToEightWay(Direction));
-                    NodeContext.FlDirect = NodeContext.CurrentDirection;
+                    uint32_t OffsetSourceImageID = RootRender->ImageID;
+                    int OffsetSourceFrame = RootRender->FrameIndex;
+                    bool OffsetSourceFlipped = RootRender->Flipped;
+                    if (Node.ParentIndex >= 0 &&
+                        Node.ParentIndex < (int)Tree->Nodes.size())
+                    {
+                        const auto& Parent = Tree->Nodes[(size_t)Node.ParentIndex];
+                        OffsetSourceImageID = Parent.ImageID;
+                        OffsetSourceFrame = Parent.FrameIndex;
+                        OffsetSourceFlipped = Parent.Flipped;
+                    }
+                    const size_t LoType = Node.OverlayOffsetType >= 0
+                        ? (size_t)Node.OverlayOffsetType
+                        : 2u;
+                    const size_t OffsetIndex = Node.OverlayOffsetType >= 0
+                        ? (size_t)std::max(0, Node.OverlayOffsetIndex)
+                        : 0u;
+                    const auto Offset = sOverlayOffsetResolver(
+                        OffsetSourceImageID, LoType,
+                        (size_t)std::max(0, OffsetSourceFrame),
+                        OffsetIndex, OffsetSourceFlipped);
+                    if (Offset)
+                        Node.Offset = *Offset;
                 }
-                else if (Node.ParentIndex >= 0 &&
-                         Node.ParentIndex < (int)Tree->Nodes.size())
-                {
-                    const auto& ParentContext =
-                        Tree->Nodes[(size_t)Node.ParentIndex].VM.GetContext();
-                    NodeContext.CurrentDirection = ParentContext.CurrentDirection;
-                    NodeContext.FlDirect = ParentContext.FlDirect;
-                }
-                else if (RootState != mScriptStates.end())
-                {
-                    const auto& RootContext = RootState->second.VM.GetContext();
-                    NodeContext.CurrentDirection = RootContext.CurrentDirection;
-                    NodeContext.FlDirect = RootContext.FlDirect;
-                }
-                Node.VM.RefreshDirectionalFrame();
-            };
-            if (Node.Visible && RootRender && sOverlayOffsetResolver &&
-                (Node.UseSpecialOffset || Node.OverlayOffsetType >= 0))
-            {
-                uint32_t OffsetSourceImageID = RootRender->ImageID;
-                int OffsetSourceFrame = RootRender->FrameIndex;
-                bool OffsetSourceFlipped = RootRender->Flipped;
                 if (Node.ParentIndex >= 0 &&
-                    Node.ParentIndex < (int)Tree->Nodes.size())
-                {
-                    const auto& Parent = Tree->Nodes[(size_t)Node.ParentIndex];
-                    OffsetSourceImageID = Parent.ImageID;
-                    OffsetSourceFrame = Parent.FrameIndex;
-                    OffsetSourceFlipped = Parent.Flipped;
-                }
-                const size_t LoType = Node.OverlayOffsetType >= 0
-                    ? (size_t)Node.OverlayOffsetType
-                    : 2u;
-                const size_t OffsetIndex = Node.OverlayOffsetType >= 0
-                    ? (size_t)std::max(0, Node.OverlayOffsetIndex)
-                    : 0u;
-                const auto Offset = sOverlayOffsetResolver(
-                    OffsetSourceImageID, LoType,
-                    (size_t)std::max(0, OffsetSourceFrame),
-                    OffsetIndex, OffsetSourceFlipped);
-                if (Offset)
-                    Node.Offset = *Offset;
-            }
-            if (Node.ParentIndex >= 0 &&
-                (Node.ParentIndex >= (int)Tree->Nodes.size() ||
-                 !Tree->Nodes[(size_t)Node.ParentIndex].Visible))
-            {
-                Node.Visible = false;
-            }
-            if (Node.LifetimeRemaining >= 0.0f)
-            {
-                Node.LifetimeRemaining -= DeltaTime;
-                if (Node.LifetimeRemaining <= 0.0f)
+                    (Node.ParentIndex >= (int)Tree->Nodes.size() ||
+                     !Tree->Nodes[(size_t)Node.ParentIndex].Visible))
                 {
                     Node.Visible = false;
-                    MarkImageSubtreeHidden(*Tree, (int)I);
                 }
-            }
-            if (Node.Visible && Node.VM.IsRunning())
-            {
-                RefreshNodeDirection();
-                constexpr float kIScriptFrameSeconds = 1.0f / 24.0f;
-                Node.StepAccumulator += DeltaTime;
-                bool Ran = false;
-                while (Node.StepAccumulator >= kIScriptFrameSeconds)
+                if (Node.LifetimeRemaining >= 0.0f)
                 {
-                    Node.StepAccumulator -= kIScriptFrameSeconds;
-                    Ran = Node.VM.ExecuteFrame() || Ran;
-                    if (!Node.VM.IsRunning())
-                        break;
-                }
-                if (!Ran && Node.AnimID == Game::IScriptAnims::Anim_Init)
-                    Node.VM.ExecuteFrame();
-                RefreshNodeDirection();
-                auto& NodeContext = Node.VM.GetContext();
-                if (NodeContext.FollowMainGraphic && RootRender)
-                {
-                    Node.FollowsMainGraphic = true;
-                    if (RootState != mScriptStates.end())
-                    {
-                        NodeContext.BaseFrameIndex =
-                            RootState->second.VM.GetContext().BaseFrameIndex;
-                    }
-                    else
-                    {
-                        NodeContext.BaseFrameIndex = RootRender->FrameIndex;
-                    }
-                    NodeContext.FrameIndex = RootRender->FrameIndex;
-                    NodeContext.FlipState = RootRender->Flipped;
-                }
-                NodeContext.FollowMainGraphic = false;
-                if (NodeContext.HorPosSet)
-                    Node.Offset.X = (float)NodeContext.HorPos;
-                if (NodeContext.VertPosSet)
-                    Node.Offset.Y = (float)NodeContext.VertPos;
-                Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
-                Node.Flipped = Node.VM.GetContext().FlipState;
-                if (Trans)
-                {
-                    const Core::Math::Vec2 NodeOffset = Node.Offset;
-                    const float NodeLifetime = Node.LifetimeRemaining;
-                    ConsumeImageNodeEvents(
-                        ID, (int)I, NodeOffset, NodeLifetime, *Trans, Player, Combat);
-                    if (!Node.VM.IsRunning() &&
-                        !(Node.PersistentSpriteAttachment &&
-                          Node.LifetimeRemaining < 0.0f))
+                    Node.LifetimeRemaining -= DeltaTime;
+                    if (Node.LifetimeRemaining <= 0.0f)
                     {
                         Node.Visible = false;
                         MarkImageSubtreeHidden(*Tree, (int)I);
                     }
                 }
+                if (Node.Visible && Node.VM.IsRunning())
+                {
+                    RefreshImageNodeDirection(
+                        EM, Node, *Tree, Trans, Path, Combat, RootContext);
+                    constexpr float kIScriptFrameSeconds = 1.0f / 24.0f;
+                    Node.StepAccumulator += DeltaTime;
+                    bool Ran = false;
+                    while (Node.StepAccumulator >= kIScriptFrameSeconds)
+                    {
+                        Node.StepAccumulator -= kIScriptFrameSeconds;
+                        Ran = Node.VM.ExecuteFrame() || Ran;
+                        if (!Node.VM.IsRunning())
+                            break;
+                    }
+                    if (!Ran && Node.AnimID == Game::IScriptAnims::Anim_Init)
+                        Node.VM.ExecuteFrame();
+                    RefreshImageNodeDirection(
+                        EM, Node, *Tree, Trans, Path, Combat, RootContext);
+                    auto& NodeContext = Node.VM.GetContext();
+                    if (NodeContext.FollowMainGraphic && RootRender)
+                    {
+                        Node.FollowsMainGraphic = true;
+                        if (RootContext)
+                            NodeContext.BaseFrameIndex = RootContext->BaseFrameIndex;
+                        else
+                            NodeContext.BaseFrameIndex = RootRender->FrameIndex;
+                        NodeContext.FrameIndex = RootRender->FrameIndex;
+                        NodeContext.FlipState = RootRender->Flipped;
+                    }
+                    NodeContext.FollowMainGraphic = false;
+                    if (NodeContext.HorPosSet)
+                        Node.Offset.X = (float)NodeContext.HorPos;
+                    if (NodeContext.VertPosSet)
+                        Node.Offset.Y = (float)NodeContext.VertPos;
+                    Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
+                    Node.Flipped = Node.VM.GetContext().FlipState;
+                    if (Trans)
+                    {
+                        NodeOffset = AccumulatedImageNodeOffset(*Tree, (int)I);
+                        NodeLifetime = Node.LifetimeRemaining;
+                        HideNodeAfterEvents = !Node.VM.IsRunning() &&
+                            !(Node.PersistentSpriteAttachment &&
+                              Node.LifetimeRemaining < 0.0f);
+                        ConsumeEvents = true;
+                    }
+                }
             }
+
+            if (ConsumeEvents)
+            {
+                // This call may grow Tree->Nodes. The pre-event Node reference
+                // has left scope, so reacquire the source strictly by index.
+                ConsumeImageNodeEvents(
+                    ID, (int)I, NodeOffset, NodeLifetime, *Trans, Player, Combat);
+                if (I >= Tree->Nodes.size())
+                    continue;
+                if (HideNodeAfterEvents)
+                {
+                    Tree->Nodes[I].Visible = false;
+                    MarkImageSubtreeHidden(*Tree, (int)I);
+                }
+            }
+
             // A persistent attachment may finish its Init script, but it must
             // still rotate with the parent sprite. OpenBW calls
             // set_sprite_images_heading_by_index() for every image, including
             // the carried mineral/gas image.
-            if (Node.Visible && Node.InheritSpriteDirection)
+            auto& CurrentNode = Tree->Nodes[I];
+            if (CurrentNode.Visible && CurrentNode.InheritSpriteDirection)
             {
-                RefreshNodeDirection();
-                Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
-                Node.Flipped = Node.VM.GetContext().FlipState;
+                RefreshImageNodeDirection(
+                    EM, CurrentNode, *Tree, Trans, Path, Combat, RootContext);
+                CurrentNode.FrameIndex =
+                    std::max(0, CurrentNode.VM.GetCurrentFrame());
+                CurrentNode.Flipped = CurrentNode.VM.GetContext().FlipState;
             }
         }
         // ParentIndex stores vector indices, so keep node slots stable even after
@@ -494,6 +685,9 @@ void AnimationSystem::EnsureUnitSubunitNode(
 {
     auto& EM = mSystemMgr.GetEntityManager();
     auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+    const auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+    const bool FullyBurrowed =
+        Burrow && (Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed);
     ImageSubnode* Subunit = nullptr;
     if (Tree)
     {
@@ -507,7 +701,7 @@ void AnimationSystem::EnsureUnitSubunitNode(
         }
     }
 
-    if (Render.SubunitImageID == UINT32_MAX)
+    if (FullyBurrowed || Render.SubunitImageID == UINT32_MAX)
     {
         if (Subunit)
             Subunit->Visible = false;
@@ -522,7 +716,14 @@ void AnimationSystem::EnsureUnitSubunitNode(
         Subunit = &Tree->Nodes.back();
     }
     if (Subunit->Visible && Subunit->ImageID == Render.SubunitImageID)
+    {
+        // units.dat turrets are positioned from the body image's LO* table.
+        // UpdateImageTrees refreshes LO(2, 0) from the current body frame and
+        // flip state before the node is rendered.
+        Subunit->OverlayOffsetType = 2;
+        Subunit->OverlayOffsetIndex = 0;
         return;
+    }
 
     *Subunit = ImageSubnode{};
     Subunit->ImageID = Render.SubunitImageID;
@@ -531,8 +732,139 @@ void AnimationSystem::EnsureUnitSubunitNode(
     Subunit->Visible = true;
     Subunit->PersistentSpriteAttachment = true;
     Subunit->IsUnitSubunit = true;
+    Subunit->OverlayOffsetType = 2;
+    Subunit->OverlayOffsetIndex = 0;
     Subunit->LifetimeRemaining = -1.0f;
     StartImageNodeScript(*Subunit);
+}
+
+void AnimationSystem::UpdateUnitSubunitAttackLifecycle(
+    int EntityID,
+    const CombatComponent* Combat)
+{
+    auto& EM = mSystemMgr.GetEntityManager();
+    auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+    if (!Tree)
+        return;
+
+    EnsureIScriptLoaded();
+    if (!sIScriptDB.IsLoaded())
+        return;
+
+    const bool PendingAttack = Combat && Combat->PendingAttackFrame;
+    const auto IsLiveTarget = [&](int TargetID) -> bool
+    {
+        if (TargetID < 0 || !EM.IsAlive(TargetID))
+            return false;
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+        return TargetUnit && TargetUnit->HitPoints > 0;
+    };
+    const bool HasLiveTarget = Combat &&
+        (PendingAttack || IsLiveTarget(Combat->TargetEntityID));
+
+    int AimTargetID = -1;
+    if (Combat)
+    {
+        AimTargetID = PendingAttack
+            ? Combat->PendingAttackTargetEntityID
+            : Combat->TargetEntityID;
+    }
+    const auto* TargetPath = AimTargetID >= 0
+        ? EM.GetComponent<PathfindingComponent>(AimTargetID)
+        : nullptr;
+    const auto* TargetCombat = AimTargetID >= 0
+        ? EM.GetComponent<CombatComponent>(AimTargetID)
+        : nullptr;
+    const bool TargetAir =
+        (TargetPath && TargetPath->IsAir) ||
+        (TargetCombat && TargetCombat->MyElevation == Elevation::Air);
+    const int AttackInit = TargetAir
+        ? Game::IScriptAnims::Anim_AirAttkInit
+        : Game::IScriptAnims::Anim_GndAttkInit;
+    const int AttackRepeat = TargetAir
+        ? Game::IScriptAnims::Anim_AirAttkRpt
+        : Game::IScriptAnims::Anim_GndAttkRpt;
+
+    for (auto& Node : Tree->Nodes)
+    {
+        if (!Node.Visible || !Node.IsUnitSubunit || Node.UseSpriteID)
+            continue;
+
+        // Seeing the low level request go false arms this image for exactly
+        // one future shot.  Each turret image owns this edge independently.
+        if (!PendingAttack)
+            Node.AttackRequestLatched = false;
+
+        const auto* ImageInfo = sIScriptDB.FindImageInfo((int)Node.ImageID);
+        const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
+            ? sIScriptDB.FindScript(ImageInfo->IScriptID)
+            : nullptr;
+        if (!Script)
+            continue;
+
+        const auto HasAnim = [&](int AnimID) -> bool
+        {
+            return AnimID >= 0 &&
+                AnimID < (int)Script->AnimationPC.size() &&
+                Script->AnimationPC[(size_t)AnimID] > 0;
+        };
+        const auto StartAnim = [&](int AnimID)
+        {
+            Node.ScriptID = ImageInfo->IScriptID;
+            Node.AnimID = AnimID;
+            Node.StepAccumulator = 0.0f;
+            Node.VM.LoadScript(
+                AnimID, &sIScriptDB.GetProgram().ProgramData,
+                Script->AnimationPC[(size_t)AnimID]);
+            auto& Context = Node.VM.GetContext();
+            Context.ImageID = (int)Node.ImageID;
+            Context.FrameIndex = Node.FrameIndex;
+            Context.HasDirectionalFrames = ImageInfo->HasDirectionalFrames;
+            Node.InheritSpriteDirection = ImageInfo->HasDirectionalFrames;
+        };
+
+        const bool CurrentGroundAttack =
+            Node.AnimID == Game::IScriptAnims::Anim_GndAttkInit ||
+            Node.AnimID == Game::IScriptAnims::Anim_GndAttkRpt;
+        const bool CurrentAirAttack =
+            Node.AnimID == Game::IScriptAnims::Anim_AirAttkInit ||
+            Node.AnimID == Game::IScriptAnims::Anim_AirAttkRpt;
+        const bool CurrentAttack = CurrentGroundAttack || CurrentAirAttack;
+
+        if (PendingAttack)
+        {
+            if (Node.AttackRequestLatched)
+                continue;
+
+            const bool MatchingAttackPose = TargetAir
+                ? CurrentAirAttack
+                : CurrentGroundAttack;
+            const int RequestedAnim = MatchingAttackPose && HasAnim(AttackRepeat)
+                ? AttackRepeat
+                : AttackInit;
+            if (HasAnim(RequestedAnim))
+                StartAnim(RequestedAnim);
+            Node.AttackRequestLatched = true;
+            continue;
+        }
+
+        if (!CurrentAttack)
+            continue;
+
+        // Clearing PendingAttackFrame at the attack opcode must not bounce the
+        // turret back to Init: with a live target, its current Init/Rpt script
+        // owns all authored recoil/recovery (some turret scripts intentionally
+        // loop there until the next request). Target loss is the explicit edge
+        // that replaces even such a loop with the channel-matched ToIdle.
+        if (HasLiveTarget)
+            continue;
+
+        const int ToIdleAnim = CurrentAirAttack
+            ? Game::IScriptAnims::Anim_AirAttkToIdle
+            : Game::IScriptAnims::Anim_GndAttkToIdle;
+        if (HasAnim(ToIdleAnim))
+            StartAnim(ToIdleAnim);
+    }
 }
 
 void AnimationSystem::UpdateCarriedResourceOverlay(
@@ -650,7 +982,73 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
 {
     auto& EM = mSystemMgr.GetEntityManager();
     auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
-    auto HideExisting = [&]()
+    const auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+    const bool FullyBurrowed =
+        Burrow && (Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed);
+    auto UpdateAcidSporeOverlay = [&]()
+    {
+        int DesiredImageID = -1;
+        if (Unit && Unit->HitPoints > 0 && Unit->AcidSporeCount > 0 &&
+            !Building && !FullyBurrowed &&
+            !EM.GetComponent<EffectComponent>(EntityID))
+        {
+            const int BaseImageID =
+                Unit->SizeType == UnitSize::Small ? 986 :
+                Unit->SizeType == UnitSize::Medium ? 990 : 994;
+            DesiredImageID =
+                BaseImageID + std::min(Unit->AcidSporeCount / 2, 3);
+        }
+
+        bool HasDesiredOverlay = false;
+        if (Tree)
+        {
+            for (size_t I = 0; I < Tree->Nodes.size(); ++I)
+            {
+                auto& Node = Tree->Nodes[I];
+                if (!Node.IsAcidSporeOverlay)
+                    continue;
+                if ((int)Node.ImageID == DesiredImageID)
+                {
+                    Node.Visible = true;
+                    Node.PersistentSpriteAttachment = true;
+                    if (!Node.VM.IsRunning())
+                        StartImageNodeScript(Node);
+                    HasDesiredOverlay = true;
+                    continue;
+                }
+                Node.Visible = false;
+                Node.VM.Reset();
+                Node.AnimID = -1;
+                Node.ScriptID = -1;
+                Node.StepAccumulator = 0.0f;
+                MarkImageSubtreeHidden(*Tree, (int)I);
+            }
+        }
+
+        if (DesiredImageID < 0 || HasDesiredOverlay)
+            return;
+
+        AddImageTreeNode(EntityID, -1, DesiredImageID, Core::Math::Vec2{},
+                         true, false, -1.0f, false, true, false);
+        Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
+        if (!Tree)
+            return;
+        for (auto NodeIt = Tree->Nodes.rbegin();
+             NodeIt != Tree->Nodes.rend(); ++NodeIt)
+        {
+            if (NodeIt->Visible &&
+                (int)NodeIt->ImageID == DesiredImageID &&
+                NodeIt->ParentIndex == -1)
+            {
+                NodeIt->IsAcidSporeOverlay = true;
+                NodeIt->PersistentSpriteAttachment = true;
+                break;
+            }
+        }
+    };
+    UpdateAcidSporeOverlay();
+
+    auto HideAllDamageOverlays = [&]()
     {
         if (!Tree)
             return;
@@ -659,16 +1057,21 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
             if (!Tree->Nodes[I].IsDamageOverlay)
                 continue;
             Tree->Nodes[I].Visible = false;
+            Tree->Nodes[I].VM.Reset();
+            Tree->Nodes[I].AnimID = -1;
+            Tree->Nodes[I].ScriptID = -1;
+            Tree->Nodes[I].StepAccumulator = 0.0f;
             MarkImageSubtreeHidden(*Tree, (int)I);
         }
     };
 
-    HideExisting();
     if (!Unit || Unit->MaxHitPoints <= 0 || Unit->HitPoints <= 0 ||
-        Unit->HitPoints >= Unit->MaxHitPoints ||
+        (Unit->HitPoints >= Unit->MaxHitPoints && Unit->HitPointSubDamage == 0) ||
         (Building && Building->UnderConstruction) ||
+        FullyBurrowed ||
         EM.GetComponent<EffectComponent>(EntityID) || !sOverlayOffsetResolver)
     {
+        HideAllDamageOverlays();
         return;
     }
 
@@ -679,31 +1082,61 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
     };
     std::vector<DamageSlot> Slots;
     constexpr int kDamageOverlaySlots = 22;
+    int DamageStateSlotCount = 0;
     for (int Index = 0; Index < kDamageOverlaySlots; ++Index)
     {
+        if (sOverlayOffsetResolver(
+                Render.ImageID, 1, 0u, (size_t)Index, Render.Flipped))
+        {
+            ++DamageStateSlotCount;
+        }
         const auto Offset = sOverlayOffsetResolver(
             Render.ImageID, 1, (size_t)std::max(0, Render.FrameIndex),
             (size_t)Index, Render.Flipped);
         if (Offset)
             Slots.push_back({Index, *Offset});
     }
-    if (Slots.empty())
+    if (Slots.empty() || DamageStateSlotCount <= 0)
+    {
+        HideAllDamageOverlays();
         return;
+    }
 
-    const float MissingFraction = std::clamp(
-        (float)(Unit->MaxHitPoints - Unit->HitPoints) /
-            ((float)Unit->MaxHitPoints * (2.0f / 3.0f)),
-        0.0f, 1.0f);
-    const int DamageSteps = std::clamp(
-        (int)std::ceil(MissingFraction * (float)(Slots.size() * 2)),
-        0, (int)Slots.size() * 2);
-    const int LargeCount = DamageSteps / 2;
-    const bool HasSmallRemainder = (DamageSteps & 1) != 0;
+    const int DamageSteps = ComputeDamageOverlaySteps(
+        Unit->HitPoints, Unit->HitPointSubDamage, Unit->MaxHitPoints,
+        DamageStateSlotCount);
+    const int LargeCount = std::min(
+        DamageSteps / 2, (int)Slots.size());
+    const bool HasSmallRemainder =
+        (DamageSteps & 1) != 0 && LargeCount < (int)Slots.size();
 
     constexpr int kSmallDamageImageBase = 450;
     constexpr int kLargeDamageImageBase = 472;
-    auto AddDamageNode = [&](const DamageSlot& Slot, int ImageID)
+    std::vector<std::pair<int, int>> DesiredNodes;
+    auto EnsureDamageNode = [&](const DamageSlot& Slot, int ImageID)
     {
+        DesiredNodes.emplace_back(ImageID, Slot.Index);
+        if (Tree)
+        {
+            for (auto& Node : Tree->Nodes)
+            {
+                if (!Node.IsDamageOverlay || (int)Node.ImageID != ImageID ||
+                    Node.ParentIndex != -1 ||
+                    Node.OverlayOffsetIndex != Slot.Index)
+                {
+                    continue;
+                }
+                Node.Visible = true;
+                Node.Offset = Slot.Offset;
+                Node.CreationOffset = Slot.Offset;
+                Node.OverlayOffsetType = 1;
+                Node.PersistentSpriteAttachment = true;
+                if (!Node.VM.IsRunning())
+                    StartImageNodeScript(Node);
+                return;
+            }
+        }
+
         AddImageTreeNode(EntityID, -1, ImageID, Slot.Offset,
                          true, false, -1.0f, false, true, false);
         Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
@@ -726,11 +1159,36 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
     };
 
     for (int I = 0; I < LargeCount; ++I)
-        AddDamageNode(Slots[(size_t)I], kLargeDamageImageBase + Slots[(size_t)I].Index);
+        EnsureDamageNode(Slots[(size_t)I],
+                         kLargeDamageImageBase + Slots[(size_t)I].Index);
     if (HasSmallRemainder && LargeCount < (int)Slots.size())
     {
         const auto& Slot = Slots[(size_t)LargeCount];
-        AddDamageNode(Slot, kSmallDamageImageBase + Slot.Index);
+        EnsureDamageNode(Slot, kSmallDamageImageBase + Slot.Index);
+    }
+
+    if (Tree)
+    {
+        for (size_t I = 0; I < Tree->Nodes.size(); ++I)
+        {
+            auto& Node = Tree->Nodes[I];
+            if (!Node.IsDamageOverlay)
+                continue;
+            const bool Desired = std::find(
+                DesiredNodes.begin(), DesiredNodes.end(),
+                std::pair<int, int>{(int)Node.ImageID,
+                                    Node.OverlayOffsetIndex}) !=
+                DesiredNodes.end();
+            if (!Desired)
+            {
+                Node.Visible = false;
+                Node.VM.Reset();
+                Node.AnimID = -1;
+                Node.ScriptID = -1;
+                Node.StepAccumulator = 0.0f;
+                MarkImageSubtreeHidden(*Tree, (int)I);
+            }
+        }
     }
 }
 
@@ -803,6 +1261,21 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
     if (!Tree)
         Tree = &EM.AddComponent<ImageTreeComponent>(EntityID);
+    const auto ApplyBurrowVisibility = [&](ImageSubnode& Node,
+                                           bool RestoreAfterUnburrow)
+    {
+        const auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID);
+        const bool FullyBurrowed = Burrow &&
+            (Burrow->IsBurrowed || Burrow->Phase == BurrowPhase::Burrowed);
+        if (!FullyBurrowed || Node.AlwaysVisible)
+            return;
+
+        // OpenBW applies the same images.dat visibility rule to layers created
+        // while a unit is already underground. Such transient attack/dust
+        // layers must not flash for one frame or be revived by UnBurrow.
+        Node.Visible = false;
+        Node.HiddenByBurrow = RestoreAfterUnburrow;
+    };
     const auto InitializeInheritedDirection = [Tree](ImageSubnode& Node)
     {
         if (!Node.InheritSpriteDirection || Node.ParentIndex < 0 ||
@@ -829,7 +1302,9 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             Node.DrawAbove == DrawAbove &&
             Node.UseSpriteID == UseSpriteID)
         {
+            const bool RestoreAfterUnburrow = Node.HiddenByBurrow;
             Node.Visible = true;
+            Node.HiddenByBurrow = false;
             Node.Flipped = Flipped;
             Node.LifetimeRemaining = Lifetime;
             Node.PersistentSpriteAttachment =
@@ -838,13 +1313,14 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             if (!Node.UseSpriteID && !Node.VM.IsRunning())
                 StartImageNodeScript(Node);
             InitializeInheritedDirection(Node);
+            ApplyBurrowVisibility(Node, RestoreAfterUnburrow);
             return;
         }
     }
 
     for (auto& Node : Tree->Nodes)
     {
-        if (!Node.Visible)
+        if (!Node.Visible && !Node.HiddenByBurrow)
         {
             Node = ImageSubnode{};
             Node.ImageID = (uint32_t)ImageID;
@@ -861,6 +1337,7 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             if (!Node.UseSpriteID)
                 StartImageNodeScript(Node);
             InitializeInheritedDirection(Node);
+            ApplyBurrowVisibility(Node, false);
             return;
         }
     }
@@ -885,6 +1362,7 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     if (!Node.UseSpriteID)
         StartImageNodeScript(Node);
     InitializeInheritedDirection(Node);
+    ApplyBurrowVisibility(Node, false);
     Tree->Nodes.push_back(Node);
 }
 
@@ -895,7 +1373,10 @@ void AnimationSystem::StartImageNodeScript(ImageSubnode& Node)
         return;
 
     const auto* ImageInfo = sIScriptDB.FindImageInfo((int)Node.ImageID);
-    if (!ImageInfo || ImageInfo->IScriptID < 0)
+    if (!ImageInfo)
+        return;
+    Node.AlwaysVisible = ImageInfo->AlwaysVisible;
+    if (ImageInfo->IScriptID < 0)
         return;
     const auto* Script = sIScriptDB.FindScript(ImageInfo->IScriptID);
     if (!Script ||
@@ -926,7 +1407,11 @@ void AnimationSystem::RunImageTreeAnimation(int EntityID, int AnimID)
 
     for (auto& Node : Tree->Nodes)
     {
-        if (!Node.Visible || Node.UseSpriteID)
+        const bool DeathAttachment =
+            AnimID == Game::IScriptAnims::Anim_Death &&
+            (Node.PersistentSpriteAttachment || Node.IsUnitSubunit ||
+             Node.IsAddonConnectorOverlay || Node.IsDamageOverlay);
+        if ((!Node.Visible && !DeathAttachment) || Node.UseSpriteID)
             continue;
         const auto* ImageInfo = sIScriptDB.FindImageInfo((int)Node.ImageID);
         const auto* Script = ImageInfo && ImageInfo->IScriptID >= 0
@@ -935,9 +1420,22 @@ void AnimationSystem::RunImageTreeAnimation(int EntityID, int AnimID)
         if (!Script || AnimID >= (int)Script->AnimationPC.size() ||
             Script->AnimationPC[(size_t)AnimID] <= 0)
         {
+            if (AnimID == Game::IScriptAnims::Anim_Death)
+            {
+                Node.PersistentSpriteAttachment = false;
+                Node.VM.Reset();
+                Node.AnimID = Game::IScriptAnims::Anim_Death;
+                Node.Visible = false;
+            }
             continue;
         }
-        if (Node.AnimID == AnimID && Node.VM.IsRunning())
+        if (AnimID == Game::IScriptAnims::Anim_Death)
+        {
+            Node.PersistentSpriteAttachment = false;
+            Node.Visible = true;
+        }
+        if (Node.AnimID == AnimID &&
+            (Node.VM.IsRunning() || AnimID == Game::IScriptAnims::Anim_Death))
             continue;
 
         Node.ScriptID = ImageInfo->IScriptID;
@@ -974,9 +1472,19 @@ void AnimationSystem::RunUnitSubunitAnimation(int EntityID, int AnimID)
         if (!Script || AnimID >= (int)Script->AnimationPC.size() ||
             Script->AnimationPC[(size_t)AnimID] <= 0)
         {
+            if (AnimID == Game::IScriptAnims::Anim_Death)
+            {
+                Node.PersistentSpriteAttachment = false;
+                Node.VM.Reset();
+                Node.AnimID = Game::IScriptAnims::Anim_Death;
+                Node.Visible = false;
+            }
             continue;
         }
-        if (Node.AnimID == AnimID && Node.VM.IsRunning())
+        if (AnimID == Game::IScriptAnims::Anim_Death)
+            Node.PersistentSpriteAttachment = false;
+        if (Node.AnimID == AnimID &&
+            (Node.VM.IsRunning() || AnimID == Game::IScriptAnims::Anim_Death))
             continue;
 
         Node.ScriptID = ImageInfo->IScriptID;
@@ -1048,12 +1556,14 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
             case Game::IScriptEventType::PlaySoundBetween:
                 if (mAudio && Event.A >= 0)
                 {
-                    int UnitType = Player ? Player->PlayerID : -1;
+                    // IScript plays sounds at an image position, without a
+                    // source-unit pointer.  Therefore DAT PerUnitType limiting
+                    // does not apply to this path (matching openbw-ref).
                     mAudio->PlaySound(Event.A,
                                       Trans.Position.X + NodeOffset.X,
                                       Trans.Position.Y + NodeOffset.Y,
-                                      0, UnitType,
-                                      Core::Audio::SoundFlags::PerSound);
+                                      0, -1,
+                                      Core::Audio::SoundFlags::None);
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
@@ -1062,17 +1572,86 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
                                   Event.D != 0, false, NodeLifetime,
                                   false);
                 break;
+            case Game::IScriptEventType::CreateImageOverlayLo:
+            {
+                if (!sOverlayOffsetResolver)
+                    break;
+                const auto Offset = sOverlayOffsetResolver(
+                    (uint32_t)SourceImageID, (size_t)std::max(0, Event.B),
+                    (size_t)std::max(0, SourceFrame),
+                    (size_t)std::max(0, Event.C), SourceFlipped);
+                if (!Offset)
+                    break;
+                AddImageTreeNode(EntityID, NodeIndex, Event.A, *Offset,
+                                 Event.D != 0, false, NodeLifetime, false);
+                // LO offsets are frame-relative. Mark the created/reused node
+                // so UpdateImageTrees resolves it again when its parent frame
+                // or facing changes instead of freezing the launch flash.
+                for (auto It = Tree->Nodes.rbegin(); It != Tree->Nodes.rend(); ++It)
+                {
+                    if (It->Visible && It->ImageID == (uint32_t)Event.A &&
+                        It->ParentIndex == NodeIndex &&
+                        It->CreationOffset.X == Offset->X &&
+                        It->CreationOffset.Y == Offset->Y)
+                    {
+                        It->OverlayOffsetType = std::max(0, Event.B);
+                        It->OverlayOffsetIndex = std::max(0, Event.C);
+                        break;
+                    }
+                }
+                break;
+            }
             case Game::IScriptEventType::CreateImageOverlaySpecialOffset:
                 AddImageTreeNode(EntityID, NodeIndex, Event.A, {},
                                   Event.D != 0, false, NodeLifetime,
                                   false, false, true);
                 break;
             case Game::IScriptEventType::CreateSpriteOverlay:
-                AddImageTreeNode(EntityID, NodeIndex, Event.A,
-                                  Core::Math::Vec2{(float)Event.B, (float)Event.C},
-                                  Event.D != 0, false, NodeLifetime, true,
-                                  false);
+            {
+                const int SpriteID = ResolveTerranMissileTrailSprite(
+                    mSystemMgr.GetEntityManager(), EntityID, Event.A);
+                if (!SpawnIScriptSpriteEffect(
+                        EntityID, Trans, SpriteID,
+                        NodeOffset + Core::Math::Vec2{
+                            (float)Event.B, (float)Event.C},
+                        Event.D != 0, Player,
+                        Tree->Nodes[(size_t)NodeIndex].VM.GetContext()
+                            .CurrentDirection))
+                {
+                    // Asset-less regression harnesses retain the old static
+                    // child fallback. The client configures the SpriteID to
+                    // main ImageID resolver, so real thingies are independent
+                    // world-space effects with their own Init IScript.
+                    AddImageTreeNode(EntityID, NodeIndex, SpriteID,
+                                      Core::Math::Vec2{(float)Event.B,
+                                                       (float)Event.C},
+                                      Event.D != 0, false, NodeLifetime, true,
+                                      false);
+                }
                 break;
+            }
+            case Game::IScriptEventType::CreateSpriteOverlayLo:
+            {
+                if (!sOverlayOffsetResolver)
+                    break;
+                const auto Offset = sOverlayOffsetResolver(
+                    (uint32_t)SourceImageID, (size_t)std::max(0, Event.B),
+                    (size_t)std::max(0, SourceFrame),
+                    (size_t)std::max(0, Event.C), SourceFlipped);
+                if (!Offset)
+                    break;
+                if (!SpawnIScriptSpriteEffect(
+                        EntityID, Trans, Event.A, NodeOffset + *Offset,
+                        Event.D != 0, Player,
+                        Tree->Nodes[(size_t)NodeIndex].VM.GetContext()
+                            .CurrentDirection))
+                {
+                    AddImageTreeNode(EntityID, NodeIndex, Event.A, *Offset,
+                                     Event.D != 0, false, NodeLifetime, true,
+                                     false);
+                }
+                break;
+            }
             case Game::IScriptEventType::CreateGasOverlays:
                 CreateGasOverlay(EntityID, NodeIndex, SourceImageID, SourceFrame,
                                  SourceFlipped, Event.A, NodeLifetime);
@@ -1080,6 +1659,11 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
             case Game::IScriptEventType::OrderSignal:
                 if ((Event.A & 1) != 0)
                 {
+                    if (auto* Projectile = mSystemMgr.GetEntityManager()
+                            .GetComponent<BulletComponent>(EntityID))
+                    {
+                        Projectile->AwaitingLaunchSignal = false;
+                    }
                     if (auto* Building = mSystemMgr.GetEntityManager()
                             .GetComponent<BuildingComponent>(EntityID);
                         Building && Building->UnderConstruction &&
@@ -1099,8 +1683,32 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
             case Game::IScriptEventType::DoGroundDamage:
             case Game::IScriptEventType::CastSpell:
                 if (Combat && Combat->PendingAttackFrame && mBulletSystem)
-                    CombatSystem::ResolvePendingAttackFrame(
-                        mSystemMgr.GetEntityManager(), *mBulletSystem, EntityID);
+                {
+                    const bool Resolved =
+                        CombatSystem::ResolvePendingAttackFrame(
+                            mSystemMgr.GetEntityManager(), *mBulletSystem,
+                            EntityID,
+                            Event.Type == Game::IScriptEventType::Attack &&
+                                    Event.B != 0
+                                ? (float)Event.A
+                                : 0.0f);
+                    if (Resolved)
+                    {
+                        // The attack opcode is the authoritative end of this
+                        // subunit's request. Rearm immediately so an extremely
+                        // short cooldown cannot lose a new shot merely because
+                        // no animation frame observed PendingAttackFrame=false.
+                        if (auto* UpdatedTree = mSystemMgr.GetEntityManager()
+                                .GetComponent<ImageTreeComponent>(EntityID);
+                            UpdatedTree && NodeIndex >= 0 &&
+                            NodeIndex < (int)UpdatedTree->Nodes.size() &&
+                            UpdatedTree->Nodes[(size_t)NodeIndex].IsUnitSubunit)
+                        {
+                            UpdatedTree->Nodes[(size_t)NodeIndex]
+                                .AttackRequestLatched = false;
+                        }
+                    }
+                }
                 break;
             default:
                 break;
@@ -1136,6 +1744,55 @@ void AnimationSystem::SpawnIScriptOverlay(int ParentEntityID,
     Render.TotalFrames = 1;
     Render.Layer = RenderLayer::Effects;
     Render.ZOrder = 1;
+}
+
+bool AnimationSystem::SpawnIScriptSpriteEffect(
+    int ParentEntityID,
+    const TransformComponent& ParentTrans,
+    int SpriteID,
+    Core::Math::Vec2 WorldOffset,
+    bool DrawAbove,
+    const PlayerComponent* Player,
+    int IScriptDirection)
+{
+    if (SpriteID < 0 || !sSpriteImageResolver)
+        return false;
+    const auto ImageID = sSpriteImageResolver(SpriteID);
+    if (!ImageID || *ImageID == UINT32_MAX)
+        return false;
+
+    auto& EM = mSystemMgr.GetEntityManager();
+    const int EffectID = EM.CreateEntity();
+    auto& Trans = EM.AddComponent<TransformComponent>(EffectID);
+    Trans.Position = ParentTrans.Position + WorldOffset;
+
+    auto& Render = EM.AddComponent<RenderComponent>(EffectID);
+    Render.ImageID = *ImageID;
+    Render.FrameIndex = 0;
+    Render.TotalFrames = 1;
+    Render.Layer = RenderLayer::Effects;
+    Render.ZOrder = DrawAbove ? 1 : -1;
+
+    auto& Effect = EM.AddComponent<EffectComponent>(EffectID);
+    Effect.LifetimeRemaining = 8.0f;
+    Effect.ParentEntityID = ParentEntityID;
+    Effect.FollowParent = false;
+    Effect.InitialAnimation = Game::IScriptAnims::Anim_Init;
+    Effect.DestroyWhenAnimationCompletes = true;
+    Effect.DrawAbove = DrawAbove;
+    Effect.IScriptDirection = IScriptDirection >= 0
+        ? (IScriptDirection & 0xff)
+        : -1;
+
+    auto& Unit = EM.AddComponent<UnitComponent>(EffectID);
+    Unit.ChkUnitID = -1;
+    Unit.HitPoints = 0;
+    Unit.MaxHitPoints = 1;
+    Unit.SupplyCost = 0;
+    if (Player)
+        EM.AddComponent<PlayerComponent>(EffectID) = *Player;
+
+    return true;
 }
 
 bool AnimationSystem::SpawnHarvestWeaponVisual(int EntityID,
@@ -1274,10 +1931,9 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
             case Game::IScriptEventType::PlaySoundBetween:
                 if (mAudio && Event.A >= 0)
                 {
-                    int UnitType = Player ? Player->PlayerID : -1;
                     mAudio->PlaySound(Event.A, Trans.Position.X, Trans.Position.Y,
-                                      0, UnitType,
-                                      Core::Audio::SoundFlags::PerSound);
+                                      0, -1,
+                                      Core::Audio::SoundFlags::None);
                 }
                 break;
             case Game::IScriptEventType::CreateImageOverlay:
@@ -1290,6 +1946,49 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                                  Event.D != 0, false,
                                  TransientOverlay ? 0.35f : -1.0f,
                                  false, PersistentAttachment);
+                break;
+            }
+            case Game::IScriptEventType::CreateImageOverlayLo:
+            {
+                auto& EM = mSystemMgr.GetEntityManager();
+                const auto* RootRender = EM.GetComponent<RenderComponent>(EntityID);
+                if (!RootRender || !sOverlayOffsetResolver)
+                    break;
+                // ExecuteFrame may emit playfram and *UseLo in the same
+                // simulation tick. RenderComponent is synchronized only after
+                // all events are consumed, so use the VM's current authored
+                // frame/flip here instead of the previous rendered frame.
+                const auto& RootContext = State.VM.GetContext();
+                const auto Offset = sOverlayOffsetResolver(
+                    RootRender->ImageID, (size_t)std::max(0, Event.B),
+                    (size_t)std::max(0, State.VM.GetCurrentFrame()),
+                    (size_t)std::max(0, Event.C), RootContext.FlipState);
+                if (!Offset)
+                    break;
+                const bool PersistentAttachment =
+                    State.AnimID == Game::IScriptAnims::Anim_Init &&
+                    sImageAttachmentPersistenceResolver &&
+                    sImageAttachmentPersistenceResolver((uint32_t)Event.A);
+                AddImageTreeNode(EntityID, -1, Event.A, *Offset,
+                                 Event.D != 0, false,
+                                 TransientOverlay ? 0.35f : -1.0f,
+                                 false, PersistentAttachment);
+                if (auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID))
+                {
+                    for (auto It = Tree->Nodes.rbegin();
+                         It != Tree->Nodes.rend(); ++It)
+                    {
+                        if (It->Visible && It->ImageID == (uint32_t)Event.A &&
+                            It->ParentIndex < 0 &&
+                            It->CreationOffset.X == Offset->X &&
+                            It->CreationOffset.Y == Offset->Y)
+                        {
+                            It->OverlayOffsetType = std::max(0, Event.B);
+                            It->OverlayOffsetIndex = std::max(0, Event.C);
+                            break;
+                        }
+                    }
+                }
                 break;
             }
             case Game::IScriptEventType::CreateImageOverlaySpecialOffset:
@@ -1305,11 +2004,55 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 break;
             }
             case Game::IScriptEventType::CreateSpriteOverlay:
-                AddImageTreeNode(EntityID, Event.A, Event.B, Event.C,
-                                 Event.D != 0, false,
-                                 TransientOverlay ? 0.35f : -1.0f,
-                                 true);
+            {
+                const auto& SpriteContext = State.VM.GetContext();
+                const Core::Math::Vec2 RootImageOffset{
+                    SpriteContext.HorPosSet ? (float)SpriteContext.HorPos : 0.0f,
+                    SpriteContext.VertPosSet ? (float)SpriteContext.VertPos : 0.0f};
+                const int SpriteID = ResolveTerranMissileTrailSprite(
+                    mSystemMgr.GetEntityManager(), EntityID, Event.A);
+                if (!SpawnIScriptSpriteEffect(
+                        EntityID, Trans, SpriteID,
+                        RootImageOffset + Core::Math::Vec2{
+                            (float)Event.B, (float)Event.C},
+                        Event.D != 0, Player,
+                        SpriteContext.CurrentDirection))
+                {
+                    AddImageTreeNode(EntityID, SpriteID, Event.B, Event.C,
+                                     Event.D != 0, false,
+                                     TransientOverlay ? 0.35f : -1.0f,
+                                     true);
+                }
                 break;
+            }
+            case Game::IScriptEventType::CreateSpriteOverlayLo:
+            {
+                const auto* RootRender = mSystemMgr.GetEntityManager()
+                    .GetComponent<RenderComponent>(EntityID);
+                if (!RootRender || !sOverlayOffsetResolver)
+                    break;
+                const auto& SpriteContext = State.VM.GetContext();
+                const auto Offset = sOverlayOffsetResolver(
+                    RootRender->ImageID, (size_t)std::max(0, Event.B),
+                    (size_t)std::max(0, State.VM.GetCurrentFrame()),
+                    (size_t)std::max(0, Event.C), SpriteContext.FlipState);
+                if (!Offset)
+                    break;
+                const Core::Math::Vec2 RootImageOffset{
+                    SpriteContext.HorPosSet ? (float)SpriteContext.HorPos : 0.0f,
+                    SpriteContext.VertPosSet ? (float)SpriteContext.VertPos : 0.0f};
+                if (!SpawnIScriptSpriteEffect(
+                        EntityID, Trans, Event.A, RootImageOffset + *Offset,
+                        Event.D != 0, Player,
+                        SpriteContext.CurrentDirection))
+                {
+                    AddImageTreeNode(EntityID, -1, Event.A, *Offset,
+                                     Event.D != 0, false,
+                                     TransientOverlay ? 0.35f : -1.0f,
+                                     true);
+                }
+                break;
+            }
             case Game::IScriptEventType::WarpOverlay:
                 // Script 193 drives modifier 12 by changing modifier_data1.
                 // Keep that value on the root render image; texture.grp is a
@@ -1350,13 +2093,30 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 {
                     break;
                 }
+                if ((Event.Type == Game::IScriptEventType::DoGroundDamage ||
+                     Event.Type == Game::IScriptEventType::DoMissileDamage) &&
+                    mBulletSystem &&
+                    mBulletSystem->ResolveIScriptDamageFrame(EntityID))
+                {
+                    break;
+                }
                 if (Combat && Combat->PendingAttackFrame && mBulletSystem)
-                    CombatSystem::ResolvePendingAttackFrame(mSystemMgr.GetEntityManager(), *mBulletSystem, EntityID);
+                    CombatSystem::ResolvePendingAttackFrame(
+                        mSystemMgr.GetEntityManager(), *mBulletSystem, EntityID,
+                        Event.Type == Game::IScriptEventType::Attack &&
+                                Event.B != 0
+                            ? (float)Event.A
+                            : 0.0f);
                 break;
             case Game::IScriptEventType::OrderSignal:
                 if ((Event.A & 1) != 0)
                 {
                     auto& EM = mSystemMgr.GetEntityManager();
+                    if (auto* Projectile =
+                            EM.GetComponent<BulletComponent>(EntityID))
+                    {
+                        Projectile->AwaitingLaunchSignal = false;
+                    }
                     if (auto* Siege = EM.GetComponent<SiegeTransitionComponent>(EntityID);
                         Siege && Siege->Active)
                     {
@@ -1385,6 +2145,7 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                                 Cloak = &EM.AddComponent<CloakComponent>(EntityID);
                             Cloak->IsBurrowed = true;
                             Cloak->IsCloaked = true;
+                            BurrowState::SetVisualBurrowed(EM, EntityID, true);
                         }
                         else if (Burrow->Phase == BurrowPhase::Unburrowing)
                         {
@@ -1397,6 +2158,7 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                                 if (!Cloak->IsPassiveCloak)
                                     Cloak->IsCloaked = false;
                             }
+                            BurrowState::SetVisualBurrowed(EM, EntityID, false);
                         }
                     }
                 }
@@ -1436,7 +2198,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
                                              const StatusEffectComponent* Status,
                                              const ProductionComponent* Prod,
                                              const HarvestComponent* Harvest,
-                                             const BulletComponent* Bullet)
+                                             BulletComponent* Bullet)
 {
     auto& State = mScriptStates[EntityID];
 
@@ -1498,9 +2260,23 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         AttackTargetsAir = (TargetPath && TargetPath->IsAir) ||
             (TargetCombat && TargetCombat->MyElevation == Elevation::Air);
     }
-    const int AttackAnim = AttackTargetsAir
+    const int OrdinaryAttackAnim = AttackTargetsAir
         ? Game::IScriptAnims::Anim_AirAttkInit
         : Game::IScriptAnims::Anim_GndAttkInit;
+    const bool RootUsesSpecialSelfDestruct =
+        IsPendingAttack &&
+        Combat &&
+        Combat->SelfDestructOnAttack &&
+        HasIScriptAnimationForImage(
+            (int)Render.ImageID, Game::IScriptAnims::Anim_SpecialState1) &&
+        !HasIScriptAnimationForImage((int)Render.ImageID,
+                                     OrdinaryAttackAnim);
+    const int AttackAnim = RootUsesSpecialSelfDestruct
+        ? Game::IScriptAnims::Anim_SpecialState1
+        : OrdinaryAttackAnim;
+    const int AttackRepeatAnim = AttackTargetsAir
+        ? Game::IScriptAnims::Anim_AirAttkRpt
+        : Game::IScriptAnims::Anim_GndAttkRpt;
     // Tank/Goliath-style units own a separate, independently scripted turret.
     // Only that subunit may run the attack entry; running the root entry too
     // creates a second muzzle flash at the chassis origin.
@@ -1509,6 +2285,22 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         HasIScriptAnimationForImage((int)Render.SubunitImageID, AttackAnim);
     const bool RootOwnsPendingAttack =
         IsPendingAttack && !SubunitOwnsPendingAttack;
+
+    if (DesiredState == AnimState::Unburrowing)
+        BurrowState::SetVisualBurrowed(EM, EntityID, false);
+    if (DesiredState == AnimState::Burrowed && !RootOwnsPendingAttack)
+    {
+        BurrowState::SetVisualBurrowed(EM, EntityID, true);
+        // A buried Lurker must hold an invisible rest state, not replay the
+        // Burrow entry after every attack.  Resetting the completed hidden
+        // script also guarantees the next GndAttkInit starts at its authored
+        // attack event instead of resuming a frozen previous attack.
+        State.VM.Reset();
+        State.AnimID = -1;
+        State.WasPendingAttack = false;
+        State.StepAccumulator = 0.0f;
+        return true;
+    }
 
     EnsureIScriptLoaded();
     if (!sIScriptDB.IsLoaded())
@@ -1605,9 +2397,101 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     {
         TargetAnim = Game::IScriptAnims::Anim_GndAttkToIdle;
     }
-    if (Bullet)
+    bool HoldCompletedRootAttack = false;
+    if (!ImageOrScriptChanged && !IsBuilding && !Bullet)
     {
-        if (Bullet->Behavior == WeaponBehavior::Persist &&
+        const bool CurrentGroundAttack =
+            State.AnimID == Game::IScriptAnims::Anim_GndAttkInit ||
+            State.AnimID == Game::IScriptAnims::Anim_GndAttkRpt;
+        const bool CurrentAirAttack =
+            State.AnimID == Game::IScriptAnims::Anim_AirAttkInit ||
+            State.AnimID == Game::IScriptAnims::Anim_AirAttkRpt;
+        const bool CurrentSpecialAttack =
+            RootUsesSpecialSelfDestruct &&
+            State.AnimID == Game::IScriptAnims::Anim_SpecialState1;
+        const bool CurrentAttack =
+            CurrentGroundAttack || CurrentAirAttack || CurrentSpecialAttack;
+
+        if (RootOwnsPendingAttack)
+        {
+            // OpenBW requests the repeat entry for every shot. sprite_run_anim
+            // maps only the first request to *AttkInit; a shot requested while
+            // the matching Init/Rpt pose is active starts *AttkRpt instead.
+            const bool MatchingAttackPose =
+                State.AnimID == AttackAnim ||
+                State.AnimID == AttackRepeatAnim;
+            if (State.WasPendingAttack && MatchingAttackPose &&
+                State.VM.IsRunning())
+            {
+                // PendingAttackFrame remains set from wind-up through the
+                // attack opcode. That is one shot request, not a request to
+                // restart the body script on every simulation frame.
+                TargetAnim = State.AnimID;
+            }
+            else if (!State.WasPendingAttack && MatchingAttackPose &&
+                     HasAnim(AttackRepeatAnim))
+                TargetAnim = AttackRepeatAnim;
+            else if (HasAnim(AttackAnim))
+                TargetAnim = AttackAnim;
+        }
+        else if (CurrentAttack &&
+                 (DesiredState == AnimState::Attacking ||
+                  DesiredState == AnimState::Idle))
+        {
+            if (State.VM.IsRunning())
+            {
+                // The attack opcode is usually before the authored recoil and
+                // recovery frames (notably Marine and Dragoon). Firing clears
+                // PendingAttackFrame, but must not truncate the rest of IScript.
+                TargetAnim = State.AnimID;
+            }
+            else if (DesiredState == AnimState::Attacking)
+            {
+                // OpenBW holds the terminal attack pose until the cooldown
+                // requests *AttkRpt or the unit leaves its attack order.
+                HoldCompletedRootAttack = true;
+            }
+            else
+            {
+                const int ToIdleAnim = CurrentAirAttack
+                    ? Game::IScriptAnims::Anim_AirAttkToIdle
+                    : Game::IScriptAnims::Anim_GndAttkToIdle;
+                if (HasAnim(ToIdleAnim))
+                    TargetAnim = ToIdleAnim;
+            }
+        }
+        else if (DesiredState == AnimState::Idle && State.VM.IsRunning() &&
+                 (State.AnimID == Game::IScriptAnims::Anim_GndAttkToIdle ||
+                  State.AnimID == Game::IScriptAnims::Anim_AirAttkToIdle))
+        {
+            // These transition entries commonly jump into the authored idle
+            // loop. Keep that PC instead of replacing it with Init next frame.
+            TargetAnim = State.AnimID;
+        }
+    }
+    if (Bullet && !ImageOrScriptChanged)
+    {
+        if (Bullet->AwaitingLaunchSignal &&
+            State.AnimID == Game::IScriptAnims::Anim_Init &&
+            State.VM.IsRunning() &&
+            HasAnim(Game::IScriptAnims::Anim_Init))
+        {
+            // Init owns the projectile until sigorder 1. Switching to the
+            // flight entry on the next render update would skip delayed launch
+            // flashes and leave BulletSystem permanently frozen.
+            TargetAnim = Game::IScriptAnims::Anim_Init;
+        }
+        else if (Bullet->VisualAnimationOverride >= 0 &&
+            HasAnim(Bullet->VisualAnimationOverride))
+        {
+            TargetAnim = Bullet->VisualAnimationOverride;
+        }
+        else if (State.AnimID == Game::IScriptAnims::Anim_SpecialState1 &&
+                 State.VM.IsRunning())
+        {
+            TargetAnim = State.AnimID;
+        }
+        else if (Bullet->Behavior == WeaponBehavior::Persist &&
             HasAnim(Game::IScriptAnims::Anim_SpecialState2))
         {
             TargetAnim = Game::IScriptAnims::Anim_SpecialState2;
@@ -1649,8 +2533,22 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     {
         TargetAnim = Game::IScriptAnims::Anim_SpecialState2;
     }
+    const auto* EffectVisual = EM.GetComponent<EffectComponent>(EntityID);
+    if (EffectVisual && EffectVisual->InitialAnimation >= 0 &&
+        HasAnim(EffectVisual->InitialAnimation))
+    {
+        TargetAnim = EffectVisual->InitialAnimation;
+    }
+    if (HoldCompletedRootAttack)
+    {
+        State.WasPendingAttack = false;
+        return true;
+    }
     if (TargetAnim < 0)
+    {
+        State.WasPendingAttack = IsPendingAttack;
         return false;
+    }
 
     const bool IsTransientAnim =
         RootOwnsPendingAttack ||
@@ -1686,9 +2584,15 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     if (NeedStart)
     {
         const int PreviousAnim = State.AnimID;
+        const bool FirstScriptForEntity = State.ImageID < 0;
         const int EntryPC = Script->AnimationPC[(size_t)TargetAnim];
         State.VM.LoadScript(TargetAnim, &sIScriptDB.GetProgram().ProgramData, EntryPC);
         auto& Ctx = State.VM.GetContext();
+        if (FirstScriptForEntity)
+        {
+            Ctx.RandomSeed = (uint32_t)EntityID * 1664525u +
+                Render.ImageID * 1013904223u + 1u;
+        }
         Ctx.ImageID = (int)Render.ImageID;
         Ctx.BaseFrameIndex = 0;
         Ctx.FrameIndex = 0;
@@ -1698,6 +2602,8 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.ScriptID = ActiveScriptID;
         State.AnimID = TargetAnim;
         State.StepAccumulator = 0.0f;
+        if (Bullet && Bullet->VisualAnimationOverride == TargetAnim)
+            Bullet->VisualAnimationOverride = -1;
         if (TargetAnim == Game::IScriptAnims::Anim_Built)
             State.HasPlayedBuilt = true;
         if (ShouldClearImageTreeForAnimRestart(
@@ -1706,7 +2612,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         {
             ClearImageTree(EntityID, !ImageOrScriptChanged);
         }
-        else if (IsBuilding)
+        else if (IsBuilding || TargetAnim == Game::IScriptAnims::Anim_Death)
         {
             // StarCraft runs a requested sprite animation on every image in
             // the sprite, not just on its root. This preserves completed
@@ -1727,7 +2633,14 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
 
     auto& Ctx = State.VM.GetContext();
     Ctx.LiftOffState = Bldg && Bldg->IsLifted;
-    if (!IsBuilding)
+    if (EffectVisual && EffectVisual->IScriptDirection >= 0)
+    {
+        Ctx.CurrentDirection = EffectVisual->IScriptDirection & 0xff;
+        Ctx.FlDirect = Ctx.CurrentDirection;
+        if (Ctx.HasDirectionalFrames)
+            State.VM.RefreshDirectionalFrame();
+    }
+    else if (!IsBuilding)
     {
         Core::Math::Vec2 AnimDirection;
         if ((IsMiningMinerals && Harvest && Harvest->TargetResourceID >= 0) ||
@@ -1766,13 +2679,6 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
     {
         Ctx.IsAttacking = false;
     }
-    if (IsPendingAttack)
-    {
-        // Turrets are authored as child images. Drive their attack entry even
-        // when the root deliberately stays in its idle/walking animation.
-        if (SubunitOwnsPendingAttack)
-            RunUnitSubunitAnimation(EntityID, AttackAnim);
-    }
     Ctx.IsWalking = DesiredState == AnimState::Walking;
 
     constexpr float kIScriptFrameSeconds = 1.0f / 24.0f;
@@ -1792,6 +2698,24 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.VM.RefreshDirectionalFrame();
 
     ConsumeIScriptEvents(EntityID, State, Trans, Player, Combat, Harvest);
+
+    // Some custom projectile scripts terminate Init without sigorder. They
+    // still need a deterministic launch point once every authored Init frame
+    // has played, rather than remaining frozen forever.
+    if (Bullet && Bullet->AwaitingLaunchSignal &&
+        State.AnimID == Game::IScriptAnims::Anim_Init &&
+        !State.VM.IsRunning())
+    {
+        Bullet->AwaitingLaunchSignal = false;
+    }
+
+    if (EffectVisual && EffectVisual->DestroyWhenAnimationCompletes &&
+        !State.VM.IsRunning())
+    {
+        // opc_end destroys the root image in OpenBW. Keep the presentation
+        // entity only so independently-running child images can finish.
+        Render.Visible = false;
+    }
 
     // Some Protoss WarpIn roots end while a child effect emits sigorder 1;
     // other building scripts have no signaling child. Treat a terminal root
@@ -1873,6 +2797,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
             State.WasUnderConstruction = false;
         }
     }
+    State.WasPendingAttack = Combat && Combat->PendingAttackFrame && !IsFrozen;
 
     const bool DebugEntityImportant =
         Player && (Player->PlayerID == 0 || Player->PlayerID == 1);
@@ -1900,6 +2825,13 @@ void AnimationSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
     UpdateScriptEffects(DeltaTime);
+    for (auto It = mScriptStates.begin(); It != mScriptStates.end();)
+    {
+        if (!EM.IsAlive(It->first))
+            It = mScriptStates.erase(It);
+        else
+            ++It;
+    }
 
     auto Entities = EM.GetEntitiesWith<TransformComponent, RenderComponent>();
     for (int Eid : Entities)
@@ -1927,7 +2859,13 @@ void AnimationSystem::Update(float DeltaTime)
         const bool UsedIScript = UpdateIScriptAnimation(
             Eid, DeltaTime, State, *Render, *Trans, Path, Player,
             Combat, Bldg, Status, Prod, Harvest, Bullet);
-        EnsureUnitSubunitNode(Eid, *Render);
+        const bool IsIndependentEffect =
+            EM.GetComponent<EffectComponent>(Eid) != nullptr;
+        if (!IsIndependentEffect)
+        {
+            EnsureUnitSubunitNode(Eid, *Render);
+            UpdateUnitSubunitAttackLifecycle(Eid, Combat);
+        }
         if (auto* Siege = EM.GetComponent<SiegeTransitionComponent>(Eid);
             Siege && Siege->Active && Siege->Stage == 0)
         {
@@ -1936,27 +2874,21 @@ void AnimationSystem::Update(float DeltaTime)
                     ? Game::IScriptAnims::Anim_SpecialState1
                     : Game::IScriptAnims::Anim_SpecialState2);
         }
-        if (Combat && Combat->PendingAttackFrame &&
-            Render->SubunitImageID != UINT32_MAX)
+        if (!IsIndependentEffect)
         {
-            bool TargetAir = false;
-            if (Combat->PendingAttackTargetEntityID >= 0)
-            {
-                const int TargetID = Combat->PendingAttackTargetEntityID;
-                const auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetID);
-                const auto* TargetCombat = EM.GetComponent<CombatComponent>(TargetID);
-                TargetAir = (TargetPath && TargetPath->IsAir) ||
-                    (TargetCombat && TargetCombat->MyElevation == Elevation::Air);
-            }
-            RunUnitSubunitAnimation(
-                Eid, TargetAir ? Game::IScriptAnims::Anim_AirAttkInit
-                               : Game::IScriptAnims::Anim_GndAttkInit);
+            UpdateCommandCenterProductionVisual(Eid, *Render, Prod, DeltaTime);
+            UpdateAddonConnectorOverlay(Eid, *Render);
+            UpdateDamageOverlays(Eid, *Render, Unit, Bldg);
         }
-        UpdateCommandCenterProductionVisual(Eid, *Render, Prod, DeltaTime);
-        UpdateAddonConnectorOverlay(Eid, *Render);
-        UpdateDamageOverlays(Eid, *Render, Unit, Bldg);
         if (UsedIScript)
             continue;
+        if (IsIndependentEffect)
+        {
+            // Missing authored entry: never leave a static copy of the dead
+            // body/projectile visible until the safety timer expires.
+            Render->Visible = false;
+            continue;
+        }
 
         // Look up animation clip
         int ChkID = Unit ? Unit->ChkUnitID : 0;
@@ -2039,6 +2971,7 @@ void AnimationSystem::Update(float DeltaTime)
     // Root scripts establish the current sprite heading and may create image
     // overlays. Advance those overlays afterwards so a newly-created shadow
     // receives the same heading in this frame.
+    UpdateShieldImpactOverlays();
     UpdateImageTrees(DeltaTime);
 
     // Siege/unsiege uses the authored tank scripts instead of instantly

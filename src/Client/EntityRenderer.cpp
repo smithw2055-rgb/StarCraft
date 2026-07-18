@@ -451,10 +451,15 @@ namespace
 
     int RenderSortBand(Core::ECS::EntityManager& Entities, int EntityId)
     {
+        if (const auto* Effect =
+                Entities.GetComponent<Game::Components::EffectComponent>(EntityId))
+        {
+            return Effect->RenderBand >= 0
+                ? Effect->RenderBand
+                : (Effect->DrawAbove ? 3 : 0);
+        }
         if (IsAirEntity(Entities, EntityId))
             return 2;
-        if (Entities.GetComponent<Game::Components::EffectComponent>(EntityId))
-            return 3;
         return 1;
     }
 
@@ -1160,7 +1165,21 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     Order.erase(std::remove_if(Order.begin(), Order.end(), [&](int EntityId) {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
-        return !Trans || !RenderComp || !RenderComp->Visible ||
+        bool HasVisibleEffectChild = false;
+        if (Entities.GetComponent<Game::Components::EffectComponent>(EntityId))
+        {
+            if (const auto* Tree =
+                    Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
+            {
+                HasVisibleEffectChild = std::any_of(
+                    Tree->Nodes.begin(), Tree->Nodes.end(),
+                    [](const Game::Components::ImageSubnode& Node) {
+                        return Node.Visible;
+                    });
+            }
+        }
+        return !Trans || !RenderComp ||
+               (!RenderComp->Visible && !HasVisibleEffectChild) ||
                Trans->Position.X < CullMinX ||
                Trans->Position.X > CullMaxX ||
                Trans->Position.Y < CullMinY ||
@@ -1275,7 +1294,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const auto* Frames = mSpriteAssets.HasCache() ?
             mSpriteAssets.GetDatImageFrames(RenderComp->ImageID) :
             nullptr;
-        if (Frames && !Frames->empty())
+        if (RenderComp->Visible && Frames && !Frames->empty())
         {
             if (RenderComp->TotalFrames <= 1)
                 RenderComp->TotalFrames = (int)Frames->size();
@@ -1340,7 +1359,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
 
-        if (!DrewSprite)
+        if (!DrewSprite && RenderComp->Visible)
         {
             ++DebugFallbackCount;
             static std::unordered_map<int, bool> MissingSpriteLogged;

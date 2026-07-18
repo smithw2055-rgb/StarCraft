@@ -14,7 +14,7 @@ enum class ResearchId : uint8_t
 {
     None = 0,
 
-    // Terran (0-15)
+    // Terran
     Terran_InfantryWeapons,
     Terran_InfantryArmor,
     Terran_VehicleWeapons,
@@ -37,7 +37,7 @@ enum class ResearchId : uint8_t
     Terran_ColossusReactor,
     Terran_CharonBoosters,
 
-    // Zerg (16-33)
+    // Zerg
     Zerg_MeleeAttacks,
     Zerg_MissileAttacks,
     Zerg_Carapace,
@@ -61,7 +61,7 @@ enum class ResearchId : uint8_t
     Zerg_DefilerEnergy,
     Zerg_LurkerMorph,
 
-    // Protoss (34-51)
+    // Protoss
     Protoss_GroundWeapons,
     Protoss_GroundArmor,
     Protoss_PlasmaShields,
@@ -86,6 +86,10 @@ enum class ResearchId : uint8_t
     Protoss_DisruptionWeb,
     Protoss_ReaverCapacity,
     Protoss_CarrierCapacity,
+
+    // Keep newly added IDs at the end so existing serialized/menu IDs remain stable.
+    Protoss_GraviticBoosters,
+    Protoss_GraviticThrusters,
 
     Count
 };
@@ -135,6 +139,9 @@ public:
                                 int& OutGas);
 
     static int GetWeaponBonus(const Core::ECS::EntityManager& EM, int EntityID);
+    static int GetWeaponBonusForTarget(const Core::ECS::EntityManager& EM,
+                                       int EntityID,
+                                       bool TargetIsAir);
     static int GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetRangeBonusPixels(const Core::ECS::EntityManager& EM, int EntityID);
     static int GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& EM,

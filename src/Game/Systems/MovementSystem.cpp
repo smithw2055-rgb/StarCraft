@@ -29,21 +29,35 @@ namespace
         return Value && Value[0] != '\0' && Value[0] != '0';
     }
 
-    static void LogMovementStall(Core::ECS::EntityID EntityID,
+    static void LogMovementStall(Core::ECS::EntityManager& EM,
+                                 Core::ECS::EntityID EntityID,
                                  const TransformComponent& Transform,
                                  const PathfindingComponent& Path,
                                  const char* Phase)
     {
         if (!PathingDebugEnabled())
             return;
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        const auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+        const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+        const auto* BlockerUnit = Path.BlockedByEntityID >= 0
+            ? EM.GetComponent<UnitComponent>(Path.BlockedByEntityID)
+            : nullptr;
         Core::Utils::Logger::Info("Pathing",
             std::string("stall phase=") + Phase +
             " entity=" + std::to_string(EntityID) +
+            " chk=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
+            " command=" + std::to_string(
+                Command ? (int)Command->CurrentCommand : -1) +
             " pos=" + std::to_string((int)Transform.Position.X) + "," +
                 std::to_string((int)Transform.Position.Y) +
             " target=" + std::to_string((int)Path.RequestedDestination.X) + "," +
                 std::to_string((int)Path.RequestedDestination.Y) +
             " blocker=" + std::to_string(Path.BlockedByEntityID) +
+            " blocker_chk=" + std::to_string(BlockerUnit ? BlockerUnit->ChkUnitID : -1) +
+            " ignore=" + std::to_string(Path.RequestedIgnoreEntityID) +
+            " harvest_target=" + std::to_string(Harvest ? Harvest->TargetResourceID : -1) +
+            " harvest_state=" + std::to_string(Harvest ? (int)Harvest->State : -1) +
             " repath=" + std::to_string(Path.RepathFailCount) +
             " nodes=" + std::to_string(Path.Path.size()) +
             " index=" + std::to_string(Path.PathIndex));
@@ -411,6 +425,65 @@ namespace
         return Rect;
     }
 
+    static bool IsResourceDepotUnit(int ChkUnitID)
+    {
+        return ChkUnitID == 106 ||  // Terran Command Center
+               ChkUnitID == 131 ||  // Zerg Hatchery
+               ChkUnitID == 132 ||  // Zerg Lair
+               ChkUnitID == 133 ||  // Zerg Hive
+               ChkUnitID == 154;    // Protoss Nexus
+    }
+
+    static bool IsOwnedResourceDepot(Core::ECS::EntityManager& EM,
+                                     Core::ECS::EntityID WorkerID,
+                                     Core::ECS::EntityID BlockerID)
+    {
+        const auto* WorkerPlayer = EM.GetComponent<PlayerComponent>(WorkerID);
+        const auto* DepotPlayer = EM.GetComponent<PlayerComponent>(BlockerID);
+        const auto* DepotUnit = EM.GetComponent<UnitComponent>(BlockerID);
+        const auto* DepotBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
+        return WorkerPlayer && DepotPlayer && DepotUnit && DepotBuilding &&
+               WorkerPlayer->PlayerID == DepotPlayer->PlayerID &&
+               IsResourceDepotUnit(DepotUnit->ChkUnitID);
+    }
+
+    static bool ShouldIgnoreStaticBlockerAtRuntime(
+        Core::ECS::EntityManager& EM,
+        Core::ECS::EntityID MovingID,
+        Core::ECS::EntityID BlockerID)
+    {
+        const auto* Path = EM.GetComponent<PathfindingComponent>(MovingID);
+        if (!Path || Path->RequestedIgnoreEntityID != BlockerID)
+            return false;
+
+        // A Terran builder is the only ordinary unit allowed to enter a
+        // building footprint, and only for the unfinished building that has
+        // explicitly recorded it as a builder/assistant.
+        if (const auto* Building = EM.GetComponent<BuildingComponent>(BlockerID);
+            Building && Building->UnderConstruction &&
+            Building->HasBuilderUnit(MovingID))
+        {
+            return true;
+        }
+
+        const auto* Harvest = EM.GetComponent<HarvestComponent>(MovingID);
+        if (!Harvest || Harvest->State == HarvestState::Idle)
+            return false;
+
+        if (BlockerID == Harvest->TargetResourceID ||
+            BlockerID == Harvest->ReturnBuildingID)
+        {
+            return true;
+        }
+
+        // Immediately after depositing, HarvestSystem temporarily keeps the
+        // depot as the ignored blocker so the worker can leave the footprint.
+        // Limit that exception to an owned canonical depot and to the return
+        // trip's transition back toward a resource.
+        return Harvest->State == HarvestState::MovingToResource &&
+               IsOwnedResourceDepot(EM, MovingID, BlockerID);
+    }
+
     static Core::Math::Vec2 ResolveStaticBlockers(Core::ECS::EntityManager& EM,
                                                   Core::ECS::EntityID MovingID,
                                                   Core::Math::Vec2 Proposed,
@@ -428,12 +501,11 @@ namespace
         {
             if (BlockerID == MovingID || !IsStaticGroundBlocker(EM, BlockerID))
                 continue;
-            // CommandSystem has already planned this order with the explicit
-            // target excluded (for example, a worker approaching a mineral
-            // field). Applying that target again as a hard runtime blocker
-            // leaves the unit parked at the footprint edge with a path that
-            // can never finish.
-            if (MovingPath && BlockerID == MovingPath->RequestedIgnoreEntityID)
+            // Planning may exclude an interaction target so A* can find an
+            // approach route. That does not make the target physically
+            // passable: runtime overlap is reserved for the harvest and
+            // assigned-construction contact states above.
+            if (ShouldIgnoreStaticBlockerAtRuntime(EM, MovingID, BlockerID))
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -511,6 +583,38 @@ namespace
     {
         const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
         return Harvest && Harvest->State != HarvestState::Idle;
+    }
+
+    static bool IsEmbeddedInStaticBlocker(Core::ECS::EntityManager& EM,
+                                           Core::ECS::EntityID MovingID,
+                                           Core::ECS::EntityID BlockerID,
+                                           const Core::Math::Vec2& Position)
+    {
+        if (BlockerID < 0 || !IsStaticGroundBlocker(EM, BlockerID))
+            return false;
+
+        const auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID);
+        const auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
+        const auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
+        const auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
+        const auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
+        const auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+        if (!MovingPath || !BlockerTrans || !BlockerUnit)
+            return false;
+
+        const StaticBlockerRect BlockerRect = StaticBlockerRectForEntity(
+            BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
+        const StaticBlockerRect MovingRect = CollisionRectForPath(*MovingPath);
+        const float ExpandedLeft =
+            BlockerTrans->Position.X - BlockerRect.Left - MovingRect.Right;
+        const float ExpandedRight =
+            BlockerTrans->Position.X + BlockerRect.Right + MovingRect.Left;
+        const float ExpandedTop =
+            BlockerTrans->Position.Y - BlockerRect.Top - MovingRect.Bottom;
+        const float ExpandedBottom =
+            BlockerTrans->Position.Y + BlockerRect.Bottom + MovingRect.Top;
+        return Position.X > ExpandedLeft && Position.X < ExpandedRight &&
+               Position.Y > ExpandedTop && Position.Y < ExpandedBottom;
     }
 
     static bool IsAssignedConstructionWorker(Core::ECS::EntityManager& EM,
@@ -609,11 +713,21 @@ namespace
             const float ProposedOverlap = DynamicCollisionOverlap(
                 Proposed, MovingRect, OtherTrans->Position, OtherRect);
             // Existing overlaps can occur during spawn, map load, or dense
-            // group movement. Permit only steps that actually reduce that
-            // overlap. Allowing every step from an overlapped position lets
-            // units on the same route collapse into identical coordinates.
+            // group movement. Never permit a step that deepens that overlap;
+            // nearly merged units must actively reduce it. Allowing every
+            // step from an overlapped position lets units on the same route
+            // collapse into identical coordinates.
             const bool EntersNewOverlap =
                 CurrentOverlap <= 0.0f && ProposedOverlap > 0.0f;
+            const Core::Math::Vec2 Applied = Proposed - Current;
+            const bool FollowsMovingBlocker =
+                Applied.LengthSq() > 0.001f &&
+                OtherPath->CurrentVelocity.LengthSq() > 0.001f &&
+                Applied.Dot(OtherPath->CurrentVelocity) > 0.0f;
+            const bool WorsensExistingOverlap =
+                CurrentOverlap > 0.0f &&
+                ProposedOverlap > CurrentOverlap + 0.01f &&
+                !FollowsMovingBlocker;
             const float MovingArea =
                 (MovingRect.Left + MovingRect.Right) *
                 (MovingRect.Top + MovingRect.Bottom);
@@ -626,7 +740,8 @@ namespace
             const bool FailsToEscapeExistingOverlap =
                 AlreadyNearlyMerged && ProposedOverlap > 0.0f &&
                 ProposedOverlap >= CurrentOverlap - 0.01f;
-            if (EntersNewOverlap || FailsToEscapeExistingOverlap)
+            if (EntersNewOverlap || WorsensExistingOverlap ||
+                FailsToEscapeExistingOverlap)
             {
                 return OtherID;
             }
@@ -721,141 +836,88 @@ namespace
         return Path.CollisionRadius > 16 ? Path.CollisionRadius : 0;
     }
 
-    static bool PathHasMeaningfulProgress(const TransformComponent& Trans,
-                                          const PathfindingComponent& Path,
-                                          const Core::Math::Vec2& Target,
-                                          const std::vector<Core::Math::Vec2>& Waypoints)
+    static bool RequestMovementPath(
+        Core::ECS::EntityManager& EM,
+        Core::ECS::EntityID EntityID,
+        const Game::Map::GameMap* Map,
+        const Core::Math::Vec2& Target,
+        int IgnoreEntityID,
+        int AvoidDynamicEntityID)
     {
-        if (Waypoints.empty())
+        if (const auto Callback = MovementSystem::GetPathRequestCallback())
+        {
+            return Callback(
+                EM,
+                EntityID,
+                Map,
+                Target,
+                IgnoreEntityID,
+                AvoidDynamicEntityID);
+        }
+
+        // Some narrow regression binaries link MovementSystem without the real
+        // CommandSystem. Keep that standalone seam functional; game/runtime
+        // builds install the shared staged requester through SetMap().
+        auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
+        auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        if (!Transform || !Path)
             return false;
 
-        const Core::Math::Vec2 Last = Waypoints.back();
-        const float ArrivalTolerance =
-            std::max(Path.NodeTolerance, (float)CollisionRadiusFromBounds(Path));
-        if (Trans.Position.DistanceTo(Target) <= ArrivalTolerance)
-            return true;
-
-        const bool LastApproachesTarget =
-            Last.DistanceTo(Target) < Trans.Position.DistanceTo(Target) - ArrivalTolerance;
-        return LastApproachesTarget;
-    }
-
-    static void RefreshPathToTarget(Core::ECS::EntityManager& EM,
-                                    Core::ECS::EntityID EntityID,
-                                    const Game::Map::GameMap* Map,
-                                    const Core::Math::Vec2& Target,
-                                    int IgnoreEntityID = -1,
-                                    int AvoidDynamicEntityID = -1)
-    {
-        auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
-        auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
-        if (!Trans || !Path)
-            return;
-
-        const bool DestinationChanged =
-            Path->RequestedDestination.DistanceTo(Target) > 1.0f ||
-            Path->RequestedIgnoreEntityID != IgnoreEntityID;
         Path->RequestedDestination = Target;
         Path->RequestedIgnoreEntityID = IgnoreEntityID;
         Path->Path.clear();
         Path->PathIndex = 0;
         Path->BlockedByEntityID = -1;
-        if (DestinationChanged)
-        {
-            Path->DestinationStallTimer = 0.0f;
-            Path->HasLastDestinationDistance = false;
-        }
-
         if (Path->IsAir || !Map)
         {
             Path->Path.push_back(Target);
-            return;
+            return true;
         }
 
-        int StartTileX = 0;
-        int StartTileY = 0;
-        Map->WorldToTile(Trans->Position, StartTileX, StartTileY);
-        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(EntityID);
-        std::vector<StaticBlockerRect> Blockers;
-        for (auto BlockerID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
-        {
-            if (BlockerID == IgnoreEntityID)
-                continue;
-            if (BlockerID == EntityID)
-                continue;
-
-            auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
-            auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
-            auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
-            auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
-            auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
-            if (!BlockerTrans || !BlockerUnit)
-                continue;
-
-            const bool IsStaticBlocker =
-                IsStaticGroundBlocker(EM, BlockerID);
-            const bool IsRequestedDynamicAvoid =
-                BlockerID == AvoidDynamicEntityID;
-            const auto* BlockerPlayer =
-                EM.GetComponent<PlayerComponent>(BlockerID);
-            const bool IsStoppedFriendlyDynamicAvoid =
-                AvoidDynamicEntityID >= 0 &&
-                !IsStaticBlocker &&
-                MovingPlayer &&
-                BlockerPlayer &&
-                MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
-                BlockerPath &&
-                BlockerPath->CurrentVelocity.LengthSq() <= 0.01f;
-            if (!IsStaticBlocker &&
-                !IsRequestedDynamicAvoid &&
-                !IsStoppedFriendlyDynamicAvoid)
-            {
-                continue;
-            }
-
-            auto Rect = StaticBlockerRectForEntity(
-                BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
-            const StaticBlockerRect MovingRect = CollisionRectForPath(*Path);
-            Rect.Left += MovingRect.Right;
-            Rect.Top += MovingRect.Bottom;
-            Rect.Right += MovingRect.Left;
-            Rect.Bottom += MovingRect.Top;
-            Rect.Position = BlockerTrans->Position;
-            Blockers.push_back(Rect);
-        }
-
+        const auto* AvoidTransform =
+            EM.GetComponent<TransformComponent>(AvoidDynamicEntityID);
+        const auto* AvoidPath =
+            EM.GetComponent<PathfindingComponent>(AvoidDynamicEntityID);
+        const float MovingRadius =
+            (float)std::max(4, CollisionRadiusFromBounds(*Path));
         const std::function<bool(int, int)> ExtraBlockedTile =
-            [Blockers = std::move(Blockers), Map, StartTileX, StartTileY](int TileX, int TileY)
+            [Map, AvoidTransform, AvoidPath, MovingRadius](int TileX, int TileY)
         {
-            if (TileX == StartTileX && TileY == StartTileY)
+            if (!AvoidTransform || !AvoidPath)
                 return false;
-
             const Core::Math::Vec2 Center = Map->TileToWorld(TileX, TileY);
-            for (const auto& Rect : Blockers)
-            {
-                if (Center.X >= Rect.Position.X - Rect.Left &&
-                    Center.X <= Rect.Position.X + Rect.Right &&
-                    Center.Y >= Rect.Position.Y - Rect.Top &&
-                    Center.Y <= Rect.Position.Y + Rect.Bottom)
-                {
-                    return true;
-                }
-            }
-            return false;
+            const float Left = AvoidPath->HasCollisionBounds
+                ? (float)AvoidPath->CollisionLeft
+                : (float)AvoidPath->CollisionRadius;
+            const float Right = AvoidPath->HasCollisionBounds
+                ? (float)AvoidPath->CollisionRight + 1.0f
+                : (float)AvoidPath->CollisionRadius;
+            const float Up = AvoidPath->HasCollisionBounds
+                ? (float)AvoidPath->CollisionUp
+                : (float)AvoidPath->CollisionRadius;
+            const float Down = AvoidPath->HasCollisionBounds
+                ? (float)AvoidPath->CollisionDown + 1.0f
+                : (float)AvoidPath->CollisionRadius;
+            constexpr float kExactCollisionRasterPadding = 16.0f;
+            return Center.X >= AvoidTransform->Position.X - Left - MovingRadius -
+                                   kExactCollisionRasterPadding &&
+                   Center.X <= AvoidTransform->Position.X + Right + MovingRadius +
+                                   kExactCollisionRasterPadding &&
+                   Center.Y >= AvoidTransform->Position.Y - Up - MovingRadius -
+                                   kExactCollisionRasterPadding &&
+                   Center.Y <= AvoidTransform->Position.Y + Down + MovingRadius +
+                                   kExactCollisionRasterPadding;
         };
-
         auto Result = Game::Pathfinding::AStar::FindPath(
             *Map,
-            Trans->Position,
+            Transform->Position,
             Target,
             1000,
             TerrainClearanceForPath(*Path),
             ExtraBlockedTile);
-        if (Result.Found &&
-            PathHasMeaningfulProgress(*Trans, *Path, Target, Result.Waypoints))
-        {
+        if (Result.Found)
             Path->Path = std::move(Result.Waypoints);
-        }
+        return !Path->Path.empty();
     }
 
     static Core::Math::Vec2 ResolveEdgeApproachTarget(Core::ECS::EntityManager& EM,
@@ -901,8 +963,7 @@ namespace
         if (!Path || !Trans)
             return false;
 
-        Core::Math::Vec2 Target = Path->RequestedDestination;
-        const Core::Math::Vec2 FinalDestination = Path->RequestedDestination;
+        Core::Math::Vec2 FinalDestination = Path->RequestedDestination;
         const int RequestedTargetEntityID = Path->RequestedTargetEntityID;
         const int RequestedIgnoreEntityID = Path->RequestedIgnoreEntityID;
         int TargetEntityID = Path->RequestedTargetEntityID >= 0
@@ -911,14 +972,31 @@ namespace
         if (Path->RequestedTargetEntityID >= 0)
         {
             if (auto* TargetTrans = EM.GetComponent<TransformComponent>(Path->RequestedTargetEntityID))
-                Target = TargetTrans->Position;
+            {
+                FinalDestination = TargetTrans->Position;
+                if (auto* Command = EM.GetComponent<CommandComponent>(EntityID))
+                {
+                    Command->TargetPosition = FinalDestination;
+                    if (Command->CurrentOrderIndex >= 0 &&
+                        Command->CurrentOrderIndex < (int)Command->Orders.size())
+                    {
+                        Command->Orders[Command->CurrentOrderIndex].TargetPosition =
+                            FinalDestination;
+                    }
+                }
+            }
         }
+        Core::Math::Vec2 Target = FinalDestination;
         if (UseEdgeTarget && TargetEntityID >= 0)
             Target = ResolveEdgeApproachTarget(EM, Trans->Position, TargetEntityID, Target);
 
-        RefreshPathToTarget(EM, EntityID, Map, Target,
-                            Path->RequestedIgnoreEntityID,
-                            AvoidDynamicEntityID);
+        RequestMovementPath(
+            EM,
+            EntityID,
+            Map,
+            Target,
+            Path->RequestedIgnoreEntityID,
+            AvoidDynamicEntityID);
         if (auto* RefreshedPath = EM.GetComponent<PathfindingComponent>(EntityID))
         {
             RefreshedPath->RequestedDestination = FinalDestination;
@@ -935,10 +1013,10 @@ namespace
                                     const Game::Map::GameMap* Map)
     {
         const auto RefreshAndRestartWaypointTracking =
-            [&](bool UseEdgeTarget)
+            [&](bool UseEdgeTarget, int AvoidEntityID = -1)
             {
                 const bool Refreshed = RefreshPathForCurrentRequest(
-                    EM, EntityID, Map, UseEdgeTarget);
+                    EM, EntityID, Map, UseEdgeTarget, AvoidEntityID);
                 if (Refreshed)
                 {
                     // The replacement route has a different first waypoint.
@@ -952,9 +1030,32 @@ namespace
 
         if (Path.RepathFailCount == 0)
         {
+            // Capture the exact blocker before RequestMovementPath clears the
+            // transient collision field.  Passing it as an avoid target asks
+            // A* for a strict route around its DAT rectangle; it does not
+            // alter the command's interaction ignore or permit pass-through.
+            const int ExactStaticBlockerID =
+                Path.BlockedByEntityID >= 0 &&
+                IsStaticGroundBlocker(EM, Path.BlockedByEntityID)
+                    ? Path.BlockedByEntityID
+                    : -1;
             Path.RepathFailCount = 1;
             Path.LastRepathTime = 0.0f;
-            return RefreshAndRestartWaypointTracking(false);
+            const bool Refreshed = RefreshAndRestartWaypointTracking(
+                false, ExactStaticBlockerID);
+            if (!Refreshed && ExactStaticBlockerID >= 0)
+            {
+                // A strict raster can legitimately seal every exit from the
+                // current tile (notably a worker already touching a mineral in
+                // a one-tile lane). Do not let the owning system immediately
+                // rebuild the same known-colliding straight path. Preserve the
+                // blocker after marking the destination failed so harvesting
+                // can adopt that live patch or choose another resource.
+                MarkMoveTargetFailed(Path);
+                Path.BlockedByEntityID = ExactStaticBlockerID;
+                Path.RepathFailCount = 0;
+            }
+            return Refreshed;
         }
         if (Path.RepathFailCount == 1)
         {
@@ -1123,12 +1224,10 @@ void MovementSystem::Update(float DeltaTime)
         {
             if (BlockerID == ID || !IsStaticGroundBlocker(EM, BlockerID))
                 continue;
-            // Harvest and construction deliberately path into their current
-            // resource depot/building.  ResolveStaticBlockers already honors
-            // this exception; the repulse field must honor it as well or the
-            // worker is pushed back out every frame and can never reach the
-            // delivery/work contact point.
-            if (BlockerID == PathA->RequestedIgnoreEntityID)
+            // Keep repulsion consistent with the hard-collision exception.
+            // A planning-only target ignore must never become a physical
+            // pass-through here.
+            if (ShouldIgnoreStaticBlockerAtRuntime(EM, ID, BlockerID))
                 continue;
 
             auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
@@ -1248,7 +1347,7 @@ void MovementSystem::Update(float DeltaTime)
                     if (Dist > 32.0f)
                     {
                         Cmd->TargetPosition = TTrans->Position;
-                        RefreshPathToTarget(EM, ID, mMap, TTrans->Position);
+                        RefreshPathForCurrentRequest(EM, ID, mMap, false);
                     }
                 }
             }
@@ -1262,7 +1361,6 @@ void MovementSystem::Update(float DeltaTime)
                  Cmd->CurrentCommand == CommandType::AttackMove ||
                   Cmd->CurrentCommand == CommandType::Follow ||
                   Cmd->CurrentCommand == CommandType::Build ||
-                  Cmd->CurrentCommand == CommandType::Repair ||
                   Cmd->CurrentCommand == CommandType::Harvest) &&
                 !RecentlyFailedCurrentRequest(*PathComp) &&
                 Trans->Position.DistanceTo(PathComp->RequestedDestination) >
@@ -1271,8 +1369,27 @@ void MovementSystem::Update(float DeltaTime)
                 if (RefreshPathForCurrentRequest(EM, ID, mMap, false))
                     continue;
                 MarkMoveTargetFailed(*PathComp);
-                if (Cmd && Cmd->HasPendingOrders())
+                if (Cmd && Cmd->HasPendingOrders() &&
+                    Cmd->CurrentCommand != CommandType::Build)
                     CommandSystem::AdvanceQueue(EM, ID);
+                continue;
+            }
+
+            // Repair owns its entity-target approach in CommandSystem. Reaching
+            // one local path leg is not completion: the target may have moved,
+            // and distance must be measured from its current footprint.
+            if (Cmd && Cmd->CurrentCommand == CommandType::Repair)
+            {
+                ClearMotion(*PathComp);
+                continue;
+            }
+
+            // BuildingSystem owns the exact footprint-distance check and the
+            // retry/cancel policy for construction approaches. Reaching a local
+            // path endpoint must not consume the Build order first.
+            if (Cmd && Cmd->CurrentCommand == CommandType::Build)
+            {
+                ClearMotion(*PathComp);
                 continue;
             }
 
@@ -1379,6 +1496,10 @@ void MovementSystem::Update(float DeltaTime)
                 const float OldDistance = Dist;
                 Core::Math::Vec2 Proposed = ResolveStaticBlockers(
                     EM, ID, Waypoint, MoveDir, PathComp->IsAir);
+                const bool EscapingStaticOverlap =
+                    !IsActiveHarvester(EM, ID) &&
+                    IsEmbeddedInStaticBlocker(
+                        EM, ID, PathComp->BlockedByEntityID, Trans->Position);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveDynamicUnitBlockers(
@@ -1387,7 +1508,8 @@ void MovementSystem::Update(float DeltaTime)
                     EM, ID, Proposed, MoveDir, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
-                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
+                if (!EscapingStaticOverlap)
+                    Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, MoveDir, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
@@ -1409,7 +1531,7 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
-                    LogMovementStall(ID, *Trans, *PathComp, "waypoint");
+                    LogMovementStall(EM, ID, *Trans, *PathComp, "waypoint");
                     if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
                     {
                         const int AvoidEntityID = PathComp->BlockedByEntityID;
@@ -1450,6 +1572,10 @@ void MovementSystem::Update(float DeltaTime)
                 Core::Math::Vec2 Proposed = Trans->Position + ActualMove * MoveAmount;
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, ActualMove, PathComp->IsAir);
+                const bool EscapingStaticOverlap =
+                    !IsActiveHarvester(EM, ID) &&
+                    IsEmbeddedInStaticBlocker(
+                        EM, ID, PathComp->BlockedByEntityID, Trans->Position);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
                 Proposed = ResolveDynamicUnitBlockers(
@@ -1458,7 +1584,8 @@ void MovementSystem::Update(float DeltaTime)
                     EM, ID, Proposed, ActualMove, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
                     MovingRadius, PathComp->IsAir);
-                Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
+                if (!EscapingStaticOverlap)
+                    Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, MoveDir, PathComp->IsAir);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
@@ -1480,7 +1607,7 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
-                    LogMovementStall(ID, *Trans, *PathComp, "segment");
+                    LogMovementStall(EM, ID, *Trans, *PathComp, "segment");
                     if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
                     {
                         const int AvoidEntityID = PathComp->BlockedByEntityID;
@@ -1514,23 +1641,38 @@ void MovementSystem::Update(float DeltaTime)
             const bool NeedsContinuation =
                 Trans->Position.DistanceTo(PathComp->RequestedDestination) >
                 std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp));
+            const int FailedStaticBlockerID =
+                PathComp->HasRecentMoveFailure &&
+                PathComp->BlockedByEntityID >= 0 &&
+                IsStaticGroundBlocker(EM, PathComp->BlockedByEntityID)
+                    ? PathComp->BlockedByEntityID
+                    : -1;
             ClearMotion(*PathComp);
+            if (FailedStaticBlockerID >= 0)
+                PathComp->BlockedByEntityID = FailedStaticBlockerID;
             if (NeedsContinuation &&
                 Cmd &&
                 (Cmd->CurrentCommand == CommandType::Move ||
                  Cmd->CurrentCommand == CommandType::AttackMove ||
                   Cmd->CurrentCommand == CommandType::Follow ||
                   Cmd->CurrentCommand == CommandType::Build ||
-                  Cmd->CurrentCommand == CommandType::Repair ||
                   Cmd->CurrentCommand == CommandType::Harvest) &&
                 !RecentlyFailedCurrentRequest(*PathComp))
             {
                 if (!RefreshPathForCurrentRequest(EM, ID, mMap, false))
                 {
                     MarkMoveTargetFailed(*PathComp);
-                    if (Cmd->HasPendingOrders())
+                    if (Cmd->HasPendingOrders() &&
+                        Cmd->CurrentCommand != CommandType::Build)
                         CommandSystem::AdvanceQueue(EM, ID);
                 }
+            }
+            else if (Cmd &&
+                     (Cmd->CurrentCommand == CommandType::Repair ||
+                      Cmd->CurrentCommand == CommandType::Build))
+            {
+                // Repair and construction systems consume their own approach
+                // orders after checking the live target footprint.
             }
             else if (Cmd && Cmd->HasPendingOrders())
                 CommandSystem::AdvanceQueue(EM, ID);

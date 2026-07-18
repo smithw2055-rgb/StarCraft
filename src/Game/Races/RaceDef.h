@@ -46,11 +46,28 @@ struct UnitDef
     float SplashRadius = 0.0f;
 
     std::vector<int> RequiredBuildings;  // building UnitDef IDs required
-    int ProducedBy = -1;                  // building UnitDef ID that produces this
+    int ProducedBy = -1;                  // producer UnitDef ID (building or morph source)
     int ChkUnitID = 0;
     int DefaultIconIndex = -1;
     bool IsAddon = false;
     int AddonOnBuildingDefID = -1;
+
+    // Weapon values mirror weapons.dat on a per-hit basis.  The target-specific
+    // cooldowns are expressed in seconds; zero keeps the legacy AttackCooldown
+    // fallback for definitions that have not been calibrated yet.
+    int GroundDamageBonus = 0;
+    int AirDamageBonus = 0;
+    int GroundHitCount = 1;
+    int AirHitCount = 1;
+    float GroundAttackCooldown = 0.0f;
+    float AirAttackCooldown = 0.0f;
+    float SplashInnerRadius = 0.0f;
+    float SplashMediumRadius = 0.0f;
+    bool SelfDestructOnAttack = false;
+    // Appended after the legacy aggregate-initialized prefix so existing unit
+    // table rows keep their original field alignment.
+    float GroundAttackRange = 0.0f;
+    float AirAttackRange = 0.0f;
 };
 
 //
@@ -76,13 +93,25 @@ inline void ApplyCombatDefinition(Components::CombatComponent& Combat,
 {
     Combat.GroundDamage = Def.GroundDamage;
     Combat.AirDamage = Def.AirDamage;
+    Combat.GroundDamageBonus = Def.GroundDamageBonus;
+    Combat.AirDamageBonus = Def.AirDamageBonus;
+    Combat.GroundHitCount = Def.GroundHitCount;
+    Combat.AirHitCount = Def.AirHitCount;
     Combat.GroundDmgType = Def.GroundDmgType;
     Combat.AirDmgType = Def.AirDmgType;
     Combat.AttackRange = Def.AttackRange;
+    Combat.GroundAttackRange = Def.GroundAttackRange;
+    Combat.AirAttackRange = Def.AirAttackRange;
+    Combat.MinimumAttackRange = 0.0f;
     Combat.AttackCooldown = Def.AttackCooldown;
+    Combat.GroundAttackCooldown = Def.GroundAttackCooldown;
+    Combat.AirAttackCooldown = Def.AirAttackCooldown;
     Combat.WeaponBeh = Def.WeaponBeh;
     Combat.Splash = Def.Splash;
+    Combat.SplashInnerRadius = Def.SplashInnerRadius;
+    Combat.SplashMediumRadius = Def.SplashMediumRadius;
     Combat.SplashRadius = Def.SplashRadius;
+    Combat.SelfDestructOnAttack = Def.SelfDestructOnAttack;
     Combat.CanTargetGround = Def.GroundDamage > 0;
     Combat.CanTargetAir = Def.AirDamage > 0;
     Combat.MyElevation = IsAirUnit ? Components::Elevation::Air

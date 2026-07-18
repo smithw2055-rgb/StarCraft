@@ -31,7 +31,19 @@ namespace
     BuildingSystem::CollisionBoundsResolver gCollisionBoundsResolver;
     BuildingSystem::AddonOffsetResolver gAddonOffsetResolver;
     std::vector<BuildOrder> gPendingBuildOrders;
+    struct UnreachableBuildSite
+    {
+        int PlayerID = -1;
+        int BuildingDefID = -1;
+        Core::Math::Vec2 Position;
+        float RemainingSeconds = 0.0f;
+    };
+    std::vector<UnreachableBuildSite> gUnreachableBuildSites;
     constexpr uint32_t ProtossWarpAnchorImageID = 211;
+    constexpr int MaxPendingBuildApproachFailures = 8;
+    constexpr float MaxPendingBuildApproachSeconds = 180.0f;
+    constexpr float UnreachableBuildSiteCooldownSeconds = 90.0f;
+    constexpr float UnreachableBuilderCooldownSeconds = 30.0f;
 
     struct BuildingFootprintTiles
     {
@@ -455,6 +467,26 @@ namespace
                                int BuildingDefID,
                                int CandidateOffset = 0)
     {
+        const auto PreserveConstructionOrder = [&]()
+        {
+            auto* Command = EM.GetComponent<CommandComponent>(BuilderID);
+            if (!Command)
+                return;
+
+            // The path is calculated through the regular Move machinery, but
+            // ownership of its completion belongs to BuildingSystem.  Keep the
+            // rich order aligned with the legacy command so MovementSystem does
+            // not finish the approach as an ordinary move before the worker can
+            // start construction/morphing.
+            Command->CancelAll();
+            Order ConstructionOrder;
+            ConstructionOrder.Type = OrderType::Build;
+            ConstructionOrder.TargetPosition = BuildPosition;
+            ConstructionOrder.TargetEntityID = BuildingID;
+            ConstructionOrder.PathingIgnoreEntityID = BuildingID;
+            Command->QueueOrder(ConstructionOrder);
+        };
+
         std::vector<Core::Math::Vec2> Candidates;
         BuildConstructionApproachCandidates(
             Candidates, EM, BuilderID, BuildingID, BuildPosition, BuildingDefID);
@@ -462,27 +494,42 @@ namespace
         const size_t CandidateCount = Candidates.size();
         const size_t StartIndex = CandidateCount > 0
             ? (size_t)std::max(0, CandidateOffset) % CandidateCount : 0;
+        bool SkippedRecentCandidate = false;
         for (size_t Attempt = 0; Attempt < CandidateCount; ++Attempt)
         {
             const auto& Candidate = Candidates[(StartIndex + Attempt) % CandidateCount];
             if (IsRecentFailedMoveTarget(
                     EM.GetComponent<PathfindingComponent>(BuilderID), Candidate))
             {
+                SkippedRecentCandidate = true;
                 continue;
             }
             if (CommandSystem::IssueMoveAndHasPath(
                     EM, BuilderID, Candidate, BuildingID))
+            {
+                PreserveConstructionOrder();
                 return;
+            }
         }
 
-        if (auto* Path = EM.GetComponent<PathfindingComponent>(BuilderID))
-            Path->HasRecentMoveFailure = false;
-        for (size_t Attempt = 0; Attempt < CandidateCount; ++Attempt)
+        // Only perform the second pass when the first pass deliberately skipped
+        // a blacklisted candidate. If every candidate was actually searched and
+        // failed, repeating all of the same bounded A* requests is pure churn.
+        if (SkippedRecentCandidate)
         {
-            const auto& Candidate = Candidates[(StartIndex + Attempt) % CandidateCount];
-            if (CommandSystem::IssueMoveAndHasPath(
-                    EM, BuilderID, Candidate, BuildingID))
-                return;
+            if (auto* Path = EM.GetComponent<PathfindingComponent>(BuilderID))
+                Path->HasRecentMoveFailure = false;
+            for (size_t Attempt = 0; Attempt < CandidateCount; ++Attempt)
+            {
+                const auto& Candidate =
+                    Candidates[(StartIndex + Attempt) % CandidateCount];
+                if (CommandSystem::IssueMoveAndHasPath(
+                        EM, BuilderID, Candidate, BuildingID))
+                {
+                    PreserveConstructionOrder();
+                    return;
+                }
+            }
         }
 
         CommandSystem::IssueMove(
@@ -491,6 +538,7 @@ namespace
             ConstructionApproachPosition(
                 EM, BuilderID, BuildingID, BuildPosition, BuildingDefID),
             BuildingID);
+        PreserveConstructionOrder();
     }
 
     float DistanceToConstructionFootprint(Core::ECS::EntityManager& EM,
@@ -533,11 +581,20 @@ namespace
                              bool UnderConstruction)
     {
         Unit.ChkUnitID = Def.ChkUnitID;
-        Unit.HitPoints = UnderConstruction ? 1 : Def.HitPoints;
+        // Brood War creates an incomplete building at one tenth of its final
+        // vitality, then grows the remaining nine tenths over the authored
+        // construction time. This matters especially for a Drone that has
+        // just been consumed: the new Zerg structure must be targetable, but
+        // must not begin as an artificial one-hit building.
+        Unit.HitPoints = UnderConstruction
+            ? std::max(1, Def.HitPoints / 10)
+            : Def.HitPoints;
         Unit.MaxHitPoints = Def.HitPoints;
         Unit.UnitRace = Def.RaceType;
         Unit.SizeType = Def.SizeType;
-        Unit.ShieldPoints = UnderConstruction ? 0 : Def.ShieldPoints;
+        Unit.ShieldPoints = UnderConstruction
+            ? Def.ShieldPoints / 10
+            : Def.ShieldPoints;
         Unit.MaxShieldPoints = Def.ShieldPoints;
         Unit.EnergyPoints = UnderConstruction ? 0 : Def.EnergyPoints;
         Unit.MaxEnergyPoints = Def.EnergyPoints;
@@ -1064,6 +1121,15 @@ void BuildingSystem::SetMap(const Game::Map::GameMap* Map)
     gMap = Map;
 }
 
+void BuildingSystem::ResetPendingBuildOrders()
+{
+    // Pending orders reference entity ids and resource ledgers owned by one
+    // game session. Never carry them into a newly bootstrapped EntityManager,
+    // where ids can be reused for unrelated units.
+    gPendingBuildOrders.clear();
+    gUnreachableBuildSites.clear();
+}
+
 int BuildingSystem::CountPendingBuilds(int PlayerID, int BuildingDefID)
 {
     return (int)std::count_if(
@@ -1072,6 +1138,21 @@ int BuildingSystem::CountPendingBuilds(int PlayerID, int BuildingDefID)
         {
             return Order.Active && Order.PlayerID == PlayerID &&
                    Order.BuildingDefID == BuildingDefID;
+        });
+}
+
+bool BuildingSystem::WasRecentlyUnreachable(
+    int PlayerID, int BuildingDefID, const Core::Math::Vec2& Position)
+{
+    constexpr float SameSiteRadius = 48.0f;
+    return std::any_of(
+        gUnreachableBuildSites.begin(), gUnreachableBuildSites.end(),
+        [PlayerID, BuildingDefID, &Position](const UnreachableBuildSite& Site)
+        {
+            return Site.RemainingSeconds > 0.0f &&
+                   Site.PlayerID == PlayerID &&
+                   Site.BuildingDefID == BuildingDefID &&
+                   Site.Position.DistanceTo(Position) <= SameSiteRadius;
         });
 }
 
@@ -1196,17 +1277,21 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
             return false;
         }
     }
+    else if (!Def.IsAddon &&
+             IsBuilderAssignedToActiveConstruction(
+                 const_cast<Core::ECS::EntityManager&>(EM), BuilderID))
+    {
+        SetReason(OutReason, "builder is already assigned to another building");
+        return false;
+    }
     else if (Def.RaceType == Race::Terran && BuilderDefID != Races::GetUnitDefID("SCV"))
     {
         SetReason(OutReason, "only SCV can place Terran buildings");
         return false;
     }
-    else if (((Def.RaceType == Race::Terran && !Def.IsAddon) ||
-              Def.RaceType == Race::Protoss) &&
-             IsBuilderAssignedToActiveConstruction(
-                 const_cast<Core::ECS::EntityManager&>(EM), BuilderID))
+    else if (Def.RaceType == Race::Zerg && BuilderDefID != Races::GetUnitDefID("Drone"))
     {
-        SetReason(OutReason, "builder is already assigned to another building");
+        SetReason(OutReason, "only Drone can place Zerg buildings");
         return false;
     }
     else if (Def.RaceType == Race::Protoss && BuilderDefID != Races::GetUnitDefID("Probe"))
@@ -1317,8 +1402,7 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
     Resources.Minerals -= Def.MineralCost;
     Resources.VespeneGas -= Def.GasCost;
 
-    if ((Def.RaceType == Components::Race::Terran && !Def.IsAddon) ||
-        Def.RaceType == Components::Race::Protoss)
+    if (!Def.IsAddon)
     {
         BuildOrder Order;
         Order.Active = true;
@@ -1342,7 +1426,9 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
             "BuildingSystem",
             std::string(Def.RaceType == Components::Race::Protoss
                             ? "Probe moving to warp "
-                            : "SCV moving to build ") +
+                            : Def.RaceType == Components::Race::Zerg
+                                ? "Drone moving to morph "
+                                : "SCV moving to build ") +
             Def.Name + " at (" +
             std::to_string((int)BuildPosition.X) + "," +
             std::to_string((int)BuildPosition.Y) + ")");
@@ -1472,6 +1558,17 @@ void BuildingSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f)
         return;
 
+    for (auto& Site : gUnreachableBuildSites)
+        Site.RemainingSeconds -= DeltaTime;
+    gUnreachableBuildSites.erase(
+        std::remove_if(
+            gUnreachableBuildSites.begin(), gUnreachableBuildSites.end(),
+            [](const UnreachableBuildSite& Site)
+            {
+                return Site.RemainingSeconds <= 0.0f;
+            }),
+        gUnreachableBuildSites.end());
+
     auto& EM = mSystemMgr.GetEntityManager();
     ProcessPendingBuildOrders(EM, DeltaTime);
     auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
@@ -1492,7 +1589,7 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
             continue;
 
         const auto Def = Races::GetUnitDefByID(Order.BuildingDefID);
-        auto RefundAndCancel = [&]()
+        auto RefundAndCancel = [&](bool ReleaseBuilderState = true)
         {
             if (Order.PlayerID >= 0)
             {
@@ -1500,11 +1597,29 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                 Resources.Minerals += Def.MineralCost;
                 Resources.VespeneGas += Def.GasCost;
             }
+            if (ReleaseBuilderState && EM.IsAlive(Order.BuilderID))
+            {
+                if (auto* Command = EM.GetComponent<CommandComponent>(Order.BuilderID))
+                {
+                    Command->CancelAll();
+                    Command->TargetEntityID = -1;
+                }
+                if (auto* Path = EM.GetComponent<PathfindingComponent>(Order.BuilderID))
+                {
+                    Path->Path.clear();
+                    Path->PathIndex = 0;
+                    Path->CurrentSpeed = 0.0f;
+                    Path->TargetSpeed = 0.0f;
+                    Path->CurrentVelocity = {0.0f, 0.0f};
+                    Path->RequestedTargetEntityID = -1;
+                }
+            }
             Order.Active = false;
         };
 
         auto* BuilderTransform = EM.GetComponent<TransformComponent>(Order.BuilderID);
         auto* BuilderUnit = EM.GetComponent<UnitComponent>(Order.BuilderID);
+        auto* BuilderPlayer = EM.GetComponent<PlayerComponent>(Order.BuilderID);
         if (!EM.IsAlive(Order.BuilderID) || !BuilderTransform || !BuilderUnit ||
             BuilderUnit->HitPoints <= 0)
         {
@@ -1512,6 +1627,34 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                 "BuildingSystem", "Cancelled pending " + Def.Name +
                 ": builder unavailable");
             RefundAndCancel();
+            continue;
+        }
+
+        if (!BuilderPlayer || BuilderPlayer->PlayerID != Order.PlayerID)
+        {
+            Core::Utils::Logger::Info(
+                "BuildingSystem", "Cancelled pending " + Def.Name +
+                ": builder ownership changed");
+            const auto* BuilderCommand =
+                EM.GetComponent<CommandComponent>(Order.BuilderID);
+            // Clear only the stale construction approach. If the ownership
+            // transfer already installed a newer command, preserve it.
+            RefundAndCancel(
+                !BuilderCommand ||
+                BuilderCommand->CurrentCommand == CommandType::Build);
+            continue;
+        }
+
+        if (const auto* BuilderCommand =
+                EM.GetComponent<CommandComponent>(Order.BuilderID);
+            BuilderCommand &&
+            BuilderCommand->CurrentCommand != CommandType::Build)
+        {
+            Core::Utils::Logger::Info(
+                "BuildingSystem", "Cancelled pending " + Def.Name +
+                ": builder received a replacement command");
+            // Preserve the user's newer Move/Stop/Harvest order and path.
+            RefundAndCancel(false);
             continue;
         }
 
@@ -1523,12 +1666,14 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
         if (Distance > BuilderRadius + 12.0f)
         {
             Order.ApproachSeconds += DeltaTime;
+            Order.TotalApproachSeconds += DeltaTime;
             if (!Order.HasBestFootprintDistance ||
                 Distance < Order.BestFootprintDistance - 2.0f)
             {
                 Order.BestFootprintDistance = Distance;
                 Order.HasBestFootprintDistance = true;
                 Order.NoProgressSeconds = 0.0f;
+                Order.ConsecutiveApproachFailures = 0;
             }
             else
             {
@@ -1536,10 +1681,43 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
             }
 
             auto* Path = EM.GetComponent<PathfindingComponent>(Order.BuilderID);
-            if (IsMoveSettled(Path) || Order.NoProgressSeconds >= 4.0f ||
-                Order.ApproachSeconds >= 10.0f)
+            const bool MoveSettled = IsMoveSettled(Path);
+            const bool SettledRetryReady =
+                MoveSettled && Order.ApproachSeconds >= 2.0f;
+            const bool MadeNoProgress = Order.NoProgressSeconds >= 4.0f;
+            const bool RefreshApproach = Order.ApproachSeconds >= 10.0f;
+            if (SettledRetryReady || MadeNoProgress || RefreshApproach)
             {
                 ++Order.ApproachAttempt;
+                if (SettledRetryReady || MadeNoProgress)
+                    ++Order.ConsecutiveApproachFailures;
+
+                if (Order.ConsecutiveApproachFailures >=
+                        MaxPendingBuildApproachFailures ||
+                    Order.TotalApproachSeconds >=
+                        MaxPendingBuildApproachSeconds)
+                {
+                    gUnreachableBuildSites.push_back({
+                        Order.PlayerID,
+                        Order.BuildingDefID,
+                        Order.Position,
+                        UnreachableBuildSiteCooldownSeconds});
+                    if (auto* FailedPath =
+                            EM.GetComponent<PathfindingComponent>(Order.BuilderID))
+                    {
+                        FailedPath->HasRecentMoveFailure = true;
+                        FailedPath->RecentFailedMoveTarget = Order.Position;
+                        FailedPath->RecentMoveFailureCooldown =
+                            UnreachableBuilderCooldownSeconds;
+                    }
+                    Core::Utils::Logger::Info(
+                        "BuildingSystem", "Cancelled pending " + Def.Name +
+                        ": builder could not reach footprint after " +
+                        std::to_string(Order.ApproachAttempt) + " attempts");
+                    RefundAndCancel();
+                    continue;
+                }
+
                 IssueConstructionMove(
                     EM, Order.BuilderID, -1, Order.Position,
                     Order.BuildingDefID, Order.ApproachAttempt);
@@ -1561,17 +1739,46 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
         if (IsGasBuildingDefID(Order.BuildingDefID) &&
             Order.Target.Type == BuildTargetType::TargetEntity)
         {
-            EntityID = ClaimRefineryTarget(
-                EM, Order.BuilderID, Order.BuildingDefID,
-                Order.Target.TargetEntityID, Order.PlayerID);
+            const int TargetID = Order.Target.TargetEntityID;
+            const auto* TargetResource =
+                EM.GetComponent<ResourceComponent>(TargetID);
+            const auto* TargetBuilding =
+                EM.GetComponent<BuildingComponent>(TargetID);
+            const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+            const auto* Claimed =
+                EM.GetComponent<ClaimedGeyserComponent>(TargetID);
+            const int TargetDefID = ResolveDefID(EM, TargetID);
+            const bool GeyserStillAvailable =
+                EM.IsAlive(TargetID) && TargetResource && TargetBuilding &&
+                TargetUnit && TargetResource->Type == ResourceType::VespeneGas &&
+                !IsGasBuildingDefID(TargetDefID) &&
+                (!Claimed || !Claimed->IsClaimed);
+            if (GeyserStillAvailable)
+            {
+                EntityID = ClaimRefineryTarget(
+                    EM, Order.BuilderID, Order.BuildingDefID,
+                    TargetID, Order.PlayerID);
+            }
         }
-        else if (IsFootprintPlacementValid(
-                     EM, Order.BuildingDefID, Order.Position,
-                     Order.BuilderID))
+        else
         {
-            EntityID = CreateBuildingEntity(
-                EM, Order.BuildingDefID, Order.Position, Order.PlayerID,
-                true, Order.BuilderID, -1);
+            const bool HasRequiredPower =
+                !Def.RequiresPylon ||
+                HasPylonPowerAtPosition(
+                    EM, Order.Position, Order.PlayerID);
+            const bool HasRequiredCreep =
+                !Def.RequiresCreep ||
+                HasCreepAcrossFootprint(
+                    Order.BuildingDefID, Order.Position);
+            if (HasRequiredPower && HasRequiredCreep &&
+                IsFootprintPlacementValid(
+                    EM, Order.BuildingDefID, Order.Position,
+                    Order.BuilderID))
+            {
+                EntityID = CreateBuildingEntity(
+                    EM, Order.BuildingDefID, Order.Position, Order.PlayerID,
+                    true, Order.BuilderID, -1);
+            }
         }
 
         if (EntityID < 0)
@@ -1592,7 +1799,7 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                 Building->BuilderUnitID = -1;
             if (auto* Command = EM.GetComponent<CommandComponent>(Order.BuilderID))
             {
-                Command->CurrentCommand = CommandType::Stop;
+                Command->CancelAll();
                 Command->TargetEntityID = -1;
             }
             if (auto* Path = EM.GetComponent<PathfindingComponent>(Order.BuilderID))
@@ -1604,6 +1811,19 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                 Path->CurrentVelocity = {0.0f, 0.0f};
                 Path->RequestedTargetEntityID = -1;
             }
+        }
+        else if (Def.RaceType == Components::Race::Zerg)
+        {
+            // A Drone is the seed of a Zerg structure. Keep it as a normal,
+            // targetable moving unit until it actually reaches the requested
+            // footprint; only a successful placement consumes it and begins
+            // the autonomous morph.
+            if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
+                Building->BuilderUnitID = -1;
+            auto& Resources = HarvestSystem::GetResources(Order.PlayerID);
+            Resources.SupplyUsed = std::max(
+                0, Resources.SupplyUsed - std::max(0, BuilderUnit->SupplyCost));
+            EM.DestroyEntity(Order.BuilderID);
         }
         else if (auto* Command = EM.GetComponent<CommandComponent>(Order.BuilderID))
         {
@@ -1617,7 +1837,9 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
             "BuildingSystem",
             std::string(Def.RaceType == Components::Race::Protoss
                             ? "Started warp-in after Probe arrival: "
-                            : "Started building after SCV arrival: ") +
+                            : Def.RaceType == Components::Race::Zerg
+                                ? "Started morph after Drone arrival: "
+                                : "Started building after SCV arrival: ") +
             Def.Name + " at (" + std::to_string((int)Order.Position.X) +
             "," + std::to_string((int)Order.Position.Y) + ")");
     }
@@ -1972,9 +2194,34 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
 
     if (BuilderNearby)
     {
-        Building->BuildProgress += DeltaTime * (float)std::max(1, NearbyBuilderCount);
-        int MaxHP = Unit->MaxHitPoints;
-        Unit->HitPoints = std::max(1, (int)(MaxHP * (Building->BuildProgress / Building->TotalBuildTime)));
+        const float PreviousProgress = std::clamp(
+            Building->BuildProgress, 0.0f, Building->TotalBuildTime);
+        Building->BuildProgress = std::min(
+            Building->TotalBuildTime,
+            PreviousProgress +
+                DeltaTime * (float)std::max(1, NearbyBuilderCount));
+        const float ProgressDelta = Building->TotalBuildTime > 0.0f
+            ? (Building->BuildProgress - PreviousProgress) /
+                  Building->TotalBuildTime
+            : 1.0f;
+        const int MaxHP = Unit->MaxHitPoints;
+        const int InitialHP = std::max(1, MaxHP / 10);
+        Building->ConstructionHitPointAccumulator +=
+            (float)(MaxHP - InitialHP) * ProgressDelta;
+        const int HitPointGain =
+            (int)Building->ConstructionHitPointAccumulator;
+        Building->ConstructionHitPointAccumulator -= (float)HitPointGain;
+        Unit->HitPoints = std::clamp(
+            Unit->HitPoints + HitPointGain, 1, MaxHP);
+        const int MaxShields = Unit->MaxShieldPoints;
+        const int InitialShields = MaxShields / 10;
+        Building->ConstructionShieldAccumulator +=
+            (float)(MaxShields - InitialShields) * ProgressDelta;
+        const int ShieldGain = (int)Building->ConstructionShieldAccumulator;
+        Building->ConstructionShieldAccumulator -= (float)ShieldGain;
+        Unit->ShieldPoints = std::clamp(
+            Unit->ShieldPoints + ShieldGain,
+            0, MaxShields);
     }
 
     // OpenBW's Terran IncompleteBuilding order replaces the generic
@@ -2020,10 +2267,24 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
         return;
     }
 
+    // Round the final fractional construction point to the nearest whole
+    // point. Floating-point progress can leave a tiny positive residue even
+    // when the full integer vitality budget was already granted; treating any
+    // residue as +1 would heal one point of combat damage on completion.
+    if (Building->ConstructionHitPointAccumulator >= 0.5f)
+    {
+        Unit->HitPoints = std::min(Unit->MaxHitPoints, Unit->HitPoints + 1);
+    }
+    Building->ConstructionHitPointAccumulator = 0.0f;
+    if (Building->ConstructionShieldAccumulator >= 0.5f)
+    {
+        Unit->ShieldPoints = std::min(Unit->MaxShieldPoints,
+                                      Unit->ShieldPoints + 1);
+    }
+    Building->ConstructionShieldAccumulator = 0.0f;
+
     Building->UnderConstruction = false;
     Building->BuildProgress = Building->TotalBuildTime;
-    Unit->HitPoints = Unit->MaxHitPoints;
-    Unit->ShieldPoints = Unit->MaxShieldPoints;
     Unit->EnergyPoints = Unit->MaxEnergyPoints;
 
     if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
@@ -2056,7 +2317,7 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     {
         if (auto* BuilderCommand = EM.GetComponent<CommandComponent>(BuilderID))
         {
-            BuilderCommand->CurrentCommand = CommandType::Stop;
+            BuilderCommand->CancelAll();
             BuilderCommand->TargetEntityID = -1;
         }
     }

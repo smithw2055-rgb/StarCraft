@@ -2,6 +2,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Game/Components.h"
+#include "Game/IScriptVM.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -17,6 +18,7 @@ namespace Game::Systems
 void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
                                int,
                                const Game::Components::CombatComponent&,
+                               int,
                                int,
                                int)
 {
@@ -102,8 +104,47 @@ int main()
     Render.Flipped = true;
     Render.Tint = Core::Color(200, 220, 255, 210);
 
+    const int HallucinationTarget = EM.CreateEntity();
+    auto& TargetTransform =
+        EM.AddComponent<Game::Components::TransformComponent>(HallucinationTarget);
+    TargetTransform.Position = {256.0f, 128.0f};
+    auto& TargetUnit =
+        EM.AddComponent<Game::Components::UnitComponent>(HallucinationTarget);
+    const auto DragoonDef = Game::Races::GetUnitDefByID(
+        Game::Races::GetUnitDefID("Dragoon"));
+    TargetUnit.ChkUnitID = DragoonDef.ChkUnitID;
+    TargetUnit.UnitRace = DragoonDef.RaceType;
+    TargetUnit.HitPoints = 31;
+    TargetUnit.MaxHitPoints = DragoonDef.HitPoints;
+    TargetUnit.ShieldPoints = 17;
+    TargetUnit.MaxShieldPoints = DragoonDef.ShieldPoints;
+    TargetUnit.Armor = DragoonDef.Armor;
+    TargetUnit.EnergyPoints = 40;
+    TargetUnit.MaxEnergyPoints = 200;
+    TargetUnit.SupplyCost = DragoonDef.SupplyCost;
+    auto& TargetPlayer =
+        EM.AddComponent<Game::Components::PlayerComponent>(HallucinationTarget);
+    TargetPlayer = Player;
+    auto& TargetRender =
+        EM.AddComponent<Game::Components::RenderComponent>(HallucinationTarget);
+    TargetRender.ImageID = 789;
+    TargetRender.SubunitImageID = 987;
+    TargetRender.FrameIndex = 3;
+    TargetRender.TotalFrames = 9;
+    auto& TargetPath =
+        EM.AddComponent<Game::Components::PathfindingComponent>(HallucinationTarget);
+    TargetPath.TargetSpeed = 75.0f;
+    TargetPath.CurrentSpeed = 25.0f;
+    TargetPath.CollisionRadius = 12;
+    auto& TargetCombat =
+        EM.AddComponent<Game::Components::CombatComponent>(HallucinationTarget);
+    TargetCombat.GroundDamage = 20;
+    TargetCombat.AttackRange = 128.0f;
+    TargetCombat.TargetEntityID = Caster;
+
     Require(Game::Systems::SpellSystem::CastSpell(
-                EM, Caster, Game::Systems::SpellType::Hallucination),
+                EM, Caster, Game::Systems::SpellType::Hallucination,
+                HallucinationTarget),
             "hallucination can be cast by an energized caster");
 
     auto* CasterUnit = EM.GetComponent<Game::Components::UnitComponent>(Caster);
@@ -122,7 +163,7 @@ int main()
                                            Game::Components::UnitComponent,
                                            Game::Components::TransformComponent>())
     {
-        if (EntityID == Caster)
+        if (EntityID == Caster || EntityID == HallucinationTarget)
             continue;
 
         auto* Status = EM.GetComponent<Game::Components::StatusEffectComponent>(EntityID);
@@ -133,27 +174,75 @@ int main()
 
         Require(Status && Status->HasEffect(Game::Components::StatusEffect::Hallucination),
                 "illusion carries hallucination visual status");
-        Require(IllusionRender && IllusionRender->ImageID == Render.ImageID &&
-                    IllusionRender->SubunitImageID == Render.SubunitImageID &&
-                    IllusionRender->FrameIndex == Render.FrameIndex &&
-                    IllusionRender->Flipped == Render.Flipped,
-                "illusion copies the caster render state for sprite effect rendering");
+        Require(IllusionRender && IllusionRender->ImageID == TargetRender.ImageID &&
+                    IllusionRender->SubunitImageID == TargetRender.SubunitImageID &&
+                    IllusionRender->FrameIndex == TargetRender.FrameIndex,
+                "illusion copies the selected target render state");
         Require(IllusionPlayer && IllusionPlayer->PlayerID == Player.PlayerID,
                 "illusion keeps the caster player identity");
-        Require(IllusionUnit && IllusionUnit->ChkUnitID == Unit.ChkUnitID &&
-                    IllusionUnit->HitPoints == 1 &&
-                    IllusionUnit->MaxHitPoints == 1,
-                "illusion keeps unit identity but has illusion hit points");
+        Require(IllusionUnit && IllusionUnit->ChkUnitID == TargetUnit.ChkUnitID &&
+                    IllusionUnit->HitPoints == TargetUnit.MaxHitPoints &&
+                    IllusionUnit->ShieldPoints == TargetUnit.MaxShieldPoints &&
+                    IllusionUnit->Armor == TargetUnit.Armor &&
+                    IllusionUnit->EnergyPoints == 0 &&
+                    IllusionUnit->SupplyCost == 0,
+                "illusion copies target identity and starts at full vitality without spell energy");
+        auto* IllusionPath =
+            EM.GetComponent<Game::Components::PathfindingComponent>(EntityID);
+        auto* IllusionCombat =
+            EM.GetComponent<Game::Components::CombatComponent>(EntityID);
+        Require(IllusionPath && IllusionPath->CollisionRadius == TargetPath.CollisionRadius &&
+                    IllusionPath->CurrentSpeed == 0.0f && IllusionPath->Path.empty(),
+                "illusion copies collision data but starts stationary");
+        Require(IllusionCombat &&
+                    IllusionCombat->GroundDamage == TargetCombat.GroundDamage &&
+                    IllusionCombat->TargetEntityID == -1,
+                "illusion copies weapon data without transient targets");
         Require(IllusionTrans &&
-                    IllusionTrans->Position.Y == 96.0f &&
-                    (IllusionTrans->Position.X == 96.0f ||
-                     IllusionTrans->Position.X == 160.0f),
-                "illusion is spawned at the expected visual offset");
+                    IllusionTrans->Position.Y == TargetTransform.Position.Y &&
+                    (IllusionTrans->Position.X == TargetTransform.Position.X - 32.0f ||
+                     IllusionTrans->Position.X == TargetTransform.Position.X + 32.0f),
+                "illusion is spawned around the selected target");
 
         IllusionCount++;
     }
 
     Require(IllusionCount == 2, "hallucination creates two renderable visual copies");
+
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, Caster, Game::Systems::SpellType::Hallucination),
+            "hallucination requires an explicit friendly unit target");
+
+    const int PlagueCaster =
+        CreateCaster(EM, 2, {2048.0f, 96.0f}, 200);
+    const int PlagueCornerTarget =
+        CreateUnit(EM, "Marine", 5, {2112.0f, 160.0f});
+    const int PlagueOutsideTarget =
+        CreateUnit(EM, "Marine", 5, {2113.0f, 96.0f});
+    const int PlagueInvincibleTarget =
+        CreateUnit(EM, "Marine", 5, {2080.0f, 96.0f});
+    EM.GetComponent<Game::Components::UnitComponent>(PlagueInvincibleTarget)->IsInvincible = true;
+    const int PlagueBurrowedTarget =
+        CreateUnit(EM, "Hydralisk", 5, {2016.0f, 96.0f});
+    auto& PlagueBurrow =
+        EM.AddComponent<Game::Components::BurrowComponent>(PlagueBurrowedTarget);
+    PlagueBurrow.IsBurrowed = true;
+    PlagueBurrow.Phase = Game::Components::BurrowPhase::Burrowed;
+
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, PlagueCaster, Game::Systems::SpellType::Plague,
+                -1, {2048.0f, 96.0f}),
+            "Plague can be cast at a ground position");
+    auto* CornerPlague =
+        EM.GetComponent<Game::Components::StatusEffectComponent>(PlagueCornerTarget);
+    Require(CornerPlague &&
+                CornerPlague->HasEffect(Game::Components::StatusEffect::Plague),
+            "Plague uses the classic 64-pixel square and includes its corner");
+    Require(!EM.GetComponent<Game::Components::StatusEffectComponent>(PlagueCaster) &&
+                !EM.GetComponent<Game::Components::StatusEffectComponent>(PlagueOutsideTarget) &&
+                !EM.GetComponent<Game::Components::StatusEffectComponent>(PlagueInvincibleTarget) &&
+                !EM.GetComponent<Game::Components::StatusEffectComponent>(PlagueBurrowedTarget),
+            "Plague excludes its caster, outside-square, invincible, and burrowed units");
 
     constexpr int BroodlingCasterPlayerID = 2;
     constexpr int BroodlingVictimPlayerID = 5;
@@ -166,6 +255,12 @@ int main()
         CreateCaster(EM, BroodlingCasterPlayerID, {256.0f, 96.0f}, 200);
     const int BroodlingVictim =
         CreateUnit(EM, "Marine", BroodlingVictimPlayerID, {288.0f, 96.0f});
+    const int MarineChkID = Game::Races::GetUnitDefByID(
+        Game::Races::GetUnitDefID("Marine")).ChkUnitID;
+    auto& BroodlingVictimRender =
+        EM.AddComponent<Game::Components::RenderComponent>(BroodlingVictim);
+    BroodlingVictimRender.ImageID = (uint32_t)MarineChkID;
+    BroodlingVictimRender.Layer = Game::Components::RenderLayer::Units;
 
     Require(Game::Systems::SpellSystem::CastSpell(
                 EM, BroodlingCaster, Game::Systems::SpellType::SpawnBroodling,
@@ -185,8 +280,6 @@ int main()
                 DeathRecord->AwardKill,
             "spell-driven unit death records trigger-visible death metadata");
     int DeathVisualCount = 0;
-    const int MarineChkID = Game::Races::GetUnitDefByID(
-        Game::Races::GetUnitDefID("Marine")).ChkUnitID;
     for (int EntityID : EM.GetEntitiesWith<Game::Components::EffectComponent,
                                            Game::Components::RenderComponent,
                                            Game::Components::TransformComponent,
@@ -211,14 +304,22 @@ int main()
         Require(DeathTrans->Position.X == 288.0f &&
                     DeathTrans->Position.Y == 96.0f,
             "death visual remains at the victim death position");
-        Require(DeathEffect->LifetimeRemaining > 0.0f,
-            "death visual has a finite effect lifetime");
-        Require(!EM.GetComponent<Game::Components::PlayerComponent>(EntityID),
-            "death visual is not counted as a live player-owned unit");
+        Require(DeathEffect->LifetimeRemaining > 0.0f &&
+                    DeathEffect->InitialAnimation ==
+                        Game::IScriptAnims::Anim_Death &&
+                    DeathEffect->DestroyWhenAnimationCompletes &&
+                    !EM.GetComponent<
+                        Game::Components::PathfindingComponent>(EntityID),
+            "death visual is a finite collision-free, IScript-driven effect");
+        const auto* DeathPlayer =
+            EM.GetComponent<Game::Components::PlayerComponent>(EntityID);
+        Require(DeathPlayer &&
+                    DeathPlayer->PlayerID == BroodlingVictimPlayerID,
+            "death visual preserves owner tint without becoming a live entity");
         ++DeathVisualCount;
     }
     Require(DeathVisualCount == 1,
-            "spell-driven unit death leaves one short-lived death visual");
+            "spell-driven unit death leaves one scripted death visual");
 
     const int BroodlingDefID = Game::Races::GetUnitDefID("Broodling");
     const auto BroodlingDef = Game::Races::GetUnitDefByID(BroodlingDefID);

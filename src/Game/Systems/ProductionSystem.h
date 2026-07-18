@@ -48,6 +48,8 @@ public:
                               int PlayerID);
 
 private:
+    void ProcessHangarProduction(Core::ECS::EntityManager& EM,
+                                 int EntityID, float DeltaTime);
     void ProcessTraining(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);
 
     static int SpawnUnit(Core::ECS::EntityManager& EM,

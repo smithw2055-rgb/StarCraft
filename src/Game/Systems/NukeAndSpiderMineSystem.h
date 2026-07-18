@@ -15,8 +15,9 @@ class NukeAndSpiderMineSystem : public Core::ECS::ISystem
 public:
     using ImageIDResolver = std::function<uint32_t(int ChkUnitID)>;
 
-    NukeAndSpiderMineSystem(Core::ECS::SystemManager& SysMgr, class BulletSystem& BulletSys)
-        : mSystemMgr(SysMgr), mBulletSystem(BulletSys) {}
+    NukeAndSpiderMineSystem(Core::ECS::SystemManager& SysMgr,
+                           class BulletSystem& BulletSys);
+    ~NukeAndSpiderMineSystem() override;
 
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "NukeAndSpiderMineSystem"; }
@@ -24,10 +25,11 @@ public:
     // The mine is created outside the normal production flow, so it needs the
     // same unit-id to image-id bridge as produced units and buildings.
     static void SetImageResolver(ImageIDResolver Resolver);
+    static bool PlaceSpiderMineForActiveSession(int VultureEntityID);
 
     void ArmNuke(int GhostEntityID, int SiloEntityID, const Core::Math::Vec2& TargetPos);
     void CancelNuke(int EntityID);
-    void PlaceSpiderMine(int VultureEntityID);
+    bool PlaceSpiderMine(int VultureEntityID);
     bool IsSpiderMineTriggered(int MineEntityID) const;
     void TriggerSpiderMine(int MineEntityID, int TargetEntityID);
 

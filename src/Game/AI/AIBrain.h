@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Game/AI/AIDifficulty.h"
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
 #include <vector>
@@ -9,6 +10,8 @@ namespace Game::Map { class GameMap; }
 
 namespace Game::Systems
 {
+
+class FogOfWarSystem;
 
 enum class AIStrategy : uint8_t
 {
@@ -23,7 +26,9 @@ class AIBrain : public Core::ECS::ISystem
 {
 public:
     AIBrain(Core::ECS::SystemManager& SysMgr, int AIPlayerID, int TargetPlayerID,
-            bool ShowcaseMode = false, const Game::Map::GameMap* Map = nullptr);
+            bool ShowcaseMode = false, const Game::Map::GameMap* Map = nullptr,
+            AIDifficulty Difficulty = AIDifficulty::Medium,
+            const FogOfWarSystem* Fog = nullptr);
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "AIBrain"; }
 
@@ -35,6 +40,22 @@ private:
         bool IsBuilding = false;
     };
 
+    struct EnemyIntel
+    {
+        int VisibleGroundCombat = 0;
+        int VisibleAirCombat = 0;
+        int VisibleWorkers = 0;
+        int VisibleBuildings = 0;
+        int VisibleDetectors = 0;
+        int VisibleCloaked = 0;
+        int KnownRace = -1;
+        bool HasSeenAir = false;
+        bool HasSeenDetector = false;
+        bool HasSeenCloak = false;
+        Core::Math::Vec2 LastSeenPosition;
+        float LastSeenSeconds = -1.0f;
+    };
+
     void RunTerranAI(Core::ECS::EntityManager& EM);
     void RunTerranShowcase(Core::ECS::EntityManager& EM);
     void RunZergAI(Core::ECS::EntityManager& EM);
@@ -44,14 +65,22 @@ private:
 
     void ManageEconomy(Core::ECS::EntityManager& EM);
     void ManageMilitary(Core::ECS::EntityManager& EM);
+    void RefreshEnemyIntel(Core::ECS::EntityManager& EM);
+    void ManageScouting(Core::ECS::EntityManager& EM);
+    void ManageUpgrades(Core::ECS::EntityManager& EM, int RaceValue);
+    void ManageCombatAbilities(Core::ECS::EntityManager& EM);
     bool DefendBaseIfNeeded(Core::ECS::EntityManager& EM);
     void ManageTerranRepairs(Core::ECS::EntityManager& EM);
     void SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize);
     void TrainWorkerIfNeeded(Core::ECS::EntityManager& EM, int ProducerDefID, int WorkerDefID, int MaxWorkers);
 
     Core::Math::Vec2 FindBaseLocation(Core::ECS::EntityManager& EM);
-    Core::Math::Vec2 FindEnemyBaseLocation(Core::ECS::EntityManager& EM);
-    bool HasLivingForces(Core::ECS::EntityManager& EM, int PlayerID) const;
+    Core::Math::Vec2 FindEnemyBaseLocation(Core::ECS::EntityManager& EM,
+                                            bool AdvanceSearchWaypoint = false);
+    void BuildEnemySearchWaypoints(Core::ECS::EntityManager& EM);
+    Core::Math::Vec2 SelectEnemySearchWaypoint(Core::ECS::EntityManager& EM,
+                                                bool AdvanceSearchWaypoint);
+    bool HasLivingStructures(Core::ECS::EntityManager& EM, int PlayerID) const;
     void RetargetIfNeeded(Core::ECS::EntityManager& EM);
     Core::Math::Vec2 FindExpansionLocation(Core::ECS::EntityManager& EM);
     int FindProducerFor(Core::ECS::EntityManager& EM, int UnitDefID);
@@ -83,6 +112,13 @@ private:
     int CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID,
                      bool IncludeUnderConstruction = false);
     int CountQueuedByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID) const;
+    int CountOwnedResourceDepots(Core::ECS::EntityManager& EM,
+                                 bool IncludeUnderConstruction = true) const;
+    bool TryStartResearch(Core::ECS::EntityManager& EM,
+                          const std::vector<int>& ResearchIDs,
+                          int MaxLevel);
+    bool IsVisibleToAI(const Core::Math::Vec2& Position, int EntityID,
+                       Core::ECS::EntityManager& EM) const;
     int GetRace(Core::ECS::EntityManager& EM);
     void BuildOrTrain(Core::ECS::EntityManager& EM, int DefID, const Core::Math::Vec2& NearPos);
 
@@ -99,20 +135,37 @@ private:
     Core::Math::Vec2 mEnemyBasePos;
     Core::Math::Vec2 mExpansionPos;
     bool mPositionsResolved = false;
-    bool mExpansionStarted = false;
+    float mLastExpansionOrderSeconds = -10000.0f;
     std::vector<BuildStep> mBuildQueue;
     int mBuildQueueIdx = 0;
     float mBuildTimer = 0.0f;
     AIStrategy mStrategy = AIStrategy::Balanced;
     bool mShowcaseMode = false;
     bool mDefendingBase = false;
+    AIDifficulty mDifficulty = AIDifficulty::Medium;
     const Game::Map::GameMap* mMap = nullptr;
+    const FogOfWarSystem* mFog = nullptr;
+    EnemyIntel mEnemyIntel;
+    int mScoutUnitID = -1;
+    float mLastScoutOrderSeconds = -10000.0f;
+    bool mOpeningScoutSent = false;
+    std::vector<Core::Math::Vec2> mEnemySearchWaypoints;
+    size_t mEnemySearchWaypointIndex = 0;
+    Core::Math::Vec2 mLastEnemySearchWaypoint;
+    bool mHasLastEnemySearchWaypoint = false;
+    bool mConfigurationLogged = false;
+    bool mEliminationLogged = false;
     bool mShowcaseCompleteLogged = false;
     bool mShowcaseStartedLogged = false;
+    int mBuildPlacementSerial = 0;
     std::vector<int> mShowcaseQueuedUnits;
     std::vector<int> mShowcaseRallyConfiguredBuildings;
     std::vector<int> mActiveAttackGroup;
     float mActiveAttackGroupAge = 0.0f;
+    int mLastAttackWaveSize = 0;
+    std::vector<int> mActiveDefenseGroup;
+    Core::Math::Vec2 mLastDefenseTarget;
+    bool mHasDefenseTarget = false;
 };
 
 } // namespace Game::Systems

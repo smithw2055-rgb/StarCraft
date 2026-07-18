@@ -8,6 +8,7 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace Game::Systems
 {
@@ -82,6 +83,59 @@ namespace
             Cmd->TargetPosition = {};
         }
     }
+
+    bool HasHallucinationStatus(Core::ECS::EntityManager& EM, int EntityID)
+    {
+        const auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+        return Status && Status->HasEffect(StatusEffect::Hallucination);
+    }
+
+    void ResetHallucinationPath(PathfindingComponent& Path,
+                                const Core::Math::Vec2& SpawnPosition)
+    {
+        Path.Path.clear();
+        Path.PathIndex = 0;
+        Path.RequestedDestination = SpawnPosition;
+        Path.RequestedTargetEntityID = -1;
+        Path.RequestedIgnoreEntityID = -1;
+        Path.RepathFailCount = 0;
+        Path.LastRepathTime = 0.0f;
+        Path.BlockedByEntityID = -1;
+        Path.CurrentVelocity = {};
+        Path.CurrentSpeed = 0.0f;
+        Path.TargetSpeed = 0.0f;
+        Path.RepulseVector = {};
+        Path.FriendlyYieldVector = {};
+        Path.FriendlyYieldAnchor = {};
+        Path.HasFriendlyYieldAnchor = false;
+        Path.HasRecentMoveFailure = false;
+        Path.RecentFailedMoveTarget = {};
+        Path.RecentMoveFailureCooldown = 0.0f;
+        Path.StallTimer = 0.0f;
+        Path.LastWaypointDistance = 0.0f;
+        Path.HasLastWaypointDistance = false;
+        Path.DestinationStallTimer = 0.0f;
+        Path.LastDestinationDistance = 0.0f;
+        Path.HasLastDestinationDistance = false;
+    }
+
+    void ResetHallucinationCombat(CombatComponent& Combat)
+    {
+        Combat.CooldownRemaining = 0.0f;
+        Combat.TargetEntityID = -1;
+        Combat.PendingAttackFrame = false;
+        Combat.PendingAttackTargetEntityID = -1;
+        Combat.PendingAttackTargetPos = {};
+        Combat.PendingAttackDamage = 0;
+        Combat.PendingAttackUpgradeBonus = 0;
+        Combat.PendingAttackHitCount = 1;
+        Combat.PendingAttackRangePixels = 0.0f;
+        Combat.PendingAttackElapsed = 0.0f;
+        Combat.PendingAttackMissedAtLaunch = false;
+        Combat.AutoTargetEntityID = -1;
+        Combat.LastDamagerEntityID = -1;
+        Combat.AutoTargetLockSeconds = 0.0f;
+    }
 }
 
 int SpellSystem::GetSpellEnergyCost(SpellType Spell)
@@ -137,6 +191,12 @@ bool SpellSystem::CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, Spell
         return false;
     }
 
+    if (HasHallucinationStatus(EM, CasterID))
+    {
+        if (OutReason) *OutReason = "hallucinations cannot cast spells";
+        return false;
+    }
+
     int EnergyCost = GetSpellEnergyCost(Spell);
     if (CasterUnit->EnergyPoints < EnergyCost)
     {
@@ -188,6 +248,27 @@ bool SpellSystem::CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, Spell
         if (TargetEntityID < 0 || !IsMechanicalLockdownTarget(EM, TargetEntityID))
         {
             if (OutReason) *OutReason = "lockdown requires a mechanical target";
+            return false;
+        }
+    }
+
+
+    if (Spell == SpellType::Hallucination)
+    {
+        const auto* TargetUnit = TargetEntityID >= 0
+            ? EM.GetComponent<UnitComponent>(TargetEntityID) : nullptr;
+        const auto* TargetPlayer = TargetEntityID >= 0
+            ? EM.GetComponent<PlayerComponent>(TargetEntityID) : nullptr;
+        const auto* TargetTransform = TargetEntityID >= 0
+            ? EM.GetComponent<TransformComponent>(TargetEntityID) : nullptr;
+        if (!TargetUnit || !TargetPlayer || !TargetTransform ||
+            TargetUnit->HitPoints <= 0 ||
+            TargetPlayer->PlayerID != CasterPlayer->PlayerID ||
+            EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID) ||
+            HasHallucinationStatus(EM, TargetEntityID))
+        {
+            if (OutReason) *OutReason = "hallucination requires a friendly real unit";
             return false;
         }
     }
@@ -418,41 +499,50 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
         case SpellType::DarkSwarm:
         {
-            // DarkSwarm: protect ground units from ranged attacks
-            float Radius = 96.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent>();
-            for (int Uid : Units)
-            {
-                auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
-                if (UTrans && UTrans->Position.DistanceTo(Pos) <= Radius)
-                {
-                    auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
-                    if (!Status)
-                        Status = &EM.AddComponent<StatusEffectComponent>(Uid);
-                    Status->AddEffect(StatusEffect::DarkSwarm, 8.0f, CasterID);
-                }
-            }
+            // Brood War represents Dark Swarm as a persistent spell entity.
+            // Protection follows current position, so units entering or leaving
+            // the cloud gain or lose cover immediately instead of retaining a
+            // cast-time status snapshot.
+            const int AreaID = EM.CreateEntity();
+            EM.AddComponent<TransformComponent>(AreaID).Position = Pos;
+            auto& Area = EM.AddComponent<SpellAreaComponent>(AreaID);
+            Area.Effect = StatusEffect::DarkSwarm;
+            Area.Radius = 96.0f;
+            Area.DurationRemaining = 900.0f / 24.0f;
+            Area.SourceEntityID = CasterID;
             Logger::Info("SpellSystem", "Dark Swarm cast");
             break;
         }
 
         case SpellType::Plague:
         {
-            float Radius = 96.0f;
+            constexpr float HalfExtent = 64.0f;
             auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
             for (int Uid : Units)
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
                 auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
-                auto* UPlayer = EM.GetComponent<PlayerComponent>(Uid);
-                if (!UUnit || !UTrans || !UPlayer) continue;
-                if (UTrans->Position.DistanceTo(Pos) <= Radius)
-                {
-                    auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
-                    if (!Status)
-                        Status = &EM.AddComponent<StatusEffectComponent>(Uid);
-                    Status->AddEffect(StatusEffect::Plague, 20.0f, CasterID);
-                }
+                if (!UUnit || !UTrans || Uid == CasterID || UUnit->IsInvincible)
+                    continue;
+                if (auto* ExistingStatus = EM.GetComponent<StatusEffectComponent>(Uid);
+                    ExistingStatus && ExistingStatus->HasEffect(StatusEffect::Stasis))
+                    continue;
+                const auto* Burrow = EM.GetComponent<BurrowComponent>(Uid);
+                const auto* Cloak = EM.GetComponent<CloakComponent>(Uid);
+                if ((Burrow && (Burrow->IsBurrowed ||
+                                Burrow->Phase == BurrowPhase::Burrowed)) ||
+                    (Cloak && Cloak->IsBurrowed))
+                    continue;
+                const Core::Math::Vec2 Offset = UTrans->Position - Pos;
+                if (std::abs(Offset.X) > HalfExtent ||
+                    std::abs(Offset.Y) > HalfExtent)
+                    continue;
+
+                auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
+                if (!Status)
+                    Status = &EM.AddComponent<StatusEffectComponent>(Uid);
+                Status->AddEffect(StatusEffect::Plague, 75.0f * 8.0f / 24.0f,
+                                  CasterID);
             }
             Logger::Info("SpellSystem", "Plague cast");
             break;
@@ -503,11 +593,36 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
         case SpellType::Hallucination:
         {
-            // Create 2 illusory copies near the caster
-            auto* CasterRace = EM.GetComponent<UnitComponent>(CasterID);
-            if (CasterRace)
+            // Brood War creates two full-vitality copies of the selected
+            // friendly unit. They retain its movement, weapon, armor and
+            // presentation data, but cannot deal damage or cast spells.
+            auto* SourceUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+            auto* SourceTrans = EM.GetComponent<TransformComponent>(TargetEntityID);
+            auto* SourcePlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+            if (SourceUnit && SourceTrans && SourcePlayer)
             {
-                auto* CasterRender = EM.GetComponent<RenderComponent>(CasterID);
+                // Entity/component pools may grow while the two copies are
+                // created, so snapshot every source value before adding any
+                // new component rather than retaining invalidatable pointers.
+                const UnitComponent SourceUnitCopy = *SourceUnit;
+                const TransformComponent SourceTransformCopy = *SourceTrans;
+                const PlayerComponent SourcePlayerCopy = *SourcePlayer;
+                const auto* SourceRender = EM.GetComponent<RenderComponent>(TargetEntityID);
+                const auto* SourcePath = EM.GetComponent<PathfindingComponent>(TargetEntityID);
+                const auto* SourceCombat = EM.GetComponent<CombatComponent>(TargetEntityID);
+                const auto* SourceCloak = EM.GetComponent<CloakComponent>(TargetEntityID);
+                const bool HasSourceRender = SourceRender != nullptr;
+                const bool HasSourcePath = SourcePath != nullptr;
+                const bool HasSourceCombat = SourceCombat != nullptr;
+                const bool HasSourceCloak = SourceCloak != nullptr;
+                const RenderComponent SourceRenderCopy =
+                    SourceRender ? *SourceRender : RenderComponent{};
+                const PathfindingComponent SourcePathCopy =
+                    SourcePath ? *SourcePath : PathfindingComponent{};
+                const CombatComponent SourceCombatCopy =
+                    SourceCombat ? *SourceCombat : CombatComponent{};
+                const CloakComponent SourceCloakCopy =
+                    SourceCloak ? *SourceCloak : CloakComponent{};
                 for (int I = 0; I < 2; I++)
                 {
                     int IllusionID = EM.CreateEntity();
@@ -516,16 +631,48 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     auto& IPlayer = EM.AddComponent<PlayerComponent>(IllusionID);
                     auto& IStatus = EM.AddComponent<StatusEffectComponent>(IllusionID);
 
-                    ITrans.Position = CasterTrans->Position;
+                    ITrans = SourceTransformCopy;
                     ITrans.Position.X += (float)((I == 0 ? -32.0f : 32.0f));
-                    IUnit.UnitRace = CasterRace->UnitRace;
-                    IUnit.ChkUnitID = CasterRace->ChkUnitID;
-                    IUnit.HitPoints = 1;
-                    IUnit.MaxHitPoints = 1;
-                    if (CasterPlayer)
-                        IPlayer = *CasterPlayer;
-                    if (CasterRender)
-                        EM.AddComponent<RenderComponent>(IllusionID) = *CasterRender;
+                    IUnit = SourceUnitCopy;
+                    // Hallucinations never reserve or release real supply.
+                    IUnit.SupplyCost = 0;
+                    IUnit.HitPoints = IUnit.MaxHitPoints;
+                    IUnit.ShieldPoints = IUnit.MaxShieldPoints;
+                    IUnit.HitPointSubDamage = 0;
+                    IUnit.ShieldSubDamage = 0;
+                    IUnit.ShieldRegenAccumulator = 0.0f;
+                    IUnit.HealthRegenAccumulator = 0.0f;
+                    IUnit.RepairHitPointAccumulator = 0.0f;
+                    IUnit.RepairMineralCostAccumulator = 0.0f;
+                    IUnit.RepairGasCostAccumulator = 0.0f;
+                    IUnit.RepairTargetEntityID = -1;
+                    IUnit.PlagueDamageAccumulator = 0.0f;
+                    IUnit.IrradiateDamageAccumulator = 0.0f;
+                    IUnit.EnergyPoints = 0;
+                    IUnit.HangarBuildProgress = 0.0f;
+                    IUnit.HangarBuildInProgress = false;
+                    IPlayer = SourcePlayerCopy;
+                    if (HasSourceRender)
+                        EM.AddComponent<RenderComponent>(IllusionID) = SourceRenderCopy;
+                    if (HasSourcePath)
+                    {
+                        auto& IPath = EM.AddComponent<PathfindingComponent>(IllusionID);
+                        IPath = SourcePathCopy;
+                        ResetHallucinationPath(IPath, ITrans.Position);
+                    }
+                    if (HasSourceCombat)
+                    {
+                        auto& ICombat = EM.AddComponent<CombatComponent>(IllusionID);
+                        ICombat = SourceCombatCopy;
+                        ResetHallucinationCombat(ICombat);
+                    }
+                    if (HasSourceCloak)
+                    {
+                        auto& ICloak = EM.AddComponent<CloakComponent>(IllusionID);
+                        ICloak = SourceCloakCopy;
+                        ICloak.IsBurrowed = false;
+                    }
+                    EM.AddComponent<CommandComponent>(IllusionID);
                     IStatus.AddEffect(StatusEffect::Hallucination, 180.0f, CasterID);
                 }
             }
@@ -627,6 +774,16 @@ void SpellSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
 
     auto& EM = mSystemMgr.GetEntityManager();
+    auto Areas = EM.GetEntitiesWith<Components::SpellAreaComponent>();
+    for (int Id : Areas)
+    {
+        auto* Area = EM.GetComponent<Components::SpellAreaComponent>(Id);
+        if (!Area) continue;
+        Area->DurationRemaining -= DeltaTime;
+        if (Area->DurationRemaining <= 0.0f)
+            EM.DestroyEntity(Id);
+    }
+
     auto Entities = EM.GetEntitiesWith<Components::SpellCooldown>();
     for (int Id : Entities)
     {

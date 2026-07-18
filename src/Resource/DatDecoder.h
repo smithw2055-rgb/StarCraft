@@ -45,7 +45,9 @@ struct UnitEntry
     uint32_t RequiredUnits = 0;  // bitmask
     uint16_t UnitSize = 0;
     uint16_t GroundWeapon = 0;
+    uint8_t MaxGroundHits = 0;
     uint16_t AirWeapon = 0;
+    uint8_t MaxAirHits = 0;
     uint8_t Plagueable = 1;
     uint8_t Hallucinable = 1;
     uint8_t IsBuilding = 0;
@@ -70,11 +72,16 @@ struct WeaponEntry
     uint8_t DamageUpgrade = 0;
     uint8_t DamageType = 0;
     uint16_t SplashType = 0;
+    uint8_t Lifetime = 0;
     uint16_t InnerSplashRadius = 0;
     uint16_t MediumSplashRadius = 0;
     uint16_t OuterSplashRadius = 0;
     uint16_t WeaponBehavior = 0;
     uint8_t BulletCount = 1;
+    uint8_t AttackAngle = 0;
+    int8_t BulletHeadingOffset = 0;
+    int8_t ForwardOffset = 0;
+    int8_t UpwardOffset = 0;
     uint16_t Icon = 0;
 };
 

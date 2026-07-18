@@ -22,6 +22,7 @@ namespace
 {
     using Game::Systems::TerranResearchId;
 
+    constexpr int ZergLarva = 35;
     constexpr int ZergDrone = 41;
     constexpr int ZergHatchery = 131;
     constexpr int ZergLair = 132;
@@ -63,6 +64,7 @@ int Hud::GetDefaultPageForSelection(int SelectedChkUnitId) const
 {
     switch (SelectedChkUnitId)
     {
+        case ZergLarva: return PageZergLarva;
         case ZergDrone: return PageZergDroneMain;
         case ZergHatchery:
         case ZergLair:
@@ -220,7 +222,8 @@ void Hud::BuildTerranPage(int SelectedEntityId,
     auto TrainEnabled = [&](int DefId) -> bool
     {
         return EcsEntities && SelectedEntityId > 0 &&
-               Game::Systems::ProductionSystem::CanTrain(*EcsEntities, SelectedEntityId, DefId);
+               Game::Systems::ProductionSystem::CanTrain(
+                   *EcsEntities, SelectedEntityId, DefId);
     };
 
     auto BuildEnabled = [&](int DefId) -> bool
@@ -531,7 +534,25 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(2, "Stop", HudCommandId::Stop, true);
             SetCommandButton(3, "Hold", HudCommandId::Hold, true);
             SetCommandButton(4, "Patrol", HudCommandId::Patrol, true);
-            TechAbilityButton(6, TerranResearchId::SpiderMines, "Mines", Vulture);
+            {
+                const bool Researched = UpgradeSystem::HasResearch(
+                    PlayerIdForSelection(),
+                    ToResearchId(TerranResearchId::SpiderMines));
+                const auto* Inventory =
+                    EcsEntities && SelectedEntityId > 0
+                        ? EcsEntities->GetComponent<
+                              Game::Components::VultureMineInventoryComponent>(
+                              SelectedEntityId)
+                        : nullptr;
+                const int RemainingMines =
+                    Inventory ? Inventory->RemainingMines : 3;
+                SetButton(
+                    6, "Mines (" + std::to_string(RemainingMines) + ")",
+                    ActionKind::Command, Vulture,
+                    HudCommandId::LaySpiderMine,
+                    TerranResearchId::SpiderMines, IconForDef(Vulture),
+                    Researched && RemainingMines > 0);
+            }
             break;
 
         case PageTerranGoliath:
@@ -738,7 +759,9 @@ void Hud::BuildZergPage(int SelectedEntityId,
     auto TrainEnabled = [&](int DefId) -> bool
     {
         return EcsEntities && SelectedEntityId > 0 &&
-               Game::Systems::ProductionSystem::CanTrain(*EcsEntities, SelectedEntityId, DefId);
+               SelectedChkUnitId == ZergLarva &&
+               Game::Systems::ZergSystem::CanMorphLarvaIntoUnit(
+                   *EcsEntities, SelectedEntityId, DefId);
     };
 
     auto BuildEnabled = [&](int DefId) -> bool
@@ -1010,7 +1033,7 @@ void Hud::BuildZergPage(int SelectedEntityId,
             }
             break;
 
-        case PageZergHatchery:
+        case PageZergLarva:
             TrainButtonForDef(0, Drone);
             TrainButtonForDef(1, Zergling);
             TrainButtonForDef(2, Hydralisk);
@@ -1018,16 +1041,20 @@ void Hud::BuildZergPage(int SelectedEntityId,
             TrainButtonForDef(4, Mutalisk);
             TrainButtonForDef(5, Scourge);
             TrainButtonForDef(6, Queen);
-            SetCommandButton(7, "Rally", HudCommandId::Rally, CanRallySelected());
-            SetButton(8, "More", ActionKind::OpenSubmenu, -1, HudCommandId::None,
-                      TerranResearchId::None, IconMore, true, PageZergHatcheryCommands,
+            TrainButtonForDef(7, Ultralisk);
+            TrainButtonForDef(8, Defiler);
+            break;
+
+        case PageZergHatchery:
+            SetCommandButton(0, "Rally", HudCommandId::Rally, CanRallySelected());
+            SetButton(8, "More", ActionKind::OpenSubmenu, -1,
+                      HudCommandId::None, TerranResearchId::None, IconMore,
+                      true, PageZergHatcheryCommands,
                       HudVisualId::AdvancedBuild);
             CancelButtonIfBusy();
             break;
 
         case PageZergHatcheryCommands:
-            TrainButtonForDef(0, Ultralisk);
-            TrainButtonForDef(1, Defiler);
             ResearchButton(2, TerranResearchId::ZergBurrow, "Burrow", Drone);
             if (SelectedDefId == Hatchery)
                 MorphButtonForDef(3, Lair);
@@ -1414,6 +1441,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             ResearchButton(0, TerranResearchId::ProtossApialSensors, "Apial", Scout);
             ResearchButton(1, TerranResearchId::ProtossArgusJewel, "Argus", Corsair);
             ResearchButton(2, TerranResearchId::ProtossCarrierCapacity, "Capacity", Carrier);
+            ResearchButton(3, TerranResearchId::ProtossGraviticThrusters, "Thrusters", Scout);
             break;
 
         case PageProtossArbiterTribunal:
@@ -1424,6 +1452,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
 
         case PageProtossObservatory:
             ResearchButton(0, TerranResearchId::ProtossSensorArray, "Sensor", Observer);
+            ResearchButton(1, TerranResearchId::ProtossGraviticBoosters, "Boosters", Observer);
             break;
 
         case PageProtossShieldBattery:

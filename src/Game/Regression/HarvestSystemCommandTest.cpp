@@ -6,6 +6,7 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Systems/MovementSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -86,6 +87,11 @@ bool CommandSystem::IssueMoveAndHasPath(Core::ECS::EntityManager& EM,
     return false;
 }
 
+void CommandSystem::AdvanceQueue(Core::ECS::EntityManager&,
+                                 Core::ECS::EntityID)
+{
+}
+
 } // namespace Game::Systems
 
 namespace
@@ -140,6 +146,22 @@ namespace
             TargetTrans->Position.X + NearestX,
             TargetTrans->Position.Y + NearestY
         });
+    }
+
+    bool CollisionBoundsOverlap(
+        const Game::Components::TransformComponent& ATransform,
+        const Game::Components::PathfindingComponent& APath,
+        const Game::Components::TransformComponent& BTransform,
+        const Game::Components::PathfindingComponent& BPath)
+    {
+        return ATransform.Position.X - (float)APath.CollisionLeft <
+                   BTransform.Position.X + (float)BPath.CollisionRight + 1.0f &&
+               ATransform.Position.X + (float)APath.CollisionRight + 1.0f >
+                   BTransform.Position.X - (float)BPath.CollisionLeft &&
+               ATransform.Position.Y - (float)APath.CollisionUp <
+                   BTransform.Position.Y + (float)BPath.CollisionDown + 1.0f &&
+               ATransform.Position.Y + (float)APath.CollisionDown + 1.0f >
+                   BTransform.Position.Y - (float)BPath.CollisionUp;
     }
 
     int CreateCompletedDepot(Core::ECS::EntityManager& EM,
@@ -322,6 +344,12 @@ int main()
     Require(Path->RequestedIgnoreEntityID == Depot && !Path->Path.empty(),
         "worker leaving a completed delivery ignores the depot it starts inside");
 
+    ScvTrans->Position = {200.0f, 100.0f};
+    HarvestSystem.Update(0.1f);
+    Require(Harvest->State == Game::Components::HarvestState::MovingToResource &&
+            Path->RequestedIgnoreEntityID == Mineral && !Path->Path.empty(),
+        "worker switches collision ignore from the departed depot to its mineral target");
+
     int ReplacementMineral = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(ReplacementMineral).Position =
         {520.0f, 100.0f};
@@ -404,6 +432,212 @@ int main()
                 ? "Drone replans to a live mineral field after depletion"
                 : "Probe replans to a live mineral field after depletion");
     }
+
+    for (int WorkerChkUnitID : {0x07, 0x29, 0x40})
+    {
+        Core::ECS::SystemManager AdjacentMineralSysMgr;
+        auto& AdjacentEM = AdjacentMineralSysMgr.GetEntityManager();
+
+        const int Worker = AdjacentEM.CreateEntity();
+        AdjacentEM.AddComponent<Game::Components::TransformComponent>(Worker).Position =
+            {64.0f, 100.0f};
+        auto& WorkerUnit =
+            AdjacentEM.AddComponent<Game::Components::UnitComponent>(Worker);
+        WorkerUnit.ChkUnitID = WorkerChkUnitID;
+        WorkerUnit.Speed = 2.8f;
+        AdjacentEM.AddComponent<Game::Components::PlayerComponent>(Worker).PlayerID = 0;
+        auto& WorkerPath =
+            AdjacentEM.AddComponent<Game::Components::PathfindingComponent>(Worker);
+        SetCollisionBounds(WorkerPath, 8, 8, 7, 7);
+
+        const int BlockingMineral = AdjacentEM.CreateEntity();
+        AdjacentEM.AddComponent<Game::Components::TransformComponent>(BlockingMineral).Position =
+            {100.0f, 100.0f};
+        auto& BlockingUnit =
+            AdjacentEM.AddComponent<Game::Components::UnitComponent>(BlockingMineral);
+        BlockingUnit.ChkUnitID = 176;
+        auto& BlockingResource =
+            AdjacentEM.AddComponent<Game::Components::ResourceComponent>(BlockingMineral);
+        BlockingResource.Type = Game::Components::ResourceType::Minerals;
+        BlockingResource.Amount = 1500;
+        BlockingResource.MaxAmount = 1500;
+        auto& BlockingPath =
+            AdjacentEM.AddComponent<Game::Components::PathfindingComponent>(BlockingMineral);
+        SetCollisionBounds(BlockingPath, 32, 20, 31, 19);
+
+        const int RequestedMineral = AdjacentEM.CreateEntity();
+        AdjacentEM.AddComponent<Game::Components::TransformComponent>(RequestedMineral).Position =
+            {180.0f, 100.0f};
+        auto& RequestedUnit =
+            AdjacentEM.AddComponent<Game::Components::UnitComponent>(RequestedMineral);
+        RequestedUnit.ChkUnitID = 176;
+        auto& RequestedResource =
+            AdjacentEM.AddComponent<Game::Components::ResourceComponent>(RequestedMineral);
+        RequestedResource.Type = Game::Components::ResourceType::Minerals;
+        RequestedResource.Amount = 1500;
+        RequestedResource.MaxAmount = 1500;
+        auto& RequestedPath =
+            AdjacentEM.AddComponent<Game::Components::PathfindingComponent>(RequestedMineral);
+        SetCollisionBounds(RequestedPath, 32, 20, 31, 19);
+
+        const bool BusyBlockingMineral = WorkerChkUnitID == 0x07;
+        int ExistingGatherer = -1;
+        if (BusyBlockingMineral)
+        {
+            ExistingGatherer = AdjacentEM.CreateEntity();
+            BlockingResource.ActiveGathererEntityID = ExistingGatherer;
+        }
+
+        Require(Game::Systems::HarvestSystem::IssueHarvest(
+                    AdjacentEM, {Worker}, RequestedMineral),
+            "worker can start toward a mineral hidden behind an adjacent patch");
+        // Match a strict static-avoid request which found no exit: movement
+        // leaves no route, marks the destination failed, and preserves the
+        // exact mineral blocker for the owning harvest state machine.
+        WorkerPath.Path.clear();
+        WorkerPath.PathIndex = 0;
+        WorkerPath.HasRecentMoveFailure = true;
+        WorkerPath.RecentFailedMoveTarget = WorkerPath.RequestedDestination;
+        WorkerPath.BlockedByEntityID = BlockingMineral;
+
+        Game::Systems::HarvestSystem AdjacentHarvestSystem(AdjacentMineralSysMgr);
+        AdjacentHarvestSystem.Update(0.1f);
+
+        const auto* WorkerHarvest =
+            AdjacentEM.GetComponent<Game::Components::HarvestComponent>(Worker);
+        const auto* WorkerCommand =
+            AdjacentEM.GetComponent<Game::Components::CommandComponent>(Worker);
+        Require(WorkerHarvest &&
+                WorkerHarvest->TargetResourceID == BlockingMineral &&
+                WorkerHarvest->DesiredResourceID == BlockingMineral &&
+                WorkerCommand &&
+                WorkerCommand->CurrentCommand == Game::Components::CommandType::Harvest &&
+                WorkerCommand->TargetEntityID == BlockingMineral,
+            WorkerChkUnitID == 0x07
+                ? "SCV retargets the adjacent mineral reported as its exact blocker"
+                : WorkerChkUnitID == 0x29
+                    ? "Drone retargets the adjacent mineral reported as its exact blocker"
+                    : "Probe retargets the adjacent mineral reported as its exact blocker");
+        Require(std::find(RequestedResource.QueuedGatherers.begin(),
+                          RequestedResource.QueuedGatherers.end(), Worker) ==
+                    RequestedResource.QueuedGatherers.end() &&
+                (BlockingResource.ActiveGathererEntityID == Worker ||
+                 std::find(BlockingResource.QueuedGatherers.begin(),
+                           BlockingResource.QueuedGatherers.end(), Worker) !=
+                     BlockingResource.QueuedGatherers.end()),
+            "adjacent-mineral reroute leaves the unreachable queue and joins the blocker");
+        Require(WorkerPath.Path.empty() &&
+                WorkerPath.RequestedIgnoreEntityID == BlockingMineral &&
+                !WorkerPath.HasRecentMoveFailure &&
+                WorkerPath.RequestedDestination.DistanceTo({64.0f, 100.0f}) <= 0.1f,
+            "no-route worker adopts the adjacent mineral without retrying the blocked route");
+
+        if (BusyBlockingMineral)
+        {
+            Require(WorkerHarvest->State ==
+                        Game::Components::HarvestState::QueuedAtResource,
+                "SCV waits at an occupied blocking mineral instead of oscillating");
+            AdjacentHarvestSystem.Update(0.1f);
+            Require(WorkerHarvest->TargetResourceID == BlockingMineral &&
+                    WorkerHarvest->State ==
+                        Game::Components::HarvestState::QueuedAtResource &&
+                    WorkerPath.Path.empty(),
+                "queued SCV does not spread back to the unreachable mineral behind it");
+        }
+        else
+        {
+            Require(WorkerHarvest->State == Game::Components::HarvestState::Mining &&
+                    BlockingResource.ActiveGathererEntityID == Worker,
+                "free adjacent mineral begins mining immediately after blocker reroute");
+        }
+    }
+
+    // Exercise the real runtime order (Movement then Harvest) on a map-backed
+    // route.  The mineral approach is behind a neutral geyser whose exact DAT
+    // rectangle intersects the straight segment even though tile centers do
+    // not.  The old stall refresh cleared BlockedByEntityID and rebuilt the
+    // same one-node route forever; the strict static-avoid refresh must carry
+    // the worker around without treating the geyser as passable.
+    Core::ECS::SystemManager OrderedDetourSysMgr;
+    auto& OrderedDetourEM = OrderedDetourSysMgr.GetEntityManager();
+    Game::Map::GameMap OrderedDetourMap;
+    OrderedDetourMap.Generate(16, 8);
+    Game::Systems::CommandSystem::SetMap(&OrderedDetourMap);
+
+    const int OrderedProbe = OrderedDetourEM.CreateEntity();
+    auto& OrderedProbeTransform =
+        OrderedDetourEM.AddComponent<Game::Components::TransformComponent>(OrderedProbe);
+    OrderedProbeTransform.Position = {267.0f, 111.0f};
+    auto& OrderedProbeUnit =
+        OrderedDetourEM.AddComponent<Game::Components::UnitComponent>(OrderedProbe);
+    OrderedProbeUnit.ChkUnitID = 64;
+    OrderedProbeUnit.Speed = 2.8f;
+    OrderedProbeUnit.HitPoints = 20;
+    OrderedDetourEM.AddComponent<Game::Components::PlayerComponent>(OrderedProbe).PlayerID = 0;
+    auto& OrderedProbePath =
+        OrderedDetourEM.AddComponent<Game::Components::PathfindingComponent>(OrderedProbe);
+    SetCollisionBounds(OrderedProbePath, 11, 11, 11, 11);
+
+    const int BlockingGeyser = OrderedDetourEM.CreateEntity();
+    auto& BlockingGeyserTransform =
+        OrderedDetourEM.AddComponent<Game::Components::TransformComponent>(BlockingGeyser);
+    BlockingGeyserTransform.Position = {192.0f, 128.0f};
+    auto& BlockingGeyserUnit =
+        OrderedDetourEM.AddComponent<Game::Components::UnitComponent>(BlockingGeyser);
+    BlockingGeyserUnit.ChkUnitID = 188;
+    BlockingGeyserUnit.HitPoints = 500;
+    auto& BlockingGeyserResource =
+        OrderedDetourEM.AddComponent<Game::Components::ResourceComponent>(BlockingGeyser);
+    BlockingGeyserResource.Type = Game::Components::ResourceType::VespeneGas;
+    BlockingGeyserResource.Amount = 5000;
+    auto& BlockingGeyserPath =
+        OrderedDetourEM.AddComponent<Game::Components::PathfindingComponent>(BlockingGeyser);
+    SetCollisionBounds(BlockingGeyserPath, 64, 32, 63, 31);
+
+    const int OrderedMineral = OrderedDetourEM.CreateEntity();
+    OrderedDetourEM.AddComponent<Game::Components::TransformComponent>(OrderedMineral).Position =
+        {64.0f, 96.0f};
+    auto& OrderedMineralUnit =
+        OrderedDetourEM.AddComponent<Game::Components::UnitComponent>(OrderedMineral);
+    OrderedMineralUnit.ChkUnitID = 176;
+    OrderedMineralUnit.HitPoints = 1;
+    auto& OrderedMineralResource =
+        OrderedDetourEM.AddComponent<Game::Components::ResourceComponent>(OrderedMineral);
+    OrderedMineralResource.Type = Game::Components::ResourceType::Minerals;
+    OrderedMineralResource.Amount = 1500;
+    OrderedMineralResource.MaxAmount = 1500;
+    auto& OrderedMineralPath =
+        OrderedDetourEM.AddComponent<Game::Components::PathfindingComponent>(OrderedMineral);
+    SetCollisionBounds(OrderedMineralPath, 32, 16, 31, 15);
+
+    Require(Game::Systems::HarvestSystem::IssueHarvest(
+                OrderedDetourEM, {OrderedProbe}, OrderedMineral),
+        "map-backed worker can start harvesting behind a static resource");
+    Game::Systems::MovementSystem OrderedMovement(
+        OrderedDetourSysMgr, &OrderedDetourMap);
+    Game::Systems::HarvestSystem OrderedHarvest(OrderedDetourSysMgr);
+    float OrderedDetourY = 0.0f;
+    for (int Step = 0; Step < 320; ++Step)
+    {
+        OrderedMovement.Update(0.05f);
+        OrderedHarvest.Update(0.05f);
+        Require(OrderedProbePath.RequestedIgnoreEntityID != BlockingGeyser,
+            "static detour never turns the blocking geyser into a pass-through ignore");
+        Require(!CollisionBoundsOverlap(
+                    OrderedProbeTransform, OrderedProbePath,
+                    BlockingGeyserTransform, BlockingGeyserPath),
+            "harvest detour never overlaps the non-target geyser DAT footprint");
+        OrderedDetourY = std::max(
+            OrderedDetourY, std::fabs(OrderedProbeTransform.Position.Y - 111.0f));
+    }
+    const auto* OrderedHarvestState =
+        OrderedDetourEM.GetComponent<Game::Components::HarvestComponent>(OrderedProbe);
+    Require(OrderedHarvestState &&
+            OrderedHarvestState->TargetResourceID == OrderedMineral &&
+            OrderedMineralResource.Amount < 1500,
+        "Movement-then-Harvest loop reaches the mineral instead of repeating a cleared blocker");
+    Require(OrderedProbeTransform.Position.X < 128.0f && OrderedDetourY > 16.0f,
+        "harvest worker takes a real lateral route around the neutral static footprint");
 
     Core::ECS::SystemManager GasSysMgr;
     auto& GasEM = GasSysMgr.GetEntityManager();
