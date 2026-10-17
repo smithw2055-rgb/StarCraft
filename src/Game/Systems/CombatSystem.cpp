@@ -694,8 +694,17 @@ static Core::Math::Vec2 ComputeCombatFormationTarget(
         StandOff = TargetRadius + SelfRadius + 4.0f;
     }
 
-    return TargetTrans->Position - Forward * StandOff +
-           Lateral * LateralOffset;
+    Core::Math::Vec2 Offset = Forward * (-StandOff) + Lateral * LateralOffset;
+    const float MaxAllowedDistance = SelfRanged
+        ? std::max(TargetRadius + SelfRadius + 16.0f, RangePixels - 6.0f)
+        : (TargetRadius + SelfRadius + 14.0f);
+    const float OffsetDist = Offset.Length();
+    if (OffsetDist > MaxAllowedDistance && OffsetDist > 0.001f)
+    {
+        Offset = Offset * (MaxAllowedDistance / OffsetDist);
+    }
+
+    return TargetTrans->Position + Offset;
 }
 
 static void IssueCombatApproachPreservingCommand(
@@ -1503,6 +1512,71 @@ void CombatSystem::ApplyDamageRaw(Core::ECS::EntityManager& EM, int TargetID,
                 SetAutoTarget(*TargetCombat, AttackerID, kAutoTargetLockSeconds);
             }
         }
+
+        // Call for Help: broadcast attacker to nearby allies within 224px (7 tiles)
+        if (AreEnemyPlayers(EM, TargetID, AttackerID) && EM.IsAlive(AttackerID))
+        {
+            const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
+            const auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetID);
+            if (TargetTrans && TargetPlayer)
+            {
+                std::vector<int> NearbyAllies;
+                if (sActiveCombatSpatialHash && !sActiveCombatSpatialHash->Empty())
+                {
+                    sActiveCombatSpatialHash->QueryInto(
+                        TargetTrans->Position.X - 224.0f, TargetTrans->Position.Y - 224.0f,
+                        TargetTrans->Position.X + 224.0f, TargetTrans->Position.Y + 224.0f,
+                        NearbyAllies);
+                }
+                else
+                {
+                    NearbyAllies = EM.GetEntitiesWith<TransformComponent, UnitComponent,
+                                                      CombatComponent, PlayerComponent>();
+                }
+
+                for (int AllyID : NearbyAllies)
+                {
+                    if (AllyID == TargetID) continue;
+                    const auto* AllyPlayer = EM.GetComponent<PlayerComponent>(AllyID);
+                    const auto* AllyUnit = EM.GetComponent<UnitComponent>(AllyID);
+                    auto* AllyCombat = EM.GetComponent<CombatComponent>(AllyID);
+                    const auto* AllyTrans = EM.GetComponent<TransformComponent>(AllyID);
+                    if (!AllyPlayer || !AllyUnit || !AllyCombat || !AllyTrans ||
+                        AllyUnit->HitPoints <= 0 ||
+                        AllyPlayer->PlayerID != TargetPlayer->PlayerID ||
+                        IsWorkerUnit(AllyUnit) ||
+                        EM.GetComponent<BuildingComponent>(AllyID) != nullptr)
+                    {
+                        continue;
+                    }
+                    if (AllyTrans->Position.DistanceTo(TargetTrans->Position) > 224.0f)
+                        continue;
+
+                    const auto* AllyCmd = EM.GetComponent<CommandComponent>(AllyID);
+                    // Never break HoldPosition or explicit attack focus order
+                    if (AllyCmd && (AllyCmd->CurrentCommand == CommandType::HoldPosition ||
+                                    (AllyCmd->CurrentCommand == CommandType::Attack && AllyCmd->TargetEntityID >= 0)))
+                    {
+                        continue;
+                    }
+
+                    if (!CanAttackTarget(*AllyCombat, EM, AttackerID))
+                        continue;
+
+                    // If idle or currently targeting a low-priority target (building/worker), switch to attacker
+                    const int CurrentTarget = AllyCombat->TargetEntityID;
+                    int CurrentPriority = 999;
+                    if (CurrentTarget >= 0 && EM.IsAlive(CurrentTarget))
+                    {
+                        CurrentPriority = EvaluateTargetAttackPriority(EM, AllyID, CurrentTarget);
+                    }
+                    if (CurrentPriority >= 3 || CurrentTarget < 0)
+                    {
+                        SetAutoTarget(*AllyCombat, AttackerID, kAutoTargetLockSeconds);
+                    }
+                }
+            }
+        }
     }
     if (TargetUnit->HitPoints <= 0)
     {
@@ -2063,10 +2137,9 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     const float BaseRangePixels = EffectiveAttackRangePixels(EM, EntityID, *Combat);
     const bool HoldPosition = Cmd && Cmd->CurrentCommand == CommandType::HoldPosition;
     const bool ExplicitAttackOrder =
-        Cmd && (Cmd->CurrentCommand == CommandType::Attack ||
-                Cmd->CurrentCommand == CommandType::AttackMove);
+        Cmd && (Cmd->CurrentCommand == CommandType::Attack && Cmd->TargetEntityID >= 0);
 
-    int TargetID = ExplicitAttackOrder ? Cmd->TargetEntityID : -1;
+    int TargetID = ExplicitAttackOrder ? Cmd->TargetEntityID : (Cmd && Cmd->CurrentCommand == CommandType::AttackMove ? Cmd->TargetEntityID : -1);
 
     // Validate target
     if (TargetID >= 0)
@@ -2075,6 +2148,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         {
             ClearCombatTargetForInvalidTarget(EM, EntityID, TargetID);
             TargetID = -1;
+            if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
+                Cmd->TargetEntityID = -1;
         }
     }
 
@@ -2088,6 +2163,49 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     if (TargetID < 0 && Combat->AutoTargetEntityID >= 0)
     {
         TargetID = Combat->AutoTargetEntityID;
+        if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
+            Cmd->TargetEntityID = TargetID;
+    }
+
+    // Retarget check for AttackMove or non-explicit attacks:
+    if (!ExplicitAttackOrder)
+    {
+        if (Combat->AutoTargetEntityID >= 0 && Combat->AutoTargetEntityID != TargetID &&
+            IsActiveTargetValid(EM, *Combat, Combat->AutoTargetEntityID, EntityID))
+        {
+            const int AutoPriority = EvaluateTargetAttackPriority(EM, EntityID, Combat->AutoTargetEntityID);
+            const int CurrentPriority = (TargetID >= 0 && EM.IsAlive(TargetID))
+                ? EvaluateTargetAttackPriority(EM, EntityID, TargetID)
+                : 999;
+            if (AutoPriority <= CurrentPriority)
+            {
+                TargetID = Combat->AutoTargetEntityID;
+                if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
+                    Cmd->TargetEntityID = TargetID;
+            }
+        }
+        else if (TargetID >= 0 && Combat->AutoTargetLockSeconds <= 0.0f)
+        {
+            const int CurrentPriority = EvaluateTargetAttackPriority(EM, EntityID, TargetID);
+            if (CurrentPriority >= 3)
+            {
+                const float SearchRangePixels = (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
+                    ? std::max(BaseRangePixels * 2.0f, 224.0f)
+                    : (HoldPosition ? BaseRangePixels : std::max(BaseRangePixels, 224.0f));
+                const int BetterTarget = FindNearestEnemy(EM, EntityID, SearchRangePixels);
+                if (BetterTarget >= 0)
+                {
+                    const int BetterPriority = EvaluateTargetAttackPriority(EM, EntityID, BetterTarget);
+                    if (BetterPriority < CurrentPriority)
+                    {
+                        TargetID = BetterTarget;
+                        SetAutoTarget(*Combat, TargetID, 0.35f);
+                        if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
+                            Cmd->TargetEntityID = TargetID;
+                    }
+                }
+            }
+        }
     }
 
     // Find new target for attack-move
@@ -2101,12 +2219,17 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
             const Core::Math::Vec2 AttackMoveDestination = Cmd->TargetPosition;
             Combat->TargetEntityID = TargetID;
             Cmd->TargetEntityID = TargetID;
+            SetAutoTarget(*Combat, TargetID, 0.35f);
             if (EM.GetComponent<TransformComponent>(TargetID))
             {
                 IssueCombatApproachPreservingCommand(
                     EM, EntityID, TargetID, BaseRangePixels,
                     CommandType::AttackMove, AttackMoveDestination, TargetID);
             }
+        }
+        else
+        {
+            Cmd->TargetEntityID = -1;
         }
     }
 
@@ -2122,7 +2245,10 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
              !IsWorkerUnit(Unit));
         if (PassiveAutoAcquire && Combat->AutoTargetLockSeconds <= 0.0f)
         {
-            TargetID = FindNearestEnemy(EM, EntityID, BaseRangePixels);
+            const float SearchRange = HoldPosition
+                ? BaseRangePixels
+                : std::max(BaseRangePixels, 224.0f);
+            TargetID = FindNearestEnemy(EM, EntityID, SearchRange);
             if (TargetID >= 0)
                 SetAutoTarget(*Combat, TargetID, 0.35f);
         }
@@ -2133,6 +2259,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         Combat->TargetEntityID = -1;
         if (Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
         {
+            Cmd->TargetEntityID = -1;
             auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
             const bool HasActivePath = Path && Path->PathIndex < (int)Path->Path.size();
             const bool HasRecentFailure = Path && Path->HasRecentMoveFailure && Path->RecentMoveFailureTicks > 0;
@@ -2169,9 +2296,11 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         if (HoldPosition || InBunker || !CanChaseTargetTemporarily(Cmd, EM.GetComponent<BuildingComponent>(EntityID)))
             return;
 
-        const CommandType PreserveCommand = Cmd ? Cmd->CurrentCommand : CommandType::Attack;
+        const CommandType PreserveCommand = (Cmd && Cmd->CurrentCommand != CommandType::Stop)
+            ? Cmd->CurrentCommand
+            : CommandType::AttackMove;
         const Core::Math::Vec2 PreserveTarget = Cmd ? Cmd->TargetPosition : TargetTrans->Position;
-        const int PreserveTargetEntity = Cmd ? Cmd->TargetEntityID : TargetID;
+        const int PreserveTargetEntity = (PreserveCommand == CommandType::Attack) ? Cmd->TargetEntityID : -1;
         IssueCombatApproachPreservingCommand(
             EM, EntityID, TargetID, RangePixels,
             PreserveCommand, PreserveTarget, PreserveTargetEntity);

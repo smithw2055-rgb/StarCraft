@@ -479,9 +479,17 @@ namespace
             return false;
         if (Cmd->CurrentCommand == CommandType::Harvest ||
             Cmd->CurrentCommand == CommandType::Build ||
-            Cmd->CurrentCommand == CommandType::Repair)
+            Cmd->CurrentCommand == CommandType::Repair ||
+            Cmd->CurrentCommand == CommandType::Attack)
         {
             return false;
+        }
+
+        // Units with an active combat target must approach to weapon range, not stop at cluster boundary
+        if (const auto* Combat = EM.GetComponent<CombatComponent>(MovingID))
+        {
+            if (Combat->TargetEntityID >= 0 || Combat->AutoTargetEntityID >= 0)
+                return false;
         }
 
         const float MovingRadius = (float)CollisionRadiusFromBounds(Path);
@@ -1649,7 +1657,7 @@ namespace
                 DesiredDirection * Separation.Dot(DesiredDirection);
             if (LateralSeparation.LengthSq() > 0.001f)
             {
-                return LateralSeparation.Normalized();
+                return (DesiredDirection * 0.707f + LateralSeparation.Normalized() * 0.707f).Normalized();
             }
         }
 
@@ -2334,11 +2342,20 @@ void MovementSystem::Update(float DeltaTime)
         }
 
         // Stop/HoldPosition: clear path, don't move.
-        if (Cmd && (Cmd->CurrentCommand == CommandType::Stop ||
-                    Cmd->CurrentCommand == CommandType::HoldPosition))
+        if (Cmd && Cmd->CurrentCommand == CommandType::HoldPosition)
         {
             ClearMotion(*PathComp);
             continue;
+        }
+        if (Cmd && Cmd->CurrentCommand == CommandType::Stop)
+        {
+            const auto* CombatComp = EM.GetComponent<CombatComponent>(ID);
+            const bool InCombatChase = CombatComp && (CombatComp->TargetEntityID >= 0 || CombatComp->AutoTargetEntityID >= 0);
+            if (!InCombatChase || Path.empty())
+            {
+                ClearMotion(*PathComp);
+                continue;
+            }
         }
 
         // Follow: re-issue move toward target if path is empty

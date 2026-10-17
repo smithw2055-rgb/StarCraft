@@ -3730,8 +3730,9 @@ void AIBrain::ManageMilitaryPatrol(Core::ECS::EntityManager& EM)
     const auto& Profile = GetAIDifficultyProfile(mDifficulty);
     if (Profile.DefenderReservePercent > 0 && !HasActiveAttack)
     {
-        const size_t Reserve = (IdleCombatUnits.size() *
-            (size_t)Profile.DefenderReservePercent) / 100u;
+        const size_t Reserve = std::max<size_t>(
+            1u,
+            (IdleCombatUnits.size() * (size_t)Profile.DefenderReservePercent + 99u) / 100u);
         if (Reserve >= IdleCombatUnits.size())
             return;
         IdleCombatUnits.resize(IdleCombatUnits.size() - Reserve);
@@ -3743,14 +3744,9 @@ void AIBrain::ManageMilitaryPatrol(Core::ECS::EntityManager& EM)
         IdleCombatUnits.resize(kMaxSimultaneousPatrolOrders);
     }
 
-    if (HasActiveAttack)
+    if (HasActiveAttack && IdleCombatUnits.size() >= 2)
     {
         CombatSystem::IssueAttackMove(EM, IdleCombatUnits, mEnemyBasePos);
-    }
-    else if (mElapsedSeconds >= 45.0f && !IdleCombatUnits.empty())
-    {
-        const Core::Math::Vec2 PatrolTarget = FindEnemyBaseLocation(EM, false);
-        CombatSystem::IssueAttackMove(EM, IdleCombatUnits, PatrolTarget);
     }
 }
 
@@ -4298,9 +4294,15 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
     if (ThreatID < 0)
     {
         if (mDefendingBase)
+        {
             Core::Utils::Logger::Info(
                 "AIBrain", "Player " + std::to_string(mAIPlayerID) +
                 " base defense cleared");
+            if (!mActiveDefenseGroup.empty())
+            {
+                CombatSystem::IssueAttackMove(EM, mActiveDefenseGroup, mAiBasePos);
+            }
+        }
         mActiveDefenseGroup.clear();
         mHasDefenseTarget = false;
         return false;
@@ -4447,6 +4449,11 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
                     if (Trans->Position.DistanceTo(ThreatPosition) > 384.0f)
                     {
                         CommandSystem::SetSiegeMode(EM, Eid, false);
+                        Order AttackOrder;
+                        AttackOrder.Type = OrderType::AttackMove;
+                        AttackOrder.TargetPosition = ThreatPosition;
+                        CommandSystem::IssueOrder(EM, Eid, AttackOrder, true);
+                        continue;
                     }
                 }
             }
@@ -4461,6 +4468,11 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
                     Order UnburrowOrder;
                     UnburrowOrder.Type = OrderType::Unburrow;
                     CommandSystem::IssueOrder(EM, Eid, UnburrowOrder, false);
+                    Order AttackOrder;
+                    AttackOrder.Type = OrderType::AttackMove;
+                    AttackOrder.TargetPosition = ThreatPosition;
+                    CommandSystem::IssueOrder(EM, Eid, AttackOrder, true);
+                    continue;
                 }
             }
             CombatDefenders.push_back(Eid);
@@ -4927,7 +4939,8 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
 
     const auto FindVisibleDirectTarget = [&]()
     {
-        int UnitFallback = -1;
+        int BestTarget = -1;
+        int BestScore = -1;
         for (int EntityID : EM.GetEntitiesWith<PlayerComponent, UnitComponent,
                                                 TransformComponent>())
         {
@@ -4941,12 +4954,32 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
             {
                 continue;
             }
-            if (EM.GetComponent<BuildingComponent>(EntityID))
-                return EntityID;
-            if (UnitFallback < 0)
-                UnitFallback = EntityID;
+            auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
+            auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+            int Score = 0;
+            if (Combat && (Combat->CanTargetGround || Combat->CanTargetAir))
+            {
+                Score = Building ? 30 : 50; // Armed combat unit = 50, Defensive building = 30
+            }
+            else if (IsWorkerUnit(*Unit))
+            {
+                Score = 20; // Worker = 20
+            }
+            else if (Building)
+            {
+                Score = 10; // Other building = 10
+            }
+            else
+            {
+                Score = 5;
+            }
+            if (Score > BestScore)
+            {
+                BestScore = Score;
+                BestTarget = EntityID;
+            }
         }
-        return UnitFallback;
+        return BestTarget;
     };
 
     const auto GatherAvailableArmy = [&](bool IncludeWorkers)
@@ -5362,8 +5395,8 @@ void AIBrain::Update(float DeltaTime)
 
     if (!mShowcaseMode)
     {
-        ManageMilitary(EM);
         mDefendingBase = DefendBaseIfNeeded(EM);
+        ManageMilitary(EM);
         ManageUpgrades(EM, RaceVal);
         if (RaceVal == (int)Race::Terran)
         {
