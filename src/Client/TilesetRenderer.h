@@ -11,7 +11,9 @@ class TilesetRenderer
 {
 public:
     // Tileset name and the tileset asset view to draw from.
-    void Init(const std::string& TilesetName, Resource::Graphics::TilesetAssetCacheView TilesetAssets);
+    void Init(const std::string& TilesetName,
+              Resource::Graphics::TilesetAssetCacheView TilesetAssets,
+              const std::vector<uint16_t>* MegaTileIds = nullptr);
 
     // Set the active camera so viewport culling works.
     void SetCamera(const Render::Camera2D& Camera) { mCamera = &Camera; }

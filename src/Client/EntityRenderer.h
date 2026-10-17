@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <vector>
 
+namespace Render { class Draw2D; }
+
 namespace Game::Client
 {
 
@@ -41,9 +43,15 @@ public:
         mZoom = Zoom;
     }
 
+    void SetInterpolationAlpha(float Alpha)
+    {
+        mInterpolationAlpha = Alpha;
+    }
+
 private:
     void DrawSelectionMarker(const Entity& E);
     void DrawSelectionMarker(Core::ECS::EntityManager& Entities, int EntityId);
+    void DrawRallyIndicator(Render::Draw2D& Draw, Core::ECS::EntityManager& Entities, int BuildingEntityId) const;
     void DrawImageNode(const Entity& E, const EntityImageNode& Node, float OffsetX, float OffsetY) const;
     void DrawImageNodeTree(const Entity& E,
                            const std::vector<EntityImageNode>& Nodes,
@@ -77,6 +85,7 @@ private:
     float mCameraX = 0.0f, mCameraY = 0.0f;
     float mViewW = 1280.0f, mViewH = 720.0f;
     float mZoom = 1.0f;
+    float mInterpolationAlpha = 1.0f;
 };
 
 } // namespace Game::Client

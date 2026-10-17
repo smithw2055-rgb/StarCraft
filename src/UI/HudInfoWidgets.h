@@ -71,14 +71,15 @@ inline void DrawInfoValueBar(int& BarY,
                              const Resource::Graphics::GpuImage& HpStrip,
                              Render::Color FillColor)
 {
-    if (MaxValue <= 0 || BarY + 8 > FooterY - 6)
+    if (MaxValue <= 0 || BarY + 8 > FooterY + 20)
         return;
 
     auto& D = Render::g_Draw2D;
-    const int BarLabelW = 30;
-    const int BarW = std::max(64, StatBodyRect.W - BarLabelW - 8);
+    const int BarLabelW = 24;
+    const int TextNumberW = 58;
+    const int BarW = std::max(40, StatBodyRect.W - BarLabelW - TextNumberW - 4);
     const float Frac = std::clamp((float)Value / (float)MaxValue, 0.0f, 1.0f);
-    D.DrawText(Label, (float)StatBodyRect.X, (float)BarY - 1.0f, 1.0f, Render::Color(180, 180, 190, 255));
+    D.DrawText(Label, (float)StatBodyRect.X, (float)BarY - 1.0f, 0.95f, Render::Color(180, 180, 190, 255));
     D.DrawRect((float)StatBodyRect.X + (float)BarLabelW, (float)BarY, (float)BarW, 8.0f,
                Render::Color(28, 28, 38, 230));
 
@@ -92,7 +93,8 @@ inline void DrawInfoValueBar(int& BarY,
     if (HpStrip.Valid() && UseHpSkin)
     {
         const int FilledW = std::max(1, (int)std::floor((float)BarW * Frac));
-        DrawAtlasImage(HpStrip, { 0, 0, HpStrip.Width, HpStrip.Height },
+        const int SrcW = std::clamp((int)std::floor((float)HpStrip.Width * Frac), 1, HpStrip.Width);
+        DrawAtlasImage(HpStrip, { 0, 0, SrcW, HpStrip.Height },
                        { StatBodyRect.X + BarLabelW, BarY, FilledW, 8 },
                        Render::Colors::White());
     }
@@ -105,9 +107,9 @@ inline void DrawInfoValueBar(int& BarY,
 
     char Buf[64];
     std::snprintf(Buf, sizeof(Buf), "%d/%d", Value, MaxValue);
-    D.DrawText(Buf, (float)StatBodyRect.X + (float)BarLabelW + (float)BarW - 48.0f, (float)BarY - 1.0f, 1.0f,
+    D.DrawText(Buf, (float)StatBodyRect.X + (float)BarLabelW + (float)BarW + 5.0f, (float)BarY - 1.0f, 0.95f,
                Render::Color(220, 220, 230, 255));
-    BarY += 14;
+    BarY += 13;
 }
 
 inline void DrawInfoProgressBar(int& BarY,
@@ -117,9 +119,10 @@ inline void DrawInfoProgressBar(int& BarY,
 {
     auto& D = Render::g_Draw2D;
     Progress = std::clamp(Progress, 0.0f, 1.0f);
-    const int BarLabelW = 30;
-    const int BarW = std::max(64, StatBodyRect.W - BarLabelW - 8);
-    D.DrawText("PR", (float)StatBodyRect.X, (float)BarY - 1.0f, 1.0f, Render::Color(180, 180, 190, 255));
+    const int BarLabelW = 24;
+    const int TextNumberW = 40;
+    const int BarW = std::max(40, StatBodyRect.W - BarLabelW - TextNumberW - 4);
+    D.DrawText("PR", (float)StatBodyRect.X, (float)BarY - 1.0f, 0.95f, Render::Color(180, 180, 190, 255));
     D.DrawRect((float)StatBodyRect.X + (float)BarLabelW, (float)BarY, (float)BarW, 8.0f,
                Render::Color(28, 28, 38, 230));
     D.DrawRect((float)StatBodyRect.X + (float)BarLabelW, (float)BarY, (float)BarW * Progress, 8.0f,
@@ -129,9 +132,9 @@ inline void DrawInfoProgressBar(int& BarY,
 
     char Buf[64];
     std::snprintf(Buf, sizeof(Buf), "%d%%", (int)std::lround(Progress * 100.0f));
-    D.DrawText(Buf, (float)StatBodyRect.X + (float)BarLabelW + (float)BarW - 34.0f, (float)BarY - 1.0f, 1.0f,
+    D.DrawText(Buf, (float)StatBodyRect.X + (float)BarLabelW + (float)BarW + 5.0f, (float)BarY - 1.0f, 0.95f,
                Render::Color(220, 220, 230, 255));
-    BarY += 14;
+    BarY += 13;
 }
 
 inline void DrawInfoQueueList(const RectI& QueueRect,

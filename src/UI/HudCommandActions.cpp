@@ -160,9 +160,58 @@ void Hud::OnButtonInvoked(int ButtonIndex)
                 mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Parasite;
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
+            case HudCommandId::Infest:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Infest;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
             case HudCommandId::Consume:
                 mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Consume;
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::DefensiveMatrix:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::DefensiveMatrix;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Irradiate:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Irradiate;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Restoration:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Restoration;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::OpticalFlare:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::OpticalFlare;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Feedback:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Feedback;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Maelstrom:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Maelstrom;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::MindControl:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::MindControl;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Repair:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Repair;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::Heal:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Heal;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                break;
+            case HudCommandId::ArchonWarp:
+            case HudCommandId::DarkArchonWarp:
+            case HudCommandId::MorphLurker:
+            case HudCommandId::MorphGuardian:
+            case HudCommandId::MorphDevourer:
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::None;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
+                mState.ActiveCommand = -1;
                 break;
             default: break;
         }

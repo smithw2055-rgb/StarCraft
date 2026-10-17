@@ -17,6 +17,8 @@
 #include "Game/Replay.h"
 #include "Game/Trigger/SCRTriggerParser.h"
 
+#include "Main/CampaignPresentation.h"
+
 namespace Game::Systems { class FogOfWarSystem; }
 
 namespace Game::Client::GameLoop
@@ -57,16 +59,30 @@ struct GameSession
         return MapData;
     }
 
+    void SaveTransformTickState()
+    {
+        for (int EntityID : EcsSysMgr.GetEntityManager().GetEntitiesWith<Game::Components::TransformComponent>())
+        {
+            if (auto* Trans = EcsSysMgr.GetEntityManager().GetComponent<Game::Components::TransformComponent>(EntityID))
+            {
+                Trans->PrevPosition = Trans->Position;
+                Trans->HasPrevPosition = true;
+            }
+        }
+    }
+
     void SyncCreepPresentation()
     {
         const size_t TileCount = (size_t)MapData.Width * (size_t)MapData.Height;
-        MapData.Creep.assign(TileCount, 0);
+        if (MapData.Creep.size() != TileCount)
+            MapData.Creep.resize(TileCount, 0);
+
         for (int Y = 0; Y < MapData.Height; ++Y)
         {
             for (int X = 0; X < MapData.Width; ++X)
             {
-                if (EcsMap.IsInBounds(X, Y) && EcsMap.GetTile(X, Y).HasCreep)
-                    MapData.Creep[(size_t)Y * (size_t)MapData.Width + (size_t)X] = 1;
+                const uint8_t HasCreep = (EcsMap.IsInBounds(X, Y) && EcsMap.GetTile(X, Y).HasCreep) ? 1 : 0;
+                MapData.Creep[(size_t)Y * (size_t)MapData.Width + (size_t)X] = HasCreep;
             }
         }
     }
@@ -89,6 +105,16 @@ struct GameSession
     const std::vector<Game::Map::PlacedUnit>& GetChkUnits() const
     {
         return ChkUnits;
+    }
+
+    std::vector<Game::Map::PlacedDoodad>& MutableChkDoodads()
+    {
+        return ChkDoodads;
+    }
+
+    const std::vector<Game::Map::PlacedDoodad>& GetChkDoodads() const
+    {
+        return ChkDoodads;
     }
 
     Game::Trigger::SCRTriggerData& MutableScriptData()
@@ -128,6 +154,7 @@ struct GameSession
         MapData.StartLocations.push_back({48, 46, 1});
         MapData.TilesetName = "badlands";
         ChkUnits.clear();
+        ChkDoodads.clear();
         ScrTriggerData = {};
     }
 
@@ -135,6 +162,7 @@ struct GameSession
     {
         MapData = Result.Map;
         ChkUnits = Result.ChkUnits;
+        ChkDoodads = Result.ChkDoodads;
         ScrTriggerData = {};
     }
 
@@ -361,6 +389,8 @@ struct GameSession
     void MarkMapLoaded()
     {
         MapLoaded = true;
+        SimulationAccumulatorSeconds = 0.0;
+        SimulationTick = 0;
     }
 
     bool HasTerranAuditSpawned() const
@@ -503,6 +533,7 @@ struct GameSession
 
     GameMap MapData;
     std::vector<Game::Map::PlacedUnit> ChkUnits;
+    std::vector<Game::Map::PlacedDoodad> ChkDoodads;
     Core::ECS::SystemManager EcsSysMgr;
     Game::Map::GameMap EcsMap;
     Game::IScriptVM IscriptVM;
@@ -514,14 +545,38 @@ struct GameSession
     Game::Networking::SyncTransport NetTransport;
     Game::Systems::FogOfWarSystem* FogSystem = nullptr;
     uint32_t ReplayFrame = 0;
+    uint64_t SimulationTick = 0;
+    double SimulationAccumulatorSeconds = 0.0;
     std::vector<Game::Replay::ReplayAction> ReplayActions;
     bool EcsInitialized = false;
     bool TerranAuditSpawned = false;
     bool MapLoaded = false;
     bool ReplayRecording = false;
+    bool ReplayPlaying = false;
     bool NetSyncEnabled = false;
     bool IsHost = false;
-    bool ReplayPlaying = false;
+    MatchOutcome Outcome = MatchOutcome::Playing;
+    float MatchElapsedSeconds = 0.0f;
+    bool MeleeVictoryCheckEnabled = true;
+    std::array<bool, 8> ParticipatingPlayers{};
+
+    MatchOutcome GetMatchOutcome() const { return Outcome; }
+    void SetMatchOutcome(MatchOutcome NewOutcome) { Outcome = NewOutcome; }
+    void ResetMatchOutcome()
+    {
+        Outcome = MatchOutcome::Playing;
+        MatchElapsedSeconds = 0.0f;
+        ParticipatingPlayers.fill(false);
+    }
+    float GetMatchElapsedSeconds() const { return MatchElapsedSeconds; }
+    void AdvanceMatchElapsed(float Dt) { MatchElapsedSeconds += Dt; }
+    void SetMeleeVictoryCheckEnabled(bool Enabled) { MeleeVictoryCheckEnabled = Enabled; }
+    bool IsMeleeVictoryCheckEnabled() const { return MeleeVictoryCheckEnabled; }
+    bool IsReplayPlaying() const { return ReplayPlaying; }
+    bool IsMatchOver() const { return Outcome != MatchOutcome::Playing; }
+    bool IsVictory() const { return Outcome == MatchOutcome::Victory; }
+    bool IsDefeat() const { return Outcome == MatchOutcome::Defeat; }
+    bool IsDraw() const { return Outcome == MatchOutcome::Draw; }
 };
 
 } // namespace Game::Client::GameLoop

@@ -49,6 +49,17 @@ struct PlacedUnit
     uint16_t StateFlags;      // bit0=cloaked, bit1=burrowed, bit2=transit, bit3=hallu, bit4=invincible
 };
 
+// ── Placed doodad / sprite (THG2 / THG: 10 bytes each) ───
+struct PlacedDoodad
+{
+    uint16_t ID = 0;
+    uint16_t X = 0;
+    uint16_t Y = 0;
+    uint8_t Owner = 11;
+    uint8_t Flags = 0;
+    bool IsSprite = false;
+};
+
 // ── String table ─────────────────────────────────────────
 struct StringTable
 {
@@ -87,6 +98,9 @@ public:
     const PlacedUnit* GetUnits() const { return mUnits.data(); }
     size_t GetUnitCount() const { return mUnits.size(); }
 
+    const std::vector<PlacedDoodad>& GetDoodads() const { return mDoodads; }
+    size_t GetDoodadCount() const { return mDoodads.size(); }
+
     const StringTable& GetStringTable() const { return mStringTable; }
 
     // Raw megatile terrain data
@@ -117,6 +131,7 @@ private:
     void ParseMTXM(const ChkSectionInfo& S);
     void ParseSTR(const ChkSectionInfo& S);
     void ParseUNIT(const ChkSectionInfo& S);
+    void ParseTHG2(const ChkSectionInfo& S);
 
     const uint8_t* mRawData = nullptr;
     size_t mRawSize = 0;
@@ -130,6 +145,7 @@ private:
     PlayerInfo mPlayers[12];
     ForceInfo mForces[4];
     std::vector<PlacedUnit> mUnits;
+    std::vector<PlacedDoodad> mDoodads;
     std::vector<StartLocation> mStartLocations;
     StringTable mStringTable;
     std::vector<uint16_t> mMegaTiles;

@@ -23,6 +23,7 @@ class GlueGuiHost
 {
 public:
     using ActionCallback = std::function<void(const std::string& Action)>;
+    using AudioCallback = std::function<void(const std::string& AudioPath)>;
 
     GlueGuiHost() = default;
     ~GlueGuiHost() { Shutdown(); }
@@ -37,6 +38,7 @@ public:
     bool HandleEvent(const void* Event);
 
     void SetActionCallback(ActionCallback Cb);
+    void SetAudioCallback(AudioCallback Cb);
     bool IsActive() const { return mInitialized; }
 
 private:
@@ -57,6 +59,7 @@ private:
     Glue::GlueMenuController* mMenuControl = nullptr;
 
     ActionCallback mActionCallback;
+    AudioCallback mAudioCallback;
 };
 
 } // namespace Game::Client::UI

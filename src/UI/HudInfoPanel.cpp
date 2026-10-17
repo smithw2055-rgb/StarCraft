@@ -14,6 +14,7 @@ void Hud::DrawInfoPanel(Core::ECS::EntityManager& Entities,
         return;
 
     const bool ScvPanel =
+        mState.InfoPanel.SelectedCount <= 1 &&
         mState.Selection.SelectedTerranDefId == Game::Races::GetUnitDefID("SCV") &&
         !mState.InfoPanel.IsBuilding &&
         !mState.InfoPanel.IsResource;

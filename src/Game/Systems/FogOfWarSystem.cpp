@@ -5,6 +5,7 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace Game::Systems
 {
@@ -140,15 +141,16 @@ bool FogOfWarSystem::IsGameplayDetected(int TileX, int TileY, int PlayerID) cons
 
 void FogOfWarSystem::ResetVisibility()
 {
+    if (!mDetectorGrid.empty())
+        std::memset(mDetectorGrid.data(), 0, mDetectorGrid.size());
+    const size_t SliceSize = (size_t)mMapWidth * (size_t)mMapHeight;
     for (int P = 0; P < mMaxPlayers; P++)
     {
-        size_t Base = (size_t)P * mMapWidth * mMapHeight;
-        size_t DetBase = Base;
-        for (int I = 0; I < mMapWidth * mMapHeight; I++)
+        size_t Base = (size_t)P * SliceSize;
+        for (size_t I = 0; I < SliceSize; I++)
         {
             if (mFogGrid[Base + I] == (uint8_t)FogState::Visible)
                 mFogGrid[Base + I] = (uint8_t)FogState::Explored;
-            mDetectorGrid[DetBase + I] = false;
         }
     }
 }
@@ -158,35 +160,38 @@ void FogOfWarSystem::RevealAround(int CX, int CY, int SightRange, uint8_t* Grid,
     int R = SightRange;
     if (R < 1) R = 1;
 
-    int MinX = std::max(0, CX - R);
-    int MaxX = std::min(mMapWidth - 1, CX + R);
     int MinY = std::max(0, CY - R);
     int MaxY = std::min(mMapHeight - 1, CY + R);
+    const int R2 = R * R;
 
     for (int Y = MinY; Y <= MaxY; Y++)
     {
-        int RowBase = Y * mMapWidth;
-        for (int X = MinX; X <= MaxX; X++)
+        const int DY = Y - CY;
+        const int HalfSpan = (int)std::sqrt(R2 - DY * DY);
+        const int MinX = std::max(0, CX - HalfSpan);
+        const int MaxX = std::min(mMapWidth - 1, CX + HalfSpan);
+        if (MinX > MaxX) continue;
+
+        const size_t RowBase = (size_t)Y * (size_t)mMapWidth;
+        if (Grid)
         {
-            int DX = X - CX;
-            int DY = Y - CY;
-            if (DX * DX + DY * DY <= R * R)
+            for (int X = MinX; X <= MaxX; X++)
             {
-                size_t Idx = (size_t)RowBase + (size_t)X;
-                if (Grid && Grid[Idx] < (uint8_t)FogState::Visible)
-                    Grid[Idx] = (uint8_t)FogState::Visible;
-                if (DetGrid)
-                    DetGrid[Idx] = 1;
+                if (Grid[RowBase + (size_t)X] < (uint8_t)FogState::Visible)
+                    Grid[RowBase + (size_t)X] = (uint8_t)FogState::Visible;
             }
+        }
+        if (DetGrid)
+        {
+            std::memset(DetGrid + RowBase + MinX, 1, static_cast<size_t>(MaxX - MinX + 1));
         }
     }
 }
 
-void FogOfWarSystem::UpdateLastSeen(Core::ECS::EntityManager& EM)
+void FogOfWarSystem::UpdateLastSeen(Core::ECS::EntityManager& EM, const std::vector<int>& Units)
 {
     mLastSeen.clear();
 
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
     for (auto ID : Units)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
@@ -248,12 +253,40 @@ void FogOfWarSystem::Update(float DeltaTime)
         int EffectiveRange =
             Unit->SightRange + UpgradeSystem::GetSightRangeBonusTiles(EM, ID);
         auto* Status = EM.GetComponent<Components::StatusEffectComponent>(ID);
-        if (Status && Status->HasEffect(Components::StatusEffect::Blind))
-            EffectiveRange = 1; // Blind reduces vision to almost nothing
+        const bool IsBlind = Status && Status->HasEffect(Components::StatusEffect::Blind);
+        if (IsBlind)
+            EffectiveRange = 2; // Optical Flare blind reduces vision to 2 tiles in Brood War
+
+        bool BuildingCanDetect = true;
+        const auto* Bldg = EM.GetComponent<BuildingComponent>(ID);
+        if (Bldg)
+        {
+            if (Bldg->UnderConstruction)
+            {
+                EffectiveRange = 4; // Incomplete buildings have fixed sight range 4
+                BuildingCanDetect = false;
+            }
+            else if (Bldg->RequiresPylon && !Bldg->HasPylonPower)
+            {
+                BuildingCanDetect = false;
+            }
+        }
 
         uint8_t* FogSlice = mFogGrid.data() + SliceBase;
-        uint8_t* DetSlice = Unit->IsDetector ? (mDetectorGrid.data() + SliceBase) : nullptr;
-        RevealAround(TileX, TileY, EffectiveRange, FogSlice, DetSlice);
+        const bool CanDetect = Unit->IsDetector && !IsBlind && BuildingCanDetect;
+        const bool IsDefenseDetector = (Unit->ChkUnitID == 102 || Unit->ChkUnitID == 144 || Unit->ChkUnitID == 162);
+
+        if (CanDetect && IsDefenseDetector)
+        {
+            // Defense structures (Missile Turret, Spore Colony, Photon Cannon) have fixed detector range 7
+            RevealAround(TileX, TileY, EffectiveRange, FogSlice, nullptr);
+            RevealAround(TileX, TileY, 7, nullptr, mDetectorGrid.data() + SliceBase);
+        }
+        else
+        {
+            uint8_t* DetSlice = CanDetect ? (mDetectorGrid.data() + SliceBase) : nullptr;
+            RevealAround(TileX, TileY, EffectiveRange, FogSlice, DetSlice);
+        }
 
         if (Status)
         {
@@ -309,7 +342,7 @@ void FogOfWarSystem::Update(float DeltaTime)
             EM.DestroyEntity(ID);
     }
 
-    UpdateLastSeen(EM);
+    UpdateLastSeen(EM, Units);
 }
 
 } // namespace Game::Systems

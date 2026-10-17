@@ -30,6 +30,31 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
     mState.InfoPanel.HasSelection = true;
     mState.InfoPanel.SelectedCount = mState.Selection.SelectedCount;
 
+    mState.InfoPanel.MultiSelectSlots.clear();
+    if (mState.Selection.SelectedCount > 1 && !mState.Selection.LastSelectedIds.empty())
+    {
+        const size_t MaxUnits = std::min<size_t>(12, mState.Selection.LastSelectedIds.size());
+        for (size_t I = 0; I < MaxUnits; ++I)
+        {
+            const int EntId = mState.Selection.LastSelectedIds[I];
+            auto* U = Entities.GetComponent<Game::Components::UnitComponent>(EntId);
+            if (!U)
+                continue;
+            HudMultiSelectSlot Slot;
+            Slot.EntityId = EntId;
+            Slot.ChkUnitId = U->ChkUnitID;
+            Slot.CurrentHp = U->HitPoints;
+            Slot.MaxHp = std::max(1, U->MaxHitPoints);
+            Slot.Shield = U->ShieldPoints;
+            Slot.ShieldMax = U->MaxShieldPoints;
+            Slot.Energy = U->EnergyPoints;
+            Slot.EnergyMax = U->MaxEnergyPoints;
+            Slot.WireframeIndex = U->ChkUnitID;
+            Slot.Name = DisplayLabelForChkUnitId(U->ChkUnitID);
+            mState.InfoPanel.MultiSelectSlots.push_back(Slot);
+        }
+    }
+
     auto* SelectedUnit = Entities.GetComponent<Game::Components::UnitComponent>(SelectedEntityId);
     auto* SelectedBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(SelectedEntityId);
     auto* SelectedResource = Entities.GetComponent<Game::Components::ResourceComponent>(SelectedEntityId);
@@ -156,6 +181,21 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
             mState.InfoPanel.StatusLine = "Operational";
         }
 
+        const int CommandCenterDef = Game::Races::GetUnitDefID("CommandCenter");
+        const int NexusDef = Game::Races::GetUnitDefID("Nexus");
+        const int HatcheryDef = Game::Races::GetUnitDefID("Hatchery");
+        const int LairDef = Game::Races::GetUnitDefID("Lair");
+        const int HiveDef = Game::Races::GetUnitDefID("Hive");
+        if (ResolvedDefId == CommandCenterDef || ResolvedDefId == NexusDef ||
+            ResolvedDefId == HatcheryDef || ResolvedDefId == LairDef || ResolvedDefId == HiveDef)
+        {
+            mState.InfoPanel.IsTownCenter = true;
+            mState.InfoPanel.SupplyUsed = mState.Resources.SupplyUsed;
+            mState.InfoPanel.SupplyProvided = 10;
+            mState.InfoPanel.SupplyTotal = mState.Resources.SupplyMax;
+            mState.InfoPanel.SupplyMax = 200;
+        }
+
         if (Building->AddonID > 0 && MutableEM.IsAlive(Building->AddonID))
         {
             auto* AddonBuilding = MutableEM.GetComponent<Game::Components::BuildingComponent>(Building->AddonID);
@@ -191,6 +231,7 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
             const char* Verb = IsUpgrade ? "Upgrading " : "Researching ";
             const char* DetailPrefix = IsUpgrade ? "Upgrade " : "Research ";
             mState.InfoPanel.Progress = std::clamp(Progress, 0.0f, 1.0f);
+            mState.InfoPanel.ActiveResearchID = Building->ResearchingID;
             mState.InfoPanel.QueueLabel = QueueLabel;
             mState.InfoPanel.QueueEntries = {ResearchName};
             mState.InfoPanel.StatusLine = std::string(Verb) + ResearchName;
@@ -198,6 +239,137 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
                 std::string(DetailPrefix) +
                 std::to_string((int)std::lround(mState.InfoPanel.Progress * 100.0f)) +
                 "%";
+        }
+
+        std::string BldgName = mState.InfoPanel.Name;
+        std::vector<Game::Systems::ResearchId> TechResearches;
+        auto CheckTechBuilding = [](const std::string& Name, std::vector<Game::Systems::ResearchId>& Out) -> bool
+        {
+            using namespace Game::Systems;
+            Out.clear();
+            if (Name == "Engineering Bay" || Name == "EngineeringBay") {
+                Out = { ResearchId::Terran_InfantryWeapons, ResearchId::Terran_InfantryArmor };
+                return true;
+            }
+            if (Name == "Armory") {
+                Out = { ResearchId::Terran_VehicleWeapons, ResearchId::Terran_VehicleArmor,
+                        ResearchId::Terran_ShipWeapons, ResearchId::Terran_ShipArmor };
+                return true;
+            }
+            if (Name == "Academy") {
+                Out = { ResearchId::Terran_StimPacks, ResearchId::Terran_U238Shells, ResearchId::Terran_CaduceusReactor };
+                return true;
+            }
+            if (Name == "Machine Shop" || Name == "MachineShop") {
+                Out = { ResearchId::Terran_SiegeMode, ResearchId::Terran_SpiderMines,
+                        ResearchId::Terran_IonThrusters, ResearchId::Terran_CharonBoosters };
+                return true;
+            }
+            if (Name == "Control Tower" || Name == "ControlTower") {
+                Out = { ResearchId::Terran_CloakingField, ResearchId::Terran_ApolloReactor };
+                return true;
+            }
+            if (Name == "Covert Ops" || Name == "CovertOps") {
+                Out = { ResearchId::Terran_Lockdown, ResearchId::Terran_MoebiusReactor,
+                        ResearchId::Terran_OcularImplants, ResearchId::Terran_PersonalCloaking };
+                return true;
+            }
+            if (Name == "Physics Lab" || Name == "PhysicsLab") {
+                Out = { ResearchId::Terran_YamatoGun, ResearchId::Terran_ColossusReactor };
+                return true;
+            }
+            if (Name == "Science Facility" || Name == "ScienceFacility") {
+                Out = { ResearchId::Terran_TitanReactor };
+                return true;
+            }
+            if (Name == "Evolution Chamber" || Name == "EvolutionChamber") {
+                Out = { ResearchId::Zerg_MeleeAttacks, ResearchId::Zerg_MissileAttacks, ResearchId::Zerg_Carapace };
+                return true;
+            }
+            if (Name == "Spire" || Name == "Greater Spire" || Name == "GreaterSpire") {
+                Out = { ResearchId::Zerg_FlyerAttacks, ResearchId::Zerg_FlyerCarapace };
+                return true;
+            }
+            if (Name == "Spawning Pool" || Name == "SpawningPool") {
+                Out = { ResearchId::Zerg_AdrenalGlands, ResearchId::Zerg_MetabolicBoost };
+                return true;
+            }
+            if (Name == "Hydralisk Den" || Name == "HydraliskDen") {
+                Out = { ResearchId::Zerg_MuscularAugments, ResearchId::Zerg_GroovedSpines, ResearchId::Zerg_LurkerMorph };
+                return true;
+            }
+            if (Name == "Ultralisk Cavern" || Name == "UltraliskCavern") {
+                Out = { ResearchId::Zerg_AnabolicSynthesis, ResearchId::Zerg_ChitinousPlating };
+                return true;
+            }
+            if (Name == "Queen's Nest" || Name == "QueensNest" || Name == "Queen Nest") {
+                Out = { ResearchId::Zerg_SpawnBroodling, ResearchId::Zerg_Ensnare, ResearchId::Zerg_QueenEnergy };
+                return true;
+            }
+            if (Name == "Defiler Mound" || Name == "DefilerMound") {
+                Out = { ResearchId::Zerg_Plague, ResearchId::Zerg_Consume, ResearchId::Zerg_DefilerEnergy };
+                return true;
+            }
+            if (Name == "Forge") {
+                Out = { ResearchId::Protoss_GroundWeapons, ResearchId::Protoss_GroundArmor, ResearchId::Protoss_PlasmaShields };
+                return true;
+            }
+            if (Name == "Cybernetics Core" || Name == "CyberneticsCore") {
+                Out = { ResearchId::Protoss_AirWeapons, ResearchId::Protoss_AirArmor, ResearchId::Protoss_SingularityCharge };
+                return true;
+            }
+            if (Name == "Robotics Support Bay" || Name == "RoboticsSupportBay") {
+                Out = { ResearchId::Protoss_GraviticDrive, ResearchId::Protoss_ScarabDamage };
+                return true;
+            }
+            if (Name == "Observatory") {
+                Out = { ResearchId::Protoss_SensorArray };
+                return true;
+            }
+            if (Name == "Citadel of Adun" || Name == "CitadelOfAdun") {
+                Out = { ResearchId::Protoss_ZealotSpeed };
+                return true;
+            }
+            if (Name == "Templar Archives" || Name == "TemplarArchives") {
+                Out = { ResearchId::Protoss_PsionicStorm, ResearchId::Protoss_Hallucination, ResearchId::Protoss_KhaydarinAmulet };
+                return true;
+            }
+            if (Name == "Fleet Beacon" || Name == "FleetBeacon") {
+                Out = { ResearchId::Protoss_ApialSensors, ResearchId::Protoss_ArgusJewel };
+                return true;
+            }
+            if (Name == "Arbiter Tribunal" || Name == "ArbiterTribunal") {
+                Out = { ResearchId::Protoss_Recall, ResearchId::Protoss_KhaydarinCore };
+                return true;
+            }
+            return false;
+        };
+
+        if (CheckTechBuilding(BldgName, TechResearches))
+        {
+            mState.InfoPanel.IsTechBuilding = true;
+            mState.InfoPanel.IsProductionBuilding = false;
+            mState.InfoPanel.TechUpgrades.clear();
+            const int OwnerPlayer = Player ? Player->PlayerID : 0;
+            for (auto ResId : TechResearches)
+            {
+                const int Level = Game::Systems::UpgradeSystem::GetResearchLevel(OwnerPlayer, ResId);
+                const bool Has = Game::Systems::UpgradeSystem::HasResearch(OwnerPlayer, ResId);
+                const bool IsUp = Game::Systems::UpgradeSystem::IsUpgradeType(ResId);
+                const int MaxLvl = IsUp ? 3 : 1;
+                const int CurLvl = IsUp ? Level : (Has ? 1 : 0);
+                std::string ResName = std::string(Game::Systems::UpgradeSystem::GetResearchDisplayName(ResId));
+                mState.InfoPanel.TechUpgrades.push_back({ (int)ResId, CurLvl, MaxLvl, ResName });
+            }
+        }
+        else
+        {
+            mState.InfoPanel.IsTechBuilding = false;
+            mState.InfoPanel.IsProductionBuilding = (Production != nullptr) ||
+                (BldgName == "Barracks" || BldgName == "Factory" || BldgName == "Starport" ||
+                 BldgName == "Gateway" || BldgName == "Robotics Facility" || BldgName == "Stargate" ||
+                 BldgName == "Hatchery" || BldgName == "Lair" || BldgName == "Hive" ||
+                 BldgName == "Command Center" || BldgName == "CommandCenter" || BldgName == "Nexus");
         }
     }
     if (auto* Harvest = MutableEM.GetComponent<Game::Components::HarvestComponent>(SelectedEntityId))
@@ -219,10 +391,12 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
     if (Production && !Production->Queue.empty())
     {
         mState.InfoPanel.QueueEntries.clear();
+        mState.InfoPanel.QueueUnitDefIDs.clear();
         for (size_t Index = 0; Index < Production->Queue.size() && Index < 5; ++Index)
         {
             mState.InfoPanel.QueueEntries.push_back(
                 DisplayLabelForDef(Production->Queue[Index]));
+            mState.InfoPanel.QueueUnitDefIDs.push_back(Production->Queue[Index]);
         }
         mState.InfoPanel.QueueLabel = "Queue";
         if (Production->CurrentTrainingUnitDefID >= 0)

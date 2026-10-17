@@ -5,8 +5,8 @@
 #include <bitset>
 #include <memory>
 #include <array>
+#include <deque>
 #include <utility>
-#include <unordered_map>
 #include <algorithm>
 
 namespace Core::ECS
@@ -14,10 +14,6 @@ namespace Core::ECS
 
 using EntityID = int;
 constexpr EntityID InvalidEntity = 0;
-// Long-running melee matches create many short-lived projectile/effect entities.
-// Entity IDs are currently monotonic, so the component pools must cover the
-// whole session rather than only the peak number of simultaneously alive units.
-constexpr size_t MaxEntities = 100000;
 constexpr size_t MaxComponents = 64;
 
 using ComponentMask = std::bitset<MaxComponents>;
@@ -35,35 +31,47 @@ class ComponentPool : public IComponentPool
 public:
     T& AddComponent(EntityID Id)
     {
-        mComponentData[Id] = std::make_unique<T>();
-        mComponentMask[Id] = true;
-        return *mComponentData[Id];
+        if (Id >= (EntityID)mComponentData.size())
+        {
+            mComponentData.resize((size_t)Id + 1);
+            mComponentMask.resize((size_t)Id + 1, false);
+        }
+        if (!mComponentMask[(size_t)Id])
+            ++mActiveCount;
+        mComponentData[(size_t)Id] = std::make_unique<T>();
+        mComponentMask[(size_t)Id] = true;
+        return *mComponentData[(size_t)Id];
     }
 
     T* GetComponent(EntityID Id)
     {
-        if (Id < MaxEntities && mComponentMask[Id])
-            return mComponentData[Id].get();
+        if (Id >= 0 && Id < (EntityID)mComponentMask.size() && mComponentMask[(size_t)Id])
+            return mComponentData[(size_t)Id].get();
         return nullptr;
     }
 
     void RemoveComponent(EntityID Id) override
     {
-        if (Id < MaxEntities)
+        if (Id >= 0 && Id < (EntityID)mComponentMask.size() && mComponentMask[(size_t)Id])
         {
-            mComponentData[Id].reset();
-            mComponentMask[Id] = false;
+            mComponentData[(size_t)Id].reset();
+            mComponentMask[(size_t)Id] = false;
+            if (mActiveCount > 0)
+                --mActiveCount;
         }
     }
 
     bool HasComponent(EntityID Id) const
     {
-        return Id < MaxEntities && mComponentMask[Id];
+        return Id >= 0 && Id < (EntityID)mComponentMask.size() && mComponentMask[(size_t)Id];
     }
 
+    size_t Size() const { return mActiveCount; }
+
 private:
-    std::array<std::unique_ptr<T>, MaxEntities> mComponentData;
-    std::array<bool, MaxEntities> mComponentMask = {};
+    size_t mActiveCount = 0;
+    std::vector<std::unique_ptr<T>> mComponentData;
+    std::vector<bool> mComponentMask;
 };
 
 inline uint8_t NextComponentTypeID = 0;
@@ -82,21 +90,54 @@ public:
     void DestroyEntity(EntityID Id);
     bool IsAlive(EntityID Id) const;
     ComponentMask GetMask(EntityID Id) const;
-    size_t GetEntityCount() const { return mAlive.size() - std::count(mAlive.begin(), mAlive.end(), false); }
+    size_t GetEntityCount() const { return mLivingEntityCount; }
 
     template<typename T>
     T& AddComponent(EntityID Id)
     {
         auto* Pool = GetOrCreatePool<T>();
-        mMasks[Id].set(GetComponentTypeID<T>());
+        if ((size_t)Id >= mMasks.size())
+        {
+            mMasks.resize((size_t)Id + 1);
+            mAlive.resize((size_t)Id + 1, false);
+        }
+        mMasks[(size_t)Id].set(GetComponentTypeID<T>());
         return Pool->AddComponent(Id);
+    }
+
+    template<typename T>
+    void RemoveComponent(EntityID Id)
+    {
+        uint8_t ID = GetComponentTypeID<T>();
+        if (Id > 0 && (size_t)Id < mMasks.size())
+            mMasks[(size_t)Id].reset(ID);
+        if (mPools[ID])
+            mPools[ID]->RemoveComponent(Id);
     }
 
     template<typename T>
     T* GetComponent(EntityID Id)
     {
-        auto* Pool = GetOrCreatePool<T>();
-        return Pool->GetComponent(Id);
+        if (Id <= 0)
+            return nullptr;
+        uint8_t ID = GetComponentTypeID<T>();
+        if (!mPools[ID])
+            return nullptr;
+        return static_cast<ComponentPool<T>*>(mPools[ID].get())->GetComponent(Id);
+    }
+
+    template<typename T>
+    size_t GetComponentCount() const
+    {
+        uint8_t ID = GetComponentTypeID<T>();
+        if (!mPools[ID]) return 0;
+        return static_cast<const ComponentPool<T>*>(mPools[ID].get())->Size();
+    }
+
+    template<typename T>
+    bool HasAnyComponent() const
+    {
+        return GetComponentCount<T>() > 0;
     }
 
     template<typename... Components>
@@ -104,9 +145,9 @@ public:
     {
         std::vector<EntityID> Result;
         ComponentMask RequiredMask = CreateMask<Components...>();
-        for (EntityID Id = 1; Id <= mLastEntityId; ++Id)
+        for (EntityID Id : mActiveEntities)
         {
-            if (IsAlive(Id) && (mMasks[Id] & RequiredMask) == RequiredMask)
+            if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
                 Result.push_back(Id);
         }
         return Result;
@@ -116,9 +157,11 @@ public:
     void ForEachEntityWith(Fn&& Func)
     {
         ComponentMask RequiredMask = CreateMask<Components...>();
-        for (EntityID Id = 1; Id <= mLastEntityId; ++Id)
+        const size_t Count = mActiveEntities.size();
+        for (size_t i = 0; i < Count && i < mActiveEntities.size(); ++i)
         {
-            if (IsAlive(Id) && (mMasks[Id] & RequiredMask) == RequiredMask)
+            EntityID Id = mActiveEntities[i];
+            if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
                 Func(Id);
         }
     }
@@ -128,15 +171,11 @@ private:
     ComponentPool<T>* GetOrCreatePool()
     {
         uint8_t ID = GetComponentTypeID<T>();
-        auto It = mPools.find(ID);
-        if (It == mPools.end())
+        if (!mPools[ID])
         {
-            auto Pool = std::make_unique<ComponentPool<T>>();
-            auto* Ptr = Pool.get();
-            mPools[ID] = std::move(Pool);
-            return Ptr;
+            mPools[ID] = std::make_unique<ComponentPool<T>>();
         }
-        return static_cast<ComponentPool<T>*>(It->second.get());
+        return static_cast<ComponentPool<T>*>(mPools[ID].get());
     }
 
     void AddToMask(ComponentMask&)
@@ -166,9 +205,13 @@ private:
     }
 
     EntityID mLastEntityId = 0;
+    size_t mLivingEntityCount = 0;
     std::vector<bool> mAlive;
     std::vector<ComponentMask> mMasks;
-    std::unordered_map<uint8_t, std::unique_ptr<IComponentPool>> mPools;
+    std::deque<EntityID> mFreeIds;
+    std::vector<EntityID> mActiveEntities;
+    std::vector<size_t> mActiveEntityIndices;
+    std::array<std::unique_ptr<IComponentPool>, MaxComponents> mPools;
 };
 
 } // namespace Core::ECS

@@ -222,6 +222,51 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
             {
                 return false;
             }
+            if (!SpawnIsAir)
+            {
+                // A center point can be walkable while the unit is produced
+                // directly against a cliff lip. Reserve a terrain-only safety
+                // ring around the full unit footprint so freshly trained
+                // ground units have room to leave and form up.
+                const int CandidateHeight =
+                    gProductionMap->GetGroundHeightAtWorld(Candidate);
+                const int ProducerHeight =
+                    gProductionMap->GetGroundHeightAtWorld(
+                        ProducerTrans->Position);
+                if (CandidateHeight != ProducerHeight)
+                    return false;
+
+                constexpr float TerrainSafetyMargin = 48.0f;
+                const float Left =
+                    UnitBounds.Left + TerrainSafetyMargin;
+                const float Right =
+                    UnitBounds.Right + TerrainSafetyMargin;
+                const float Up = UnitBounds.Up + TerrainSafetyMargin;
+                const float Down = UnitBounds.Down + TerrainSafetyMargin;
+                const Core::Math::Vec2 SafetySamples[] = {
+                    {Candidate.X - Left, Candidate.Y},
+                    {Candidate.X + Right, Candidate.Y},
+                    {Candidate.X, Candidate.Y - Up},
+                    {Candidate.X, Candidate.Y + Down},
+                    {Candidate.X - Left, Candidate.Y - Up},
+                    {Candidate.X + Right, Candidate.Y - Up},
+                    {Candidate.X - Left, Candidate.Y + Down},
+                    {Candidate.X + Right, Candidate.Y + Down}
+                };
+                for (const auto& Sample : SafetySamples)
+                {
+                    int X = 0;
+                    int Y = 0;
+                    gProductionMap->WorldToTile(Sample, X, Y);
+                    if (!gProductionMap->IsInBounds(X, Y) ||
+                        !gProductionMap->IsWalkable(X, Y) ||
+                        gProductionMap->GetGroundHeightAtWorld(Sample) !=
+                            CandidateHeight)
+                    {
+                        return false;
+                    }
+                }
+            }
         }
 
         for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
@@ -319,6 +364,11 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "producer is lifted");
         return false;
     }
+    if (Building->RequiresPylon && !Building->HasPylonPower)
+    {
+        SetReason(OutReason, "producer requires pylon power");
+        return false;
+    }
     if (!ProducerUnit || ProducerUnit->HitPoints <= 0)
     {
         SetReason(OutReason, "producer is not operational");
@@ -361,6 +411,13 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
         return false;
     }
 
+    auto* Prod = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<ProductionComponent>(BuildingID);
+    if (Prod && Prod->Queue.size() >= 5)
+    {
+        SetReason(OutReason, "production queue is full");
+        return false;
+    }
+
     int PlayerID = Player ? Player->PlayerID : 0;
     auto& Res = HarvestSystem::GetResources(PlayerID);
     if (Res.Minerals < Def.MineralCost || Res.VespeneGas < Def.GasCost)
@@ -368,7 +425,8 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "not enough resources");
         return false;
     }
-    if (Res.SupplyUsed + Def.SupplyCost > Res.SupplyMax)
+    const int EffectiveSupplyMax = std::min(200, Res.SupplyMax);
+    if (Res.SupplyUsed + Def.SupplyCost > EffectiveSupplyMax)
     {
         SetReason(OutReason, "not enough supply");
         return false;
@@ -591,7 +649,8 @@ void ProductionSystem::ProcessTraining(Core::ECS::EntityManager& EM, int EntityI
 
     auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-    if (!Building || Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+    if (!Building || Building->UnderConstruction || !Unit || Unit->HitPoints <= 0 ||
+        (Building->RequiresPylon && !Building->HasPylonPower))
         return;
 
     if (Prod->CurrentTrainingUnitDefID == -1)
@@ -691,6 +750,66 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
     return EntityID;
 }
 
+static bool IsWorldPositionBlockedByBuilding(Core::ECS::EntityManager& EM,
+                                              const Core::Math::Vec2& Pos,
+                                              int ProducerBuildingID)
+{
+    if (gProductionMap)
+    {
+        int TileX = 0;
+        int TileY = 0;
+        gProductionMap->WorldToTile(Pos, TileX, TileY);
+        if (!gProductionMap->IsInBounds(TileX, TileY) || !gProductionMap->IsWalkable(TileX, TileY))
+            return true;
+    }
+
+    for (int EntityID : EM.GetEntitiesWith<TransformComponent, BuildingComponent>())
+    {
+        if (EntityID == ProducerBuildingID)
+            continue;
+        const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        if (!Trans || !Unit || Unit->HitPoints <= 0)
+            continue;
+
+        const auto Bounds = ResolveCollisionBounds(Unit->ChkUnitID);
+        const float Left = Trans->Position.X - Bounds.Left;
+        const float Right = Trans->Position.X + Bounds.Right;
+        const float Top = Trans->Position.Y - Bounds.Up;
+        const float Bottom = Trans->Position.Y + Bounds.Down;
+
+        if (Pos.X >= Left && Pos.X <= Right && Pos.Y >= Top && Pos.Y <= Bottom)
+            return true;
+    }
+    return false;
+}
+
+static Core::Math::Vec2 ResolveFreeRallyDestination(Core::ECS::EntityManager& EM,
+                                                    const Core::Math::Vec2& TargetPos,
+                                                    int ProducerBuildingID)
+{
+    if (!IsWorldPositionBlockedByBuilding(EM, TargetPos, ProducerBuildingID))
+        return TargetPos;
+
+    constexpr float Step = 24.0f;
+    for (int Ring = 1; Ring <= 8; ++Ring)
+    {
+        const float R = (float)Ring * Step;
+        constexpr int Angles = 12;
+        for (int A = 0; A < Angles; ++A)
+        {
+            const float Theta = (float)A * (6.2831853f / (float)Angles);
+            const Core::Math::Vec2 Candidate{
+                TargetPos.X + std::cos(Theta) * R,
+                TargetPos.Y + std::sin(Theta) * R
+            };
+            if (!IsWorldPositionBlockedByBuilding(EM, Candidate, ProducerBuildingID))
+                return Candidate;
+        }
+    }
+    return TargetPos;
+}
+
 int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
                                 int BuildingID, int UnitDefID)
 {
@@ -712,9 +831,11 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
         if (const auto* ProducerCmd = EM.GetComponent<CommandComponent>(BuildingID);
             ProducerCmd && ProducerCmd->HasRallyPoint)
         {
+            const Core::Math::Vec2 TargetRally =
+                ResolveFreeRallyDestination(EM, ProducerCmd->RallyPoint, BuildingID);
             Order RallyOrder;
             RallyOrder.Type = OrderType::Move;
-            RallyOrder.TargetPosition = ProducerCmd->RallyPoint;
+            RallyOrder.TargetPosition = TargetRally;
             CommandSystem::IssueOrder(EM, NewUnitID, RallyOrder, false);
         }
     }

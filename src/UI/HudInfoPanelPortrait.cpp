@@ -87,38 +87,83 @@ void Hud::DrawInfoPanelPortraits(Core::ECS::EntityManager& Entities,
         mState.InfoPanel.PreviewChkUnitId,
         GetAnimatedSelectionFallbackImage(Entities));
 
-    D.DrawRect((float)PreviewPanel.X, (float)PreviewPanel.Y,
-               (float)PreviewPanel.W, (float)PreviewPanel.H,
-               Render::Color(10, 10, 14, 208));
-    D.DrawRectLines((float)PreviewPanel.X, (float)PreviewPanel.Y,
-                    (float)PreviewPanel.W, (float)PreviewPanel.H,
-                    Render::Color(92, 112, 128, 150), 1.0f);
-    D.DrawRect((float)PortraitPanel.X, (float)PortraitPanel.Y,
-               (float)PortraitPanel.W, (float)PortraitPanel.H,
-               Render::Color(10, 10, 14, 205));
-    D.DrawRectLines((float)PortraitPanel.X, (float)PortraitPanel.Y,
-                    (float)PortraitPanel.W, (float)PortraitPanel.H,
-                    Render::Color(95, 150, 90, 160), 1.0f);
+    const bool InMultiSelect =
+        mState.InfoPanel.SelectedCount > 1 && !mState.InfoPanel.MultiSelectSlots.empty();
 
-    const RectI PreviewImageRect =
+    if (!HasModularConsole)
     {
-        PreviewPanel.X + 6,
-        PreviewPanel.Y + 6,
-        std::max(8, PreviewPanel.W - 12),
-        std::max(8, PreviewPanel.H - 12)
-    };
-    if (WireframePreviewImage && WireframePreviewImage->Valid())
-    {
-        if (WireframeBounds && WireframeBounds->Valid())
+        if (!InMultiSelect)
         {
-            DrawContainedAtlas(*WireframePreviewImage,
-                               { WireframeBounds->X, WireframeBounds->Y, WireframeBounds->W, WireframeBounds->H },
-                               PreviewImageRect,
-                               Render::Colors::White());
+            D.DrawRect((float)PreviewPanel.X, (float)PreviewPanel.Y,
+                       (float)PreviewPanel.W, (float)PreviewPanel.H,
+                       Render::Color(10, 10, 14, 208));
+            D.DrawRectLines((float)PreviewPanel.X, (float)PreviewPanel.Y,
+                            (float)PreviewPanel.W, (float)PreviewPanel.H,
+                            Render::Color(92, 112, 128, 150), 1.0f);
         }
-        else
+        D.DrawRect((float)PortraitPanel.X, (float)PortraitPanel.Y,
+                   (float)PortraitPanel.W, (float)PortraitPanel.H,
+                   Render::Color(10, 10, 14, 205));
+        D.DrawRectLines((float)PortraitPanel.X, (float)PortraitPanel.Y,
+                        (float)PortraitPanel.W, (float)PortraitPanel.H,
+                        Render::Color(95, 150, 90, 160), 1.0f);
+    }
+
+    if (!InMultiSelect)
+    {
+        const bool HasHealth = mState.InfoPanel.MaxValue > 0;
+        const int BottomReserve = HasHealth ? 16 : 0;
+        const RectI PreviewImageRect =
         {
-            DrawContainedImage(*WireframePreviewImage, PreviewImageRect, Render::Colors::White());
+            PreviewPanel.X + 6,
+            PreviewPanel.Y + 4,
+            std::max(8, PreviewPanel.W - 12),
+            std::max(8, PreviewPanel.H - 8 - BottomReserve)
+        };
+        if (WireframePreviewImage && WireframePreviewImage->Valid())
+        {
+            if (WireframeBounds && WireframeBounds->Valid())
+            {
+                DrawContainedAtlas(*WireframePreviewImage,
+                                   { WireframeBounds->X, WireframeBounds->Y, WireframeBounds->W, WireframeBounds->H },
+                                   PreviewImageRect,
+                                   Render::Colors::White());
+            }
+            else
+            {
+                DrawContainedImage(*WireframePreviewImage, PreviewImageRect, Render::Colors::White());
+            }
+        }
+
+        if (HasHealth)
+        {
+            char Buf[64];
+            const float HpPct = (float)mState.InfoPanel.CurrentValue / (float)mState.InfoPanel.MaxValue;
+            const Render::Color HpCol = HpPct > 0.66f ? Render::Color(80, 220, 95, 255)
+                                      : HpPct > 0.33f ? Render::Color(220, 210, 60, 255)
+                                      : Render::Color(240, 70, 70, 255);
+
+            if (mState.InfoPanel.ShieldMax > 0)
+            {
+                std::snprintf(Buf, sizeof(Buf), "%d/%d %d/%d",
+                              mState.InfoPanel.ShieldValue, mState.InfoPanel.ShieldMax,
+                              mState.InfoPanel.CurrentValue, mState.InfoPanel.MaxValue);
+                const float CharW = 6.0f;
+                const float TextW = (float)std::strlen(Buf) * CharW;
+                const float TextX = (float)PreviewPanel.X + ((float)PreviewPanel.W - TextW) * 0.5f;
+                const float TextY = (float)(PreviewPanel.Y + PreviewPanel.H - 13);
+                D.DrawText(Buf, std::max((float)PreviewPanel.X + 2.0f, TextX), TextY, 0.82f, Render::Color(70, 190, 255, 255));
+            }
+            else
+            {
+                std::snprintf(Buf, sizeof(Buf), "%d/%d",
+                              mState.InfoPanel.CurrentValue, mState.InfoPanel.MaxValue);
+                const float CharW = 7.0f;
+                const float TextW = (float)std::strlen(Buf) * CharW;
+                const float TextX = (float)PreviewPanel.X + ((float)PreviewPanel.W - TextW) * 0.5f;
+                const float TextY = (float)(PreviewPanel.Y + PreviewPanel.H - 13);
+                D.DrawText(Buf, std::max((float)PreviewPanel.X + 2.0f, TextX), TextY, 0.88f, HpCol);
+            }
         }
     }
 

@@ -22,7 +22,13 @@ public:
 
     static bool MorphArchon(Core::ECS::EntityManager& EM,
                              int TemplarAID, int TemplarBID,
-                            bool IsDarkArchon);
+                             bool IsDarkArchon,
+                             bool InitialShieldCharge = false);
+    static bool StartArchonWarp(Core::ECS::EntityManager& EM,
+                                int TemplarAID, int TemplarBID,
+                                bool IsDarkArchon,
+                                float Duration = 4.0f,
+                                bool InitialShieldCharge = true);
     static bool CanRechargeShieldsTarget(Core::ECS::EntityManager& EM,
                                          int BatteryID,
                                          int TargetID);
@@ -34,6 +40,7 @@ private:
     void UpdatePowerGrid(Core::ECS::EntityManager& EM);
     void RechargeShields(Core::ECS::EntityManager& EM, float DeltaTime);
     void CheckPowerStatus(Core::ECS::EntityManager& EM);
+    void UpdateArchonWarps(Core::ECS::EntityManager& EM, float DeltaTime);
 
     Core::ECS::SystemManager& mSystemMgr;
     static Game::Map::GameMap* sMap;

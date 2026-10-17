@@ -174,7 +174,7 @@ void ClientRuntime::InitializeWorldView(const GameMap& MapData,
                                         int ViewportWidth,
                                         int ViewportHeight)
 {
-    Tilemap->Init(TilesetName, GetTilesetAssets());
+    Tilemap->Init(TilesetName, GetTilesetAssets(), &MapData.MegaTileIds);
     EntityView->Init(GetSpriteAssets(), GetDataAssets());
     Selector->Init(GetDataAssets());
 
@@ -289,6 +289,15 @@ int ClientRuntime::GetLocalPlayerId() const
     return Selector->GetLocalPlayerId();
 }
 
+bool ClientRuntime::SetConsoleRace(const std::string& RaceName)
+{
+    if (Cache)
+    {
+        return Cache->LoadHdConsoleGraphicsForRace(RaceName);
+    }
+    return false;
+}
+
 void ClientRuntime::CancelPointerGesture()
 {
     Selector->CancelPointerGesture();
@@ -375,7 +384,8 @@ void ClientRuntime::BeginWorldFrame()
 
 void ClientRuntime::RenderWorld(const GameMap& MapData,
                                 Core::ECS::EntityManager& Entities,
-                                bool MapLoaded)
+                                bool MapLoaded,
+                                float InterpAlpha)
 {
     if (!MapLoaded)
         return;
@@ -385,6 +395,7 @@ void ClientRuntime::RenderWorld(const GameMap& MapData,
                           (float)Camera->GetViewportWidth(),
                            (float)Camera->GetViewportHeight(),
                            Camera->GetZoom());
+    EntityView->SetInterpolationAlpha(InterpAlpha);
     EntityView->Render(Entities, Selector->GetSelected());
 }
 

@@ -7,14 +7,13 @@
 namespace Game::Client::GameLoop
 {
 
-inline void RenderGameplayWorldFrame(ClientRuntime& Client, GameSession& Session)
+inline void RenderGameplayWorldFrame(ClientRuntime& Client, GameSession& Session, float InterpAlpha = 1.0f)
 {
     Client.BeginWorldFrame();
 
     if (Session.IsMapLoaded())
     {
-        Session.SyncCreepPresentation();
-        Client.RenderWorld(Session.GetMapData(), Session.Entities(), Session.IsMapLoaded());
+        Client.RenderWorld(Session.GetMapData(), Session.Entities(), Session.IsMapLoaded(), InterpAlpha);
         Client.RenderWorldEffects(Render::g_Draw2D);
     }
 

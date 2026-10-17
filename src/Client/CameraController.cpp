@@ -38,7 +38,11 @@ void CameraController::Update(float Dt)
         float DX = Core::Platform::GetMouseDeltaX();
         float DY = Core::Platform::GetMouseDeltaY();
         mCamera->PanBy(-DX, -DY);
+        mCamera->SetPosition(mCamera->GetTargetX(), mCamera->GetTargetY());
     }
+
+    const float Zoom = mCamera->GetZoom();
+    const float EffectiveZoom = Zoom > 0.1f ? Zoom : 1.0f;
 
     float KDX = 0.0f, KDY = 0.0f;
     if (Core::Platform::IsKeyDown(SAPP_KEYCODE_LEFT)) KDX -= 1.0f;
@@ -47,7 +51,10 @@ void CameraController::Update(float Dt)
     if (Core::Platform::IsKeyDown(SAPP_KEYCODE_DOWN)) KDY += 1.0f;
     if (KDX != 0.0f || KDY != 0.0f)
     {
-        mCamera->PanBy(KDX * mKeyboardPanSpeed * Dt, KDY * mKeyboardPanSpeed * Dt);
+        const float KLen = std::sqrt(KDX * KDX + KDY * KDY);
+        if (KLen > 1.0f) { KDX /= KLen; KDY /= KLen; }
+        const float PanStep = (mKeyboardPanSpeed / EffectiveZoom) * Dt;
+        mCamera->PanBy(KDX * PanStep, KDY * PanStep);
     }
 
     int MX = (int)Core::Platform::GetMouseX();
@@ -64,16 +71,24 @@ void CameraController::Update(float Dt)
         Core::Platform::IsMouseButtonDown(1) ||
         Core::Platform::IsMouseButtonDown(2);
 
+    const int EdgeMargin = (int)mEdgePanMarginPx;
+
     if (Core::Platform::IsWindowFocused() &&
         Core::Platform::IsMouseInGameContentArea() &&
         !AnyMouseButtonDown &&
-        MX >= 0 && MY >= ActiveTop && MX < VW && MY < ActiveBottom)
+        MX >= 0 && MY >= 0 && MX < VW && MY < VH)
     {
         float EX = 0.0f, EY = 0.0f;
-        if (MX < (int)mEdgePanMarginPx) EX = -1.0f;
-        else if (MX > VW - (int)mEdgePanMarginPx) EX = 1.0f;
-        if (MY < ActiveTop + (int)mEdgePanMarginPx) EY = -1.0f;
-        else if (MY > ActiveBottom - (int)mEdgePanMarginPx) EY = 1.0f;
+        if (MX < EdgeMargin)
+            EX = -1.0f;
+        else if (MX >= VW - EdgeMargin)
+            EX = 1.0f;
+
+        if ((MY >= ActiveTop && MY < ActiveTop + EdgeMargin) || (MY <= 4))
+            EY = -1.0f;
+        else if ((MY > ActiveBottom - EdgeMargin && MY <= ActiveBottom + 8) || (MY >= VH - 8))
+            EY = 1.0f;
+
         if (EX != 0.0f || EY != 0.0f)
         {
             const float Length = std::sqrt(EX * EX + EY * EY);
@@ -82,7 +97,8 @@ void CameraController::Update(float Dt)
                 EX /= Length;
                 EY /= Length;
             }
-            mCamera->PanBy(EX * mMousePanSpeed * Dt, EY * mMousePanSpeed * Dt);
+            const float PanStep = (mMousePanSpeed / EffectiveZoom) * Dt;
+            mCamera->PanBy(EX * PanStep, EY * PanStep);
         }
     }
 

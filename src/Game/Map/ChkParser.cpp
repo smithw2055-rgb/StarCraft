@@ -32,6 +32,7 @@ bool ChkParser::Parse(const uint8_t* Data, size_t DataSize)
         else if (memcmp(S.Name, "MTXM", 4) == 0) ParseMTXM(S);
         else if (memcmp(S.Name, "STR ", 4) == 0) ParseSTR(S);
         else if (memcmp(S.Name, "UNIT", 4) == 0) ParseUNIT(S);
+        else if (memcmp(S.Name, "THG2", 4) == 0 || memcmp(S.Name, "THG ", 4) == 0) ParseTHG2(S);
     }
 
     return true;
@@ -226,6 +227,25 @@ void ChkParser::ParseUNIT(const ChkSectionInfo& S)
             SL.Owner = P.Owner;
             mStartLocations.push_back(SL);
         }
+    }
+}
+
+void ChkParser::ParseTHG2(const ChkSectionInfo& S)
+{
+    size_t Count = S.Size / 10;
+    for (size_t I = 0; I < Count; ++I)
+    {
+        size_t Offset = S.Offset + I * 10;
+        if (Offset + 10 > mRawSize) break;
+        const uint8_t* D = mRawData + Offset;
+        PlacedDoodad P;
+        P.ID = D[0] | (D[1] << 8);
+        P.X = D[2] | (D[3] << 8);
+        P.Y = D[4] | (D[5] << 8);
+        P.Owner = D[6];
+        P.Flags = D[9];
+        P.IsSprite = (P.Flags & 0x10) != 0;
+        mDoodads.push_back(P);
     }
 }
 

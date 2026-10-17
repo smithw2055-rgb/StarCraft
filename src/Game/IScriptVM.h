@@ -1,9 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace Game
@@ -254,7 +254,6 @@ public:
     const SpriteContext& GetContext() const { return mSprite; }
 
 private:
-    using OpcodeHandler = std::function<bool(IScriptVM&)>;
     bool DispatchOpcode(int Opcode);
     int ReadArg();
     int PeekArg(int Offset = 1) const;
@@ -262,14 +261,16 @@ private:
     void SkipVectorArgs();
     uint32_t NextRandom();
     void Emit(IScriptEventType Type, int A = 0, int B = 0, int C = 0, int D = 0);
-    void RegisterDefaultOpcodes();
+
+    using OpcodeHandlerFn = bool (*)(IScriptVM&);
+    static std::array<OpcodeHandlerFn, IScriptOpcodes::kCount> InitOpcodeTable();
+    static const std::array<OpcodeHandlerFn, IScriptOpcodes::kCount> sOpcodeTable;
 
     SpriteContext mSprite;
     const std::vector<int>* mProgramData = nullptr;
     std::vector<int> mCallStack;
     int mWaitRemaining = 0;
     int mCurrentAnim = -1;
-    std::unordered_map<int, OpcodeHandler> mOpcodeHandlers;
     std::vector<IScriptEvent> mEvents;
 };
 

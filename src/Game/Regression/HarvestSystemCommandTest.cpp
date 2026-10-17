@@ -253,8 +253,12 @@ int main()
     Require(Path && !Path->Path.empty(), "harvest command receives an approach waypoint");
     Require(Path->Path.front().X < 124.0f,
         "harvest approach waypoint is outside the mineral center");
-    Require(EntityEdgeDistance(EM, Path->Path.front(), Mineral) <= 10.1f,
-        "mineral approach closes the last few visual pixels around the patch");
+    const float MineralApproachEdgeDistance =
+        EntityEdgeDistance(EM, Path->Path.front(), Mineral);
+    Require(MineralApproachEdgeDistance >= 16.0f &&
+            MineralApproachEdgeDistance <= 20.1f &&
+            Path->RequestedIgnoreEntityID == -1,
+        "mineral approach keeps the worker footprint outside a solid target patch");
     Require(Harvest && Harvest->State == Game::Components::HarvestState::MovingToResource,
         "harvest component starts by moving to resource");
 
@@ -309,8 +313,23 @@ int main()
     Require(Harvest->CarryingAmount == 8 &&
             Harvest->State == Game::Components::HarvestState::MovingToDepot,
         "worker keeps carried minerals until reaching the depot collision edge");
+    for (int Tick = 0; Tick < 72; ++Tick)
+        HarvestSystem.Update(1.0f / 24.0f);
+    Require(Harvest->ReturnRecoveryAttempts == 1 &&
+            Harvest->ReturnBuildingID == Depot &&
+            !Path->Path.empty(),
+        "stationary return worker performs one bounded depot-path recovery");
 
     ScvTrans->Position = {225.0f, 100.0f};
+    Path->PathIndex = (int)Path->Path.size();
+    Path->CurrentSpeed = 0.0f;
+    Path->CurrentVelocity = {0.0f, 0.0f};
+    HarvestSystem.Update(0.1f);
+    Require(Resources.Minerals == 50 &&
+            Harvest->CarryingAmount == 8,
+        "worker collision box contact alone does not deposit before its center reaches the depot boundary");
+
+    ScvTrans->Position = {236.0f, 100.0f};
     Path->PathIndex = (int)Path->Path.size();
     Path->CurrentSpeed = 0.0f;
     Path->CurrentVelocity = {0.0f, 0.0f};
@@ -347,8 +366,8 @@ int main()
     ScvTrans->Position = {200.0f, 100.0f};
     HarvestSystem.Update(0.1f);
     Require(Harvest->State == Game::Components::HarvestState::MovingToResource &&
-            Path->RequestedIgnoreEntityID == Mineral && !Path->Path.empty(),
-        "worker switches collision ignore from the departed depot to its mineral target");
+            Path->RequestedIgnoreEntityID == -1 && !Path->Path.empty(),
+        "worker keeps its mineral target solid after clearing the departed depot");
 
     int ReplacementMineral = EM.CreateEntity();
     EM.AddComponent<Game::Components::TransformComponent>(ReplacementMineral).Position =
@@ -485,6 +504,11 @@ int main()
         if (BusyBlockingMineral)
         {
             ExistingGatherer = AdjacentEM.CreateEntity();
+            auto& ExistingHarvest =
+                AdjacentEM.AddComponent<Game::Components::HarvestComponent>(
+                    ExistingGatherer);
+            ExistingHarvest.State = Game::Components::HarvestState::Mining;
+            ExistingHarvest.TargetResourceID = BlockingMineral;
             BlockingResource.ActiveGathererEntityID = ExistingGatherer;
         }
 
@@ -543,6 +567,16 @@ int main()
                         Game::Components::HarvestState::QueuedAtResource &&
                     WorkerPath.Path.empty(),
                 "queued SCV does not spread back to the unreachable mineral behind it");
+            auto* ExistingHarvest =
+                AdjacentEM.GetComponent<Game::Components::HarvestComponent>(
+                    ExistingGatherer);
+            Require(ExistingHarvest != nullptr,
+                "busy mineral exposes its active gatherer state");
+            ExistingHarvest->State = Game::Components::HarvestState::Idle;
+            AdjacentHarvestSystem.Update(0.1f);
+            Require(WorkerHarvest->State == Game::Components::HarvestState::Mining &&
+                    BlockingResource.ActiveGathererEntityID == Worker,
+                "stale active gatherer is pruned so the waiting SCV can mine");
         }
         else
         {
@@ -1015,50 +1049,39 @@ int main()
         QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvA);
     const auto* QueuePathB =
         QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvB);
-    Require(QueueResource.QueuedGatherers.size() == QueueScvs.size() &&
-            QueueResource.QueuedGatherers[0] == QueueScvA &&
-            QueueResource.QueuedGatherers[1] == QueueScvB,
-        "multi-selection harvest preserves selection order in the resource queue");
+    const size_t PrimaryLoad = QueueResource.QueuedGatherers.size() +
+        (QueueResource.ActiveGathererEntityID >= 0 ? 1u : 0u);
+    const size_t AlternateLoad = AlternateResource.QueuedGatherers.size() +
+        (AlternateResource.ActiveGathererEntityID >= 0 ? 1u : 0u);
+    const size_t LoadDifference = PrimaryLoad > AlternateLoad
+        ? PrimaryLoad - AlternateLoad
+        : AlternateLoad - PrimaryLoad;
+    Require(PrimaryLoad + AlternateLoad == QueueScvs.size() &&
+            LoadDifference <= 1,
+        "multi-selection harvest balances workers across nearby mineral patches");
     Require(QueuePathA && QueuePathB && !QueuePathA->Path.empty() &&
             !QueuePathB->Path.empty(),
-        "queued harvesters each receive a movement destination");
-    Require((QueuePathA->Path.back() - QueuePathB->Path.back()).LengthSq() > 1.0f &&
-            QueuePathB->Path.back().DistanceTo({128.0f, 0.0f}) >
-                QueuePathA->Path.back().DistanceTo({128.0f, 0.0f}),
-        "non-front harvesters wait outside the resource footprint instead of stacking on it");
+        "balanced harvesters each receive a movement destination");
 
-    for (size_t I = 1; I < QueueScvs.size(); ++I)
+    for (int QueueScv : QueueScvs)
     {
         const auto* ApproachPath =
-            QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvs[I]);
-        Require(ApproachPath && !ApproachPath->Path.empty(),
-            "every queued SCV receives a resource approach path");
+            QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScv);
+        const auto* AssignedHarvest =
+            QueueEM.GetComponent<Game::Components::HarvestComponent>(QueueScv);
+        Require(ApproachPath && !ApproachPath->Path.empty() &&
+                AssignedHarvest &&
+                (AssignedHarvest->TargetResourceID == QueueMineral ||
+                 AssignedHarvest->TargetResourceID == AlternateMineral),
+            "every SCV receives a path to one balanced mineral assignment");
     }
-
-    const Core::Math::Vec2 QueueScvBApproachTarget = QueuePathB->RequestedDestination;
-    QueueEM.GetComponent<Game::Components::TransformComponent>(QueueScvB)->Position =
-        {80.0f, 0.0f};
-    QueueResource.ActiveGathererEntityID = QueueScvA;
-    QueueResource.QueuedGatherers.erase(QueueResource.QueuedGatherers.begin());
-    auto* QueueHarvestA =
+    const auto* QueueHarvestA =
         QueueEM.GetComponent<Game::Components::HarvestComponent>(QueueScvA);
-    Require(QueueHarvestA != nullptr, "front SCV has harvest state");
-    QueueHarvestA->State = Game::Components::HarvestState::Mining;
-    Game::Systems::HarvestSystem QueueHarvestSystem(QueueSysMgr);
-    QueueHarvestSystem.Update(0.1f);
-    QueuePathB = QueueEM.GetComponent<Game::Components::PathfindingComponent>(QueueScvB);
     const auto* QueueHarvestB =
         QueueEM.GetComponent<Game::Components::HarvestComponent>(QueueScvB);
-    Require(QueuePathB && QueueHarvestB &&
-            QueueHarvestB->TargetResourceID == AlternateMineral &&
-            QueuePathB->RequestedDestination.DistanceTo(QueueScvBApproachTarget) > 0.1f &&
-            AlternateResource.QueuedGatherers.size() == 1 &&
-            AlternateResource.QueuedGatherers.front() == QueueScvB,
-        "a queued SCV already at a busy patch spreads to an unused nearby mineral");
-    Require(std::find(QueueResource.QueuedGatherers.begin(),
-                      QueueResource.QueuedGatherers.end(), QueueScvB) ==
-                QueueResource.QueuedGatherers.end(),
-        "spreading removes the SCV from its previous mineral queue");
+    Require(QueueHarvestA && QueueHarvestB &&
+            QueueHarvestA->TargetResourceID != QueueHarvestB->TargetResourceID,
+        "the first two SCVs spread immediately instead of stacking at one patch");
 
     std::printf("HarvestSystemCommandTest passed\n");
     return 0;

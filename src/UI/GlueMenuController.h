@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UI/GlueCampaignData.h"
+
 #include <NsCore/Aero.h>
 #include <NsGui/UserControl.h>
 #include <array>
@@ -10,6 +12,7 @@ namespace Aero {
 class Button;
 class Border;
 class FrameworkElement;
+class Image;
 struct MouseEventArgs;
 class TextBlock;
 }
@@ -33,6 +36,9 @@ public:
     using ActionCallback = std::function<void(const std::string& Action)>;
     void SetActionCallback(ActionCallback Cb) { mActionCallback = std::move(Cb); }
 
+    using AudioCallback = std::function<void(const std::string& Path)>;
+    void SetAudioCallback(AudioCallback Cb) { mAudioCallback = std::move(Cb); }
+
     void OnSinglePlayer(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnCampaign(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnCustomGame(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
@@ -51,13 +57,21 @@ public:
     void OnProtossTab(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
     void OnLanguageToggle(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
 
+    void OnBriefingStart(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
+    void OnBriefingReplay(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
+    void OnBriefingBack(Aero::BaseComponent* Sender, const Aero::RoutedEventArgs& Args);
+
+    void OpenBriefingPage(bool Expansion, int Race, int Mission);
+    void StartBriefingPlayback();
+    void StopBriefingAudio();
+
     void SetSelectedMap(const std::string& MapName);
     int GetCampaignRace() const { return mCampaignRace; }
     void SetCampaignRace(int RaceIndex); // 0=Terran, 1=Zerg, 2=Protoss
     bool HandleFallbackClick(float ViewX, float ViewY, float ViewWidth, float ViewHeight);
 
 private:
-    enum class Page : uint8_t { MainMenu, Cinematics, SinglePlayer, Campaign, CustomGame, Options, LoadGame };
+    enum class Page : uint8_t { MainMenu, Cinematics, SinglePlayer, Campaign, CustomGame, Options, LoadGame, Briefing };
     enum class Language : uint8_t { English, Chinese };
 
     void CacheElements();
@@ -187,6 +201,28 @@ private:
     // Load game buttons
     Aero::Button* mLoadGameOkBtn = nullptr;
     Aero::Button* mLoadGameBackBtn = nullptr;
+
+    // Briefing room elements
+    Aero::Border* mBriefingPage = nullptr;
+    Aero::Image* mBriefingBackgroundRace = nullptr;
+    Aero::TextBlock* mBriefingTitleText = nullptr;
+    Aero::TextBlock* mBriefingObjectivesText = nullptr;
+    Aero::TextBlock* mBriefingSubtitleSpeaker = nullptr;
+    Aero::TextBlock* mBriefingSubtitleText = nullptr;
+    Aero::Button* mBriefingStartBtn = nullptr;
+    Aero::Button* mBriefingReplayBtn = nullptr;
+    Aero::Button* mBriefingBackBtn = nullptr;
+    Aero::Border* mBriefingPortraitBorders[4] = {};
+    GlueAnimatedImage* mBriefingPortraits[4] = {};
+    Aero::TextBlock* mBriefingSpeakers[4] = {};
+
+    AudioCallback mAudioCallback;
+    CampaignBriefingInfo mBriefingInfo;
+    bool mBriefingExpansion = false;
+    int mBriefingRace = 0;
+    int mBriefingMission = 0;
+    int mBriefingLineIndex = -1;
+    float mBriefingLineTimer = 0.0f;
 };
 
 } // namespace Game::Client::UI::Glue

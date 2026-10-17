@@ -14,6 +14,11 @@ namespace
 {
     constexpr size_t kMaxSelectionSize = 12;
 
+    Selection::UnitClickSoundCallback sUnitClickSoundCallback;
+    int sConsecutiveClickCount = 0;
+    int sLastClickedEntity = -1;
+    double sLastEntityClickTime = 0.0;
+
     bool IsShiftHeld()
     {
         return Core::Platform::IsKeyDown(225) ||
@@ -550,6 +555,23 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
                 mSelected = {Best};
             }
 
+            if (Best == sLastClickedEntity && (Now - sLastEntityClickTime) < 1.5)
+            {
+                sConsecutiveClickCount++;
+            }
+            else
+            {
+                sConsecutiveClickCount = 1;
+                sLastClickedEntity = Best;
+            }
+            sLastEntityClickTime = Now;
+
+            const bool IsPissed = (sConsecutiveClickCount >= 4);
+            if (sUnitClickSoundCallback)
+            {
+                sUnitClickSoundCallback(Best, IsPissed);
+            }
+
             sLastClickId = Best;
             sLastClickX = MX;
             sLastClickY = MY;
@@ -660,6 +682,11 @@ bool Selection::IsControlGroupEmpty(int GroupIndex) const
     if (GroupIndex < 0 || GroupIndex >= kNumControlGroups)
         return true;
     return mControlGroups[GroupIndex].empty();
+}
+
+void Selection::SetUnitClickSoundCallback(UnitClickSoundCallback Callback)
+{
+    sUnitClickSoundCallback = std::move(Callback);
 }
 
 } // namespace Game::Client

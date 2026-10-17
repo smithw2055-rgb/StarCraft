@@ -257,18 +257,37 @@ void AIBrain::BuildEnemySearchWaypoints(Core::ECS::EntityManager& EM)
     if (!mEnemySearchWaypoints.empty())
         return;
 
-    const auto SnapToWalkable = [&](const Core::Math::Vec2& Position)
+    const auto SnapToWalkable = [&](const Core::Math::Vec2& Position, bool& OutValid) -> Core::Math::Vec2
     {
+        OutValid = false;
         if (!mMap)
             return Position;
 
         int TileX = 0;
         int TileY = 0;
         mMap->WorldToTile(Position, TileX, TileY);
-        if (mMap->IsInBounds(TileX, TileY) && mMap->IsWalkable(TileX, TileY))
-            return mMap->TileToWorld(TileX, TileY);
+        
+        const auto IsOpenWalkable = [&](int X, int Y) -> bool
+        {
+            if (!mMap->IsInBounds(X, Y) || !mMap->IsWalkable(X, Y))
+                return false;
+            // Ensure at least two cardinal neighbors are also walkable so units don't get stuck in 1-tile dead-ends
+            int OpenNeighbors = 0;
+            if (mMap->IsInBounds(X + 1, Y) && mMap->IsWalkable(X + 1, Y)) ++OpenNeighbors;
+            if (mMap->IsInBounds(X - 1, Y) && mMap->IsWalkable(X - 1, Y)) ++OpenNeighbors;
+            if (mMap->IsInBounds(X, Y + 1) && mMap->IsWalkable(X, Y + 1)) ++OpenNeighbors;
+            if (mMap->IsInBounds(X, Y - 1) && mMap->IsWalkable(X, Y - 1)) ++OpenNeighbors;
+            return OpenNeighbors >= 2;
+        };
 
-        for (int Radius = 1; Radius <= 8; ++Radius)
+        if (IsOpenWalkable(TileX, TileY))
+        {
+            OutValid = true;
+            return mMap->TileToWorld(TileX, TileY);
+        }
+
+        // Only search nearby up to radius 2. If it's deep inside a giant platform or cliff, discard it!
+        for (int Radius = 1; Radius <= 2; ++Radius)
         {
             for (int DY = -Radius; DY <= Radius; ++DY)
             {
@@ -278,8 +297,11 @@ void AIBrain::BuildEnemySearchWaypoints(Core::ECS::EntityManager& EM)
                         continue;
                     const int X = TileX + DX;
                     const int Y = TileY + DY;
-                    if (mMap->IsInBounds(X, Y) && mMap->IsWalkable(X, Y))
+                    if (IsOpenWalkable(X, Y))
+                    {
+                        OutValid = true;
                         return mMap->TileToWorld(X, Y);
+                    }
                 }
             }
         }
@@ -288,7 +310,10 @@ void AIBrain::BuildEnemySearchWaypoints(Core::ECS::EntityManager& EM)
 
     const auto AppendUnique = [&](const Core::Math::Vec2& RawPosition)
     {
-        const Core::Math::Vec2 Position = SnapToWalkable(RawPosition);
+        bool Valid = false;
+        const Core::Math::Vec2 Position = SnapToWalkable(RawPosition, Valid);
+        if (!Valid)
+            return;
         for (const auto& Existing : mEnemySearchWaypoints)
             if (Existing.DistanceTo(Position) <= 192.0f)
                 return;
@@ -376,6 +401,32 @@ Core::Math::Vec2 AIBrain::SelectEnemySearchWaypoint(
     bool AdvanceSearchWaypoint)
 {
     BuildEnemySearchWaypoints(EM);
+
+    // If current waypoint is already fully explored in visibility and has no enemy structures, advance to next
+    if (!AdvanceSearchWaypoint && mHasLastEnemySearchWaypoint && mFog && mMap)
+    {
+        int TileX = 0;
+        int TileY = 0;
+        mMap->WorldToTile(mLastEnemySearchWaypoint, TileX, TileY);
+        if (mFog->GetGameplayFog(TileX, TileY, mAIPlayerID) == FogState::Visible)
+        {
+            bool HasEnemyNear = false;
+            for (int Eid : EM.GetEntitiesWith<BuildingComponent, PlayerComponent, TransformComponent>())
+            {
+                auto* P = EM.GetComponent<PlayerComponent>(Eid);
+                auto* T = EM.GetComponent<TransformComponent>(Eid);
+                if (P && P->PlayerID == mTargetPlayerID && T &&
+                    T->Position.DistanceTo(mLastEnemySearchWaypoint) <= 384.0f)
+                {
+                    HasEnemyNear = true;
+                    break;
+                }
+            }
+            if (!HasEnemyNear)
+                AdvanceSearchWaypoint = true;
+        }
+    }
+
     if (!AdvanceSearchWaypoint && mHasLastEnemySearchWaypoint)
         return mLastEnemySearchWaypoint;
 
@@ -845,6 +896,42 @@ int AIBrain::FindIdleWorker(Core::ECS::EntityManager& EM)
 bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDefID,
                                      const Core::Math::Vec2& NearPos, Core::Math::Vec2& OutPos)
 {
+    if (BuildingDefID < 0)
+        return false;
+
+    Core::Math::Vec2 SearchCenter = NearPos;
+    const auto& Def = Game::Races::GetUnitDefByID(BuildingDefID);
+    if (Def.RequiresPylon && !BuildingSystem::HasPylonPowerAtPosition(EM, NearPos, mAIPlayerID))
+    {
+        float BestDist = std::numeric_limits<float>::max();
+        Core::Math::Vec2 BestPylonPos = NearPos;
+        bool FoundPylon = false;
+        const int PylonDefID = Game::Races::GetUnitDefID("Pylon");
+        const int PylonChkID = PylonDefID >= 0 ? Game::Races::GetUnitDefByID(PylonDefID).ChkUnitID : 156;
+        for (int EntityID : EM.GetEntitiesWith<TransformComponent, BuildingComponent, UnitComponent, PlayerComponent>())
+        {
+            auto* P = EM.GetComponent<PlayerComponent>(EntityID);
+            auto* B = EM.GetComponent<BuildingComponent>(EntityID);
+            auto* U = EM.GetComponent<UnitComponent>(EntityID);
+            auto* T = EM.GetComponent<TransformComponent>(EntityID);
+            if (P && B && U && T && P->PlayerID == mAIPlayerID && !B->UnderConstruction && U->HitPoints > 0)
+            {
+                if (U->ChkUnitID == PylonChkID)
+                {
+                    float Dist = T->Position.DistanceTo(NearPos);
+                    if (Dist < BestDist)
+                    {
+                        BestDist = Dist;
+                        BestPylonPos = T->Position;
+                        FoundPylon = true;
+                    }
+                }
+            }
+        }
+        if (FoundPylon)
+            SearchCenter = BestPylonPos;
+    }
+
     const int SearchSerial = mShowcaseMode ? 0 : mBuildPlacementSerial++;
     const int BaseHeight = mMap ? mMap->GetGroundHeightAtWorld(mAiBasePos) : -1;
     const auto IsOnBasePlateau = [&](const Core::Math::Vec2& Candidate)
@@ -884,9 +971,9 @@ bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDe
     };
 
     const float Step = 64.0f;
-    if ((mShowcaseMode || SearchSerial == 0) && IsAvailableBuildSite(NearPos))
+    if ((mShowcaseMode || SearchSerial == 0) && IsAvailableBuildSite(SearchCenter))
     {
-        OutPos = NearPos;
+        OutPos = SearchCenter;
         return true;
     }
 
@@ -902,8 +989,8 @@ bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDe
                     continue;
 
                 Candidates.emplace_back(
-                    NearPos.X + (float)X * Step,
-                    NearPos.Y + (float)Y * Step);
+                    SearchCenter.X + (float)X * Step,
+                    SearchCenter.Y + (float)Y * Step);
             }
         }
         const size_t CandidateStart = Candidates.empty()
@@ -924,9 +1011,9 @@ bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDe
     // exact requested point as the final fallback so expansion/depot placement
     // still succeeds on maps with a single legal footprint.
     if (!mShowcaseMode && SearchSerial != 0 &&
-        IsAvailableBuildSite(NearPos))
+        IsAvailableBuildSite(SearchCenter))
     {
-        OutPos = NearPos;
+        OutPos = SearchCenter;
         return true;
     }
 
@@ -936,25 +1023,52 @@ bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDe
 bool AIBrain::StartBuildingNear(Core::ECS::EntityManager& EM, int BuilderID,
                                 int BuildingDefID, const Core::Math::Vec2& NearPos)
 {
-    const auto& Def = Game::Races::GetUnitDefByID(BuildingDefID);
-    if (Def.IsAddon)
-        return BuildingSystem::StartBuild(EM, BuilderID, BuildingDefID, BuildTarget{});
-
-    Core::Math::Vec2 BuildPos;
-    if (!FindBuildPositionNear(EM, BuildingDefID, NearPos, BuildPos))
+    if (!mShowcaseMode &&
+        mElapsedSeconds - mLastConstructionOrderSeconds < 3.0f)
+    {
         return false;
-    return BuildingSystem::StartBuild(EM, BuilderID, BuildingDefID, BuildPos);
+    }
+
+    const auto& Def = Game::Races::GetUnitDefByID(BuildingDefID);
+    bool Started = false;
+    if (Def.IsAddon)
+    {
+        Started = BuildingSystem::StartBuild(
+            EM, BuilderID, BuildingDefID, BuildTarget{});
+    }
+    else
+    {
+        Core::Math::Vec2 BuildPos;
+        if (!FindBuildPositionNear(EM, BuildingDefID, NearPos, BuildPos))
+            return false;
+        Started = BuildingSystem::StartBuild(
+            EM, BuilderID, BuildingDefID, BuildPos);
+    }
+
+    if (Started && !mShowcaseMode)
+        mLastConstructionOrderSeconds = mElapsedSeconds;
+    return Started;
 }
 
 bool AIBrain::StartZergBuildingNear(Core::ECS::EntityManager& EM, int DroneID,
                                     int BuildingDefID, const Core::Math::Vec2& NearPos)
 {
+    if (!mShowcaseMode &&
+        mElapsedSeconds - mLastConstructionOrderSeconds < 3.0f)
+    {
+        return false;
+    }
+
     Core::Math::Vec2 BuildPos;
     if (!FindBuildPositionNear(EM, BuildingDefID, NearPos, BuildPos))
         return false;
     if (!ZergSystem::CanMorphDroneIntoBuilding(EM, DroneID, BuildingDefID))
         return false;
-    return ZergSystem::StartMorphDroneIntoBuilding(EM, DroneID, BuildingDefID, BuildPos);
+    const bool Started = ZergSystem::StartMorphDroneIntoBuilding(
+        EM, DroneID, BuildingDefID, BuildPos);
+    if (Started && !mShowcaseMode)
+        mLastConstructionOrderSeconds = mElapsedSeconds;
+    return Started;
 }
 
 bool AIBrain::TrainUnitIfPossible(Core::ECS::EntityManager& EM, int UnitDefID)
@@ -980,9 +1094,31 @@ int AIBrain::FindAvailableAddonParent(Core::ECS::EntityManager& EM, int ParentDe
     return -1;
 }
 
+static bool HasConstructionWorkerReserve(Core::ECS::EntityManager& EM,
+                                         int PlayerID,
+                                         int WorkerDefID)
+{
+    int AvailableWorkers = 0;
+    for (int EntityID : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
+    {
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+        if (Unit && Player && Player->PlayerID == PlayerID &&
+            Unit->HitPoints > 0 &&
+            Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID) ==
+                WorkerDefID)
+        {
+            ++AvailableWorkers;
+        }
+    }
+    // Never let failed construction retries steal the final mineral line.
+    return AvailableWorkers > 2;
+}
 int AIBrain::FindTerranBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID)
 {
     const int ScvDefID = Game::Races::GetUnitDefID("SCV");
+    if (!HasConstructionWorkerReserve(EM, mAIPlayerID, ScvDefID))
+        return -1;
     int MineralWorker = -1;
     for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
     {
@@ -1033,6 +1169,8 @@ int AIBrain::FindTerranBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefI
 int AIBrain::FindZergBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID)
 {
     const int DroneDefID = Game::Races::GetUnitDefID("Drone");
+    if (!HasConstructionWorkerReserve(EM, mAIPlayerID, DroneDefID))
+        return -1;
     const int ExtractorDefID = Game::Races::GetUnitDefID("Extractor");
     for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
     {
@@ -1076,6 +1214,8 @@ int AIBrain::FindZergBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID)
 int AIBrain::FindProtossBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID)
 {
     const int ProbeDefID = Game::Races::GetUnitDefID("Probe");
+    if (!HasConstructionWorkerReserve(EM, mAIPlayerID, ProbeDefID))
+        return -1;
     for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
     {
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
@@ -1115,6 +1255,12 @@ int AIBrain::FindProtossBuilderFor(Core::ECS::EntityManager& EM, int BuildingDef
 bool AIBrain::StartGasBuilding(Core::ECS::EntityManager& EM, int BuilderID,
                               int GasBuildingDefID)
 {
+    if (!mShowcaseMode &&
+        mElapsedSeconds - mLastConstructionOrderSeconds < 3.0f)
+    {
+        return false;
+    }
+
     int BestGeyser = -1;
     float BestDistance = 1e30f;
     for (int Eid : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
@@ -1137,13 +1283,27 @@ bool AIBrain::StartGasBuilding(Core::ECS::EntityManager& EM, int BuilderID,
             BestGeyser = Eid;
         }
     }
-    return BestGeyser >= 0 && BuildingSystem::StartBuild(
-        EM, BuilderID, GasBuildingDefID, BuildTarget::FromEntity(BestGeyser));
+    if (BestGeyser < 0 ||
+        !BuildingSystem::StartBuild(
+            EM, BuilderID, GasBuildingDefID,
+            BuildTarget::FromEntity(BestGeyser)))
+    {
+        return false;
+    }
+    if (!mShowcaseMode)
+        mLastConstructionOrderSeconds = mElapsedSeconds;
+    return true;
 }
 
 bool AIBrain::StartZergGasBuilding(Core::ECS::EntityManager& EM, int DroneID,
                                    int ExtractorDefID)
 {
+    if (!mShowcaseMode &&
+        mElapsedSeconds - mLastConstructionOrderSeconds < 3.0f)
+    {
+        return false;
+    }
+
     int BestGeyser = -1;
     float BestDistance = 1e30f;
     for (int Eid : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
@@ -1174,6 +1334,8 @@ bool AIBrain::StartZergGasBuilding(Core::ECS::EntityManager& EM, int DroneID,
     {
         return false;
     }
+    if (!mShowcaseMode)
+        mLastConstructionOrderSeconds = mElapsedSeconds;
     Core::Utils::Logger::Info(
         "AIBrain", "Ordered Extractor on geyser=" +
         std::to_string(BestGeyser) + "; drone " + std::to_string(DroneID) +
@@ -1190,9 +1352,7 @@ void AIBrain::ManageGas(Core::ECS::EntityManager& EM, int RefineryDefID)
         auto* P = EM.GetComponent<PlayerComponent>(Eid);
         if (B && P && P->PlayerID == mAIPlayerID &&
             B->BuildingDefID == RefineryDefID && !B->UnderConstruction &&
-            IsMeleeStructureEntity(EM, Eid) &&
-            (!EM.GetComponent<ResourceComponent>(Eid) ||
-             IsAttackableClaimedGeyser(EM, Eid)))
+            IsMeleeStructureEntity(EM, Eid))
         {
             Refineries.push_back(Eid);
         }
@@ -1221,11 +1381,35 @@ void AIBrain::ManageGas(Core::ECS::EntityManager& EM, int RefineryDefID)
             }
         }
 
+        const int RaceVal = GetRace(EM);
+        const int WorkerChkIDs[] = {0x07, 0x29, 0x40};
+        int TotalWorkers = 0;
+        int MineralWorkers = 0;
+        for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
+        {
+            auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+            auto* Owner = EM.GetComponent<PlayerComponent>(Eid);
+            if (Unit && Owner && Owner->PlayerID == mAIPlayerID &&
+                RaceVal >= 0 && RaceVal <= 2 && Unit->ChkUnitID == WorkerChkIDs[RaceVal] &&
+                Unit->HitPoints > 0)
+            {
+                ++TotalWorkers;
+                auto* Harvest = EM.GetComponent<HarvestComponent>(Eid);
+                const int ResID = Harvest
+                    ? (Harvest->DesiredResourceID >= 0 ? Harvest->DesiredResourceID : Harvest->TargetResourceID)
+                    : -1;
+                const auto* Res = EM.GetComponent<ResourceComponent>(ResID);
+                if (Res && Res->Type == ResourceType::Minerals)
+                    ++MineralWorkers;
+            }
+        }
+
         while (Assigned < 3)
         {
+            if (MineralWorkers <= 4 && TotalWorkers < 8)
+                break;
+
             int Worker = -1;
-            const int RaceVal = GetRace(EM);
-            const int WorkerChkIDs[] = {0x07, 0x29, 0x40};
             for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
             {
                 auto* Unit = EM.GetComponent<UnitComponent>(Eid);
@@ -1256,6 +1440,7 @@ void AIBrain::ManageGas(Core::ECS::EntityManager& EM, int RefineryDefID)
                 break;
             }
             ++Assigned;
+            --MineralWorkers;
             Core::Utils::Logger::Info(
                 "AIBrain", "Assigned worker " + std::to_string(Worker) +
                 " to gas building " + std::to_string(RefineryID));
@@ -1302,6 +1487,141 @@ Core::Math::Vec2 AIBrain::ShowcaseBuildPosition(Core::ECS::EntityManager& EM,
     const float SideDistance = ((float)Lane - 1.5f) * 150.0f +
                                ((Row & 1u) ? 50.0f : 0.0f);
     return mAiBasePos + Forward * ForwardDistance + Side * SideDistance;
+}
+
+void AIBrain::UpdateSafeTerranRallyPoints(Core::ECS::EntityManager& EM)
+{
+    if (!mMap)
+        return;
+
+    const Core::Math::Vec2 Directions[] = {
+        {0.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, -1.0f}, {-1.0f, 0.0f},
+        {0.70710678f, 0.70710678f},
+        {0.70710678f, -0.70710678f},
+        {-0.70710678f, 0.70710678f},
+        {-0.70710678f, -0.70710678f}
+    };
+    const float Rings[] = {96.0f, 128.0f, 160.0f, 192.0f};
+    const Game::Pathfinding::NavigationFootprint RallyFootprint{
+        16, 16, 16, 16};
+
+    const auto IsSafe = [&](const Core::Math::Vec2& Candidate,
+                            int ProducerHeight)
+    {
+        if (mMap->GetGroundHeightAtWorld(Candidate) != ProducerHeight ||
+            !mMap->GetNavigationGrid().CanOccupyWorld(
+                Candidate, RallyFootprint))
+        {
+            return false;
+        }
+
+        // Reject a rally point before it reaches the visible cliff lip. The
+        // navigation footprint handles the unit itself; this wider ring gives
+        // a forming squad enough room to spread without hugging the edge.
+        constexpr float TerrainClearance = 64.0f;
+        const Core::Math::Vec2 Samples[] = {
+            {Candidate.X - TerrainClearance, Candidate.Y},
+            {Candidate.X + TerrainClearance, Candidate.Y},
+            {Candidate.X, Candidate.Y - TerrainClearance},
+            {Candidate.X, Candidate.Y + TerrainClearance},
+            {Candidate.X - TerrainClearance,
+             Candidate.Y - TerrainClearance},
+            {Candidate.X + TerrainClearance,
+             Candidate.Y - TerrainClearance},
+            {Candidate.X - TerrainClearance,
+             Candidate.Y + TerrainClearance},
+            {Candidate.X + TerrainClearance,
+             Candidate.Y + TerrainClearance}
+        };
+        for (const auto& Sample : Samples)
+        {
+            int X = 0;
+            int Y = 0;
+            mMap->WorldToTile(Sample, X, Y);
+            if (!mMap->IsInBounds(X, Y) ||
+                !mMap->IsWalkable(X, Y) ||
+                mMap->GetGroundHeightAtWorld(Sample) != ProducerHeight)
+            {
+                return false;
+            }
+        }
+
+        for (int ResourceID :
+             EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        {
+            const auto* Resource =
+                EM.GetComponent<ResourceComponent>(ResourceID);
+            const auto* ResourcePosition =
+                EM.GetComponent<TransformComponent>(ResourceID);
+            if (Resource && ResourcePosition && Resource->Amount > 0 &&
+                Candidate.DistanceTo(ResourcePosition->Position) < 112.0f)
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (int BuildingID :
+         EM.GetEntitiesWith<BuildingComponent, PlayerComponent,
+                            TransformComponent>())
+    {
+        const auto* Building =
+            EM.GetComponent<BuildingComponent>(BuildingID);
+        const auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
+        const auto* Position =
+            EM.GetComponent<TransformComponent>(BuildingID);
+        if (!Building || !Player || !Position ||
+            Player->PlayerID != mAIPlayerID ||
+            Building->UnderConstruction ||
+            std::find(mSafeRallyConfiguredBuildings.begin(),
+                      mSafeRallyConfiguredBuildings.end(), BuildingID) !=
+                mSafeRallyConfiguredBuildings.end())
+        {
+            continue;
+        }
+
+        const auto Def =
+            Game::Races::GetUnitDefByID(Building->BuildingDefID);
+        if (Def.Name != "Barracks" && Def.Name != "Factory" &&
+            Def.Name != "Starport")
+        {
+            continue;
+        }
+
+        const int ProducerHeight =
+            mMap->GetGroundHeightAtWorld(Position->Position);
+        Core::Math::Vec2 Best;
+        float BestScore = std::numeric_limits<float>::max();
+        bool Found = false;
+        for (float Ring : Rings)
+        {
+            for (const auto& Direction : Directions)
+            {
+                const Core::Math::Vec2 Candidate =
+                    Position->Position + Direction * Ring;
+                if (!IsSafe(Candidate, ProducerHeight))
+                    continue;
+                const float Score = Candidate.DistanceTo(mAiBasePos);
+                if (!Found || Score < BestScore)
+                {
+                    Found = true;
+                    Best = Candidate;
+                    BestScore = Score;
+                }
+            }
+        }
+        if (!Found)
+            continue;
+
+        CommandSystem::SetRallyPoint(EM, BuildingID, Best);
+        mSafeRallyConfiguredBuildings.push_back(BuildingID);
+        Core::Utils::Logger::Info(
+            "AIBrain", "Safe rally set building=" +
+            std::to_string(BuildingID) + " name=" + Def.Name + " point=" +
+            std::to_string((int)Best.X) + "," +
+            std::to_string((int)Best.Y));
+    }
 }
 
 void AIBrain::UpdateShowcaseRallyPoints(Core::ECS::EntityManager& EM)
@@ -1466,6 +1786,7 @@ void AIBrain::RunTerranShowcase(Core::ECS::EntityManager& EM)
         Core::Utils::Logger::Info(
             "AIBrain", "Showcase complete: all Terran buildings and trainable units ready");
     }
+    ManageTerranMedics(EM);
 }
 
 void AIBrain::RunProtossShowcase(Core::ECS::EntityManager& EM)
@@ -1781,6 +2102,8 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
     int CommandCenterDefID = Game::Races::GetUnitDefID("CommandCenter");
     int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
 
+    UpdateSafeTerranRallyPoints(EM);
+
     const auto& Profile = GetAIDifficultyProfile(mDifficulty);
     auto& Res = HarvestSystem::GetResources(mAIPlayerID);
     const int completedBases = std::max(1, CountOwnedResourceDepots(EM, false));
@@ -1823,9 +2146,11 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
 
     // Always: workers + supply
     TrainWorkerIfNeeded(EM, CommandCenterDefID, SvcDefID, workerTarget);
+    const int maxConcurrentDepots = Res.SupplyUsed >= 70 ? 3 : (Res.SupplyUsed >= 40 ? 2 : 1);
     if (scvCount >= 8 &&
+        Res.SupplyMax < 200 &&
         Res.SupplyUsed + Profile.SupplyBuffer >= Res.SupplyMax &&
-        supplyDepotStartedCount <= supplyDepotCount &&
+        supplyDepotStartedCount < supplyDepotCount + maxConcurrentDepots &&
         Res.Minerals >= 100)
     {
         int idleSCV = FindTerranBuilderFor(EM, SupplyDepotDefID);
@@ -1839,7 +2164,7 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         completedBases,
         mDifficulty == AIDifficulty::Easy ? 1 :
             (mDifficulty == AIDifficulty::Medium ? 2 : 3));
-    const int gasWorkerThreshold = mDifficulty == AIDifficulty::Easy ? 12 :
+    const int gasWorkerThreshold = mDifficulty == AIDifficulty::Easy ? 10 :
         (mDifficulty == AIDifficulty::Medium ? 9 : 8);
     if (scvCount >= gasWorkerThreshold &&
         refineryStartedCount < desiredRefineries && Res.Minerals >= 100)
@@ -1889,6 +2214,7 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         TrainUnitIfPossible(EM, MedicDefID);
 
     if (CountByDefID(EM, mAIPlayerID, EngineeringBayDefID, true) < 1 &&
+        barracksCount >= 1 &&
         (mDifficulty != AIDifficulty::Easy || mElapsedSeconds >= 600.0f) &&
         Res.Minerals >= 125)
     {
@@ -1925,7 +2251,7 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         if (factoryCount >= 1 &&
             CountByDefID(EM, mAIPlayerID, MachineShopDefID, true) <
                 desiredMachineShops &&
-            Res.Minerals >= 50)
+            Res.Minerals >= 50 && Res.VespeneGas >= 50)
         {
             int factory = FindAvailableAddonParent(EM, FactoryDefID);
             if (factory >= 0)
@@ -2116,9 +2442,12 @@ void AIBrain::RunTerranAI(Core::ECS::EntityManager& EM)
         tankCount + goliathCount + wraithCount + vesselCount + valkyrieCount +
         battlecruiserCount;
     const int waveSize = Profile.AttackWaveSize[0];
+    const int earlyWaveSize = std::min(waveSize, std::max(3, waveSize / 4));
+    const int effectiveWaveSize = (mElapsedSeconds >= 60.0f && totalCombat >= earlyWaveSize)
+        ? earlyWaveSize : waveSize;
     if (!mDefendingBase &&
-        (totalCombat >= waveSize || mElapsedSeconds >= 2700.0f))
-        SendAttackWave(EM, waveSize);
+        (totalCombat >= effectiveWaveSize || mElapsedSeconds >= 1800.0f))
+        SendAttackWave(EM, effectiveWaveSize);
 }
 
 void AIBrain::RunZergShowcase(Core::ECS::EntityManager& EM)
@@ -2469,14 +2798,16 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     mStage = std::min(mStage, Profile.MaxTechStage);
 
     // Supply: morph overlords
-    if (Res.SupplyUsed + Profile.SupplyBuffer >= Res.SupplyMax &&
-        CountMorphingInto(OverlordDefID) == 0 && Res.Minerals >= 100)
+    const int maxConcurrentOverlords = Res.SupplyUsed >= 60 ? 3 : (Res.SupplyUsed >= 32 ? 2 : 1);
+    if (Res.SupplyMax < 200 &&
+        Res.SupplyUsed + Profile.SupplyBuffer >= Res.SupplyMax &&
+        CountMorphingInto(OverlordDefID) < maxConcurrentOverlords &&
+        Res.Minerals >= 100)
     {
         int larva = FindIdleLarva();
         if (larva >= 0 &&
             ZergSystem::StartMorphLarvaIntoUnit(EM, larva, OverlordDefID))
         {
-            return;
         }
     }
 
@@ -2484,8 +2815,10 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         completedBases,
         mDifficulty == AIDifficulty::Easy ? 1 :
             (mDifficulty == AIDifficulty::Medium ? 2 : 3));
-    if (droneCount >= (mDifficulty == AIDifficulty::Easy ? 12 : 9) &&
-        extractorStartedCount < desiredExtractors && Res.Minerals >= 50)
+    const bool NeedExtractor = droneCount >= (mDifficulty == AIDifficulty::Easy ? 10 : 8) &&
+        extractorStartedCount < desiredExtractors;
+    const int GasMineralReserve = (NeedExtractor && zerglingCount >= 4) ? 50 : 0;
+    if (NeedExtractor && Res.Minerals >= 50)
     {
         const int Drone = FindZergBuilderFor(EM, ExtractorDefID);
         if (Drone >= 0)
@@ -2507,8 +2840,8 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     const int currentWorkerTarget = mStage < 1
         ? std::min(workerTarget, openingWorkerTarget) : workerTarget;
     if (droneCount + CountMorphingInto(DroneDefID) < currentWorkerTarget &&
-        Res.Minerals >= 50 &&
-        (poolCount == 0 || zerglingCount >= 6 || droneCount < 8))
+        Res.Minerals >= 50 + GasMineralReserve &&
+        (poolCount == 0 || zerglingCount >= 4 || droneCount < 6))
     {
         const int Larva = FindIdleLarva();
         if (Larva >= 0)
@@ -2532,7 +2865,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         // Zerglings
         if (poolCount >= 1 &&
             zerglingCount + CountMorphingInto(ZerglingDefID) < 6 &&
-            Res.Minerals >= 50)
+            Res.Minerals >= 50 + GasMineralReserve)
         {
             int larva = FindIdleLarva();
             if (larva >= 0)
@@ -2544,7 +2877,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         (mDifficulty == AIDifficulty::Medium ? 14 : 20);
     if (poolCount >= 1 &&
         zerglingCount + CountMorphingInto(ZerglingDefID) < zerglingTarget &&
-        Res.Minerals >= 50)
+        Res.Minerals >= 50 + GasMineralReserve)
     {
         const int Larva = FindIdleLarva();
         if (Larva >= 0)
@@ -2584,7 +2917,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
 
         // Hydralisk Den
         if (CountByDefID(EM, mAIPlayerID, HydraliskDenDefID, true) < 1 &&
-            lairCount >= 1 && Res.Minerals >= 75 && Res.VespeneGas >= 50)
+            poolCount >= 1 && Res.Minerals >= 100 && Res.VespeneGas >= 50)
         {
             int drone = FindZergBuilderFor(EM, HydraliskDenDefID);
             if (drone >= 0)
@@ -2608,7 +2941,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         // Medium and Hard branch into air once the Lair economy is stable.
         if (Profile.MaxTechStage >= 2 &&
             CountByDefID(EM, mAIPlayerID, SpireDefID, true) < 1 &&
-            lairCount >= 1 && Res.Minerals >= 100 && Res.VespeneGas >= 100)
+            lairCount >= 1 && Res.Minerals >= 200 && Res.VespeneGas >= 150)
         {
             int drone = FindZergBuilderFor(EM, SpireDefID);
             if (drone >= 0)
@@ -2668,7 +3001,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     if (Profile.MaxTechStage >= 3 && mStage >= 2)
     {
         if (CountByDefID(EM, mAIPlayerID, QueensNestDefID, true) < 1 &&
-            lairCount >= 1 && Res.Minerals >= 75 && Res.VespeneGas >= 100)
+            lairCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 100)
         {
             const int Drone = FindZergBuilderFor(EM, QueensNestDefID);
             if (Drone >= 0)
@@ -2804,9 +3137,12 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     int totalCombat = zerglingCount + hydraCount + lurkerCount + mutaCount +
         scourgeCount + ultraCount + defilerCount;
     const int waveSize = Profile.AttackWaveSize[1];
+    const int earlyWaveSize = std::min(waveSize, std::max(3, waveSize / 4));
+    const int effectiveWaveSize = (mElapsedSeconds >= 60.0f && totalCombat >= earlyWaveSize)
+        ? earlyWaveSize : waveSize;
     if (!mDefendingBase &&
-        (totalCombat >= waveSize || mElapsedSeconds >= 2700.0f))
-        SendAttackWave(EM, waveSize);
+        (totalCombat >= effectiveWaveSize || mElapsedSeconds >= 1800.0f))
+        SendAttackWave(EM, effectiveWaveSize);
 }
 
 void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
@@ -2895,26 +3231,37 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     // Pylons for power and supply
     const bool NeedsLocalPower = NearbyCompletedPylons < 1;
     const bool NeedsSupply =
+        Res.SupplyMax < 200 &&
         Res.SupplyUsed + Profile.SupplyBuffer >= Res.SupplyMax;
+    const int maxConcurrentPylons = Res.SupplyUsed >= 70 ? 3 : (Res.SupplyUsed >= 40 ? 2 : 1);
     if (probeCount >= 6 && (NeedsLocalPower || NeedsSupply) &&
         ((NeedsLocalPower && NearbyStartedPylons == 0) ||
-         (!NeedsLocalPower && pylonStartedCount <= pylonCount)) &&
+         (!NeedsLocalPower && pylonStartedCount < pylonCount + maxConcurrentPylons)) &&
         Res.Minerals >= 100)
     {
         int probe = FindProtossBuilderFor(EM, PylonDefID);
         if (probe >= 0)
+        {
+            static const Core::Math::Vec2 PylonOffsets[] = {
+                {80.0f, 80.0f}, {-80.0f, 80.0f}, {80.0f, -80.0f}, {-80.0f, -80.0f},
+                {120.0f, 0.0f}, {-120.0f, 0.0f}, {0.0f, 120.0f}, {0.0f, -120.0f},
+                {140.0f, 80.0f}, {-140.0f, 80.0f}, {140.0f, -80.0f}, {-140.0f, -80.0f}
+            };
+            const int idx = NearbyStartedPylons % (sizeof(PylonOffsets) / sizeof(PylonOffsets[0]));
             StartBuildingNear(EM, probe, PylonDefID,
-                Core::Math::Vec2(mAiBasePos.X +
-                                     80.0f + 48.0f * (float)NearbyStartedPylons,
-                                 mAiBasePos.Y + 80.0f));
+                Core::Math::Vec2(mAiBasePos.X + PylonOffsets[idx].X,
+                                 mAiBasePos.Y + PylonOffsets[idx].Y));
+        }
     }
 
     const int desiredAssimilators = std::min(
         completedBases,
         mDifficulty == AIDifficulty::Easy ? 1 :
             (mDifficulty == AIDifficulty::Medium ? 2 : 3));
-    if (probeCount >= (mDifficulty == AIDifficulty::Easy ? 12 : 8) &&
-        assimilatorStartedCount < desiredAssimilators && Res.Minerals >= 100)
+    const bool NeedAssimilator = probeCount >= 8 &&
+        assimilatorStartedCount < desiredAssimilators;
+    const int GasMineralReserve = (NeedAssimilator && zealotCount >= 2) ? 100 : 0;
+    if (NeedAssimilator && Res.Minerals >= 100)
     {
         const int Probe = FindProtossBuilderFor(EM, AssimilatorDefID);
         if (Probe >= 0)
@@ -2925,7 +3272,8 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     const int desiredGateways = mDifficulty == AIDifficulty::Easy ? 2 :
         (mDifficulty == AIDifficulty::Medium ? 3 : std::min(5, 2 + completedBases));
     if (gatewayStartedCount < desiredGateways && pylonCount >= 1 &&
-        Res.Minerals >= 150)
+        (gatewayStartedCount == 0 || zealotCount >= 2) &&
+        Res.Minerals >= 150 + GasMineralReserve)
     {
         const int Probe = FindProtossBuilderFor(EM, GatewayDefID);
         if (Probe >= 0)
@@ -2936,7 +3284,7 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     const int zealotTarget = mDifficulty == AIDifficulty::Easy ? 8 :
         (mDifficulty == AIDifficulty::Medium ? 12 : 16);
     if (zealotCount + CountQueuedByDefID(EM, mAIPlayerID, ZealotDefID) <
-        zealotTarget)
+        zealotTarget && Res.Minerals >= 100 + GasMineralReserve)
         TrainUnitIfPossible(EM, ZealotDefID);
 
     // Stage 1: Cybernetics Core + Dragoons + Citadel
@@ -2986,13 +3334,32 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
         if (darkTemplarCount + CountQueuedByDefID(
                 EM, mAIPlayerID, DarkTemplarDefID) < darkTemplarTarget)
             TrainUnitIfPossible(EM, DarkTemplarDefID);
-        const int highTemplarTarget = mDifficulty == AIDifficulty::Hard ? 2 : 1;
+        const int highTemplarTarget = mDifficulty == AIDifficulty::Hard ? 4 : 2;
         if (highTemplarCount + CountQueuedByDefID(
                 EM, mAIPlayerID, HighTemplarDefID) < highTemplarTarget)
             TrainUnitIfPossible(EM, HighTemplarDefID);
 
+        // Morph Archons from low-energy or surplus High Templars
+        std::vector<int> ReadyTemplars;
+        for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent>())
+        {
+            auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+            auto* Player = EM.GetComponent<PlayerComponent>(Eid);
+            auto* Warp = EM.GetComponent<ArchonWarpComponent>(Eid);
+            if (Unit && Player && Player->PlayerID == mAIPlayerID &&
+                Unit->ChkUnitID == 67 && Unit->HitPoints > 0 && !Warp)
+            {
+                if (Unit->EnergyPoints < 75 || highTemplarCount >= 3)
+                    ReadyTemplars.push_back(Eid);
+            }
+        }
+        for (size_t i = 1; i < ReadyTemplars.size(); i += 2)
+        {
+            ProtossSystem::StartArchonWarp(EM, ReadyTemplars[i - 1], ReadyTemplars[i], false);
+        }
+
         if (CountByDefID(EM, mAIPlayerID, RoboticsFacilityDefID, true) < 1 &&
-            coreCount >= 1 && Res.Minerals >= 200 && Res.VespeneGas >= 100)
+            coreCount >= 1 && Res.Minerals >= 200 && Res.VespeneGas >= 200)
         {
             const int Probe = FindProtossBuilderFor(EM, RoboticsFacilityDefID);
             if (Probe >= 0)
@@ -3033,7 +3400,7 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
         if (Profile.MaxTechStage >= 3 &&
             CountByDefID(EM, mAIPlayerID, FleetBeaconDefID, true) < 1 &&
             stargateCount >= 1 &&
-            Res.Minerals >= 200 && Res.VespeneGas >= 150)
+            Res.Minerals >= 300 && Res.VespeneGas >= 200)
         {
             int probe = FindProtossBuilderFor(EM, FleetBeaconDefID);
             if (probe >= 0)
@@ -3059,6 +3426,7 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     }
 
     if (CountByDefID(EM, mAIPlayerID, ForgeDefID, true) < 1 &&
+        gatewayCount >= 1 &&
         (mDifficulty != AIDifficulty::Easy || mElapsedSeconds >= 600.0f) &&
         Res.Minerals >= 150)
     {
@@ -3120,9 +3488,12 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
     int totalCombat = zealotCount + dragoonCount + darkTemplarCount +
         highTemplarCount + observerCount + scoutCount + corsairCount + carrierCount;
     const int waveSize = Profile.AttackWaveSize[2];
+    const int earlyWaveSize = std::min(waveSize, std::max(3, waveSize / 4));
+    const int effectiveWaveSize = (mElapsedSeconds >= 60.0f && totalCombat >= earlyWaveSize)
+        ? earlyWaveSize : waveSize;
     if (!mDefendingBase &&
-        (totalCombat >= waveSize || mElapsedSeconds >= 2700.0f))
-        SendAttackWave(EM, waveSize);
+        (totalCombat >= effectiveWaveSize || mElapsedSeconds >= 1800.0f))
+        SendAttackWave(EM, effectiveWaveSize);
 }
 
 void AIBrain::ManageEconomy(Core::ECS::EntityManager& EM)
@@ -3132,9 +3503,26 @@ void AIBrain::ManageEconomy(Core::ECS::EntityManager& EM)
     for (int Mid : Minerals)
     {
         auto* Res = EM.GetComponent<ResourceComponent>(Mid);
-        if (Res && Res->Type == ResourceType::Minerals &&
+        auto* Pos = EM.GetComponent<TransformComponent>(Mid);
+        if (Res && Pos && Res->Type == ResourceType::Minerals &&
             !Res->IsDepleted && Res->Amount > 0)
-            ActiveMinerals.push_back(Mid);
+        {
+            const float DistToDepot = DistanceToNearestOwnedDepot(EM, mAIPlayerID, Pos->Position);
+            if (DistToDepot <= 450.0f)
+                ActiveMinerals.push_back(Mid);
+        }
+    }
+    if (ActiveMinerals.empty())
+    {
+        for (int Mid : Minerals)
+        {
+            auto* Res = EM.GetComponent<ResourceComponent>(Mid);
+            if (Res && Res->Type == ResourceType::Minerals &&
+                !Res->IsDepleted && Res->Amount > 0)
+            {
+                ActiveMinerals.push_back(Mid);
+            }
+        }
     }
     if (ActiveMinerals.empty()) return;
 
@@ -3163,17 +3551,29 @@ void AIBrain::ManageEconomy(Core::ECS::EntityManager& EM)
             const auto* GasPlayer =
                 EM.GetComponent<PlayerComponent>(AssignedResourceID);
             const auto* GasUnit = EM.GetComponent<UnitComponent>(AssignedResourceID);
+            const auto* GasBldg = EM.GetComponent<BuildingComponent>(AssignedResourceID);
             if (GasPlayer && GasUnit && GasPlayer->PlayerID == mAIPlayerID &&
-                GasUnit->HitPoints > 0 &&
-                IsAttackableClaimedGeyser(EM, AssignedResourceID))
+                GasUnit->HitPoints > 0 && (!GasBldg || GasBldg->BuildingDefID >= 0))
             {
                 continue;
             }
         }
 
+        const auto* WorkerTrans = EM.GetComponent<TransformComponent>(Eid);
+        const auto* ResourceTrans = EM.GetComponent<TransformComponent>(AssignedResourceID);
+        const auto* Path = EM.GetComponent<PathfindingComponent>(Eid);
+        const bool WorkerSettled = !Path || Path->Path.empty() ||
+            Path->PathIndex >= (int)Path->Path.size();
+        const bool StuckOutsideRange = WorkerSettled &&
+            H->State != HarvestState::Mining &&
+            H->State != HarvestState::Depositing &&
+            (!WorkerTrans || !ResourceTrans ||
+             WorkerTrans->Position.DistanceTo(ResourceTrans->Position) > 64.0f);
+
         const bool NeedsAssignment = H->State == HarvestState::Idle ||
             !CurrentResource || CurrentResource->Type != ResourceType::Minerals ||
-            CurrentResource->IsDepleted || CurrentResource->Amount <= 0;
+            CurrentResource->IsDepleted || CurrentResource->Amount <= 0 ||
+            StuckOutsideRange;
         if (!NeedsAssignment)
             continue;
 
@@ -3210,6 +3610,81 @@ void AIBrain::ManageMilitary(Core::ECS::EntityManager& EM)
     RefreshEnemyIntel(EM);
     ManageScouting(EM);
     ManageCombatAbilities(EM);
+    if (GetRace(EM) == (int)Race::Terran)
+    {
+        ManageTerranMedics(EM);
+    }
+    ManageMilitaryPatrol(EM);
+}
+
+void AIBrain::ManageMilitaryPatrol(Core::ECS::EntityManager& EM)
+{
+    if (mShowcaseMode || mDefendingBase)
+        return;
+
+    const bool HasActiveAttack = !mActiveAttackGroup.empty();
+
+    std::vector<int> IdleCombatUnits;
+    for (int EntityID : EM.GetEntitiesWith<UnitComponent, PlayerComponent,
+                                           TransformComponent, CombatComponent>())
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+        auto* Position = EM.GetComponent<TransformComponent>(EntityID);
+        auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
+        if (!Unit || !Player || !Position || !Combat || Unit->HitPoints <= 0 ||
+            Player->PlayerID != mAIPlayerID || IsWorkerUnit(*Unit) ||
+            EM.GetComponent<BuildingComponent>(EntityID) ||
+            !IsCombatUnit(*Unit, *Combat))
+        {
+            continue;
+        }
+
+        if (std::find(mActiveAttackGroup.begin(), mActiveAttackGroup.end(), EntityID) != mActiveAttackGroup.end() ||
+            std::find(mActiveDefenseGroup.begin(), mActiveDefenseGroup.end(), EntityID) != mActiveDefenseGroup.end())
+        {
+            continue;
+        }
+
+        auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+        const auto* Order = Command ? Command->GetCurrentOrder() : nullptr;
+        const bool IsIdle = !Order || Order->Type == OrderType::None ||
+            Order->Type == OrderType::Stop;
+        const float DistToBase = Position->Position.DistanceTo(mAiBasePos);
+        if (IsIdle && DistToBase <= 450.0f)
+        {
+            IdleCombatUnits.push_back(EntityID);
+        }
+    }
+
+    if (IdleCombatUnits.empty())
+        return;
+
+    const auto& Profile = GetAIDifficultyProfile(mDifficulty);
+    if (Profile.DefenderReservePercent > 0 && !HasActiveAttack)
+    {
+        const size_t Reserve = (IdleCombatUnits.size() *
+            (size_t)Profile.DefenderReservePercent) / 100u;
+        if (Reserve >= IdleCombatUnits.size())
+            return;
+        IdleCombatUnits.resize(IdleCombatUnits.size() - Reserve);
+    }
+
+    constexpr size_t kMaxSimultaneousPatrolOrders = 8;
+    if (IdleCombatUnits.size() > kMaxSimultaneousPatrolOrders)
+    {
+        IdleCombatUnits.resize(kMaxSimultaneousPatrolOrders);
+    }
+
+    if (HasActiveAttack)
+    {
+        CombatSystem::IssueAttackMove(EM, IdleCombatUnits, mEnemyBasePos);
+    }
+    else if (mElapsedSeconds >= 45.0f && !IdleCombatUnits.empty())
+    {
+        const Core::Math::Vec2 PatrolTarget = FindEnemyBaseLocation(EM, false);
+        CombatSystem::IssueAttackMove(EM, IdleCombatUnits, PatrolTarget);
+    }
 }
 
 void AIBrain::RefreshEnemyIntel(Core::ECS::EntityManager& EM)
@@ -3727,8 +4202,7 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
         if (!Unit || !Player || !Position ||
             Player->PlayerID != mAIPlayerID || IsWorkerUnit(*Unit) ||
             EM.GetComponent<BuildingComponent>(UnitID) ||
-            !IsArmyUnit(*Unit, Combat) ||
-            Position->Position.DistanceTo(ThreatPosition) > Profile.DefenderRadius)
+            !IsArmyUnit(*Unit, Combat))
         {
             continue;
         }
@@ -3761,22 +4235,20 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
     {
         if (Candidate.GroundPower <= 0.0f && Candidate.AirPower <= 0.0f)
             continue;
-        if (mDifficulty != AIDifficulty::Easy)
+        if (Candidate.Distance > Profile.DefenderRadius)
         {
-            const bool HelpsGround = Candidate.GroundPower > 0.0f &&
-                GroundDefenderPower < RequiredGroundPower;
-            const bool HelpsAir = Candidate.AirPower > 0.0f &&
-                AirDefenderPower < RequiredAirPower;
-            if (!HelpsGround && !HelpsAir)
-                continue;
+            // Outside local base perimeter: only recall distant units if local defenders
+            // cannot meet the required power or no defenders exist yet
+            if (GroundDefenderPower >= RequiredGroundPower &&
+                AirDefenderPower >= RequiredAirPower &&
+                !Defenders.empty())
+            {
+                break;
+            }
         }
         Defenders.push_back(Candidate.EntityID);
         GroundDefenderPower += Candidate.GroundPower;
         AirDefenderPower += Candidate.AirPower;
-        if (mDifficulty != AIDifficulty::Easy &&
-            GroundDefenderPower >= RequiredGroundPower &&
-            AirDefenderPower >= RequiredAirPower)
-            break;
     }
 
     // Detectors and spell/support units may accompany the response, but never
@@ -3799,54 +4271,99 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
     }
     const float DefenderPower = GroundDefenderPower + AirDefenderPower;
 
-    if (!Defenders.empty())
+    if (Defenders.empty())
     {
-        auto DefenseGroupKey = Defenders;
-        std::sort(DefenseGroupKey.begin(), DefenseGroupKey.end());
-        const bool DefenseGroupChanged =
-            DefenseGroupKey != mActiveDefenseGroup;
-        const bool DefenseTargetMoved = !mHasDefenseTarget ||
-            mLastDefenseTarget.DistanceTo(ThreatPosition) > 96.0f;
-        const bool RefreshDefenseOrder = !mDefendingBase ||
-            DefenseGroupChanged || DefenseTargetMoved;
-        if (RefreshDefenseOrder)
+        mActiveDefenseGroup.clear();
+        mHasDefenseTarget = false;
+        return false;
+    }
+
+    auto DefenseGroupKey = Defenders;
+    std::sort(DefenseGroupKey.begin(), DefenseGroupKey.end());
+    const bool DefenseGroupChanged =
+        DefenseGroupKey != mActiveDefenseGroup;
+    const bool DefenseTargetMoved = !mHasDefenseTarget ||
+        mLastDefenseTarget.DistanceTo(ThreatPosition) > 96.0f;
+    const bool RefreshDefenseOrder = !mDefendingBase ||
+        DefenseGroupChanged || DefenseTargetMoved;
+    if (RefreshDefenseOrder)
+    {
+        if (mDifficulty == AIDifficulty::Easy)
         {
-            if (mDifficulty == AIDifficulty::Easy)
-            {
-                mActiveAttackGroup.clear();
+            mActiveAttackGroup.clear();
+            mActiveAttackGroupAge = 0.0f;
+        }
+        else
+        {
+            mActiveAttackGroup.erase(
+                std::remove_if(
+                    mActiveAttackGroup.begin(), mActiveAttackGroup.end(),
+                    [&](int EntityID)
+                    {
+                        return std::find(Defenders.begin(), Defenders.end(),
+                                         EntityID) != Defenders.end();
+                    }),
+                mActiveAttackGroup.end());
+            if (mActiveAttackGroup.empty())
                 mActiveAttackGroupAge = 0.0f;
-            }
-            else
-            {
-                mActiveAttackGroup.erase(
-                    std::remove_if(
-                        mActiveAttackGroup.begin(), mActiveAttackGroup.end(),
-                        [&](int EntityID)
-                        {
-                            return std::find(Defenders.begin(), Defenders.end(),
-                                             EntityID) != Defenders.end();
-                        }),
-                    mActiveAttackGroup.end());
-                if (mActiveAttackGroup.empty())
-                    mActiveAttackGroupAge = 0.0f;
-            }
-            CombatSystem::IssueAttackMove(EM, Defenders, ThreatPosition);
-            mActiveDefenseGroup = std::move(DefenseGroupKey);
-            mLastDefenseTarget = ThreatPosition;
-            mHasDefenseTarget = true;
         }
-        if (!mDefendingBase)
+        std::vector<int> CombatDefenders;
+        std::vector<int> MedicDefenders;
+        for (int Eid : Defenders)
         {
-            Core::Utils::Logger::Info(
-                "AIBrain", "Player " + std::to_string(mAIPlayerID) +
-                " base defense engaged defenders=" +
-                std::to_string(Defenders.size()) + " threat=" +
-                std::to_string(ThreatID) + " threats=" +
-                std::to_string(ThreatCount) + " defender_power=" +
-                std::to_string((int)DefenderPower) + " threat_power=" +
-                std::to_string((int)ThreatPower) + " difficulty=" +
-                std::string(AIDifficultyName(mDifficulty)));
+            auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+            if (Unit && Unit->ChkUnitID == 34)
+                MedicDefenders.push_back(Eid);
+            else
+                CombatDefenders.push_back(Eid);
         }
+        if (!CombatDefenders.empty())
+        {
+            CombatSystem::IssueAttackMove(EM, CombatDefenders, ThreatPosition);
+        }
+        if (!MedicDefenders.empty())
+        {
+            int EscortLeader = -1;
+            for (int Cid : CombatDefenders)
+            {
+                auto* CUnit = EM.GetComponent<UnitComponent>(Cid);
+                if (CUnit && (CUnit->ChkUnitID == 0 || CUnit->ChkUnitID == 32 || CUnit->ChkUnitID == 1))
+                {
+                    EscortLeader = Cid;
+                    break;
+                }
+            }
+            if (EscortLeader < 0 && !CombatDefenders.empty())
+                EscortLeader = CombatDefenders.front();
+
+            for (int Mid : MedicDefenders)
+            {
+                if (EscortLeader >= 0)
+                {
+                    auto* LeadTrans = EM.GetComponent<TransformComponent>(EscortLeader);
+                    Order FollowOrder;
+                    FollowOrder.Type = OrderType::Follow;
+                    FollowOrder.TargetEntityID = EscortLeader;
+                    FollowOrder.TargetPosition = LeadTrans ? LeadTrans->Position : ThreatPosition;
+                    CommandSystem::IssueOrder(EM, Mid, FollowOrder, false);
+                }
+            }
+        }
+        mActiveDefenseGroup = std::move(DefenseGroupKey);
+        mLastDefenseTarget = ThreatPosition;
+        mHasDefenseTarget = true;
+    }
+    if (!mDefendingBase)
+    {
+        Core::Utils::Logger::Info(
+            "AIBrain", "Player " + std::to_string(mAIPlayerID) +
+            " base defense engaged defenders=" +
+            std::to_string(Defenders.size()) + " threat=" +
+            std::to_string(ThreatID) + " threats=" +
+            std::to_string(ThreatCount) + " defender_power=" +
+            std::to_string((int)DefenderPower) + " threat_power=" +
+            std::to_string((int)ThreatPower) + " difficulty=" +
+            std::string(AIDifficultyName(mDifficulty)));
     }
     return true;
 }
@@ -4036,6 +4553,201 @@ void AIBrain::ManageTerranRepairs(Core::ECS::EntityManager& EM)
         std::string(AIDifficultyName(mDifficulty)));
 }
 
+void AIBrain::ManageTerranMedics(Core::ECS::EntityManager& EM)
+{
+    // Gather all alive owned Medics
+    std::vector<int> Medics;
+    for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent, TransformComponent>())
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+        auto* Player = EM.GetComponent<PlayerComponent>(Eid);
+        if (Unit && Player && Unit->HitPoints > 0 &&
+            Unit->ChkUnitID == 34 && Player->PlayerID == mAIPlayerID)
+        {
+            Medics.push_back(Eid);
+        }
+    }
+    if (Medics.empty())
+        return;
+
+    // Gather potential patients: alive friendly organic units with missing HP
+    struct PatientCandidate
+    {
+        int EntityID = -1;
+        Core::Math::Vec2 Position;
+        int ChkUnitID = -1;
+        float Urgency = 0.0f;
+    };
+    std::vector<PatientCandidate> Patients;
+
+    // Also gather living combat infantry leaders (Marine, Firebat, Ghost) to escort when no one is wounded
+    struct EscortCandidate
+    {
+        int EntityID = -1;
+        Core::Math::Vec2 Position;
+        bool InAttackGroup = false;
+    };
+    std::vector<EscortCandidate> InfantryLeaders;
+
+    for (int Eid : EM.GetEntitiesWith<UnitComponent, PlayerComponent, TransformComponent>())
+    {
+        if (EM.GetComponent<BuildingComponent>(Eid))
+            continue;
+        auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+        auto* Player = EM.GetComponent<PlayerComponent>(Eid);
+        auto* Trans = EM.GetComponent<TransformComponent>(Eid);
+        if (!Unit || !Player || !Trans || Unit->HitPoints <= 0)
+            continue;
+
+        const bool IsFriendly = (Player->PlayerID == mAIPlayerID) ||
+            (mFog && mFog->AreAllied(mAIPlayerID, Player->PlayerID));
+        if (!IsFriendly)
+            continue;
+
+        if (Game::Races::IsOrganicChkUnitID(Unit->ChkUnitID))
+        {
+            if (Unit->HitPoints < Unit->MaxHitPoints)
+            {
+                float MissingRatio = 1.0f - ((float)Unit->HitPoints / (float)Unit->MaxHitPoints);
+                float PriorityBonus = 0.0f;
+                if (Unit->ChkUnitID == 0 || Unit->ChkUnitID == 32 || Unit->ChkUnitID == 1)
+                    PriorityBonus = 50.0f;
+                else if (Unit->ChkUnitID == 7) // SCV
+                    PriorityBonus = 20.0f;
+
+                Patients.push_back({Eid, Trans->Position, Unit->ChkUnitID, MissingRatio * 100.0f + PriorityBonus});
+            }
+            if (Player->PlayerID == mAIPlayerID &&
+                (Unit->ChkUnitID == 0 || Unit->ChkUnitID == 32 || Unit->ChkUnitID == 1))
+            {
+                bool InAttack = std::find(mActiveAttackGroup.begin(), mActiveAttackGroup.end(), Eid) != mActiveAttackGroup.end();
+                InfantryLeaders.push_back({Eid, Trans->Position, InAttack});
+            }
+        }
+    }
+
+    for (int MedicID : Medics)
+    {
+        auto* MedicUnit = EM.GetComponent<UnitComponent>(MedicID);
+        auto* MedicTrans = EM.GetComponent<TransformComponent>(MedicID);
+        auto* Command = EM.GetComponent<CommandComponent>(MedicID);
+        if (!MedicUnit || !MedicTrans)
+            continue;
+
+        const Order* CurrentOrder = Command ? Command->GetCurrentOrder() : nullptr;
+
+        // If currently executing Heal and target is still valid & wounded, let it continue
+        if (CurrentOrder && CurrentOrder->Type == OrderType::Heal && CurrentOrder->TargetEntityID >= 0)
+        {
+            auto* TargetUnit = EM.GetComponent<UnitComponent>(CurrentOrder->TargetEntityID);
+            if (TargetUnit && TargetUnit->HitPoints > 0 &&
+                TargetUnit->HitPoints < TargetUnit->MaxHitPoints &&
+                MedicUnit->EnergyPoints > 0)
+            {
+                continue;
+            }
+        }
+
+        // Priority 1: Heal nearby wounded friendly organic unit
+        int BestPatientID = -1;
+        float BestScore = -1e9f;
+        constexpr float HealScanRadius = 384.0f; // ~12 tiles
+
+        if (MedicUnit->EnergyPoints > 0)
+        {
+            for (const auto& P : Patients)
+            {
+                float Dist = MedicTrans->Position.DistanceTo(P.Position);
+                if (Dist <= HealScanRadius)
+                {
+                    float Score = P.Urgency - Dist * 0.15f;
+                    if (Score > BestScore)
+                    {
+                        BestScore = Score;
+                        BestPatientID = P.EntityID;
+                    }
+                }
+            }
+        }
+
+        if (BestPatientID >= 0)
+        {
+            auto* PatientTrans = EM.GetComponent<TransformComponent>(BestPatientID);
+            Order HealOrder;
+            HealOrder.Type = OrderType::Heal;
+            HealOrder.TargetEntityID = BestPatientID;
+            HealOrder.TargetPosition = PatientTrans ? PatientTrans->Position : MedicTrans->Position;
+            CommandSystem::IssueOrder(EM, MedicID, HealOrder, false);
+            continue;
+        }
+
+        // Priority 2: Escort infantry, stay in formation backline
+        int BestLeaderID = -1;
+        float BestLeaderDist = 1e9f;
+        bool MedicInAttack = std::find(mActiveAttackGroup.begin(), mActiveAttackGroup.end(), MedicID) != mActiveAttackGroup.end();
+
+        for (const auto& L : InfantryLeaders)
+        {
+            float Dist = MedicTrans->Position.DistanceTo(L.Position);
+            if (MedicInAttack && !L.InAttackGroup)
+                Dist += 500.0f;
+            else if (!MedicInAttack && L.InAttackGroup)
+                Dist += 300.0f;
+
+            if (Dist < BestLeaderDist)
+            {
+                BestLeaderDist = Dist;
+                BestLeaderID = L.EntityID;
+            }
+        }
+
+        if (BestLeaderID >= 0)
+        {
+            auto* LeadTrans = EM.GetComponent<TransformComponent>(BestLeaderID);
+            float RealDist = LeadTrans ? MedicTrans->Position.DistanceTo(LeadTrans->Position) : 0.0f;
+
+            if (RealDist > 80.0f)
+            {
+                Order FollowOrder;
+                FollowOrder.Type = OrderType::Follow;
+                FollowOrder.TargetEntityID = BestLeaderID;
+                FollowOrder.TargetPosition = LeadTrans->Position;
+                CommandSystem::IssueOrder(EM, MedicID, FollowOrder, false);
+            }
+            else
+            {
+                if (CurrentOrder && (CurrentOrder->Type == OrderType::Move || CurrentOrder->Type == OrderType::AttackMove))
+                {
+                    Order StopOrder;
+                    StopOrder.Type = OrderType::Stop;
+                    CommandSystem::IssueOrder(EM, MedicID, StopOrder, false);
+                }
+            }
+            continue;
+        }
+
+        // Priority 3: Stranded with no infantry around; retreat to base if far away
+        const float DistToBase = MedicTrans->Position.DistanceTo(mAiBasePos);
+        if (DistToBase > 350.0f)
+        {
+            if (!CurrentOrder || CurrentOrder->Type != OrderType::Move ||
+                CurrentOrder->TargetPosition.DistanceTo(mAiBasePos) > 64.0f)
+            {
+                Order RetreatOrder;
+                RetreatOrder.Type = OrderType::Move;
+                RetreatOrder.TargetPosition = mAiBasePos;
+                CommandSystem::IssueOrder(EM, MedicID, RetreatOrder, false);
+            }
+        }
+        else if (CurrentOrder && CurrentOrder->Type == OrderType::Move)
+        {
+            Order StopOrder;
+            StopOrder.Type = OrderType::Stop;
+            CommandSystem::IssueOrder(EM, MedicID, StopOrder, false);
+        }
+    }
+}
+
 void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
 {
     const auto& Profile = GetAIDifficultyProfile(mDifficulty);
@@ -4206,32 +4918,84 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
                 CommandSystem::IssueOrder(EM, EntityID, ResumeAdvance, true);
             }
         }
+        std::vector<int> DirectCombatUnits;
+        std::vector<int> MedicUnits;
+        std::vector<int> OtherSupportUnits;
+        for (int EntityID : ReadyAttackers)
+        {
+            auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+            auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
+            if (Unit && Unit->ChkUnitID == 34)
+                MedicUnits.push_back(EntityID);
+            else if (Unit && Combat && IsCombatUnit(*Unit, *Combat))
+                DirectCombatUnits.push_back(EntityID);
+            else
+                OtherSupportUnits.push_back(EntityID);
+        }
+
+        Core::Math::Vec2 TargetPos = mEnemyBasePos;
         if (DirectTarget >= 0)
         {
-            std::vector<int> DirectCombatUnits;
-            std::vector<int> SupportUnits;
-            for (int EntityID : ReadyAttackers)
+            const auto* Position =
+                EM.GetComponent<TransformComponent>(DirectTarget);
+            if (Position)
+                TargetPos = Position->Position;
+        }
+
+        if (!DirectCombatUnits.empty())
+            CombatSystem::IssueAttackMove(EM, DirectCombatUnits, TargetPos);
+        if (!OtherSupportUnits.empty())
+            CombatSystem::IssueAttackMove(EM, OtherSupportUnits, TargetPos);
+
+        if (!MedicUnits.empty())
+        {
+            // Medics escort combat infantry or ground combat leaders instead of rushing ahead
+            int EscortLeader = -1;
+            for (int Cid : DirectCombatUnits)
             {
-                auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-                auto* Combat = EM.GetComponent<CombatComponent>(EntityID);
-                if (Unit && Combat && IsCombatUnit(*Unit, *Combat))
-                    DirectCombatUnits.push_back(EntityID);
-                else
-                    SupportUnits.push_back(EntityID);
+                auto* CUnit = EM.GetComponent<UnitComponent>(Cid);
+                if (CUnit && (CUnit->ChkUnitID == 0 || CUnit->ChkUnitID == 32 || CUnit->ChkUnitID == 1))
+                {
+                    EscortLeader = Cid;
+                    break;
+                }
             }
-            if (!DirectCombatUnits.empty())
-                CombatSystem::IssueAttack(EM, DirectCombatUnits, DirectTarget);
-            if (!SupportUnits.empty())
+            if (EscortLeader < 0 && !DirectCombatUnits.empty())
             {
-                const auto* Position =
-                    EM.GetComponent<TransformComponent>(DirectTarget);
-                if (Position)
-                    CommandSystem::IssueAttackMove(
-                        EM, SupportUnits, Position->Position);
+                for (int Cid : DirectCombatUnits)
+                {
+                    auto* CPath = EM.GetComponent<PathfindingComponent>(Cid);
+                    if (!CPath || !CPath->IsAir)
+                    {
+                        EscortLeader = Cid;
+                        break;
+                    }
+                }
+            }
+
+            if (EscortLeader >= 0)
+            {
+                auto* LeadTrans = EM.GetComponent<TransformComponent>(EscortLeader);
+                for (int Mid : MedicUnits)
+                {
+                    Order FollowOrder;
+                    FollowOrder.Type = OrderType::Follow;
+                    FollowOrder.TargetEntityID = EscortLeader;
+                    FollowOrder.TargetPosition = LeadTrans ? LeadTrans->Position : mEnemyBasePos;
+                    CommandSystem::IssueOrder(EM, Mid, FollowOrder, false);
+                }
+            }
+            else
+            {
+                for (int Mid : MedicUnits)
+                {
+                    Order ReturnOrder;
+                    ReturnOrder.Type = OrderType::Move;
+                    ReturnOrder.TargetPosition = mAiBasePos;
+                    CommandSystem::IssueOrder(EM, Mid, ReturnOrder, false);
+                }
             }
         }
-        else
-            CombatSystem::IssueAttackMove(EM, ReadyAttackers, mEnemyBasePos);
         return DirectTarget;
     };
 
@@ -4256,6 +5020,29 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
                     std::to_string(Reinforcements.size()) +
                     " active_group=" +
                     std::to_string(mActiveAttackGroup.size()) +
+                    " direct_target=" + std::to_string(DirectTarget));
+            }
+        }
+        else
+        {
+            auto NextWave = GatherAvailableArmy(false);
+            const int MinWaveAttackers = std::max(2, WaveSize * (100 - Profile.DefenderReservePercent) / 100);
+            if ((int)NextWave.size() >= MinWaveAttackers)
+            {
+                if ((int)NextWave.size() > WaveSize)
+                    NextWave.resize((size_t)WaveSize);
+                const int DirectTarget = OrderAttackers(NextWave);
+                mActiveAttackGroup.insert(
+                    mActiveAttackGroup.end(),
+                    NextWave.begin(),
+                    NextWave.end());
+                mAttackWaveCount++;
+                mAttackCooldownRemaining = Profile.AttackCooldownSeconds;
+                Core::Utils::Logger::Info(
+                    "AIBrain", "Player " + std::to_string(mAIPlayerID) +
+                    " subsequent_wave=" + std::to_string(mAttackWaveCount) +
+                    " units=" + std::to_string(NextWave.size()) +
+                    " active_group=" + std::to_string(mActiveAttackGroup.size()) +
                     " direct_target=" + std::to_string(DirectTarget));
             }
         }
@@ -4286,10 +5073,11 @@ void AIBrain::SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize)
 
     std::vector<int> Attackers = GatherAvailableArmy(FinalAssault);
 
+    const int MinWaveAttackers = std::max(2, WaveSize * (100 - Profile.DefenderReservePercent) / 100);
     if (!Attackers.empty() &&
-        (FinalAssault || (int)Attackers.size() >= WaveSize))
+        (FinalAssault || (int)Attackers.size() >= MinWaveAttackers))
     {
-        if (!FinalAssault)
+        if (!FinalAssault && (int)Attackers.size() > WaveSize)
             Attackers.resize((size_t)WaveSize);
         const int DirectTarget = OrderAttackers(Attackers);
         mActiveAttackGroup = Attackers;
@@ -4424,7 +5212,10 @@ void AIBrain::Update(float DeltaTime)
         mDefendingBase = DefendBaseIfNeeded(EM);
         ManageUpgrades(EM, RaceVal);
         if (RaceVal == (int)Race::Terran)
+        {
             ManageTerranRepairs(EM);
+            ManageTerranMedics(EM);
+        }
     }
     else
     {

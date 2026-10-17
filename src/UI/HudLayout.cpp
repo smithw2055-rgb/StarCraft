@@ -99,6 +99,23 @@ namespace
             std::max(1, (int)std::lround((float)TerranConsoleLeftMinimapOpening.H * BaseScale))
         };
 
+        const int BtnW = std::max(20, (int)std::lround(46.0f * BaseScale));
+        const int BtnH = std::max(12, (int)std::lround(22.0f * BaseScale));
+        const int BtnGap = std::max(2, (int)std::lround(4.0f * BaseScale));
+        const int BtnStartX = Layout.MinimapRect.X + std::max(2, (int)std::lround(8.0f * BaseScale));
+        const int BtnY = Layout.MinimapRect.Y + std::max(2, (int)std::lround(4.0f * BaseScale));
+
+        for (int I = 0; I < 3; ++I)
+        {
+            Layout.MinimapButtonRects[I] =
+            {
+                BtnStartX + I * (BtnW + BtnGap),
+                BtnY,
+                BtnW,
+                BtnH
+            };
+        }
+
         const int PortraitOuterW = std::max(1, (int)std::lround((float)TerranConsolePortraitSourceWidth * BaseScale));
         const int PortraitOuterH = std::max(1, (int)std::lround((float)TerranConsolePortraitSourceHeight * BaseScale));
         const int CenterOuterW = std::max(1, (int)std::lround((float)TerranConsoleCenterSourceWidth * BaseScale));

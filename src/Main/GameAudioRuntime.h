@@ -24,6 +24,15 @@ public:
         Audio.Init();
     }
 
+    Core::Audio::AudioSystem& GetAudioSystem() { return Audio; }
+    const Core::Audio::AudioSystem& GetAudioSystem() const { return Audio; }
+
+    int PlayFile(const std::string& Path, float X = 0.0f, float Y = 0.0f, int Priority = 20,
+                 Core::Audio::SoundFlags Flags = Core::Audio::SoundFlags::PerSound)
+    {
+        return Audio.PlayFile(Path, X, Y, Priority, Flags);
+    }
+
     void ConfigureGameSounds(Game::Client::ClientRuntime& Client)
     {
         auto Source = Client.GetArchiveSource();

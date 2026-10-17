@@ -6,10 +6,15 @@
 #include <vector>
 
 #include "Core/ECS/EntityManager.h"
+#include "Render/GpuTextureHandle.h"
 #include "Resource/GpuImage.h"
 #include "Resource/SpriteAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
 #include "UI/HudState.h"
+
+namespace Game::Map { class GameMap; }
+namespace Game::Client { struct GameMap; }
+namespace Game::Systems { class FogOfWarSystem; }
 
 namespace Game::Client::UI
 {
@@ -19,6 +24,9 @@ struct HudLayout;
 class Hud
 {
 public:
+    Hud() = default;
+    ~Hud() = default;
+
     void Init(Resource::Graphics::UIAssetCacheView UIAssets,
               Resource::Graphics::SpriteAssetCacheView SpriteAssets);
     void Shutdown();
@@ -32,6 +40,16 @@ public:
               int ViewportWidth, int ViewportHeight);
 
     int CheckCommandPanelClick(int ScreenX, int ScreenY, int ViewportWidth, int ViewportHeight) const;
+    int CheckQueueSlotClick(int ScreenX, int ScreenY) const;
+    int CheckMultiSelectSlotClick(int ScreenX, int ScreenY, int& OutEntityId) const;
+    int CheckMinimapButtonClick(int ScreenX, int ScreenY, int ViewportWidth, int ViewportHeight) const;
+    void ToggleMinimapTerrain();
+    void ToggleMinimapAllianceColors();
+    void ToggleMinimapBeacons();
+    bool GetMinimapShowTerrain() const { return mState.Minimap.ShowTerrain; }
+    bool GetMinimapUseAllianceColors() const { return mState.Minimap.UseAllianceColors; }
+    bool GetMinimapShowBeacons() const { return mState.Minimap.ShowBeacons; }
+    void SetMatchElapsedSeconds(float Seconds) { mState.MatchElapsedSeconds = Seconds; }
     bool CheckMinimapClick(int ScreenX, int ScreenY,
                            int ViewportWidth, int ViewportHeight,
                            int MapWidthTiles, int MapHeightTiles,
@@ -57,6 +75,11 @@ public:
                          int MapW, int MapH,
                          const int* TileData,
                          const bool* FogVisible, const bool* FogExplored);
+    void SetMinimapViewportRect(float CamWorldX, float CamWorldY, float CamWorldW, float CamWorldH);
+    void UpdateMinimapTerrain(const Game::Map::GameMap* EcsMap,
+                             const Game::Client::GameMap* ClientMap,
+                             const Game::Systems::FogOfWarSystem* Fog,
+                             int LocalPlayerID);
     void SetCampaignPings(const std::vector<HudMinimapPing>& Pings)
     {
         mState.Minimap.CampaignPings = Pings;
@@ -102,7 +125,7 @@ private:
                        Core::ECS::EntityManager* EcsEntities);
     void BuildProtossPage(int SelectedEntityId,
                           int SelectedChkUnitId,
-                          Core::ECS::EntityManager* EcsEntities);
+                       Core::ECS::EntityManager* EcsEntities);
     void ResetInfoPanel();
     void UpdateInfoPanel(Core::ECS::EntityManager& Entities,
                          int SelectedEntityId,
@@ -121,12 +144,16 @@ private:
                    HudVisualId VisualId = HudVisualId::None,
                    int MineralCost = 0,
                    int GasCost = 0,
-                   int SupplyCost = 0);
+                   int SupplyCost = 0,
+                   char Hotkey = '\0');
     void ResetButtons();
+    void RebuildBaseTerrainColors(int MapW, int MapH,
+                                  const Game::Map::GameMap* EcsMap,
+                                  const Game::Client::GameMap* ClientMap);
     void DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
                             const HudLayout& Layout,
                             int MapWidthTiles,
-                            int MapHeightTiles) const;
+                            int MapHeightTiles);
     bool DrawConsoleChrome(const HudLayout& Layout, int ViewportWidth);
     void DrawCommandPanel(const HudLayout& Layout, int ViewportWidth, int ViewportHeight);
     void DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage& AggIcons);
@@ -140,6 +167,8 @@ private:
     void DrawStandardInfoPanel(const HudLayout& Layout,
                                bool HasModularConsole,
                                const Resource::Graphics::GpuImage& AggIcons);
+    void DrawMultiSelectPanel(const HudLayout& Layout, bool HasModularConsole);
+    void DrawMinimapButtons(const HudLayout& Layout) const;
     void DrawInfoPanel(Core::ECS::EntityManager& Entities,
                        const HudLayout& Layout,
                        bool HasModularConsole,
@@ -149,6 +178,13 @@ private:
     Resource::Graphics::UIAssetCacheView mUIAssets;
     Resource::Graphics::SpriteAssetCacheView mSpriteAssets;
 
+    Render::GpuTextureHandle mMinimapTexture = {};
+    std::vector<uint32_t> mMinimapPixels;
+    std::vector<uint32_t> mBaseTerrainColors;
+    int mMinimapTexWidth = 0;
+    int mMinimapTexHeight = 0;
+    std::string mMinimapTilesetName;
+
     static constexpr int kHudHeight = 320;
     static constexpr int kMinimapSize = 244;
     static constexpr int kCommandPanelSize = 112;
@@ -156,8 +192,3 @@ private:
 };
 
 } // namespace Game::Client::UI
-
-
-
-
-

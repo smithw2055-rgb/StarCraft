@@ -75,6 +75,9 @@ inline void InitializeCampaignRuntimeForSession(
         },
         [&Campaign](bool Paused) {
             Campaign.SetScenarioPaused(Paused);
+        },
+        [&Client](int ChkUnitID) {
+            return Client.GetSpriteAssets().ResolveSubunitImageID(ChkUnitID);
         });
 }
 

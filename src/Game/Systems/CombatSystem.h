@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
+
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
@@ -13,15 +16,40 @@ namespace Game::Systems
 {
 
 class BulletSystem;
+class FogOfWarSystem;
 
 class CombatSystem : public Core::ECS::ISystem
 {
 public:
+    using DetectorChecker = std::function<bool(int TileX, int TileY, int PlayerID)>;
+
     CombatSystem(Core::ECS::SystemManager& SysMgr, BulletSystem& BulletSys,
                  Game::Map::GameMap* Map = nullptr)
         : mSystemMgr(SysMgr), mBulletSystem(BulletSys), mMap(Map) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "CombatSystem"; }
+
+    static void SetDetectorChecker(DetectorChecker Checker);
+
+    template <typename TFow = FogOfWarSystem>
+    static void SetFogOfWarSystem(const TFow* FOW)
+    {
+        if (FOW)
+        {
+            SetDetectorChecker([FOW](int TileX, int TileY, int PlayerID) {
+                return FOW->IsGameplayDetected(TileX, TileY, PlayerID);
+            });
+        }
+        else
+        {
+            SetDetectorChecker(nullptr);
+        }
+    }
+
+    static void SetFogOfWarSystem(std::nullptr_t)
+    {
+        SetDetectorChecker(nullptr);
+    }
 
     static void IssueAttack(Core::ECS::EntityManager& EM,
                              const std::vector<int>& Attackers,
@@ -41,6 +69,8 @@ public:
                                           BulletSystem& BulletSys,
                                           int AttackerID,
                                           float ForwardOffsetPixels = 0.0f);
+    static int FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange);
+    static bool AreEnemies(int A, int B, Core::ECS::EntityManager& EM);
 
 private:
     bool BeginOrResolveAttack(Core::ECS::EntityManager& EM,
@@ -53,8 +83,6 @@ private:
                               float RangePixels,
                               bool MissedAtLaunch);
     void ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);
-    int FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange);
-    bool AreEnemies(int A, int B, Core::ECS::EntityManager& EM);
     int PickWeaponDamage(const Components::CombatComponent& Combat,
                          const Components::UnitComponent* TargetUnit,
                          bool TargetIsAir) const;

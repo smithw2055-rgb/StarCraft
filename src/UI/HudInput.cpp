@@ -44,6 +44,60 @@ int Hud::CheckCommandPanelClick(int SX, int SY, int VW, int VH) const
     return -1;
 }
 
+int Hud::CheckQueueSlotClick(int SX, int SY) const
+{
+    for (const auto& Hit : mState.InfoPanel.QueueSlotHits)
+    {
+        if (SX >= Hit.X && SX < Hit.X + Hit.W &&
+            SY >= Hit.Y && SY < Hit.Y + Hit.H)
+        {
+            return Hit.QueueIndex;
+        }
+    }
+    return -1;
+}
+
+int Hud::CheckMultiSelectSlotClick(int SX, int SY, int& OutEntityId) const
+{
+    for (const auto& Hit : mState.InfoPanel.MultiSelectSlotHits)
+    {
+        if (SX >= Hit.X && SX < Hit.X + Hit.W &&
+            SY >= Hit.Y && SY < Hit.Y + Hit.H)
+        {
+            OutEntityId = Hit.EntityId;
+            return Hit.SlotIndex;
+        }
+    }
+    OutEntityId = -1;
+    return -1;
+}
+
+int Hud::CheckMinimapButtonClick(int SX, int SY, int VW, int VH) const
+{
+    const auto Layout = ResolveHudLayout(VW, VH);
+    for (int I = 0; I < 3; ++I)
+    {
+        if (Layout.MinimapButtonRects[I].Contains(SX, SY))
+            return I;
+    }
+    return -1;
+}
+
+void Hud::ToggleMinimapTerrain()
+{
+    mState.Minimap.ShowTerrain = !mState.Minimap.ShowTerrain;
+}
+
+void Hud::ToggleMinimapAllianceColors()
+{
+    mState.Minimap.UseAllianceColors = !mState.Minimap.UseAllianceColors;
+}
+
+void Hud::ToggleMinimapBeacons()
+{
+    mState.Minimap.ShowBeacons = !mState.Minimap.ShowBeacons;
+}
+
 bool Hud::IsPointInHudBand(int, int SY, int VW, int VH) const
 {
     const auto Layout = ResolveHudLayout(VW, VH);

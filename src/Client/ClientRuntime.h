@@ -72,6 +72,7 @@ struct ClientRuntime
     void UpdateSelection(Core::ECS::EntityManager& Entities, bool BlockSelection);
     void SetLocalPlayerId(int PlayerId);
     int GetLocalPlayerId() const;
+    bool SetConsoleRace(const std::string& RaceName);
     void CancelPointerGesture();
     void PruneSelection(Core::ECS::EntityManager& Entities);
     void HandleControlGroupHotkeys(Core::ECS::EntityManager& Entities);
@@ -88,7 +89,8 @@ struct ClientRuntime
     void BeginWorldFrame();
     void RenderWorld(const GameMap& MapData,
                      Core::ECS::EntityManager& Entities,
-                     bool MapLoaded);
+                     bool MapLoaded,
+                     float InterpAlpha = 1.0f);
     void RenderWorldEffects(Render::Draw2D& Draw2D);
     void RenderSelectionDragOverlay();
     void RenderCursor(int MouseX,

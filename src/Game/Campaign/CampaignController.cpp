@@ -95,7 +95,7 @@ namespace
 
     bool HasMissionMessageAction(const Trigger::SCRTriggerData& Data)
     {
-        constexpr uint8_t MessageActionTypes[] = {7, 8, 9, 29, 41, 47};
+        constexpr uint8_t MessageActionTypes[] = {7, 8, 9, 29};
         for (uint8_t ActionType : MessageActionTypes)
         {
             if (HasEnabledActionType(Data, ActionType))
@@ -162,7 +162,7 @@ bool CampaignController::Init(Core::ECS::EntityManager& EM, const Trigger::SCRTr
         Message.Text = mMissionName.empty() ? "Mission started" : mMissionName;
         Message.ActionID = 0;
         Message.PlayerID = mLocalPlayerID;
-        Message.TimeRemaining = 3600.0f;
+        Message.TimeRemaining = 5.0f;
         mMessages.push_back(std::move(Message));
     }
 
@@ -309,7 +309,7 @@ void CampaignController::RefreshLeaderboardValue(Core::ECS::EntityManager& EM)
         auto* Player = EM.GetComponent<Components::PlayerComponent>(EntityID);
         if (!Unit || !Player || Unit->HitPoints <= 0)
             continue;
-        if (Unit->ChkUnitID != (int)mLeaderboard.UnitID)
+        if (!Trigger::MatchUnitGroup(Unit->ChkUnitID, mLeaderboard.UnitID))
             continue;
         if (!mLeaderboard.IncludeComputerPlayers && Player->PlayerID != mLeaderboard.PlayerID)
             continue;
@@ -361,8 +361,6 @@ void CampaignController::SyncMessagesFromTriggerVM(float DeltaTime)
             case 7:  // Transmission.
             case 8:  // Play WAV.
             case 9:  // Display text.
-            case 41: // Set next scenario / briefing-style text on some maps.
-            case 47: // Display text message.
             {
                 CampaignMessage Message;
                 Message.Text = Event.Text;

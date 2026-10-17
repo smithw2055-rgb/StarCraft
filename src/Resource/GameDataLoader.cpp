@@ -1,4 +1,4 @@
-﻿#include "Resource/GameDataLoader.h"
+#include "Resource/GameDataLoader.h"
 #include "Resource/TblDecoder.h"
 #include "Core/Utils/Logger.h"
 
@@ -43,6 +43,8 @@ bool GameDataLoader::LoadFromInstall(const std::string& InstallPath)
     }
 
     bool AllOk = true;
+    LoadStatTxtTbl(*Archive);
+    LoadUnitNamesTbl(*Archive);
     AllOk = LoadUnitData(*Archive) && AllOk;
     AllOk = LoadWeaponData(*Archive) && AllOk;
     AllOk = LoadFlingyData(*Archive) && AllOk;
@@ -51,9 +53,8 @@ bool GameDataLoader::LoadFromInstall(const std::string& InstallPath)
     LoadImageRelationData(*Archive);
     AllOk = LoadUpgradeData(*Archive) && AllOk;
     AllOk = LoadTechData(*Archive) && AllOk;
+    LoadOrderData(*Archive);
     LoadImageTblData(*Archive);
-    LoadStatTxtTbl(*Archive);
-    LoadUnitNamesTbl(*Archive);
     mUnitPalette = LoadUnitPalette(*Archive);
 
     Archive->Close();
@@ -64,53 +65,9 @@ bool GameDataLoader::LoadFromInstall(const std::string& InstallPath)
     return AllOk;
 }
 
-bool GameDataLoader::LoadUnitData(IArchiveReader& Archive)
+void GameDataLoader::ApplyUnitNames()
 {
-    auto Data = ReadDataFile(Archive, "units.dat");
-    if (!Data) return false;
-    mUnits = DatDecoder::DecodeUnits(*Data);
-
-    // Assign names from known unit list
-    const char* UnitNames[] = {
-        "Terran Marine", "Terran Ghost", "Terran Vulture", "Terran Goliath",
-        "Terran Siege Tank", "SCV", "Terran Wraith", "Terran Science Vessel",
-        "Terran Dropship", "Terran Battlecruiser", "Terran Valkyrie",
-        "Terran Medic", "Firebat", "Terran H over Goliath",
-        // Zerg
-        "Zerg Larva", "Zerg Egg", "Zerg Zergling", "Zerg Hydralisk",
-        "Zerg Ultralisk", "Zerg Broodling", "Zerg Drone", "Zerg Overlord",
-        "Zerg Mutalisk", "Zerg Guardian", "Zerg Queen", "Zerg Defiler",
-        "Zerg Scourge", "Zerg Infested Terran", "Zerg Lurker",
-        "Zerg Devourer",
-        // Protoss
-        "Protoss Probe", "Protoss Zealot", "Protoss Dragoon",
-        "Protoss High Templar", "Protoss Dark Templar", "Protoss Archon",
-        "Protoss Dark Archon", "Protoss Reaver", "Protoss Shuttle",
-        "Protoss Scout", "Protoss Corsair", "Protoss Carrier",
-        "Protoss Arbiter", "Protoss Observer",
-        // Buildings - Terran
-        "Terran Command Center", "Terran Supply Depot", "Terran Refinery",
-        "Terran Barracks", "Terran Academy", "Terran Factory",
-        "Terran Starport", "Terran Engineering Bay", "Terran Armory",
-        "Terran Bunker", "Terran Missile Turret", "Terran Science Facility",
-        "Terran Nuclear Silo", "Terran Comsat Station", "Terran Machine Shop",
-        // Buildings - Zerg
-        "Zerg Hatchery", "Zerg Lair", "Zerg Hive", "Zerg Spawning Pool",
-        "Zerg Evolution Chamber", "Zerg Hydralisk Den", "Zerg Spire",
-        "Zerg Greater Spire", "Zerg Queen's Nest", "Zerg Defiler Mound",
-        "Zerg Ultralisk Cavern", "Zerg Nydus Canal", "Zerg Extractor",
-        "Zerg Sunken Colony", "Zerg Spore Colony", "Zerg Creep Colony",
-        // Buildings - Protoss
-        "Protoss Nexus", "Protoss Pylon", "Protoss Gateway",
-        "Protoss Forge", "Protoss Cybernetics Core", "Protoss Photon Cannon",
-        "Protoss Shield Battery", "Protoss Robotics Facility",
-        "Protoss Robotics Support Bay", "Protoss Observatory",
-        "Protoss Stargate", "Protoss Fleet Beacon", "Protoss Citadel of Adun",
-        "Protoss Templar Archives", "Protoss Arbiter Tribunal",
-        "Protoss Assimilator"
-    };
-
-    for (size_t I = 0; I < mUnits.size(); I++)
+    for (size_t I = 0; I < mUnits.size(); ++I)
     {
         if (I < mUnitNamesTbl.size() && !mUnitNamesTbl[I].Text.empty())
         {
@@ -120,12 +77,15 @@ bool GameDataLoader::LoadUnitData(IArchiveReader& Archive)
         {
             mUnits[I].Name = mStatTxtTbl[I].Text;
         }
-        else if (I < sizeof(UnitNames)/sizeof(UnitNames[0]))
-        {
-            mUnits[I].Name = UnitNames[I];
-        }
     }
+}
 
+bool GameDataLoader::LoadUnitData(IArchiveReader& Archive)
+{
+    auto Data = ReadDataFile(Archive, "units.dat");
+    if (!Data) return false;
+    mUnits = DatDecoder::DecodeUnits(*Data);
+    ApplyUnitNames();
     return true;
 }
 
@@ -200,6 +160,20 @@ bool GameDataLoader::LoadImageTblData(IArchiveReader& Archive)
     return false;
 }
 
+bool GameDataLoader::LoadOrderData(IArchiveReader& Archive)
+{
+    auto Data = ReadDataFile(Archive, "orders.dat");
+    if (!Data) return false;
+    mOrders = DatDecoder::DecodeOrders(*Data);
+    if (!mOrders.empty())
+    {
+        Core::Utils::Logger::Info("GameDataLoader",
+            "Loaded orders.dat: " + std::to_string(mOrders.size()) + " entries");
+        return true;
+    }
+    return false;
+}
+
 bool GameDataLoader::LoadImageTblDataRaw(const std::vector<uint8_t>& Data)
 {
     if (Data.empty()) return false;
@@ -207,9 +181,19 @@ bool GameDataLoader::LoadImageTblDataRaw(const std::vector<uint8_t>& Data)
     return !mImageTbl.empty();
 }
 
+bool GameDataLoader::LoadOrderDataRaw(const std::vector<uint8_t>& Data)
+{
+    if (Data.empty()) return false;
+    mOrders = DatDecoder::DecodeOrders(Data);
+    return !mOrders.empty();
+}
+
 bool GameDataLoader::LoadStatTxtTbl(IArchiveReader& Archive)
 {
-    std::vector<std::string> Paths = {"stat_txt.tbl", "arr/stat_txt.tbl", "STAT_TXT.TBL", "arr/STAT_TXT.TBL"};
+    std::vector<std::string> Paths = {
+        "rez/stat_txt.tbl", "stat_txt.tbl", "arr/stat_txt.tbl",
+        "rez/STAT_TXT.TBL", "STAT_TXT.TBL", "arr/STAT_TXT.TBL"
+    };
     for (auto& P : Paths)
     {
         auto Data = Archive.ReadFile(P);
@@ -220,6 +204,7 @@ bool GameDataLoader::LoadStatTxtTbl(IArchiveReader& Archive)
             {
                 Core::Utils::Logger::Info("GameDataLoader",
                     "Loaded stat_txt.tbl: " + std::to_string(mStatTxtTbl.size()) + " strings");
+                ApplyUnitNames();
                 return true;
             }
         }
@@ -230,7 +215,10 @@ bool GameDataLoader::LoadStatTxtTbl(IArchiveReader& Archive)
 
 bool GameDataLoader::LoadUnitNamesTbl(IArchiveReader& Archive)
 {
-    std::vector<std::string> Paths = {"unitnames.tbl", "arr/unitnames.tbl", "UNITNAMES.TBL", "arr/UNITNAMES.TBL"};
+    std::vector<std::string> Paths = {
+        "rez/unitnames.tbl", "unitnames.tbl", "arr/unitnames.tbl",
+        "rez/UNITNAMES.TBL", "UNITNAMES.TBL", "arr/UNITNAMES.TBL"
+    };
     for (auto& P : Paths)
     {
         auto Data = Archive.ReadFile(P);
@@ -241,6 +229,7 @@ bool GameDataLoader::LoadUnitNamesTbl(IArchiveReader& Archive)
             {
                 Core::Utils::Logger::Info("GameDataLoader",
                     "Loaded unitnames.tbl: " + std::to_string(mUnitNamesTbl.size()) + " strings");
+                ApplyUnitNames();
                 return true;
             }
         }
@@ -262,6 +251,7 @@ bool GameDataLoader::LoadUnitDataRaw(const std::vector<uint8_t>& Data)
 {
     if (Data.empty()) return false;
     mUnits = DatDecoder::DecodeUnits(Data);
+    ApplyUnitNames();
     return true;
 }
 
@@ -411,6 +401,13 @@ const ImageRelationEntry* GameDataLoader::FindImageRelationByID(uint32_t ID) con
 {
     if (ID < mImageRelations.size())
         return &mImageRelations[ID];
+    return nullptr;
+}
+
+const OrderEntry* GameDataLoader::FindOrderByID(uint32_t ID) const
+{
+    if (ID < mOrders.size())
+        return &mOrders[ID];
     return nullptr;
 }
 

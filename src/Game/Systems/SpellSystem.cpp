@@ -3,6 +3,7 @@
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Game/Systems/HarvestSystem.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
@@ -28,40 +29,7 @@ namespace
         if (EM.GetComponent<BuildingComponent>(EntityID))
             return false;
 
-        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
-        if (DefID >= 0)
-        {
-            const auto Def = Game::Races::GetUnitDefByID(DefID);
-            if (Def.IsBuilding)
-                return false;
-
-            switch (Def.RaceType)
-            {
-                case Race::Terran:
-                    return Def.Name != "SCV" &&
-                           Def.Name != "Marine" &&
-                           Def.Name != "Firebat" &&
-                           Def.Name != "Medic" &&
-                           Def.Name != "Ghost";
-                case Race::Protoss:
-                    return Def.Name == "Dragoon" ||
-                           Def.Name == "Reaver" ||
-                           Def.Name == "Shuttle" ||
-                           Def.Name == "Scout" ||
-                           Def.Name == "Corsair" ||
-                           Def.Name == "Carrier" ||
-                           Def.Name == "Arbiter" ||
-                           Def.Name == "Observer";
-                case Race::Zerg:
-                    return Def.Name == "Infested Terran";
-            }
-        }
-
-        if (Unit->UnitRace == Race::Terran)
-            return Unit->SizeType != UnitSize::Small;
-        if (Unit->UnitRace == Race::Protoss)
-            return Unit->SizeType != UnitSize::Small;
-        return false;
+        return Game::Races::IsMechanicalChkUnitID(Unit->ChkUnitID);
     }
 
     void ClearMotionAfterTeleport(Core::ECS::EntityManager& EM, int EntityID)
@@ -156,6 +124,15 @@ int SpellSystem::GetSpellEnergyCost(SpellType Spell)
         case SpellType::SpawnBroodling:return 150;
         case SpellType::Parasite:      return 75;
         case SpellType::Consume:       return 0;
+        case SpellType::DefensiveMatrix: return 100;
+        case SpellType::Irradiate:       return 75;
+        case SpellType::Restoration:     return 50;
+        case SpellType::OpticalFlare:    return 75;
+        case SpellType::Feedback:        return 50;
+        case SpellType::Maelstrom:       return 100;
+        case SpellType::MindControl:     return 150;
+        case SpellType::DisruptionWeb:   return 125;
+        case SpellType::Infestation:     return 0;
         default: return 0;
     }
 }
@@ -164,15 +141,24 @@ float SpellSystem::GetSpellCooldown(SpellType Spell)
 {
     switch (Spell)
     {
-        case SpellType::PsionicStorm:  return 3.0f;
-        case SpellType::YamatoGun:     return 10.0f;
-        case SpellType::Lockdown:      return 4.0f;
-        case SpellType::EMPShockwave:  return 6.0f;
-        case SpellType::ScannerSweep:  return 5.0f;
-        case SpellType::StasisField:   return 4.0f;
-        case SpellType::Recall:        return 6.0f;
-        case SpellType::DarkSwarm:     return 4.0f;
-        case SpellType::Plague:        return 4.0f;
+        case SpellType::PsionicStorm:    return 3.0f;
+        case SpellType::YamatoGun:       return 10.0f;
+        case SpellType::Lockdown:        return 4.0f;
+        case SpellType::EMPShockwave:    return 6.0f;
+        case SpellType::ScannerSweep:    return 5.0f;
+        case SpellType::StasisField:     return 4.0f;
+        case SpellType::Recall:          return 6.0f;
+        case SpellType::DarkSwarm:       return 4.0f;
+        case SpellType::Plague:          return 4.0f;
+        case SpellType::DefensiveMatrix: return 2.0f;
+        case SpellType::Irradiate:       return 2.0f;
+        case SpellType::Restoration:     return 1.0f;
+        case SpellType::OpticalFlare:    return 2.0f;
+        case SpellType::Feedback:        return 2.0f;
+        case SpellType::Maelstrom:       return 4.0f;
+        case SpellType::MindControl:     return 5.0f;
+        case SpellType::DisruptionWeb:   return 4.0f;
+        case SpellType::Infestation:     return 2.0f;
         default: return 2.0f;
     }
 }
@@ -273,6 +259,171 @@ bool SpellSystem::CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, Spell
         }
     }
 
+    if (Spell == SpellType::DefensiveMatrix)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "defensive matrix requires a non-building unit";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetUnit || TargetUnit->IsInvincible)
+        {
+            if (OutReason) *OutReason = "invalid target for defensive matrix";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Irradiate)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "irradiate requires a non-building unit";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetUnit || TargetUnit->IsInvincible || !Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID) ||
+            TargetUnit->ChkUnitID == 35 || TargetUnit->ChkUnitID == 36 || TargetUnit->ChkUnitID == 97)
+        {
+            if (OutReason) *OutReason = "irradiate requires an organic non-egg target";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Restoration)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "restoration requires a non-building unit";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::OpticalFlare)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "optical flare requires a non-building unit";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetUnit || TargetUnit->IsInvincible)
+        {
+            if (OutReason) *OutReason = "optical flare cannot target invincible units";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Feedback)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "feedback requires a non-building unit";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetUnit || TargetUnit->MaxEnergyPoints <= 0 || TargetUnit->EnergyPoints <= 0)
+        {
+            if (OutReason) *OutReason = "feedback requires a target with energy";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::MindControl)
+    {
+        if (TargetEntityID < 0 || TargetEntityID == CasterID ||
+            EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "mind control requires an enemy non-building unit";
+            return false;
+        }
+        const auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        if (!TargetPlayer || !TargetUnit || TargetPlayer->PlayerID == CasterPlayer->PlayerID ||
+            TargetUnit->IsInvincible || HasHallucinationStatus(EM, TargetEntityID) ||
+            TargetUnit->ChkUnitID == 35 || TargetUnit->ChkUnitID == 36 || TargetUnit->ChkUnitID == 97)
+        {
+            if (OutReason) *OutReason = "invalid mind control target";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::SpawnBroodling)
+    {
+        if (TargetEntityID < 0 || EM.GetComponent<BuildingComponent>(TargetEntityID) ||
+            EM.GetComponent<ResourceComponent>(TargetEntityID))
+        {
+            if (OutReason) *OutReason = "spawn broodling requires a non-building unit";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        const auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetEntityID);
+        const bool TargetIsAir = (TargetPath && TargetPath->IsAir) ||
+                                 (TargetUnit && Game::Data::IsAirUnitType(TargetUnit->ChkUnitID));
+        if (!TargetUnit || TargetUnit->IsInvincible ||
+            TargetIsAir ||
+            !Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID) ||
+            TargetUnit->ChkUnitID == 35 || TargetUnit->ChkUnitID == 36 || TargetUnit->ChkUnitID == 97)
+        {
+            if (OutReason) *OutReason = "spawn broodling requires a live organic ground unit";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::DisruptionWeb)
+    {
+        if (CasterPlayer && !UpgradeSystem::HasResearch(
+                CasterPlayer->PlayerID, ResearchId::Protoss_DisruptionWeb))
+        {
+            if (OutReason) *OutReason = "disruption web is not researched";
+            return false;
+        }
+    }
+
+    if (Spell == SpellType::Infestation)
+    {
+        if (TargetEntityID < 0)
+        {
+            if (OutReason) *OutReason = "infestation requires a target";
+            return false;
+        }
+        const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+        const auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+        if (!TargetUnit || !TargetPlayer || TargetUnit->HitPoints <= 0)
+        {
+            if (OutReason) *OutReason = "invalid infestation target";
+            return false;
+        }
+        if (TargetPlayer->PlayerID == CasterPlayer->PlayerID)
+        {
+            if (OutReason) *OutReason = "cannot infest friendly buildings";
+            return false;
+        }
+        constexpr int TerranCommandCenterChkUnitID = 106;
+        if (TargetUnit->ChkUnitID != TerranCommandCenterChkUnitID)
+        {
+            if (OutReason) *OutReason = "infestation requires a terran command center";
+            return false;
+        }
+        if (const auto* TargetBldg = EM.GetComponent<BuildingComponent>(TargetEntityID);
+            TargetBldg && TargetBldg->IsLifted)
+        {
+            if (OutReason) *OutReason = "cannot infest lifted command center";
+            return false;
+        }
+        if (TargetUnit->HitPoints * 2 >= TargetUnit->MaxHitPoints)
+        {
+            if (OutReason) *OutReason = "command center must be damaged below 50% HP";
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -312,41 +463,81 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
     {
         case SpellType::PsionicStorm:
         {
-            // AoE 112 damage over 7 seconds in 3-tile radius
-            float Radius = 96.0f; // 3 tiles
-            float Duration = 7.0f;
-            float TickDamage = 112.0f / (Duration / 0.25f); // 4 ticks/sec
+            // Brood War: Psionic Storm deals its first tick immediately on impact,
+            // then persists for 4 seconds, dealing true spell damage (14 per 0.5s tick,
+            // 112 total over 8 ticks) in an area.
+            constexpr float Radius = 96.0f;
+            constexpr int kStormTickDamage = 14;
 
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-            for (int Uid : Units)
+            for (int TargetID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
             {
-                auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
-                auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
-                auto* UPlayer = EM.GetComponent<PlayerComponent>(Uid);
-                if (!UUnit || !UTrans || !UPlayer) continue;
-                if (UUnit->HitPoints <= 0) continue;
-                if (UPlayer->PlayerID == CasterPlayer->PlayerID) continue;
+                if (!EM.IsAlive(TargetID)) continue;
+                if (EM.GetComponent<BuildingComponent>(TargetID) ||
+                    EM.GetComponent<ResourceComponent>(TargetID))
+                    continue;
 
-                float D = UTrans->Position.DistanceTo(Pos);
-                if (D <= Radius)
+                const auto* TTrans = EM.GetComponent<TransformComponent>(TargetID);
+                auto* TUnit = EM.GetComponent<UnitComponent>(TargetID);
+                if (!TTrans || !TUnit || TUnit->HitPoints <= 0 || TUnit->IsInvincible)
+                    continue;
+
+                if (auto* Status = EM.GetComponent<StatusEffectComponent>(TargetID);
+                    Status && Status->HasEffect(StatusEffect::Stasis))
+                    continue;
+
+                if (TTrans->Position.DistanceTo(Pos) <= Radius)
                 {
-                    int Dmg = std::max(1, (int)TickDamage);
-                    if (UUnit->ShieldPoints > 0)
+                    int Dmg = kStormTickDamage;
+                    if (TUnit->ShieldPoints > 0)
                     {
-                        if (Dmg <= UUnit->ShieldPoints)
-                        { UUnit->ShieldPoints -= Dmg; Dmg = 0; }
+                        if (Dmg <= TUnit->ShieldPoints)
+                        {
+                            TUnit->ShieldPoints -= Dmg;
+                            Dmg = 0;
+                        }
                         else
-                        { Dmg -= UUnit->ShieldPoints; UUnit->ShieldPoints = 0; }
+                        {
+                            Dmg -= TUnit->ShieldPoints;
+                            TUnit->ShieldPoints = 0;
+                        }
                     }
-                    UUnit->HitPoints = std::max(0, UUnit->HitPoints - Dmg);
-                    if (UUnit->HitPoints <= 0)
+                    if (Dmg > 0)
                     {
-                        RecordUnitDeath(EM, Uid, CasterID, true);
-                        EM.DestroyEntity(Uid);
+                        TUnit->HitPoints -= Dmg;
+                        if (TUnit->HitPoints <= 0)
+                        {
+                            TUnit->HitPoints = 0;
+                            RecordUnitDeath(EM, TargetID, CasterID, true);
+                            EM.DestroyEntity(TargetID);
+                        }
                     }
                 }
             }
+
+            const int AreaID = EM.CreateEntity();
+            EM.AddComponent<TransformComponent>(AreaID).Position = Pos;
+            auto& Area = EM.AddComponent<SpellAreaComponent>(AreaID);
+            Area.Effect = StatusEffect::Storm;
+            Area.Radius = Radius;
+            Area.DurationRemaining = 4.0f;
+            Area.SourceEntityID = CasterID;
             Logger::Info("SpellSystem", "Psionic Storm cast at (" +
+                std::to_string((int)Pos.X) + "," + std::to_string((int)Pos.Y) + ")");
+            break;
+        }
+
+        case SpellType::DisruptionWeb:
+        {
+            // Brood War: Disruption Web persists for 24 seconds (576 frames).
+            // Any ground units or ground defense structures beneath it cannot attack.
+            const int AreaID = EM.CreateEntity();
+            EM.AddComponent<TransformComponent>(AreaID).Position = Pos;
+            auto& Area = EM.AddComponent<SpellAreaComponent>(AreaID);
+            Area.Effect = StatusEffect::DisruptionWeb;
+            Area.Radius = 96.0f;
+            Area.DurationRemaining = 24.0f;
+            Area.SourceEntityID = CasterID;
+            Logger::Info("SpellSystem", "Disruption Web cast at (" +
                 std::to_string((int)Pos.X) + "," + std::to_string((int)Pos.Y) + ")");
             break;
         }
@@ -356,7 +547,8 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             if (TargetEntityID >= 0)
             {
                 CombatComponent FakeCombat;
-                FakeCombat.GroundDmgType = DamageType::Normal;
+                FakeCombat.GroundDmgType = DamageType::Explosive;
+                FakeCombat.AirDmgType = DamageType::Explosive;
                 FakeCombat.GroundDamage = 260;
                 FakeCombat.AirDamage = 260;
                 FakeCombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
@@ -763,6 +955,254 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             break;
         }
 
+        case SpellType::DefensiveMatrix:
+        {
+            if (TargetEntityID >= 0)
+            {
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                if (TargetUnit)
+                {
+                    TargetUnit->DefensiveMatrixPoints = 250;
+                    auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
+                    if (!Status)
+                        Status = &EM.AddComponent<StatusEffectComponent>(TargetEntityID);
+                    Status->AddEffect(StatusEffect::DefensiveMatrix, 35.0f, CasterID);
+                }
+            }
+            Logger::Info("SpellSystem", "Defensive Matrix applied");
+            break;
+        }
+
+        case SpellType::Irradiate:
+        {
+            if (TargetEntityID >= 0)
+            {
+                auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
+                if (!Status)
+                    Status = &EM.AddComponent<StatusEffectComponent>(TargetEntityID);
+                Status->AddEffect(StatusEffect::Irradiate, 25.0f, CasterID);
+            }
+            Logger::Info("SpellSystem", "Irradiate applied");
+            break;
+        }
+
+        case SpellType::Restoration:
+        {
+            if (TargetEntityID >= 0)
+            {
+                if (auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID))
+                {
+                    TargetUnit->AcidSporeCount = 0;
+                    TargetUnit->AcidSporeTimers.fill(0.0f);
+                    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(TargetUnit->ChkUnitID);
+                    if (DefID >= 0)
+                    {
+                        const auto Def = Game::Races::GetUnitDefByID(DefID);
+                        TargetUnit->SightRange = Def.SightRange;
+                        TargetUnit->IsDetector = Game::Races::IsDetectorChkUnitID(TargetUnit->ChkUnitID);
+                    }
+                }
+                if (auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID))
+                {
+                    Status->RemoveEffect(StatusEffect::Blind);
+                    Status->RemoveEffect(StatusEffect::Lockdown);
+                    Status->RemoveEffect(StatusEffect::Parasite);
+                    Status->RemoveEffect(StatusEffect::Plague);
+                    Status->RemoveEffect(StatusEffect::Ensnare);
+                    Status->RemoveEffect(StatusEffect::Irradiate);
+                }
+            }
+            Logger::Info("SpellSystem", "Restoration cast");
+            break;
+        }
+
+        case SpellType::OpticalFlare:
+        {
+            if (TargetEntityID >= 0)
+            {
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                if (TargetUnit)
+                {
+                    TargetUnit->SightRange = 1;
+                    TargetUnit->IsDetector = false;
+                }
+                auto* Status = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
+                if (!Status)
+                    Status = &EM.AddComponent<StatusEffectComponent>(TargetEntityID);
+                Status->AddEffect(StatusEffect::Blind, 9999.0f, CasterID);
+            }
+            Logger::Info("SpellSystem", "Optical Flare cast");
+            break;
+        }
+
+        case SpellType::Feedback:
+        {
+            if (TargetEntityID >= 0)
+            {
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                if (TargetUnit && TargetUnit->EnergyPoints > 0)
+                {
+                    const int EnergyDrained = TargetUnit->EnergyPoints;
+                    TargetUnit->EnergyPoints = 0;
+                    CombatComponent FakeCombat;
+                    FakeCombat.GroundDmgType = DamageType::IgnoreArmor;
+                    FakeCombat.AirDmgType = DamageType::IgnoreArmor;
+                    FakeCombat.GroundDamage = EnergyDrained;
+                    FakeCombat.AirDamage = EnergyDrained;
+                    FakeCombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
+                    FakeCombat.CanTargetGround = true;
+                    FakeCombat.CanTargetAir = true;
+                    FakeCombat.AttackRange = 10.0f;
+                    CombatSystem::ApplyDamage(EM, TargetEntityID, FakeCombat, CasterID, EnergyDrained);
+                }
+            }
+            Logger::Info("SpellSystem", "Feedback cast");
+            break;
+        }
+
+        case SpellType::Maelstrom:
+        {
+            constexpr float Radius = 64.0f;
+            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            for (int Uid : Units)
+            {
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(Uid);
+                auto* TargetTrans = EM.GetComponent<TransformComponent>(Uid);
+                if (!TargetUnit || !TargetTrans || TargetUnit->HitPoints <= 0 || TargetUnit->IsInvincible)
+                    continue;
+                if (EM.GetComponent<BuildingComponent>(Uid) || EM.GetComponent<ResourceComponent>(Uid))
+                    continue;
+                if (!Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID))
+                    continue;
+                if (TargetTrans->Position.DistanceTo(Pos) > Radius)
+                    continue;
+
+                auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
+                if (!Status)
+                    Status = &EM.AddComponent<StatusEffectComponent>(Uid);
+                Status->AddEffect(StatusEffect::Maelstrom, 12.0f, CasterID);
+            }
+            Logger::Info("SpellSystem", "Maelstrom cast");
+            break;
+        }
+
+        case SpellType::MindControl:
+        {
+            if (TargetEntityID >= 0)
+            {
+                CasterUnit->ShieldPoints = 0;
+                CasterUnit->ShieldSubDamage = 0;
+
+                auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                if (TargetPlayer && TargetUnit)
+                {
+                    const int OldPlayerID = TargetPlayer->PlayerID;
+                    const int NewPlayerID = CasterPlayer->PlayerID;
+                    TargetPlayer->PlayerID = NewPlayerID;
+
+                    if (TargetUnit->SupplyCost > 0)
+                    {
+                        HarvestSystem::GetResources(OldPlayerID).SupplyUsed =
+                            std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyUsed - TargetUnit->SupplyCost);
+                        HarvestSystem::GetResources(NewPlayerID).SupplyUsed += TargetUnit->SupplyCost;
+                    }
+
+                    const int DefID = Game::Races::GetUnitDefIDByChkUnitID(TargetUnit->ChkUnitID);
+                    if (DefID >= 0)
+                    {
+                        const int ProvidedSupply = Game::Races::GetSupplyProvidedByDefID(DefID);
+                        if (ProvidedSupply > 0)
+                        {
+                            HarvestSystem::GetResources(OldPlayerID).SupplyMax =
+                                std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyMax - ProvidedSupply);
+                            HarvestSystem::GetResources(NewPlayerID).SupplyMax =
+                                std::min(200, HarvestSystem::GetResources(NewPlayerID).SupplyMax + ProvidedSupply);
+                        }
+                    }
+                }
+                if (auto* Cmd = EM.GetComponent<CommandComponent>(TargetEntityID))
+                {
+                    Cmd->CancelAll();
+                    Cmd->CommandQueue.clear();
+                    Cmd->CurrentCommand = CommandType::Stop;
+                    Cmd->TargetEntityID = -1;
+                    Cmd->TargetPosition = {};
+                }
+                if (auto* Combat = EM.GetComponent<CombatComponent>(TargetEntityID))
+                {
+                    Combat->TargetEntityID = -1;
+                    Combat->AutoTargetEntityID = -1;
+                    Combat->PendingAttackFrame = false;
+                }
+            }
+            Logger::Info("SpellSystem", "Mind Control cast");
+            break;
+        }
+
+        case SpellType::Infestation:
+        {
+            if (TargetEntityID >= 0)
+            {
+                auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+                auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetEntityID);
+                if (TargetUnit && TargetPlayer)
+                {
+                    const int OldPlayerID = TargetPlayer->PlayerID;
+                    const int NewPlayerID = CasterPlayer->PlayerID;
+
+                    if (OldPlayerID >= 0 && OldPlayerID < kPlayerResourceSlots)
+                    {
+                        HarvestSystem::GetResources(OldPlayerID).SupplyMax =
+                            std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyMax - 10);
+                    }
+
+                    constexpr int InfestedCommandCenterChkUnitID = 130;
+                    TargetUnit->ChkUnitID = InfestedCommandCenterChkUnitID;
+                    TargetUnit->UnitRace = Race::Zerg;
+                    TargetUnit->HitPoints = TargetUnit->MaxHitPoints;
+                    TargetUnit->HitPointSubDamage = 0;
+                    TargetPlayer->PlayerID = NewPlayerID;
+
+                    if (auto* TargetBldg = EM.GetComponent<BuildingComponent>(TargetEntityID))
+                    {
+                        TargetBldg->BurnDamageAccumulator = 0.0f;
+                        TargetBldg->UnderConstruction = false;
+                        TargetBldg->IsLifted = false;
+                        TargetBldg->FlightPhase = BuildingFlightPhase::Grounded;
+                    }
+
+                    if (auto* TargetProd = EM.GetComponent<ProductionComponent>(TargetEntityID))
+                    {
+                        TargetProd->Queue.clear();
+                        TargetProd->CurrentTrainingUnitDefID = -1;
+                        TargetProd->TrainingProgress = 0.0f;
+                        TargetProd->TrainingTimePerUnit = 0.0f;
+                    }
+
+                    if (auto* TargetCmd = EM.GetComponent<CommandComponent>(TargetEntityID))
+                    {
+                        TargetCmd->CancelAll();
+                        TargetCmd->CommandQueue.clear();
+                        TargetCmd->CurrentCommand = CommandType::Stop;
+                        TargetCmd->TargetEntityID = -1;
+                        TargetCmd->TargetPosition = {};
+                    }
+
+                    if (auto* TargetRender = EM.GetComponent<RenderComponent>(TargetEntityID))
+                    {
+                        TargetRender->ImageID = static_cast<uint32_t>(InfestedCommandCenterChkUnitID);
+                    }
+
+                    // Queen sacrifices herself to infest the Command Center
+                    RecordUnitDeath(EM, CasterID, -1, true);
+                    EM.DestroyEntity(CasterID);
+                }
+            }
+            Logger::Info("SpellSystem", "Command Center infested");
+            break;
+        }
+
         default: break;
     }
 
@@ -790,6 +1230,85 @@ void SpellSystem::Update(float DeltaTime)
         auto* SC = EM.GetComponent<Components::SpellCooldown>(Id);
         if (SC && SC->CooldownRemaining > 0.0f)
             SC->CooldownRemaining -= DeltaTime;
+    }
+
+    // Process Psionic Storm periodic damage
+    mStormTickTimer += DeltaTime;
+    constexpr float kStormTickInterval = 0.5f; // 8 ticks over 4 seconds
+    if (mStormTickTimer >= kStormTickInterval)
+    {
+        mStormTickTimer -= kStormTickInterval;
+
+        std::vector<std::pair<Core::Math::Vec2, std::pair<float, int>>> ActiveStorms;
+        for (int AreaID : EM.GetEntitiesWith<TransformComponent, SpellAreaComponent>())
+        {
+            const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
+            const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
+            if (Area && AreaTrans && Area->Effect == StatusEffect::Storm && Area->DurationRemaining > 0.0f)
+            {
+                ActiveStorms.push_back({AreaTrans->Position, {Area->Radius, Area->SourceEntityID}});
+            }
+        }
+
+        if (!ActiveStorms.empty())
+        {
+            // Brood War: 14 damage per tick (112 total).
+            // Shields absorb first, then HP. Ignores armor. Friendly fire applies.
+            // Does not hit buildings or resources. Overlapping storms do NOT stack.
+            constexpr int kStormTickDamage = 14;
+            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            for (int Uid : Units)
+            {
+                auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
+                auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
+                if (!UUnit || !UTrans || UUnit->HitPoints <= 0 || UUnit->IsInvincible)
+                    continue;
+                if (EM.GetComponent<BuildingComponent>(Uid) || EM.GetComponent<ResourceComponent>(Uid))
+                    continue;
+                if (auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
+                    Status && Status->HasEffect(StatusEffect::Stasis))
+                    continue;
+
+                int CasterEntityID = -1;
+                bool InsideStorm = false;
+                for (const auto& Storm : ActiveStorms)
+                {
+                    if (UTrans->Position.DistanceTo(Storm.first) <= Storm.second.first)
+                    {
+                        InsideStorm = true;
+                        CasterEntityID = Storm.second.second;
+                        break;
+                    }
+                }
+
+                if (InsideStorm)
+                {
+                    int Dmg = kStormTickDamage;
+                    if (UUnit->ShieldPoints > 0)
+                    {
+                        if (Dmg <= UUnit->ShieldPoints)
+                        {
+                            UUnit->ShieldPoints -= Dmg;
+                            Dmg = 0;
+                        }
+                        else
+                        {
+                            Dmg -= UUnit->ShieldPoints;
+                            UUnit->ShieldPoints = 0;
+                        }
+                    }
+                    if (Dmg > 0)
+                    {
+                        UUnit->HitPoints = std::max(0, UUnit->HitPoints - Dmg);
+                        if (UUnit->HitPoints <= 0)
+                        {
+                            RecordUnitDeath(EM, Uid, CasterEntityID, true);
+                            EM.DestroyEntity(Uid);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

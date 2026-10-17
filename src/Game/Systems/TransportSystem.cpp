@@ -2,6 +2,7 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
+#include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Core/Utils/Logger.h"
@@ -16,6 +17,19 @@ using Core::Utils::Logger;
 
 namespace
 {
+    const Game::Map::GameMap* gTransportMap = nullptr;
+
+    bool IsValidUnloadLanding(const Game::Map::GameMap* Map, const Core::Math::Vec2& Pos)
+    {
+        if (!Map)
+            return true;
+        int TileX = 0, TileY = 0;
+        Map->WorldToTile(Pos, TileX, TileY);
+        if (!Map->IsInBounds(TileX, TileY))
+            return false;
+        return Map->IsWalkable(TileX, TileY);
+    }
+
     bool IsTransportUnit(Core::ECS::EntityManager& EM,
                          int EntityID,
                          const UnitComponent* Unit = nullptr,
@@ -70,11 +84,26 @@ namespace
         if (Loaded && std::find(Loaded->PassengerIDs.begin(), Loaded->PassengerIDs.end(), PassengerID) !=
                           Loaded->PassengerIDs.end())
             return Fail("unit already loaded");
-        const size_t Capacity = TU->ChkUnitID == 125
-            ? static_cast<size_t>(TransportSystem::kMaxBunkerCapacity)
-            : static_cast<size_t>(TransportSystem::kMaxTransportCapacity);
-        if (Loaded && Loaded->PassengerIDs.size() >= Capacity)
-            return Fail("transport full");
+
+        const bool IsBunker = (TU->ChkUnitID == 125);
+        if (IsBunker)
+        {
+            if (!TransportSystem::CanEnterBunker(PU->ChkUnitID))
+                return Fail("unit cannot enter bunker");
+            const int UsedSpace = TransportSystem::GetLoadedSpace(EM, TransportID);
+            if (UsedSpace + 1 > TransportSystem::kMaxBunkerCapacity)
+                return Fail("bunker full");
+        }
+        else
+        {
+            const int SpaceNeeded = TransportSystem::GetUnitSpaceRequired(PU->ChkUnitID);
+            if (SpaceNeeded <= 0)
+                return Fail("passenger cannot be loaded");
+            const int UsedSpace = TransportSystem::GetLoadedSpace(EM, TransportID);
+            if (UsedSpace + SpaceNeeded > TransportSystem::kMaxTransportCapacity)
+                return Fail("transport full");
+        }
+
         if (RequireRange && TT->Position.DistanceTo(PT->Position) > 64.0f)
             return Fail("too far from transport");
         return true;
@@ -107,7 +136,10 @@ namespace
         {
             const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
             if (DefID >= 0)
-                Unit->Speed = Game::Races::GetUnitDefByID(DefID).Speed;
+            {
+                Unit->Speed = Game::Races::GetUnitDefByID(DefID).Speed *
+                              UpgradeSystem::GetMovementSpeedMultiplier(EM, PassengerID);
+            }
         }
     }
 
@@ -152,6 +184,109 @@ bool TransportSystem::IsTransport(Core::ECS::EntityManager& EM, int EntityID)
     return IsTransportUnit(EM, EntityID, Unit, Player);
 }
 
+int TransportSystem::GetUnitSpaceRequired(int ChkUnitID)
+{
+    switch (ChkUnitID)
+    {
+        // 1 slot: Small / Infantry / Workers / Critters
+        case 0:   // Marine
+        case 1:   // Ghost
+        case 7:   // SCV
+        case 10:  // Gui Montag
+        case 16:  // Sarah Kerrigan
+        case 20:  // Jim Raynor (Marine)
+        case 32:  // Firebat
+        case 34:  // Medic
+        case 37:  // Zergling
+        case 40:  // Broodling
+        case 41:  // Drone
+        case 50:  // Infested Terran
+        case 54:  // Devouring One
+        case 64:  // Probe
+        case 95:  // Rhynadon
+        case 96:  // Bengalaas
+        case 97:  // Scantid
+        case 98:  // Kakaru
+        case 99:  // Samir Duran
+        case 100: // Alexei Stukov
+        case 101: // Ragnasaur
+        case 102: // Ursadon
+            return 1;
+
+        // 2 slots: Medium ground units
+        case 2:   // Vulture
+        case 3:   // Goliath
+        case 17:  // Alan Schezar
+        case 19:  // Jim Raynor (Vulture)
+        case 38:  // Hydralisk
+        case 46:  // Defiler
+        case 52:  // Unclean One
+        case 53:  // Hunter Killer
+        case 61:  // Dark Templar
+        case 65:  // Zealot
+        case 67:  // High Templar
+        case 74:  // Zeratul
+        case 77:  // Fenix (Zealot)
+        case 79:  // Tassadar
+        case 103: // Lurker
+            return 2;
+
+        // 4 slots: Large ground units
+        case 5:   // Siege Tank (Tank Mode)
+        case 23:  // Edmund Duke (Tank Mode)
+        case 39:  // Ultralisk
+        case 48:  // Torrasque
+        case 63:  // Dark Archon
+        case 66:  // Dragoon
+        case 68:  // Archon
+        case 76:  // Tassadar/Zeratul Archon
+        case 78:  // Fenix (Dragoon)
+        case 81:  // Warbringer
+        case 83:  // Reaver
+            return 4;
+
+        // 0 slots: Siege Mode Tanks, Air units, Buildings, Eggs, etc.
+        default:
+            return 0;
+    }
+}
+
+bool TransportSystem::CanEnterBunker(int ChkUnitID)
+{
+    switch (ChkUnitID)
+    {
+        case 0:   // Marine
+        case 1:   // Ghost
+        case 10:  // Gui Montag
+        case 16:  // Sarah Kerrigan
+        case 20:  // Jim Raynor (Marine)
+        case 32:  // Firebat
+        case 34:  // Medic
+        case 99:  // Samir Duran
+        case 100: // Alexei Stukov
+            return true;
+        default:
+            return false;
+    }
+}
+
+int TransportSystem::GetLoadedSpace(Core::ECS::EntityManager& EM, int TransportID)
+{
+    const auto* Loaded = EM.GetComponent<LoadedUnitsComponent>(TransportID);
+    if (!Loaded)
+        return 0;
+
+    int Total = 0;
+    for (int PID : Loaded->PassengerIDs)
+    {
+        if (const auto* PU = EM.GetComponent<UnitComponent>(PID))
+        {
+            Total += GetUnitSpaceRequired(PU->ChkUnitID);
+        }
+    }
+    return Total;
+}
+
 bool TransportSystem::CanLoad(Core::ECS::EntityManager& EM, int TransportID, int PassengerID,
                                std::string* OutReason)
 {
@@ -190,13 +325,12 @@ bool TransportSystem::IssueBoard(Core::ECS::EntityManager& EM,
         return false;
 
     const auto* TransportUnit = EM.GetComponent<UnitComponent>(TransportID);
-    const bool CanRendezvous =
-        TransportUnit && TransportUnit->ChkUnitID != 125;
-    const size_t Capacity = TransportUnit && TransportUnit->ChkUnitID == 125
-        ? static_cast<size_t>(kMaxBunkerCapacity)
-        : static_cast<size_t>(kMaxTransportCapacity);
-    const auto* Loaded = EM.GetComponent<LoadedUnitsComponent>(TransportID);
-    size_t ReservedSlots = Loaded ? Loaded->PassengerIDs.size() : 0;
+    const bool IsBunker = TransportUnit && TransportUnit->ChkUnitID == 125;
+    const bool CanRendezvous = TransportUnit && !IsBunker;
+    const int Capacity = IsBunker
+        ? kMaxBunkerCapacity
+        : kMaxTransportCapacity;
+    int ReservedSpace = GetLoadedSpace(EM, TransportID);
 
     if (auto* ExistingPlan = EM.GetComponent<PendingTransportBoardingComponent>(TransportID))
     {
@@ -212,15 +346,21 @@ bool TransportSystem::IssueBoard(Core::ECS::EntityManager& EM,
     std::vector<int> RendezvousPassengers;
     for (int PassengerID : PassengerIDs)
     {
-        if (ReservedSlots >= Capacity)
+        if (ReservedSpace >= Capacity)
             break;
         if (!ValidateLoadTarget(EM, TransportID, PassengerID, false, nullptr))
             continue;
+
+        const auto* PU = EM.GetComponent<UnitComponent>(PassengerID);
+        const int SpaceNeeded = IsBunker ? 1 : (PU ? GetUnitSpaceRequired(PU->ChkUnitID) : 1);
+        if (SpaceNeeded <= 0 || ReservedSpace + SpaceNeeded > Capacity)
+            continue;
+
         if (CanLoad(EM, TransportID, PassengerID, nullptr))
         {
             if (LoadUnit(EM, TransportID, PassengerID))
             {
-                ++ReservedSlots;
+                ReservedSpace += SpaceNeeded;
                 AcceptedAny = true;
             }
             continue;
@@ -238,12 +378,12 @@ bool TransportSystem::IssueBoard(Core::ECS::EntityManager& EM,
         if (CanRendezvous)
         {
             RendezvousPassengers.push_back(PassengerID);
-            ++ReservedSlots;
+            ReservedSpace += SpaceNeeded;
             AcceptedAny = true;
         }
         else if (PassengerCanApproach)
         {
-            ++ReservedSlots;
+            ReservedSpace += SpaceNeeded;
             AcceptedAny = true;
         }
     }
@@ -277,7 +417,11 @@ bool TransportSystem::LoadUnit(Core::ECS::EntityManager& EM, int TransportID, in
     if (Render) Render->Visible = false;
 
     auto* Unit = EM.GetComponent<UnitComponent>(PassengerID);
-    if (Unit) Unit->Speed = 0.0f;
+    if (Unit)
+    {
+        Unit->Speed = 0.0f;
+        Unit->LoadedInTransportID = TransportID;
+    }
     ClearPassengerMotion(EM, PassengerID);
     if (auto* Pending = EM.GetComponent<PendingTransportLoadComponent>(TransportID))
         Pending->PassengerID = -1;
@@ -290,6 +434,11 @@ bool TransportSystem::LoadUnit(Core::ECS::EntityManager& EM, int TransportID, in
     return true;
 }
 
+void TransportSystem::SetMap(const Game::Map::GameMap* Map)
+{
+    gTransportMap = Map;
+}
+
 bool TransportSystem::CanUnload(Core::ECS::EntityManager& EM, int TransportID,
                                  int PassengerIndex, std::string* OutReason)
 {
@@ -299,6 +448,29 @@ bool TransportSystem::CanUnload(Core::ECS::EntityManager& EM, int TransportID,
         if (OutReason) *OutReason = "no such passenger";
         return false;
     }
+
+    if (gTransportMap)
+    {
+        auto* TT = EM.GetComponent<TransformComponent>(TransportID);
+        if (TT)
+        {
+            bool HasAnyWalkable = false;
+            for (int i = 0; i < 8; ++i)
+            {
+                if (IsValidUnloadLanding(gTransportMap, TT->Position + UnloadOffset(i)))
+                {
+                    HasAnyWalkable = true;
+                    break;
+                }
+            }
+            if (!HasAnyWalkable)
+            {
+                if (OutReason) *OutReason = "terrain is impassable";
+                return false;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -306,21 +478,46 @@ bool TransportSystem::UnloadUnit(Core::ECS::EntityManager& EM, int TransportID,
                                   int PassengerIndex, const Core::Math::Vec2& Position)
 {
     auto* Loaded = EM.GetComponent<LoadedUnitsComponent>(TransportID);
-    if (!Loaded || PassengerIndex >= (int)Loaded->PassengerIDs.size()) return false;
+    if (!Loaded || PassengerIndex < 0 || PassengerIndex >= (int)Loaded->PassengerIDs.size()) return false;
+
+    auto* TT = EM.GetComponent<TransformComponent>(TransportID);
+    if (!TT) return false;
+
+    Core::Math::Vec2 TargetPos = Position.LengthSq() > 0 ? Position :
+        Core::Math::Vec2(TT->Position.X + 48.0f, TT->Position.Y);
+
+    if (gTransportMap && !IsValidUnloadLanding(gTransportMap, TargetPos))
+    {
+        bool FoundWalkable = false;
+        for (int i = 0; i < 8; ++i)
+        {
+            const Core::Math::Vec2 AltPos = TT->Position + UnloadOffset(i);
+            if (IsValidUnloadLanding(gTransportMap, AltPos))
+            {
+                TargetPos = AltPos;
+                FoundWalkable = true;
+                break;
+            }
+        }
+        if (!FoundWalkable)
+        {
+            return false;
+        }
+    }
 
     int PassengerID = Loaded->PassengerIDs[PassengerIndex];
     Loaded->PassengerIDs.erase(Loaded->PassengerIDs.begin() + PassengerIndex);
 
-    auto* TT = EM.GetComponent<TransformComponent>(TransportID);
     auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
-    if (PT && TT)
+    if (PT)
     {
-        PT->Position = Position.LengthSq() > 0 ? Position :
-            Core::Math::Vec2(TT->Position.X + 48.0f, TT->Position.Y);
+        PT->Position = TargetPos;
     }
 
     auto* Render = EM.GetComponent<RenderComponent>(PassengerID);
     if (Render) Render->Visible = true;
+    if (auto* PassUnit = EM.GetComponent<UnitComponent>(PassengerID))
+        PassUnit->LoadedInTransportID = -1;
     RestorePassenger(EM, PassengerID);
 
     Logger::Info("TransportSystem",

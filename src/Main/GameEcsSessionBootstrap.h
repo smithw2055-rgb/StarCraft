@@ -115,10 +115,52 @@ inline void InitializeLoadedMapGameplayRuntime(
     const char* ShowcaseValue = std::getenv("STARCRAFT_AI_SHOWCASE");
     const bool RunShowcase = ShowcaseValue && ShowcaseValue[0] != '\0' &&
                              ShowcaseValue[0] != '0';
+    const bool IsObserver =
+        GameSessionBootstrap::Detail::IsAiObserverMatch();
+    const bool AddPlayableStarts = !IsCampaignMission || RunShowcase || IsObserver;
+    const bool RegisterGenericAi = (!IsCampaignMission && !RunShowcase) || IsObserver;
     InitializeGameplayEntitiesAndRuntimeState(
-        Session, Client, Hud, !IsCampaignMission || RunShowcase,
-        !IsCampaignMission && !RunShowcase);
-    if (EnableCampaignRuntime)
+        Session, Client, Hud, AddPlayableStarts, RegisterGenericAi);
+
+    const int LocalPlayerID = Session.GetLocalPlayerID();
+    GameSessionBootstrap::Detail::StartRace PlayerRace =
+        GameSessionBootstrap::Detail::RaceFromScriptPlayer(Session, LocalPlayerID);
+    PlayerRace = GameSessionBootstrap::Detail::ApplyShowcaseRaceOverride(PlayerRace);
+
+    if (PlayerRace == GameSessionBootstrap::Detail::StartRace::Terran)
+    {
+        for (int Eid : Session.Entities().GetEntitiesWith<Game::Components::UnitComponent,
+                                                          Game::Components::PlayerComponent>())
+        {
+            auto* P = Session.Entities().GetComponent<Game::Components::PlayerComponent>(Eid);
+            auto* U = Session.Entities().GetComponent<Game::Components::UnitComponent>(Eid);
+            if (P && U && P->PlayerID == LocalPlayerID)
+            {
+                if (U->UnitRace == Game::Components::Race::Protoss)
+                {
+                    PlayerRace = GameSessionBootstrap::Detail::StartRace::Protoss;
+                    break;
+                }
+                else if (U->UnitRace == Game::Components::Race::Zerg)
+                {
+                    PlayerRace = GameSessionBootstrap::Detail::StartRace::Zerg;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::string ConsoleRace = "terran";
+    if (PlayerRace == GameSessionBootstrap::Detail::StartRace::Protoss)
+        ConsoleRace = "protoss";
+    else if (PlayerRace == GameSessionBootstrap::Detail::StartRace::Zerg)
+        ConsoleRace = "zerg";
+
+    Client.SetConsoleRace(ConsoleRace);
+    Core::Utils::Logger::Info("GameBootstrap", "Selected console race: " + ConsoleRace);
+
+    const bool EnableCampaign = EnableCampaignRuntime;
+    if (EnableCampaign)
     {
         InitializeCampaignRuntimeForSession(
             Campaign, Session, Audio, Client, MapPath, PreserveManualCamera);

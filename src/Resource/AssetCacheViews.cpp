@@ -81,6 +81,12 @@ const TilesetAtlas* TilesetAssetCacheView::GetTilesetAtlas(const std::string& Ti
     return mCache ? mCache->GetTilesetAtlas(TilesetName) : nullptr;
 }
 
+const TilesetAtlas* TilesetAssetCacheView::GetTilesetAtlasForMap(
+    const std::string& TilesetName, const std::vector<uint16_t>* MegaTileIds) const
+{
+    return mCache ? mCache->GetTilesetAtlasForMap(TilesetName, MegaTileIds) : nullptr;
+}
+
 const std::vector<TilesetCreepFrame>* TilesetAssetCacheView::GetTilesetCreepFrames(
     const std::string& TilesetName) const
 {
@@ -125,6 +131,11 @@ const std::vector<GpuImage>* UIAssetCacheView::GetCommandButtonSkins(CommandButt
 const std::vector<GpuImage>* UIAssetCacheView::GetWireframeFrames() const
 {
     return mCache ? mCache->GetWireframeFrames() : nullptr;
+}
+
+bool UIAssetCacheView::EnsureWireframeFrame(int FrameIndex) const
+{
+    return mCache ? mCache->EnsureWireframeFrame(FrameIndex) : false;
 }
 
 const std::vector<GpuImage>* UIAssetCacheView::GetCursorFrames(const std::string& CursorName) const

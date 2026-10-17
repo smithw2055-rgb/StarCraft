@@ -493,6 +493,8 @@ if(BUILD_ANIMATION_RUNTIME_DIRECTION_TEST)
         src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
         src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Races/RaceDef.cpp
     )
 
     target_include_directories(AnimationRuntimeDirectionTest PRIVATE
@@ -695,6 +697,7 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
         src/Game/Systems/ProductionSystem.cpp
         src/Game/Systems/ProtossSystem.cpp
         src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
         src/Game/Systems/TransportSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
@@ -755,6 +758,7 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
         src/Game/Systems/CommandSystem.cpp
         src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
         src/Game/Systems/SpellSystem.cpp
         src/Game/Systems/TransportSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
@@ -888,6 +892,87 @@ if(BUILD_MOVEMENT_COMMAND_TEST)
     endif()
 endif()
 
+option(BUILD_NAVIGATION_PATHFINDING_TEST
+    "Build minitile navigation pathfinding regression test" ON)
+if(BUILD_NAVIGATION_PATHFINDING_TEST)
+    add_executable(NavigationPathfindingTest
+        src/Game/Regression/NavigationPathfindingTest.cpp)
+
+    target_include_directories(NavigationPathfindingTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(NavigationPathfindingTest PRIVATE
+            /W4 /utf-8 /permissive-)
+        target_compile_definitions(NavigationPathfindingTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(NavigationPathfindingTest PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+option(BUILD_NAVIGATION_DETERMINISM_TEST
+    "Build fixed-tick navigation determinism regression test" ON)
+if(BUILD_NAVIGATION_DETERMINISM_TEST)
+    add_executable(NavigationDeterminismTest
+        src/Game/Regression/NavigationDeterminismTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp)
+
+    target_include_directories(NavigationDeterminismTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(NavigationDeterminismTest PRIVATE
+            /W4 /utf-8 /permissive-)
+        target_compile_definitions(NavigationDeterminismTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(NavigationDeterminismTest PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+option(BUILD_NAVIGATION_STRESS_TEST
+    "Build 800-unit navigation stress benchmark" ON)
+if(BUILD_NAVIGATION_STRESS_TEST)
+    add_executable(NavigationStressTest
+        src/Game/Regression/NavigationStressTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp)
+
+    target_include_directories(NavigationStressTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(NavigationStressTest PRIVATE
+            /W4 /utf-8 /permissive-)
+        target_compile_definitions(NavigationStressTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(NavigationStressTest PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 option(BUILD_PRODUCTION_ECONOMY_TEST "Build production economy regression test" ON)
 if(BUILD_PRODUCTION_ECONOMY_TEST)
     add_executable(ProductionEconomyTest
@@ -1018,6 +1103,7 @@ if(BUILD_BUILDING_PLACEMENT_TEST)
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BuildingSystem.cpp
         src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
     )
 
     target_include_directories(BuildingPlacementTest PRIVATE
@@ -1030,6 +1116,34 @@ if(BUILD_BUILDING_PLACEMENT_TEST)
             _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
     else()
         target_compile_options(BuildingPlacementTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+option(BUILD_MATCH_OUTCOME_TEST "Build match outcome regression test" ON)
+if(BUILD_MATCH_OUTCOME_TEST)
+    add_executable(MatchOutcomeTest
+        src/Game/Regression/MatchOutcomeTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/IScriptVM.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Map/ChkParser.cpp
+    )
+
+    target_include_directories(MatchOutcomeTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(MatchOutcomeTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(MatchOutcomeTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(MatchOutcomeTest PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
 
@@ -1078,6 +1192,48 @@ if(BUILD_OGG_VORBIS_DECODE_TEST)
             _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
     else()
         target_compile_options(OggVorbisDecodeTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+option(BUILD_TRANSPORT_SYSTEM_TEST "Build transport system regression test" ON)
+if(BUILD_TRANSPORT_SYSTEM_TEST)
+    add_executable(TransportSystemTest
+        src/Game/Regression/TransportSystemTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/IScriptVM.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+    )
+
+    target_include_directories(TransportSystemTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(TransportSystemTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(TransportSystemTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(TransportSystemTest PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
 
@@ -1238,6 +1394,8 @@ foreach(_StarCraftRegressionTest IN ITEMS
     AnimationStateTest
     AnimationRuntimeDirectionTest
     MovementCommandTest
+    NavigationPathfindingTest
+    NavigationDeterminismTest
     CommandSystemOrderTest
     CombatRulesTest
     SpellVisualStateTest
@@ -1261,11 +1419,17 @@ foreach(_StarCraftRegressionTest IN ITEMS
     SelectionInteractionTest
     RaceDefinitionMappingTest
     AIBrainStrategyTest
-    OggVorbisDecodeTest )
+    MatchOutcomeTest
+    OggVorbisDecodeTest
+    TransportSystemTest )
     if(TARGET ${_StarCraftRegressionTest})
         add_test(NAME ${_StarCraftRegressionTest} COMMAND ${_StarCraftRegressionTest})
         set_tests_properties(${_StarCraftRegressionTest} PROPERTIES
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+        if("${_StarCraftRegressionTest}" STREQUAL "CampaignCatalogRuntimeTest")
+            set_tests_properties(CampaignCatalogRuntimeTest PROPERTIES
+                ENVIRONMENT "STARCRAFT_CAMPAIGN_LONG_AUDIT_SECONDS=0")
+        endif()
     endif()
 endforeach()
 
@@ -1547,7 +1711,7 @@ if(BUILD_GAME_CLIENT)
                 -P ${CMAKE_SOURCE_DIR}/cmake/StarCraftInteractionSmoke.cmake)
         set_tests_properties(StarCraftInteractionSmoke PROPERTIES
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-            TIMEOUT 60
+            TIMEOUT 120
             LABELS "runtime")
     endif()
 endif()

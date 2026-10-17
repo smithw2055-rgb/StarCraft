@@ -454,6 +454,20 @@ int main()
     Require(CountCreep(Map) == 0,
         "all creep eventually recedes after the final live source is destroyed");
 
+    // Burrow capabilities
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(37, 0), "Zergling can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(38, 0), "Hydralisk can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(41, 0), "Drone can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(46, 0), "Defiler can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(50, 0), "Infested Terran can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(51, 0), "Infested Kerrigan can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(52, 0), "Unclean One can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(53, 0), "Hunter Killer can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(54, 0), "Devouring One can burrow");
+    Require(Game::Systems::ZergSystem::CanUnitBurrow(103, 0), "Lurker can burrow");
+    Require(!Game::Systems::ZergSystem::CanUnitBurrow(39, 0), "Ultralisk cannot burrow");
+    Require(!Game::Systems::ZergSystem::CanUnitBurrow(43, 0), "Mutalisk cannot burrow");
+
     std::puts("Zerg creep and regeneration regression tests passed");
     return 0;
 }

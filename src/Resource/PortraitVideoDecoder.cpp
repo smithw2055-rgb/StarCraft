@@ -516,11 +516,38 @@ namespace
                 const int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
                 const int B = (298 * C + 516 * D + 128) >> 8;
 
+                uint8_t OutR = ClampByte(R);
+                uint8_t OutG = ClampByte(G);
+                uint8_t OutB = ClampByte(B);
+                uint8_t OutA = 255;
+
+                if (AlphaPlane)
+                {
+                    OutA = (*AlphaPlane)[(size_t)Y * (size_t)Out.Width + (size_t)X];
+                }
+                else
+                {
+                    // Chroma keying for green screen portrait webm videos (SC:R green screen assets)
+                    const int MaxRB = std::max((int)OutR, (int)OutB);
+                    const int GreenDelta = (int)OutG - MaxRB;
+                    if (GreenDelta > 45 && OutG > 70)
+                    {
+                        OutA = 0;
+                        OutG = static_cast<uint8_t>(MaxRB);
+                    }
+                    else if (GreenDelta > 15 && OutG > 60)
+                    {
+                        const float Factor = (float)(GreenDelta - 15) / 30.0f;
+                        OutA = static_cast<uint8_t>(std::clamp((1.0f - Factor) * 255.0f, 0.0f, 255.0f));
+                        OutG = static_cast<uint8_t>(MaxRB + (int)((1.0f - Factor) * 15.0f));
+                    }
+                }
+
                 const size_t Dst = ((size_t)Y * (size_t)Out.Width + (size_t)X) * 4u;
-                Out.Rgba[Dst + 0u] = ClampByte(R);
-                Out.Rgba[Dst + 1u] = ClampByte(G);
-                Out.Rgba[Dst + 2u] = ClampByte(B);
-                Out.Rgba[Dst + 3u] = AlphaPlane ? (*AlphaPlane)[(size_t)Y * (size_t)Out.Width + (size_t)X] : 255;
+                Out.Rgba[Dst + 0u] = OutR;
+                Out.Rgba[Dst + 1u] = OutG;
+                Out.Rgba[Dst + 2u] = OutB;
+                Out.Rgba[Dst + 3u] = OutA;
             }
         }
 

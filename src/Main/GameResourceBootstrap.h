@@ -256,22 +256,38 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
                 }
             }
             const auto* Weapon = Loader->FindWeaponByID(WeaponID);
-            if (!Weapon || Weapon->FlingyID >= 209)
+            // Flingy 0 is classic StarCraft's sentinel for melee / projectile-less attacks
+            // (e.g. Zealot Psi Blades, Zergling Claws, Ultralisk Kaiser Blades).
+            // OpenBW fire_weapon explicitly guards with `if (!weapon_type->flingy) return`.
+            // Resolving Flingy 0 would incorrectly map to Scourge avenger.grp.
+            if (!Weapon || Weapon->FlingyID == 0 || Weapon->FlingyID >= 209)
                 return std::nullopt;
             const auto* Flingy = Loader->FindFlingyByID(Weapon->FlingyID);
             if (!Flingy)
                 return std::nullopt;
             const auto* Sprite = Loader->FindSpriteByID(Flingy->SpriteID);
-            if (!Sprite || Loader->ResolveImageGrpPath(Sprite->ImageID).empty())
+            if (!Sprite)
+                return std::nullopt;
+            const std::string GrpPath = Loader->ResolveImageGrpPath(Sprite->ImageID);
+            if (GrpPath.empty())
                 return std::nullopt;
 
+            std::string LowerGrpPath = GrpPath;
+            std::transform(LowerGrpPath.begin(), LowerGrpPath.end(), LowerGrpPath.begin(),
+                [](unsigned char C) { return (char)std::tolower(C); });
+            // circle14.grp is classic StarCraft's invisible projectile / collision
+            // delivery helper (e.g. Firebat Flame Thrower, Psi Storm delivery).
+            // It carries real weapon simulation parameters but must never render.
+            const bool IsInvisibleBullet =
+                LowerGrpPath.find("circle14") != std::string::npos;
+
             Game::Systems::BulletSystem::VisualSpec Spec;
-            Spec.ImageID = Sprite->ImageID;
+            Spec.ImageID = IsInvisibleBullet ? UINT32_MAX : Sprite->ImageID;
             Spec.Speed = (float)Flingy->TopSpeed * 24.0f / 256.0f;
-            Spec.HasInitAnimation =
+            Spec.HasInitAnimation = !IsInvisibleBullet &&
                 Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
                     (int)Sprite->ImageID, Game::IScriptAnims::Anim_Init);
-            Spec.HasImpactAnimation =
+            Spec.HasImpactAnimation = !IsInvisibleBullet &&
                 Game::Systems::AnimationSystem::HasIScriptAnimationForImage(
                     (int)Sprite->ImageID, Game::IScriptAnims::Anim_Death);
             Spec.BulletType = (int)Weapon->WeaponBehavior;

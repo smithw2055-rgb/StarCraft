@@ -1,6 +1,9 @@
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
+#include "Resource/DdsGrpDecoder.h"
+#include "Resource/GrpToGpu.h"
+#include "Resource/UIAssetImageHelpers.h"
 
 #include <utility>
 
@@ -55,12 +58,90 @@ bool ResourceCache::LoadUIIconGraphics()
 
 bool ResourceCache::LoadWireframeGraphics()
 {
-    return LoadPreferredUIFrames("sprites\\wirefram\\wirefram.grp",
+#ifdef _WIN32
+    if (mSources.UseExtractedAssets)
+    {
+        const std::string DdsPath = GetDdsGrpLogicalPath("unit\\wirefram\\wirefram.grp");
+        auto DdsGrpData = ReadUIFileWithUpperFallback(DdsPath);
+        if (DdsGrpData)
+        {
+            auto Parsed = ParseDdsGrp(*DdsGrpData);
+            if (Parsed && !Parsed->Frames.empty())
+            {
+                mUI.WireframeFrames.resize(Parsed->Frames.size());
+                mUI.WireframeOpaqueBounds.resize(Parsed->Frames.size());
+                Core::Utils::Logger::Info("ResourceCache",
+                    "Initialized lazy HD wireframe slots: " +
+                    std::to_string(mUI.WireframeFrames.size()) + " frames");
+                return true;
+            }
+        }
+    }
+#endif
+    return LoadPreferredUIFrames("unit\\wirefram\\wirefram.grp",
                                  mUI.WireframeFrames,
                                  {},
                                  &mUI.WireframeOpaqueBounds,
                                  false,
                                  "wireframe frames");
+}
+
+bool ResourceCache::EnsureWireframeFrame(int FrameIndex)
+{
+    if (FrameIndex < 0 || FrameIndex >= static_cast<int>(mUI.WireframeFrames.size()))
+        return false;
+
+    if (mUI.WireframeFrames[static_cast<size_t>(FrameIndex)].Valid())
+        return true;
+
+#ifdef _WIN32
+    if (mSources.UseExtractedAssets)
+    {
+        const std::string DdsPath = GetDdsGrpLogicalPath("unit\\wirefram\\wirefram.grp");
+        auto DdsGrpData = ReadUIFileWithUpperFallback(DdsPath);
+        if (DdsGrpData)
+        {
+            auto Parsed = ParseDdsGrp(*DdsGrpData);
+            if (Parsed && FrameIndex < static_cast<int>(Parsed->Frames.size()))
+            {
+                const auto& Frame = Parsed->Frames[static_cast<size_t>(FrameIndex)];
+                auto ImageOpt = LoadWicRgbaImageFromMemory(
+                    DdsGrpData->data() + Frame.DataOffset,
+                    Frame.ByteSize);
+                if (ImageOpt && ImageOpt->Width > 0 && ImageOpt->Height > 0)
+                {
+                    if (FrameIndex < static_cast<int>(mUI.WireframeOpaqueBounds.size()))
+                    {
+                        mUI.WireframeOpaqueBounds[static_cast<size_t>(FrameIndex)] =
+                            ComputeOpaqueBounds(ImageOpt->Rgba.data(), ImageOpt->Width, ImageOpt->Height);
+                    }
+                    mUI.WireframeFrames[static_cast<size_t>(FrameIndex)] =
+                        UploadRgbaFull(ImageOpt->Width, ImageOpt->Height, ImageOpt->Rgba.data());
+                    return mUI.WireframeFrames[static_cast<size_t>(FrameIndex)].Valid();
+                }
+            }
+        }
+    }
+#endif
+
+    // Fallback: decode single classic GRP frame
+    auto GrpData = ReadUIFileWithUpperFallback("unit\\wirefram\\wirefram.grp");
+    if (!GrpData)
+        return false;
+
+    auto SpriteOpt = DecodeGrpToRgba(*GrpData, mData.ActivePalette, {});
+    if (!SpriteOpt || FrameIndex >= static_cast<int>(SpriteOpt->Frames.size()))
+        return false;
+
+    const auto& Frame = SpriteOpt->Frames[static_cast<size_t>(FrameIndex)];
+    if (FrameIndex < static_cast<int>(mUI.WireframeOpaqueBounds.size()))
+    {
+        mUI.WireframeOpaqueBounds[static_cast<size_t>(FrameIndex)] =
+            ComputeOpaqueBounds(Frame.Rgba.data(), Frame.Width, Frame.Height);
+    }
+    mUI.WireframeFrames[static_cast<size_t>(FrameIndex)] =
+        UploadRgbaFull(Frame.Width, Frame.Height, Frame.Rgba.data());
+    return mUI.WireframeFrames[static_cast<size_t>(FrameIndex)].Valid();
 }
 
 bool ResourceCache::LoadBlinkGraphics()

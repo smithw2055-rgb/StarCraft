@@ -75,6 +75,9 @@ bool GameController::Initialize(int Width, int Height)
             [this](const std::string& MapPath) { SetMapPathOverride(MapPath); },
             [this]() { StartGame(); });
     },
+        [this](const std::string& AudioPath) {
+            mRuntime.App.Audio.PlayFile(AudioPath, 0.0f, 0.0f, 35, Core::Audio::SoundFlags::PerSound);
+        },
         !mDirectStartEnabled);
 #if ENABLE_GUI_UI
     if (mInitialGuiHudEnabled && mRuntime.App.Gui.MainGui.IsActive())

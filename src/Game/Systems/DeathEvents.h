@@ -255,6 +255,60 @@ inline void RecordUnitDeath(Core::ECS::EntityManager& EM,
     SettleSupplyForDeath(EM, VictimEntityID, *VictimUnit, VictimPlayer->PlayerID);
     SpawnDeathVisual(EM, VictimEntityID, *VictimUnit);
 
+    if (auto* VictimBuilding = EM.GetComponent<Game::Components::BuildingComponent>(VictimEntityID))
+    {
+        if (VictimBuilding->IsAddon && VictimBuilding->BuilderUnitID >= 0)
+        {
+            if (auto* Parent = EM.GetComponent<Game::Components::BuildingComponent>(VictimBuilding->BuilderUnitID))
+            {
+                if (Parent->AddonID == VictimEntityID)
+                    Parent->AddonID = -1;
+            }
+        }
+        if (VictimBuilding->AddonID >= 0)
+        {
+            if (auto* Addon = EM.GetComponent<Game::Components::BuildingComponent>(VictimBuilding->AddonID))
+            {
+                if (Addon->BuilderUnitID == VictimEntityID)
+                    Addon->BuilderUnitID = -1;
+            }
+            if (auto* AddonRender = EM.GetComponent<Game::Components::RenderComponent>(VictimBuilding->AddonID))
+            {
+                AddonRender->AddonConnectorImageID = UINT32_MAX;
+            }
+            VictimBuilding->AddonID = -1;
+        }
+    }
+
+    if (auto* Loaded = EM.GetComponent<Game::Components::LoadedUnitsComponent>(VictimEntityID))
+    {
+        std::vector<int> Passengers = Loaded->PassengerIDs;
+        Loaded->PassengerIDs.clear();
+        for (int PassengerID : Passengers)
+        {
+            if (EM.IsAlive(PassengerID))
+            {
+                if (auto* PassUnit = EM.GetComponent<Game::Components::UnitComponent>(PassengerID))
+                    PassUnit->HitPoints = 0;
+                RecordUnitDeath(EM, PassengerID, KillerEntityID, AwardKill);
+                EM.DestroyEntity(PassengerID);
+            }
+        }
+    }
+
+    if (VictimUnit->LoadedInTransportID >= 0)
+    {
+        if (auto* Loaded = EM.GetComponent<Game::Components::LoadedUnitsComponent>(VictimUnit->LoadedInTransportID))
+        {
+            auto it = std::remove(Loaded->PassengerIDs.begin(), Loaded->PassengerIDs.end(), VictimEntityID);
+            if (it != Loaded->PassengerIDs.end())
+            {
+                Loaded->PassengerIDs.erase(it, Loaded->PassengerIDs.end());
+            }
+        }
+        VictimUnit->LoadedInTransportID = -1;
+    }
+
     auto& Record = EM.AddComponent<Game::Components::DeathRecordComponent>(VictimEntityID);
     Record.VictimPlayerID = VictimPlayer->PlayerID;
     Record.VictimUnitID = VictimUnit->ChkUnitID;

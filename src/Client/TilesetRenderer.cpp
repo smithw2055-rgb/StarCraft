@@ -29,7 +29,8 @@ namespace
 }
 
 void TilesetRenderer::Init(const std::string& TilesetName,
-                            Resource::Graphics::TilesetAssetCacheView TilesetAssets)
+                            Resource::Graphics::TilesetAssetCacheView TilesetAssets,
+                            const std::vector<uint16_t>* MegaTileIds)
 {
     mTilesetName = TilesetName;
     mTilesetAssets = TilesetAssets;
@@ -40,7 +41,7 @@ void TilesetRenderer::Init(const std::string& TilesetName,
         Core::Utils::Logger::Warning("TilesetRenderer", "palette load failed: " + TilesetName);
         return;
     }
-    mAtlas = mTilesetAssets.GetTilesetAtlas(TilesetName);
+    mAtlas = mTilesetAssets.GetTilesetAtlasForMap(TilesetName, MegaTileIds);
     mCreepFrames = mTilesetAssets.GetTilesetCreepFrames(TilesetName);
     if (mAtlas)
         mMegatileCount = mAtlas->FrameCount;
@@ -92,7 +93,7 @@ void TilesetRenderer::Render(const GameMap& Map)
 
     auto& Draw = Render::g_Draw2D;
 
-    const auto* Atlas = mAtlas ? mAtlas : mTilesetAssets.GetTilesetAtlas(mTilesetName);
+    const auto* Atlas = mAtlas ? mAtlas : mTilesetAssets.GetTilesetAtlasForMap(mTilesetName, &Map.MegaTileIds);
     const bool UseAtlas = Atlas && Atlas->Image.Valid() &&
         Atlas->FrameWidth > 0 && Atlas->FrameHeight > 0 &&
         Atlas->CellWidth > 0 && Atlas->CellHeight > 0 &&
@@ -161,10 +162,24 @@ void TilesetRenderer::Render(const GameMap& Map)
                     if (Cv5Off < mCv5->size())
                         MegaIdx = (*mCv5)[Cv5Off];
                 }
-                if ((int)MegaIdx >= Atlas->FrameCount) MegaIdx = 0;
 
-                const int Col = MegaIdx % Atlas->Columns;
-                const int Row = MegaIdx / Atlas->Columns;
+                int Slot = (int)MegaIdx;
+                if (!Atlas->MegaIdxToSlot.empty())
+                {
+                    if (MegaIdx < Atlas->MegaIdxToSlot.size())
+                        Slot = Atlas->MegaIdxToSlot[MegaIdx];
+                    else
+                        Slot = -1;
+                    if (Slot < 0)
+                        Slot = 0;
+                }
+                else if (Slot >= Atlas->FrameCount)
+                {
+                    Slot = 0;
+                }
+
+                const int Col = Slot % Atlas->Columns;
+                const int Row = Slot / Atlas->Columns;
                 const int SrcX = Col * Atlas->CellWidth + 1;
                 const int SrcY = Row * Atlas->CellHeight + 1;
                 const float U0 = (float)SrcX / (float)Atlas->Image.Width;
@@ -270,18 +285,29 @@ void TilesetRenderer::Render(const GameMap& Map)
     // neighboring creep tiles from repeating the same 32px texture.
     const auto DrawMegatile = [&](uint16_t MegaIdx, float PX, float PY)
     {
-        if (UseAtlas && MegaIdx < (uint16_t)Atlas->FrameCount)
+        if (UseAtlas)
         {
-            const int Col = MegaIdx % Atlas->Columns;
-            const int Row = MegaIdx / Atlas->Columns;
-            const int SrcX = Col * Atlas->CellWidth + 1;
-            const int SrcY = Row * Atlas->CellHeight + 1;
-            Draw.DrawSprite(Atlas->Image, PX, PY, TileSize, TileSize,
-                (float)SrcX / (float)Atlas->Image.Width,
-                (float)SrcY / (float)Atlas->Image.Height,
-                (float)(SrcX + Atlas->FrameWidth) / (float)Atlas->Image.Width,
-                (float)(SrcY + Atlas->FrameHeight) / (float)Atlas->Image.Height);
-            return;
+            int Slot = (int)MegaIdx;
+            if (!Atlas->MegaIdxToSlot.empty())
+            {
+                if (MegaIdx < Atlas->MegaIdxToSlot.size())
+                    Slot = Atlas->MegaIdxToSlot[MegaIdx];
+                else
+                    Slot = -1;
+            }
+            if (Slot >= 0 && Slot < Atlas->FrameCount)
+            {
+                const int Col = Slot % Atlas->Columns;
+                const int Row = Slot / Atlas->Columns;
+                const int SrcX = Col * Atlas->CellWidth + 1;
+                const int SrcY = Row * Atlas->CellHeight + 1;
+                Draw.DrawSprite(Atlas->Image, PX, PY, TileSize, TileSize,
+                    (float)SrcX / (float)Atlas->Image.Width,
+                    (float)SrcY / (float)Atlas->Image.Height,
+                    (float)(SrcX + Atlas->FrameWidth) / (float)Atlas->Image.Width,
+                    (float)(SrcY + Atlas->FrameHeight) / (float)Atlas->Image.Height);
+                return;
+            }
         }
         if (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())
             Draw.DrawSpriteFromImage((*Images)[MegaIdx], PX, PY, TileSize, TileSize);
@@ -303,8 +329,12 @@ void TilesetRenderer::Render(const GameMap& Map)
                 for (size_t Variant = 0; Variant < 16; ++Variant)
                 {
                     const uint16_t MegaIdx = (*mCv5)[16u + Variant];
+                    bool IsValidAtlas = UseAtlas && (
+                        (!Atlas->MegaIdxToSlot.empty() && MegaIdx < Atlas->MegaIdxToSlot.size() && Atlas->MegaIdxToSlot[MegaIdx] >= 0) ||
+                        (Atlas->MegaIdxToSlot.empty() && MegaIdx < (uint16_t)Atlas->FrameCount)
+                    );
                     if (MegaIdx != 0 &&
-                        ((UseAtlas && MegaIdx < (uint16_t)Atlas->FrameCount) ||
+                        (IsValidAtlas ||
                          (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())))
                     {
                         ValidCreepMegatiles[ValidCount++] = MegaIdx;

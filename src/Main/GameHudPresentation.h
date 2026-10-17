@@ -4,6 +4,7 @@
 #include "Client/WorldEffects.h"
 #include "Game/Components.h"
 #include "Game/Systems/FogOfWarSystem.h"
+#include "Main/GameLoop/CursorTypes.h"
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
 
@@ -49,9 +50,85 @@ inline void SyncMinimapDotsToHud(UI::Hud& Hud,
             return;
 
         const auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);
-        const Core::Color DotColor =
-            MinimapRelationshipColor(Player, LocalPlayerID, Fog);
-        Dots.push_back({Transform->Position, PackHudColor(DotColor)});
+        const int PlayerID = Player ? Player->PlayerID : 11;
+        const bool IsMineral = (Unit->ChkUnitID >= 176 && Unit->ChkUnitID <= 178);
+        const bool IsGeyser = (Unit->ChkUnitID == 188);
+        const bool IsResource = IsMineral || IsGeyser;
+        const auto* Build = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+        const bool IsBuilding = (Build != nullptr && Build->IsBuilding) || IsBuildingChkId(Unit->ChkUnitID);
+
+        if (Fog)
+        {
+            const int TileX = (int)(Transform->Position.X / 32.0f);
+            const int TileY = (int)(Transform->Position.Y / 32.0f);
+
+            if (IsResource)
+            {
+                if (!Fog->IsExplored(TileX, TileY, LocalPlayerID))
+                    return;
+            }
+            else if (PlayerID == LocalPlayerID || Fog->AreAllied(LocalPlayerID, PlayerID))
+            {
+                // Self or Allied units always visible
+            }
+            else
+            {
+                // Enemy
+                if (IsBuilding)
+                {
+                    if (!Fog->IsExplored(TileX, TileY, LocalPlayerID))
+                        return;
+                }
+                else
+                {
+                    // Enemy mobile unit: visible only in active sight
+                    if (!Fog->IsVisible(TileX, TileY, LocalPlayerID))
+                        return;
+                }
+            }
+        }
+
+        Core::Color DotColor;
+        uint8_t DotW = 2;
+        uint8_t DotH = 2;
+
+        if (IsMineral)
+        {
+            DotColor = Core::Color(0, 228, 252, 255); // Cyan
+            DotW = 2;
+            DotH = 2;
+        }
+        else if (IsGeyser)
+        {
+            DotColor = Core::Color(0, 228, 0, 255); // Green
+            DotW = 3;
+            DotH = 3;
+        }
+        else
+        {
+            if (Hud.GetMinimapUseAllianceColors())
+            {
+                if (PlayerID == LocalPlayerID || (Fog && Fog->AreAllied(LocalPlayerID, PlayerID)))
+                    DotColor = Core::Color(80, 220, 120, 255);
+                else
+                    DotColor = Core::Color(235, 64, 64, 255);
+            }
+            else
+            {
+                DotColor = MinimapRelationshipColor(Player, LocalPlayerID, Fog);
+            }
+
+            if (IsBuilding)
+            {
+                // Town halls (Command Center, Nexus, Hatchery/Lair/Hive) get 5x5 footprint
+                const bool IsTownHall = (Unit->ChkUnitID == 106 || Unit->ChkUnitID == 154 ||
+                                         Unit->ChkUnitID == 131 || Unit->ChkUnitID == 132 || Unit->ChkUnitID == 133);
+                DotW = IsTownHall ? 5 : 4;
+                DotH = IsTownHall ? 5 : 4;
+            }
+        }
+
+        Dots.push_back({Transform->Position, PackHudColor(DotColor), DotW, DotH});
     });
     Hud.SetMinimapDots(Dots);
 }
@@ -77,6 +154,20 @@ inline void RenderNativeHudFrame(UI::Hud& Hud,
                                  int ViewportWidth,
                                  int ViewportHeight)
 {
+    float CamX = 0.0f;
+    float CamY = 0.0f;
+    float CamW = 0.0f;
+    float CamH = 0.0f;
+    Client.GetVisibleWorldRect(CamX, CamY, CamW, CamH);
+
+    Hud.SetMatchElapsedSeconds(Session.GetMatchElapsedSeconds());
+    Hud.SetMinimapViewportRect(CamX, CamY, CamW, CamH);
+    Hud.UpdateMinimapTerrain(
+        &Session.GetEcsMap(),
+        &Session.GetMapData(),
+        Session.GetFogSystem(),
+        Session.GetLocalPlayerID());
+
     Hud.UpdateContext(Session.Entities(), Client.GetSelectedIds());
     SyncCampaignPingsToHud(Hud, Client, Session.GetMapData().Width, Session.GetMapData().Height);
     SyncMinimapDotsToHud(

@@ -36,6 +36,7 @@ enum class ResearchId : uint8_t
     Terran_YamatoGun,
     Terran_ColossusReactor,
     Terran_CharonBoosters,
+    Terran_PersonalCloaking,
 
     // Zerg
     Zerg_MeleeAttacks,

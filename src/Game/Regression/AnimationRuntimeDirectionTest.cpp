@@ -41,7 +41,8 @@ namespace Game::Systems
 
     bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
                                                  BulletSystem&,
-                                                 int EntityID)
+                                                 int EntityID,
+                                                 float /*ForwardOffsetPixels*/)
     {
         if (!gResolvePendingAttackFrameResult)
             return false;
@@ -522,6 +523,76 @@ int main()
         if (EM.IsAlive(EffectID))
             EM.DestroyEntity(EffectID);
     EM.DestroyEntity(LurkerSpineController);
+
+    // Verify Lurker burrowed attack lifecycle never produces blood/splat overlays (e.g. Image 484).
+    // Image 484 is Lurker's unit Death overlay, which must only be emitted when a real Lurker dies.
+    constexpr int kZergDeathBloodImage = 484;
+    for (int ExistingID : EM.GetEntitiesWith<Game::Components::RenderComponent>())
+    {
+        const auto* ExistingRender = EM.GetComponent<Game::Components::RenderComponent>(ExistingID);
+        Require(!ExistingRender || ExistingRender->ImageID != (uint32_t)kZergDeathBloodImage,
+            "Lurker spine controller and attack chain must not emit death blood splat overlays");
+        if (const auto* Tree = EM.GetComponent<Game::Components::ImageTreeComponent>(ExistingID))
+        {
+            for (const auto& Node : Tree->Nodes)
+            {
+                Require(Node.ImageID != (uint32_t)kZergDeathBloodImage,
+                    "Lurker spine attack nodes must never attach death blood splat overlays");
+            }
+        }
+    }
+
+    Game::Systems::AnimationSystem::SetSpriteImageResolver(
+        [](int SpriteID) -> std::optional<uint32_t> {
+            if (SpriteID == kLurkerSpineSprite)
+                return (uint32_t)kLurkerSpineImage;
+            if (SpriteID == kHydraliskNeedleSprite)
+                return (uint32_t)kHydraliskNeedleImage;
+            if (SpriteID == kZergDeathBloodImage)
+                return (uint32_t)kZergDeathBloodImage;
+            return std::nullopt;
+        });
+
+    // Now verify that a real Lurker unit death visual *only* emits blood overlay 484 upon actual Death.
+    const int DyingLurker = EM.CreateEntity();
+    auto& DyingLurkerTrans = EM.AddComponent<Game::Components::TransformComponent>(DyingLurker);
+    DyingLurkerTrans.Position = {100.0f, 100.0f};
+    auto& DyingLurkerRender = EM.AddComponent<Game::Components::RenderComponent>(DyingLurker);
+    DyingLurkerRender.ImageID = kLurkerImage;
+    DyingLurkerRender.TotalFrames = 256;
+    auto& DyingLurkerEffect = EM.AddComponent<Game::Components::EffectComponent>(DyingLurker);
+    DyingLurkerEffect.LifetimeRemaining = 8.0f;
+    DyingLurkerEffect.InitialAnimation = Game::IScriptAnims::Anim_Death;
+    DyingLurkerEffect.DestroyWhenAnimationCompletes = true;
+    auto& DyingLurkerUnit = EM.AddComponent<Game::Components::UnitComponent>(DyingLurker);
+    DyingLurkerUnit.ChkUnitID = 103;
+    DyingLurkerUnit.HitPoints = 0;
+
+    bool FoundBloodFromDeath = false;
+    for (int Frame = 0; Frame < 24; ++Frame)
+    {
+        Anim.Update(1.0f / 24.0f);
+        for (int AnyID : EM.GetEntitiesWith<Game::Components::RenderComponent>())
+        {
+            const auto* AnyRender = EM.GetComponent<Game::Components::RenderComponent>(AnyID);
+            if (AnyRender && AnyRender->ImageID == (uint32_t)kZergDeathBloodImage)
+                FoundBloodFromDeath = true;
+        }
+        if (const auto* Tree = EM.GetComponent<Game::Components::ImageTreeComponent>(DyingLurker))
+        {
+            for (const auto& Node : Tree->Nodes)
+            {
+                if (Node.ImageID == (uint32_t)kZergDeathBloodImage)
+                    FoundBloodFromDeath = true;
+            }
+        }
+        if (FoundBloodFromDeath)
+            break;
+    }
+    Require(FoundBloodFromDeath,
+        "Lurker unit correctly emits death blood splat only upon real unit annihilation");
+    if (EM.IsAlive(DyingLurker))
+        EM.DestroyEntity(DyingLurker);
 
     // Hydralisk Needle Spines are not a travelling bullet in Brood War.
     // GndAttkInit first emits sprite 332 through the attack LO table, then
@@ -2530,6 +2601,54 @@ int main()
     Require(std::fabs(FlightPath.FacingAngle) < 0.0001f &&
                 std::fabs(FlightPath.TargetSpeed) < 0.0001f,
             "iscript flight opcodes do not overwrite movement-system direction or speed");
+
+    // Verify IScript Turn opcodes (TurnCWise, Turn1CWise, TurnCCWise, TurnRand)
+    static const std::vector<int> TurnProgram = {
+        Game::IScriptOpcodes::Opc_TurnCWise, 2,   // +2 32-way steps (+16 in 0..255)
+        Game::IScriptOpcodes::Opc_Wait, 1,
+        Game::IScriptOpcodes::Opc_Turn1CWise,     // +1 32-way step (+8 in 0..255)
+        Game::IScriptOpcodes::Opc_Wait, 1,
+        Game::IScriptOpcodes::Opc_TurnCCWise, 1,  // -1 32-way step (-8 in 0..255)
+        Game::IScriptOpcodes::Opc_Wait, 1,
+        Game::IScriptOpcodes::Opc_End
+    };
+    Game::IScriptVM TurnVM;
+    TurnVM.GetContext().HasDirectionalFrames = true;
+    TurnVM.GetContext().BaseFrameIndex = 0;
+    TurnVM.GetContext().CurrentDirection = 0;
+    TurnVM.LoadScript(Game::IScriptAnims::Anim_Init, &TurnProgram, 0);
+    TurnVM.ExecuteFrame();
+    Require(TurnVM.GetContext().CurrentDirection == 16,
+            "TurnCWise advances CurrentDirection by 2 steps (16 units)");
+    TurnVM.ExecuteFrame();
+    Require(TurnVM.GetContext().CurrentDirection == 24,
+            "Turn1CWise advances CurrentDirection by 1 step (8 units)");
+    TurnVM.ExecuteFrame();
+    Require(TurnVM.GetContext().CurrentDirection == 16,
+            "TurnCCWise reverses CurrentDirection by 1 step (8 units)");
+
+    // Verify full 32-way directional frame resolution across 360 degrees
+    std::set<std::pair<int, bool>> ThirtyTwoWaySignatures;
+    const size_t BaseEntityCount = EM.GetEntitiesWith<Game::Components::RenderComponent>().size();
+    for (int Step = 0; Step < 32; ++Step)
+    {
+        const float Angle = (float)Step * (6.28318530718f / 32.0f);
+        const int EntityID = SpawnIdleDirectionalUnit(EM, Angle, 256, kDirectionalImage);
+        auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(EntityID);
+        Path->FacingAngle = Angle;
+        Path->CurrentSpeed = 64.0f;
+        Path->CurrentVelocity = {std::cos(Angle) * 64.0f, std::sin(Angle) * 64.0f};
+    }
+    Anim.Update(1.0f / 24.0f);
+    const auto AllRenderEntities = EM.GetEntitiesWith<Game::Components::RenderComponent>();
+    for (size_t Idx = BaseEntityCount; Idx < AllRenderEntities.size(); ++Idx)
+    {
+        const auto* Render = EM.GetComponent<Game::Components::RenderComponent>(AllRenderEntities[Idx]);
+        if (Render)
+            ThirtyTwoWaySignatures.emplace(Render->FrameIndex, Render->Flipped);
+    }
+    Require(ThirtyTwoWaySignatures.size() >= 17,
+            "full 32-way directional coverage spans all 17 mirrored GRP frames");
 
     Game::Systems::AnimationSystem::SetWeaponImageResolver({});
 

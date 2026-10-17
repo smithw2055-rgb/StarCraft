@@ -1042,38 +1042,50 @@ int main()
         }
     }
 
-    Core::ECS::SystemManager IgnoredTargetSysMgr;
-    auto& IgnoredTargetEM = IgnoredTargetSysMgr.GetEntityManager();
-    Game::Systems::MovementSystem IgnoredTargetMovement(IgnoredTargetSysMgr);
-    const int HarvestMover = CreateMovableUnit(
-        IgnoredTargetEM, {0.0f, 0.0f}, {128.0f, 0.0f},
-        7, Game::Components::UnitSize::Small, 12);
-    const int HarvestTarget = IgnoredTargetEM.CreateEntity();
-    IgnoredTargetEM.AddComponent<Game::Components::TransformComponent>(HarvestTarget).Position =
-        {64.0f, 0.0f};
-    auto& HarvestTargetUnit =
-        IgnoredTargetEM.AddComponent<Game::Components::UnitComponent>(HarvestTarget);
-    HarvestTargetUnit.ChkUnitID = 176;
-    IgnoredTargetEM.AddComponent<Game::Components::ResourceComponent>(HarvestTarget).Type =
-        Game::Components::ResourceType::Minerals;
-    auto& HarvestTargetPath =
-        IgnoredTargetEM.AddComponent<Game::Components::PathfindingComponent>(HarvestTarget);
-    SetCollisionBounds(HarvestTargetPath, 32, 20, 31, 19);
-    auto* HarvestMoverPath =
-        IgnoredTargetEM.GetComponent<Game::Components::PathfindingComponent>(HarvestMover);
-    auto* HarvestMoverTrans =
-        IgnoredTargetEM.GetComponent<Game::Components::TransformComponent>(HarvestMover);
-    Require(HarvestMoverPath && HarvestMoverTrans,
-        "harvest approach mover has pathing and transform state");
-    auto& HarvestMoverState =
-        IgnoredTargetEM.AddComponent<Game::Components::HarvestComponent>(HarvestMover);
-    HarvestMoverState.State = Game::Components::HarvestState::MovingToResource;
-    HarvestMoverState.TargetResourceID = HarvestTarget;
-    HarvestMoverPath->RequestedIgnoreEntityID = HarvestTarget;
-    for (int I = 0; I < 45; ++I)
-        IgnoredTargetMovement.Update(0.05f);
-    Require(HarvestMoverTrans->Position.X > 96.0f,
-        "movement honors the command target ignore id instead of sticking at a resource boundary");
+    for (int WorkerChkUnitID : {0x07, 0x29, 0x40})
+    {
+        Core::ECS::SystemManager MineralTargetSysMgr;
+        auto& MineralTargetEM = MineralTargetSysMgr.GetEntityManager();
+        Game::Systems::MovementSystem MineralTargetMovement(MineralTargetSysMgr);
+        const int HarvestMover = CreateMovableUnit(
+            MineralTargetEM, {0.0f, 0.0f}, {128.0f, 0.0f},
+            WorkerChkUnitID, Game::Components::UnitSize::Small, 12);
+        const int HarvestTarget = MineralTargetEM.CreateEntity();
+        MineralTargetEM.AddComponent<Game::Components::TransformComponent>(
+            HarvestTarget).Position = {64.0f, 0.0f};
+        auto& HarvestTargetUnit =
+            MineralTargetEM.AddComponent<Game::Components::UnitComponent>(
+                HarvestTarget);
+        HarvestTargetUnit.ChkUnitID = 176;
+        MineralTargetEM.AddComponent<Game::Components::ResourceComponent>(
+            HarvestTarget).Type =
+                Game::Components::ResourceType::Minerals;
+        auto& HarvestTargetPath =
+            MineralTargetEM.AddComponent<Game::Components::PathfindingComponent>(
+                HarvestTarget);
+        SetCollisionBounds(HarvestTargetPath, 32, 20, 31, 19);
+        auto* HarvestMoverPath =
+            MineralTargetEM.GetComponent<Game::Components::PathfindingComponent>(
+                HarvestMover);
+        auto* HarvestMoverTrans =
+            MineralTargetEM.GetComponent<Game::Components::TransformComponent>(
+                HarvestMover);
+        Require(HarvestMoverPath && HarvestMoverTrans,
+            "harvest approach mover has pathing and transform state");
+        auto& HarvestMoverState =
+            MineralTargetEM.AddComponent<Game::Components::HarvestComponent>(
+                HarvestMover);
+        HarvestMoverState.State =
+            Game::Components::HarvestState::MovingToResource;
+        HarvestMoverState.TargetResourceID = HarvestTarget;
+        // Even stale/legacy orders which named the mineral as a planning
+        // ignore may not turn the physical patch into a travel lane.
+        HarvestMoverPath->RequestedIgnoreEntityID = HarvestTarget;
+        for (int I = 0; I < 45; ++I)
+            MineralTargetMovement.Update(0.05f);
+        Require(HarvestMoverTrans->Position.X <= 20.01f,
+            "SCV, Drone, and Probe stop at the target mineral boundary instead of crossing it");
+    }
 
     Core::ECS::SystemManager ConstructionLaneSysMgr;
     auto& ConstructionLaneEM = ConstructionLaneSysMgr.GetEntityManager();
@@ -1309,16 +1321,18 @@ int main()
     Require(DetourMoverPath && DetourMoverTrans,
         "friendly detour mover has path and transform state");
     SetCollisionBounds(*DetourMoverPath, 8, 9, 8, 10);
-    float MaxDetourY = DetourMoverTrans->Position.Y;
+    float MaxDetourOffset = 0.0f;
     for (int I = 0; I < 160; ++I)
     {
         FriendlyDetourMovement.Update(0.05f);
-        MaxDetourY = std::max(MaxDetourY, DetourMoverTrans->Position.Y);
+        MaxDetourOffset = std::max(
+            MaxDetourOffset,
+            std::fabs(DetourMoverTrans->Position.Y - 80.0f));
     }
     Require(DetourMoverTrans->Position.X > 240.0f,
         "unit reroutes around a friendly blocker when yielding cannot clear the lane");
-    Require(MaxDetourY > 96.0f,
-        "friendly-blocker reroute contains a real lateral A* detour");
+    Require(MaxDetourOffset > 16.0f,
+        "friendly blocker produces a real deterministic lateral detour");
 
     Core::ECS::SystemManager RetrySysMgr;
     auto& RetryEM = RetrySysMgr.GetEntityManager();
@@ -1335,7 +1349,7 @@ int main()
     RetryPath->HasRecentMoveFailure = true;
     RetryPath->RecentFailedMoveTarget = RetryPath->RequestedDestination;
     RetryPath->RecentMoveFailureCooldown = 1.0f;
-    for (int I = 0; I < 9; ++I)
+    for (int I = 0; I < 22; ++I)
         RetryMovement.Update(0.1f);
     Require(RetryPath->HasRecentMoveFailure && RetryPath->Path.empty(),
         "failed movement target remains backed off during the retry cooldown");

@@ -26,6 +26,15 @@ enum class SpellType : uint8_t
     SpawnBroodling,     // Zerg: destroy target, spawn broodlings
     Parasite,           // Zerg: grant vision of target
     Consume,            // Zerg: consume friendly for energy
+    DefensiveMatrix,    // Terran: 250 HP barrier
+    Irradiate,          // Terran: AoE radiation to organic target
+    Restoration,        // Terran: dispel debuffs
+    OpticalFlare,       // Terran: blind target (sight to 1, disable detector)
+    Feedback,           // Protoss: drain target energy, deal equal damage
+    Maelstrom,          // Protoss: freeze organic units in area
+    MindControl,        // Protoss: take permanent control of target unit
+    DisruptionWeb,      // Protoss: ground units inside cannot attack
+    Infestation,        // Zerg: infest damaged Terran Command Center
     Count
 };
 
@@ -58,6 +67,7 @@ public:
 
 private:
     Core::ECS::SystemManager& mSystemMgr;
+    float mStormTickTimer = 0.0f;
 };
 
 } // namespace Game::Systems

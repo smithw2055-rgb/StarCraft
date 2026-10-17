@@ -714,7 +714,7 @@ void GuiHudHost::ApplyState()
         GasText_->SetText(std::to_string(Gas_).c_str());
     if (SupplyText_)
     {
-        std::string SupplyStr = std::to_string(SupplyUsed_) + "/" + std::to_string(SupplyMax_);
+        std::string SupplyStr = std::to_string(SupplyUsed_) + "/" + std::to_string(std::min(200, SupplyMax_));
         SupplyText_->SetText(SupplyStr.c_str());
     }
     if (TimeText_)

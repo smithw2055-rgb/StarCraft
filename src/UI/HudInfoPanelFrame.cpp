@@ -25,47 +25,50 @@ void Hud::DrawInfoPanelFrame(const HudLayout& Layout, bool HasModularConsole)
         ? InsetRect(AuxiliaryRect, std::max(14, AuxiliaryRect.W / 12), std::max(18, AuxiliaryRect.H / 11))
         : AuxiliaryRect;
 
-    if (!HasModularConsole && HudTunit.Valid())
+    if (!HasModularConsole)
     {
-        D.DrawSpriteFromImage(HudTunit,
-                              (float)InfoRect.X,
-                              (float)InfoRect.Y,
-                              (float)InfoRect.W,
-                              (float)InfoRect.H,
-                              Render::Color(255, 255, 255, 150));
-    }
-    D.DrawRect((float)InfoInnerRect.X,
-               (float)InfoInnerRect.Y,
-               (float)InfoInnerRect.W,
-               (float)InfoInnerRect.H,
-               HasModularConsole ? Render::Color(4, 5, 8, 180) : Render::Color(5, 5, 10, 90));
-    D.DrawRectLines((float)InfoInnerRect.X,
-                    (float)InfoInnerRect.Y,
-                    (float)InfoInnerRect.W,
-                    (float)InfoInnerRect.H,
-                    HasModularConsole ? Render::Color(88, 96, 112, 110) : Render::Color(120, 90, 60, 130),
-                    1.0f);
+        if (HudTunit.Valid())
+        {
+            D.DrawSpriteFromImage(HudTunit,
+                                  (float)InfoRect.X,
+                                  (float)InfoRect.Y,
+                                  (float)InfoRect.W,
+                                  (float)InfoRect.H,
+                                  Render::Color(255, 255, 255, 150));
+        }
+        D.DrawRect((float)InfoInnerRect.X,
+                   (float)InfoInnerRect.Y,
+                   (float)InfoInnerRect.W,
+                   (float)InfoInnerRect.H,
+                   Render::Color(5, 5, 10, 90));
+        D.DrawRectLines((float)InfoInnerRect.X,
+                        (float)InfoInnerRect.Y,
+                        (float)InfoInnerRect.W,
+                        (float)InfoInnerRect.H,
+                        Render::Color(120, 90, 60, 130),
+                        1.0f);
 
-    if (!HasModularConsole && HudTwire.Valid())
-    {
-        D.DrawSpriteFromImage(HudTwire,
-                              (float)AuxiliaryRect.X,
-                              (float)AuxiliaryRect.Y,
-                              (float)AuxiliaryRect.W,
-                              (float)AuxiliaryRect.H,
-                              Render::Color(255, 255, 255, 150));
+        if (HudTwire.Valid())
+        {
+            D.DrawSpriteFromImage(HudTwire,
+                                  (float)AuxiliaryRect.X,
+                                  (float)AuxiliaryRect.Y,
+                                  (float)AuxiliaryRect.W,
+                                  (float)AuxiliaryRect.H,
+                                  Render::Color(255, 255, 255, 150));
+        }
+        D.DrawRect((float)AuxiliaryInnerRect.X,
+                   (float)AuxiliaryInnerRect.Y,
+                   (float)AuxiliaryInnerRect.W,
+                   (float)AuxiliaryInnerRect.H,
+                   Render::Color(6, 6, 12, 100));
+        D.DrawRectLines((float)AuxiliaryInnerRect.X,
+                        (float)AuxiliaryInnerRect.Y,
+                        (float)AuxiliaryInnerRect.W,
+                        (float)AuxiliaryInnerRect.H,
+                        Render::Color(120, 90, 60, 120),
+                        1.0f);
     }
-    D.DrawRect((float)AuxiliaryInnerRect.X,
-               (float)AuxiliaryInnerRect.Y,
-               (float)AuxiliaryInnerRect.W,
-               (float)AuxiliaryInnerRect.H,
-               HasModularConsole ? Render::Color(8, 8, 12, 120) : Render::Color(6, 6, 12, 100));
-    D.DrawRectLines((float)AuxiliaryInnerRect.X,
-                    (float)AuxiliaryInnerRect.Y,
-                    (float)AuxiliaryInnerRect.W,
-                    (float)AuxiliaryInnerRect.H,
-                    HasModularConsole ? Render::Color(86, 96, 116, 100) : Render::Color(120, 90, 60, 120),
-                    1.0f);
 }
 
 } // namespace Game::Client::UI

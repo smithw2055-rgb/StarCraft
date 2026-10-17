@@ -28,6 +28,7 @@ enum class TerranResearchId : uint8_t
     YamatoGun = static_cast<uint8_t>(ResearchId::Terran_YamatoGun),
     ColossusReactor = static_cast<uint8_t>(ResearchId::Terran_ColossusReactor),
     CharonBoosters = static_cast<uint8_t>(ResearchId::Terran_CharonBoosters),
+    PersonalCloaking = static_cast<uint8_t>(ResearchId::Terran_PersonalCloaking),
 
     ZergMeleeAttacks = static_cast<uint8_t>(ResearchId::Zerg_MeleeAttacks),
     ZergMissileAttacks = static_cast<uint8_t>(ResearchId::Zerg_MissileAttacks),
@@ -136,7 +137,22 @@ enum class HudCommandId : uint8_t
     Ensnare,
     SpawnBroodling,
     Parasite,
-    Consume
+    Consume,
+    DefensiveMatrix,
+    Irradiate,
+    Restoration,
+    OpticalFlare,
+    Feedback,
+    Maelstrom,
+    MindControl,
+    Repair,
+    Heal,
+    ArchonWarp,
+    DarkArchonWarp,
+    MorphLurker,
+    MorphGuardian,
+    MorphDevourer,
+    Infest
 };
 
 enum class PendingTargetMode : uint8_t
@@ -166,7 +182,17 @@ enum class PendingTargetMode : uint8_t
     Ensnare,
     SpawnBroodling,
     Parasite,
-    Consume
+    Consume,
+    DefensiveMatrix,
+    Irradiate,
+    Restoration,
+    OpticalFlare,
+    Feedback,
+    Maelstrom,
+    MindControl,
+    Repair,
+    Heal,
+    Infest
 };
 
 enum class HudVisualId : uint8_t
@@ -271,6 +297,7 @@ struct CmdButtonDef
     int SupplyCost = 0;
     bool Enabled = false;
     HudVisualId VisualId = HudVisualId::None;
+    char Hotkey = '\0';
 
     CmdButtonDef();
 };

@@ -65,12 +65,14 @@ private:
 
     void ManageEconomy(Core::ECS::EntityManager& EM);
     void ManageMilitary(Core::ECS::EntityManager& EM);
+    void ManageMilitaryPatrol(Core::ECS::EntityManager& EM);
     void RefreshEnemyIntel(Core::ECS::EntityManager& EM);
     void ManageScouting(Core::ECS::EntityManager& EM);
     void ManageUpgrades(Core::ECS::EntityManager& EM, int RaceValue);
     void ManageCombatAbilities(Core::ECS::EntityManager& EM);
     bool DefendBaseIfNeeded(Core::ECS::EntityManager& EM);
     void ManageTerranRepairs(Core::ECS::EntityManager& EM);
+    void ManageTerranMedics(Core::ECS::EntityManager& EM);
     void SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize);
     void TrainWorkerIfNeeded(Core::ECS::EntityManager& EM, int ProducerDefID, int WorkerDefID, int MaxWorkers);
 
@@ -105,6 +107,7 @@ private:
     Core::Math::Vec2 FindShowcaseMapCenter(Core::ECS::EntityManager& EM) const;
     Core::Math::Vec2 ShowcaseBuildPosition(Core::ECS::EntityManager& EM,
                                             size_t LayoutIndex) const;
+    void UpdateSafeTerranRallyPoints(Core::ECS::EntityManager& EM);
     void UpdateShowcaseRallyPoints(Core::ECS::EntityManager& EM);
 
     int CountUnits(Core::ECS::EntityManager& EM, int PlayerID, int ChkUnitID = -1);
@@ -139,6 +142,7 @@ private:
     std::vector<BuildStep> mBuildQueue;
     int mBuildQueueIdx = 0;
     float mBuildTimer = 0.0f;
+    float mLastConstructionOrderSeconds = -10000.0f;
     AIStrategy mStrategy = AIStrategy::Balanced;
     bool mShowcaseMode = false;
     bool mDefendingBase = false;
@@ -159,6 +163,7 @@ private:
     bool mShowcaseStartedLogged = false;
     int mBuildPlacementSerial = 0;
     std::vector<int> mShowcaseQueuedUnits;
+    std::vector<int> mSafeRallyConfiguredBuildings;
     std::vector<int> mShowcaseRallyConfiguredBuildings;
     std::vector<int> mActiveAttackGroup;
     float mActiveAttackGroupAge = 0.0f;

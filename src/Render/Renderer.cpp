@@ -1,14 +1,31 @@
 #include "Render/Renderer.h"
 
+#include <iostream>
+#include <string>
+#include <vector>
+#include <filesystem>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <d3d11.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+#endif
+
 #include "third_party/sokol/sokol_app.h"
 #include "third_party/sokol/sokol_gfx.h"
 #include "third_party/sokol/sokol_glue.h"
 #include "third_party/sokol/sokol_log.h"
 
-#include <iostream>
-
 namespace Render
 {
+
 
 static bool g_active = false;
 static sg_pass_action g_passAction = {};
@@ -121,4 +138,157 @@ void SetClearColor(float R, float G, float B, float A)
     g_passAction.colors[0].clear_value.a = A;
 }
 
+#if defined(_WIN32)
+bool CaptureScreenshot(const std::string& OutputPath)
+{
+    using Microsoft::WRL::ComPtr;
+
+    sg_environment env = sglue_environment();
+    sg_swapchain sc = sglue_swapchain();
+    ID3D11Device* device = (ID3D11Device*)env.d3d11.device;
+    ID3D11DeviceContext* context = (ID3D11DeviceContext*)env.d3d11.device_context;
+    ID3D11RenderTargetView* rtv = (ID3D11RenderTargetView*)sc.d3d11.render_view;
+
+    if (!device || !context || !rtv)
+        return false;
+
+    ComPtr<ID3D11Resource> res;
+    rtv->GetResource(res.GetAddressOf());
+    if (!res)
+        return false;
+
+    ComPtr<ID3D11Texture2D> backBuffer;
+    HRESULT hr = res.As(&backBuffer);
+    if (FAILED(hr) || !backBuffer)
+        return false;
+
+    D3D11_TEXTURE2D_DESC desc;
+    backBuffer->GetDesc(&desc);
+
+    D3D11_TEXTURE2D_DESC stagingDesc = desc;
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.BindFlags = 0;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    stagingDesc.MiscFlags = 0;
+
+    ComPtr<ID3D11Texture2D> staging;
+    hr = device->CreateTexture2D(&stagingDesc, nullptr, staging.GetAddressOf());
+    if (FAILED(hr) || !staging)
+        return false;
+
+    context->CopyResource(staging.Get(), backBuffer.Get());
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    hr = context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr) || !mapped.pData)
+        return false;
+
+    int width = static_cast<int>(desc.Width);
+    int height = static_cast<int>(desc.Height);
+    std::vector<uint8_t> bgra(width * height * 4);
+
+    const uint8_t* srcRow = static_cast<const uint8_t*>(mapped.pData);
+    for (int y = 0; y < height; ++y)
+    {
+        std::memcpy(&bgra[y * width * 4], srcRow + y * mapped.RowPitch, width * 4);
+    }
+    context->Unmap(staging.Get(), 0);
+
+    const HRESULT initHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool needUninit = SUCCEEDED(initHr);
+
+    ComPtr<IWICImagingFactory> factory;
+    hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.GetAddressOf()));
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    std::filesystem::path outPath(OutputPath);
+    if (outPath.has_parent_path())
+        std::filesystem::create_directories(outPath.parent_path());
+
+    ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(stream.GetAddressOf());
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = stream->InitializeFromFilename(outPath.wstring().c_str(), GENERIC_WRITE);
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.GetAddressOf());
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> props;
+    hr = encoder->CreateNewFrame(frame.GetAddressOf(), props.GetAddressOf());
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = frame->Initialize(props.Get());
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = frame->SetSize(width, height);
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    hr = frame->SetPixelFormat(&pixelFormat);
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = frame->WritePixels(height, width * 4, static_cast<UINT>(bgra.size()), bgra.data());
+    if (FAILED(hr))
+    {
+        if (needUninit) CoUninitialize();
+        return false;
+    }
+
+    hr = frame->Commit();
+    if (SUCCEEDED(hr))
+        hr = encoder->Commit();
+
+    if (needUninit)
+        CoUninitialize();
+
+    return SUCCEEDED(hr);
+}
+#else
+bool CaptureScreenshot(const std::string&) { return false; }
+#endif
+
 } // namespace Render
+

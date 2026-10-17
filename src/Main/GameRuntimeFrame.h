@@ -24,14 +24,18 @@ namespace Game::Client::GameLoop
 template <typename SaveGameT,
           typename LoadGameT,
           typename RefreshGuiT,
-          typename RecordGameActionT>
+          typename RecordGameActionT,
+          typename RestartGameT,
+          typename ReturnToMainMenuT>
 inline void UpdateGameRuntimeFrame(
     GameRuntimeState& Runtime,
     float Dt,
     SaveGameT&& SaveGame,
     LoadGameT&& LoadGame,
     RefreshGuiT&& RefreshGui,
-    RecordGameActionT&& RecordGameAction)
+    RecordGameActionT&& RecordGameAction,
+    RestartGameT&& RestartGame,
+    ReturnToMainMenuT&& ReturnToMainMenu)
 {
     Core::Platform::SetDeltaTime(Dt);
     Core::Platform::ProcessInput();
@@ -74,7 +78,9 @@ inline void UpdateGameRuntimeFrame(
             [&RefreshGui]() { RefreshGui(); },
             [&RecordGameAction](uint8_t PlayerID, uint8_t ActionType, uint16_t P1, uint16_t P2) {
                 RecordGameAction(PlayerID, ActionType, P1, P2);
-            }))
+            },
+            std::forward<RestartGameT>(RestartGame),
+            std::forward<ReturnToMainMenuT>(ReturnToMainMenu)))
     {
         return;
     }
@@ -85,11 +91,15 @@ inline void UpdateGameRuntimeFrame(
         Runtime.Client.Runtime,
         Runtime.Client.Hud,
         Dt);
+    bool HasObserverSpeedOverride = false;
     if (const char* ObserverSpeed = std::getenv("STARCRAFT_AI_OBSERVER_SPEED"))
     {
         const float RequestedScale = std::strtof(ObserverSpeed, nullptr);
         if (RequestedScale >= 1.0f && RequestedScale <= 16.0f)
+        {
             SimulationScale = RequestedScale;
+            HasObserverSpeedOverride = true;
+        }
         static bool SpeedLogged = false;
         if (!SpeedLogged)
         {
@@ -99,7 +109,16 @@ inline void UpdateGameRuntimeFrame(
                 std::to_string(SimulationScale) + "x");
         }
     }
-    const float SimulationDt = Dt * SimulationScale;
+    // Observer acceleration is a tick-production control, not wall-clock
+    // catch-up.  Feeding a slow simulation frame back through a 16x scale
+    // creates an ever-growing accumulator ("spiral of death").  Normal
+    // gameplay retains the complete host delta; accelerated observation caps
+    // only its synthetic input to one 15 Hz host frame.  This still permits
+    // accelerated observation while bounding any single-frame catch-up batch.
+    const float SimulationInputDt = HasObserverSpeedOverride
+        ? std::min(Dt, 1.0f / 15.0f)
+        : Dt;
+    const float SimulationDt = SimulationInputDt * SimulationScale;
 
     RunInteractionSmokeIfRequested(
         Runtime.InteractionSmoke,
@@ -109,27 +128,33 @@ inline void UpdateGameRuntimeFrame(
         Runtime.App.Gui,
         Runtime.Client.Hud);
 
-    // Fast observer playback must advance the complete simulation in bounded
-    // steps. Passing Dt*16 once made bullets jump across several IScript
-    // frames while AnimationSystem emitted every intermediate effect at the
-    // final position (most visibly, clustered Lurker spines and missed line
-    // damage). Keep rendering at the host frame rate, but advance every game
-    // system in at most one classic 24 Hz simulation frame per substep.
-    constexpr float kMaximumSimulationStep = 1.0f / 24.0f;
-    float RemainingSimulationTime = SimulationDt;
-    while (RemainingSimulationTime > 0.000001f)
+    // Authoritative simulation advances only in complete classic 24 Hz ticks.
+    // Host-frame residual time remains in the session accumulator so stable,
+    // alternating and accelerated render rates produce the same tick states.
+    constexpr double kSimulationTickSeconds = 1.0 / 24.0;
+    const int kMaximumSimulationTicksPerHostFrame = HasObserverSpeedOverride
+        ? std::min(32, (int)std::ceil(SimulationScale * 2.0f))
+        : 2;
+    Runtime.Session.Game.SimulationAccumulatorSeconds +=
+        (double)SimulationDt;
+    int SimulationTicksThisHostFrame = 0;
+    while (Runtime.Session.Game.SimulationAccumulatorSeconds + 1.0e-12 >=
+               kSimulationTickSeconds &&
+           SimulationTicksThisHostFrame <
+               kMaximumSimulationTicksPerHostFrame)
     {
-        const float Step = RemainingSimulationTime > kMaximumSimulationStep
-            ? kMaximumSimulationStep
-            : RemainingSimulationTime;
+        Runtime.Session.Game.SaveTransformTickState();
         UpdateCampaignAndSimulationRuntime(
             Runtime.Session.Campaign,
             Runtime.Session.Game,
             Runtime.App.Audio,
             Runtime.Client.Runtime,
             Runtime.Client.Hud,
-            Step);
-        RemainingSimulationTime -= Step;
+            (float)kSimulationTickSeconds);
+        Runtime.Session.Game.SimulationAccumulatorSeconds -=
+            kSimulationTickSeconds;
+        ++Runtime.Session.Game.SimulationTick;
+        ++SimulationTicksThisHostFrame;
     }
 
     RefreshGui();
@@ -150,14 +175,23 @@ inline void RenderGameRuntimeFrame(GameRuntimeState& Runtime)
         return;
     }
 
-    RenderGameplayWorldFrame(Runtime.Client.Runtime, Runtime.Session.Game);
+    constexpr double kSimulationTickSeconds = 1.0 / 24.0;
+    const float InterpAlpha = std::clamp(
+        static_cast<float>(Runtime.Session.Game.SimulationAccumulatorSeconds / kSimulationTickSeconds),
+        0.0f, 1.0f);
+    RenderGameplayWorldFrame(Runtime.Client.Runtime, Runtime.Session.Game, InterpAlpha);
     RenderGameplayUiFrame(
         Runtime.Client.Runtime,
         Runtime.Session.Game,
         Runtime.Session.Campaign,
         Runtime.App.Menu,
         Runtime.Client.Hud,
-        !(Runtime.App.Gui.UseGui && Runtime.App.Gui.MainGui.IsActive()));
+#if ENABLE_GUI_UI
+        !(Runtime.App.Gui.UseGui && Runtime.App.Gui.MainGui.IsActive())
+#else
+        true
+#endif
+    );
     RenderGuiPresentationLayer(Runtime.App.Gui);
     Runtime.App.Runtime.UpdateFrameStats();
 }

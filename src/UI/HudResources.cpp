@@ -8,6 +8,8 @@
 #include "UI/HudText.h"
 #include "UI/HudRenderPrimitives.h"
 #include "Render/Draw2D.h"
+#include "Render/Private/SokolGpuInterop.h"
+#include "third_party/sokol/sokol_gfx.h"
 namespace Game::Client::UI
 {
 
@@ -71,7 +73,24 @@ void Hud::Init(Resource::Graphics::UIAssetCacheView UIAssets,
         " buttons=" + (HasButtons ? "1" : "0"));
 }
 
-void Hud::Shutdown() {}
+void Hud::Shutdown()
+{
+    if (mMinimapTexture.View.id)
+    {
+        sg_destroy_view(Render::ToSokol(mMinimapTexture.View));
+        mMinimapTexture.View = {};
+    }
+    if (mMinimapTexture.Image.id)
+    {
+        sg_destroy_image(Render::ToSokol(mMinimapTexture.Image));
+        mMinimapTexture.Image = {};
+    }
+    mMinimapPixels.clear();
+    mBaseTerrainColors.clear();
+    mMinimapTexWidth = 0;
+    mMinimapTexHeight = 0;
+    mMinimapTilesetName.clear();
+}
 
 const Resource::Graphics::GpuImage* Hud::GetLegacyIcon(int IconIndex) const
 {
@@ -133,6 +152,7 @@ const Resource::Graphics::GpuImage* Hud::GetSelectionPreviewImage() const
 {
     if (mState.InfoPanel.PreviewChkUnitId >= 0 && mUIAssets.HasCache())
     {
+        mUIAssets.EnsureWireframeFrame(mState.InfoPanel.PreviewChkUnitId);
         if (const auto* Wireframes = mUIAssets.GetWireframeFrames();
             Wireframes &&
             mState.InfoPanel.PreviewChkUnitId < (int)Wireframes->size() &&
@@ -318,38 +338,48 @@ void Hud::DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage&
                                  const AtlasRect& IconRect,
                                  const char* Value,
                                  const char* FallbackLabel,
-                                 Render::Color FallbackTint) -> int
+                                 Render::Color FallbackTint,
+                                 Render::Color TextColor) -> int
     {
-        const int IconSize = 16;
+        const int IconSize = 18;
         const float TextSize = 12.0f;
         const int ValueChars = (int)std::strlen(Value);
-        const int TextW = std::max(22, ValueChars * 7);
-        const int EntryW = IconSize + 4 + TextW;
+        const int TextW = std::max(36, ValueChars * 9 + 4);
+        const int EntryW = IconSize + 8 + TextW + 8;
         const int X = RightX - EntryW;
-        const int Y = 3;
+        const int Y = 4;
+        const int BarH = 22;
 
-        D.DrawRect((float)X - 3.0f, 0.0f, (float)EntryW + 6.0f, 20.0f,
-                   Render::Color(0, 0, 0, 118));
+        // Semi-transparent dark metallic container with sleek border (SC:R style)
+        D.DrawRect((float)X, (float)Y, (float)EntryW, (float)BarH,
+                   Render::Color(10, 14, 20, 215));
+        D.DrawRectLines((float)X, (float)Y, (float)EntryW, (float)BarH,
+                        Render::Color(45, 75, 105, 200), 1.0f);
+
+        // Icon
+        const int IconX = X + 5;
+        const int IconY = Y + 2;
         if (HdIcon && HdIcon->Valid())
         {
-            DrawContainedImage(*HdIcon, { X, Y, IconSize, IconSize }, Render::Colors::White());
+            DrawContainedImage(*HdIcon, { IconX, IconY, IconSize, IconSize }, Render::Colors::White());
         }
         else if (AggIcons.Valid())
         {
-            DrawAtlasImage(AggIcons, IconRect, { X, Y, IconSize, IconSize }, Render::Colors::White());
+            DrawAtlasImage(AggIcons, IconRect, { IconX, IconY, IconSize, IconSize }, Render::Colors::White());
         }
         else
         {
-            D.DrawRect((float)X + 1.0f, (float)Y + 1.0f, 14.0f, 14.0f, Render::Color(18, 20, 28, 230));
-            D.DrawRectLines((float)X + 1.0f, (float)Y + 1.0f, 14.0f, 14.0f, FallbackTint, 1.0f);
-            D.DrawText(FallbackLabel, (float)X + 4.0f, (float)Y + 3.0f, 9.0f, FallbackTint);
+            D.DrawRect((float)IconX, (float)IconY, (float)IconSize, (float)IconSize, Render::Color(18, 22, 30, 230));
+            D.DrawRectLines((float)IconX, (float)IconY, (float)IconSize, (float)IconSize, FallbackTint, 1.0f);
+            D.DrawText(FallbackLabel, (float)IconX + 4.0f, (float)IconY + 3.0f, 9.0f, FallbackTint);
         }
 
-        const float TextX = (float)X + (float)IconSize + 4.0f;
-        const float TextY = 4.0f;
-        D.DrawText(Value, TextX + 1.0f, TextY + 1.0f, TextSize, Render::Color(0, 0, 0, 210));
-        D.DrawText(Value, TextX, TextY, TextSize, Render::Color(232, 242, 252, 255));
-        return X - 8;
+        // Text with drop shadow
+        const float TextX = (float)IconX + (float)IconSize + 6.0f;
+        const float TextY = (float)Y + 4.0f;
+        D.DrawText(Value, TextX + 1.0f, TextY + 1.0f, TextSize, Render::Color(0, 0, 0, 230));
+        D.DrawText(Value, TextX, TextY, TextSize, TextColor);
+        return X - 6;
     };
 
     char MineralBuf[32];
@@ -358,15 +388,20 @@ void Hud::DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage&
     std::snprintf(MineralBuf, sizeof(MineralBuf), "%d", mState.Resources.MineralCount);
     std::snprintf(GasBuf, sizeof(GasBuf), "%d", mState.Resources.GasCount);
     std::snprintf(SupplyBuf, sizeof(SupplyBuf), "%d/%d",
-                  mState.Resources.SupplyUsed, mState.Resources.SupplyMax);
+                  mState.Resources.SupplyUsed, std::min(200, mState.Resources.SupplyMax));
 
     const auto* MineralIcon = GetLegacyIcon(0);
     const auto* GasIcon = GetLegacyIcon(2);
     const auto* SupplyIcon = GetLegacyIcon(3);
-    int ResourceRight = ViewportWidth - 8;
-    ResourceRight = DrawResourceEntry(ResourceRight, SupplyIcon, AggIconSupply, SupplyBuf, "S", Render::Color(220, 210, 120, 255));
-    ResourceRight = DrawResourceEntry(ResourceRight, GasIcon, AggIconGas, GasBuf, "G", Render::Color(84, 208, 168, 255));
-    DrawResourceEntry(ResourceRight, MineralIcon, AggIconMinerals, MineralBuf, "M", Render::Color(96, 180, 255, 255));
+
+    // Ample margin from right edge to prevent any clipping on any resolution
+    int ResourceRight = ViewportWidth - 20;
+    ResourceRight = DrawResourceEntry(ResourceRight, SupplyIcon, AggIconSupply, SupplyBuf, "S",
+                                      Render::Color(220, 210, 120, 255), Render::Color(255, 235, 140, 255));
+    ResourceRight = DrawResourceEntry(ResourceRight, GasIcon, AggIconGas, GasBuf, "G",
+                                      Render::Color(84, 208, 168, 255), Render::Color(105, 245, 165, 255));
+    DrawResourceEntry(ResourceRight, MineralIcon, AggIconMinerals, MineralBuf, "M",
+                      Render::Color(96, 180, 255, 255), Render::Color(215, 240, 255, 255));
 }
 
 } // namespace Game::Client::UI

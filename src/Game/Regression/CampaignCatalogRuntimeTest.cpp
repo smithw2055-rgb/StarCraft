@@ -47,7 +47,8 @@ bool BulletSystem::ResolveIScriptDamageFrame(int)
 
 bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager&,
                                              BulletSystem&,
-                                             int)
+                                             int,
+                                             float)
 {
     return false;
 }

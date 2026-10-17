@@ -713,6 +713,98 @@ void EntityRenderer::DrawSelectionMarker(const Entity& E)
     DrawFootprintEllipseOutline(Draw, F.CenterX, F.CenterY, F.RadiusX, F.RadiusY);
 }
 
+void EntityRenderer::DrawRallyIndicator(Render::Draw2D& Draw,
+                                        Core::ECS::EntityManager& Entities,
+                                        int BuildingEntityId) const
+{
+    auto* Cmd = Entities.GetComponent<Game::Components::CommandComponent>(BuildingEntityId);
+    auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(BuildingEntityId);
+    if (!Cmd || !Trans || !Cmd->HasRallyPoint || Cmd->RallyDisplayTimer <= 0.0f)
+        return;
+
+    const auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(BuildingEntityId);
+    if (!Unit)
+        return;
+
+    Core::Math::Vec2 StartPos = Trans->Position;
+    Core::Math::Vec2 TargetPos = Cmd->RallyPoint;
+
+    if (Cmd->TargetEntityID >= 0 && Entities.IsAlive(Cmd->TargetEntityID))
+    {
+        if (auto* TargetTrans = Entities.GetComponent<Game::Components::TransformComponent>(Cmd->TargetEntityID))
+        {
+            TargetPos = TargetTrans->Position;
+        }
+    }
+
+    const float DX = TargetPos.X - StartPos.X;
+    const float DY = TargetPos.Y - StartPos.Y;
+    const float Dist = std::sqrt(DX * DX + DY * DY);
+    if (Dist < 8.0f)
+        return;
+
+    // Fade out over the final 0.5 seconds
+    const float Fade = std::clamp(Cmd->RallyDisplayTimer / 0.5f, 0.0f, 1.0f);
+    const uint8_t AlphaMain = static_cast<uint8_t>(255.0f * Fade);
+    const uint8_t AlphaShadow = static_cast<uint8_t>(210.0f * Fade);
+
+    // Green colors matching selection indicators
+    const Render::Color Shadow(0, 0, 0, AlphaShadow);
+    const Render::Color Green(70, 255, 86, AlphaMain);
+    const Render::Color GreenBright(160, 255, 170, AlphaMain);
+
+    auto DrawSegment = [&](float X1, float Y1, float X2, float Y2, Render::Color Color, float Thickness)
+    {
+        const float SegDX = X2 - X1;
+        const float SegDY = Y2 - Y1;
+        const float SegLen = std::sqrt(SegDX * SegDX + SegDY * SegDY);
+        if (SegLen <= 0.001f) return;
+        const int Steps = std::max(1, (int)std::ceil(SegLen / 2.0f));
+        for (int I = 0; I <= Steps; ++I)
+        {
+            const float T = (float)I / (float)Steps;
+            const float PX = X1 + SegDX * T;
+            const float PY = Y1 + SegDY * T;
+            Draw.DrawRect(PX - Thickness * 0.5f, PY - Thickness * 0.5f, Thickness, Thickness, Color);
+        }
+    };
+
+    // Draw dashed line from building to rally point
+    const Core::Math::Vec2 Dir{DX / Dist, DY / Dist};
+    constexpr float DashLen = 7.0f;
+    constexpr float GapLen = 5.0f;
+    constexpr float Step = DashLen + GapLen;
+
+    for (float D = 0.0f; D < Dist; D += Step)
+    {
+        const float SegLen = std::min(DashLen, Dist - D);
+        const Core::Math::Vec2 P1 = StartPos + Dir * D;
+        const Core::Math::Vec2 P2 = P1 + Dir * SegLen;
+        DrawSegment(P1.X + 1.0f, P1.Y + 1.0f, P2.X + 1.0f, P2.Y + 1.0f, Shadow, 2.5f);
+        DrawSegment(P1.X, P1.Y, P2.X, P2.Y, Green, 1.8f);
+    }
+
+    // Destination rally marker: bright green diamond reticle with center dot
+    constexpr float R = 8.0f;
+    // Shadow diamond
+    DrawSegment(TargetPos.X - R + 1.0f, TargetPos.Y + 1.0f, TargetPos.X + 1.0f, TargetPos.Y - R + 1.0f, Shadow, 2.0f);
+    DrawSegment(TargetPos.X + 1.0f, TargetPos.Y - R + 1.0f, TargetPos.X + R + 1.0f, TargetPos.Y + 1.0f, Shadow, 2.0f);
+    DrawSegment(TargetPos.X + R + 1.0f, TargetPos.Y + 1.0f, TargetPos.X + 1.0f, TargetPos.Y + R + 1.0f, Shadow, 2.0f);
+    DrawSegment(TargetPos.X + 1.0f, TargetPos.Y + R + 1.0f, TargetPos.X - R + 1.0f, TargetPos.Y + 1.0f, Shadow, 2.0f);
+
+    // Bright green diamond
+    DrawSegment(TargetPos.X - R, TargetPos.Y, TargetPos.X, TargetPos.Y - R, Green, 1.6f);
+    DrawSegment(TargetPos.X, TargetPos.Y - R, TargetPos.X + R, TargetPos.Y, Green, 1.6f);
+    DrawSegment(TargetPos.X + R, TargetPos.Y, TargetPos.X, TargetPos.Y + R, Green, 1.6f);
+    DrawSegment(TargetPos.X, TargetPos.Y + R, TargetPos.X - R, TargetPos.Y, Green, 1.6f);
+
+    // Center cross / dot
+    Draw.DrawRect(TargetPos.X - 1.5f + 1.0f, TargetPos.Y - 1.5f + 1.0f, 3.0f, 3.0f, Shadow);
+    Draw.DrawRect(TargetPos.X - 1.5f, TargetPos.Y - 1.5f, 3.0f, 3.0f, GreenBright);
+    DrawSegment(TargetPos.X - 4.0f, TargetPos.Y, TargetPos.X + 4.0f, TargetPos.Y, GreenBright, 1.2f);
+    DrawSegment(TargetPos.X, TargetPos.Y - 4.0f, TargetPos.X, TargetPos.Y + 4.0f, GreenBright, 1.2f);
+}
+
 void EntityRenderer::DrawImageNode(const Entity& E, const EntityImageNode& Node, float OffsetX, float OffsetY) const
 {
     if (!Node.Visible || !Node.Frames || Node.Frames->empty())
@@ -929,10 +1021,11 @@ void EntityRenderer::DrawSelectionMarker(Core::ECS::EntityManager& Entities, int
     if (!Sprite || SelectionCirclePixelSize((int)Sprite->SelectionCircle) <= 0)
         VisualRadius = ResolveVisualRadius(Entities, EntityId);
 
+    const auto VisualPos = Trans->GetInterpolatedPosition(mInterpolationAlpha);
     DrawSelectionVisual(
         Draw,
         SelectionVisualForUnit(mDataAssets, mSpriteAssets, Unit->ChkUnitID,
-                               Trans->Position.X, Trans->Position.Y,
+                               VisualPos.X, VisualPos.Y,
                                IsBuilding, Unit->SizeType, VisualRadius));
 }
 
@@ -1095,10 +1188,11 @@ void EntityRenderer::DrawImageNode(Core::ECS::EntityManager& Entities,
         : RenderComp->VisualOffset.Y + BuildingFlightBodyOffsetY(Building);
     const uint8_t Alpha = (uint8_t)std::lround(
         std::clamp(Node.Opacity, 0.0f, 1.0f) * 255.0f);
+    const auto VisualPos = Trans->GetInterpolatedPosition(mInterpolationAlpha);
     DrawSpriteWithEffect(Render::g_Draw2D,
                          Img,
-                         Trans->Position.X + RootVisualOffsetX + DrawOffsetX * RiftScale - HW,
-                         Trans->Position.Y + RootVisualOffsetY + OffsetY * RiftScale - HH,
+                         VisualPos.X + RootVisualOffsetX + DrawOffsetX * RiftScale - HW,
+                         VisualPos.Y + RootVisualOffsetY + OffsetY * RiftScale - HH,
                          DrawWidth,
                          DrawHeight,
                          Render::Color(255, 255, 255, Alpha),
@@ -1138,10 +1232,9 @@ void EntityRenderer::DrawImageNodeTree(Core::ECS::EntityManager& Entities,
 
 void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vector<int>& SelectedIds)
 {
-    std::unordered_map<int, bool> SelectedLookup;
-    SelectedLookup.reserve(SelectedIds.size());
-    for (int Id : SelectedIds)
-        SelectedLookup[Id] = true;
+    auto IsEntitySelected = [&](int EntityId) -> bool {
+        return std::find(SelectedIds.begin(), SelectedIds.end(), EntityId) != SelectedIds.end();
+    };
 
     float HalfW = 0.0f;
     float HalfH = 0.0f;
@@ -1178,30 +1271,42 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     });
             }
         }
-        return !Trans || !RenderComp ||
-               (!RenderComp->Visible && !HasVisibleEffectChild) ||
-               Trans->Position.X < CullMinX ||
-               Trans->Position.X > CullMaxX ||
-               Trans->Position.Y < CullMinY ||
-               Trans->Position.Y > CullMaxY;
+        if (!Trans || !RenderComp ||
+            (!RenderComp->Visible && !HasVisibleEffectChild))
+            return true;
+        const auto VisualPos = Trans->GetInterpolatedPosition(mInterpolationAlpha);
+        return VisualPos.X < CullMinX || VisualPos.X > CullMaxX ||
+               VisualPos.Y < CullMinY || VisualPos.Y > CullMaxY;
     }), Order.end());
 
-    std::stable_sort(Order.begin(), Order.end(), [&](int A, int B) {
-        auto* TA = Entities.GetComponent<Game::Components::TransformComponent>(A);
-        auto* TB = Entities.GetComponent<Game::Components::TransformComponent>(B);
-        const int BandA = RenderSortBand(Entities, A);
-        const int BandB = RenderSortBand(Entities, B);
-        if (BandA != BandB)
-            return BandA < BandB;
+    struct RenderSortItem
+    {
+        int EntityId = 0;
+        int Band = 0;
+        int ZOrder = 0;
+        float Y = 0.0f;
+    };
+    std::vector<RenderSortItem> SortedItems;
+    SortedItems.reserve(Order.size());
+    for (int EntityId : Order)
+    {
+        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
+        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        const auto VisualPos = Trans ? Trans->GetInterpolatedPosition(mInterpolationAlpha) : Core::Math::Vec2{};
+        SortedItems.push_back({
+            EntityId,
+            RenderSortBand(Entities, EntityId),
+            RenderComp ? RenderComp->ZOrder : 0,
+            VisualPos.Y
+        });
+    }
 
-        auto* RA = Entities.GetComponent<Game::Components::RenderComponent>(A);
-        auto* RB = Entities.GetComponent<Game::Components::RenderComponent>(B);
-        const int ZOrderA = RA ? RA->ZOrder : 0;
-        const int ZOrderB = RB ? RB->ZOrder : 0;
-        if (ZOrderA != ZOrderB)
-            return ZOrderA < ZOrderB;
-
-        return TA && TB ? TA->Position.Y < TB->Position.Y : A < B;
+    std::stable_sort(SortedItems.begin(), SortedItems.end(), [](const RenderSortItem& A, const RenderSortItem& B) {
+        if (A.Band != B.Band)
+            return A.Band < B.Band;
+        if (A.ZOrder != B.ZOrder)
+            return A.ZOrder < B.ZOrder;
+        return A.Y < B.Y;
     });
 
     auto& Draw = Render::g_Draw2D;
@@ -1235,10 +1340,11 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             if (!Sprite || SelectionCirclePixelSize((int)Sprite->SelectionCircle) <= 0)
                 VisualRadius = ResolveVisualRadius(Entities, EntityId);
 
+            const auto VisualPos = Trans.GetInterpolatedPosition(mInterpolationAlpha);
             auto Inserted = SelectionVisualCache.emplace(
                 EntityId,
                 SelectionVisualForUnit(mDataAssets, mSpriteAssets, Unit.ChkUnitID,
-                                       Trans.Position.X, Trans.Position.Y,
+                                       VisualPos.X, VisualPos.Y,
                                        IsBuilding, Unit.SizeType, VisualRadius));
             return Inserted.first->second;
         };
@@ -1261,8 +1367,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         }
     }
 
-    for (int EntityId : Order)
+    for (const auto& Item : SortedItems)
     {
+        const int EntityId = Item.EntityId;
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
         auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
@@ -1271,7 +1378,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             continue;
 
         bool DrewSprite = false;
-        const bool IsSelected = SelectedLookup.find(EntityId) != SelectedLookup.end();
+        const bool IsSelected = IsEntitySelected(EntityId);
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
         const auto* Building =
@@ -1325,10 +1432,11 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                 const float DrawHeight = (float)Img.Height * RiftScale;
                 const float HW = DrawWidth * 0.5f;
                 const float HH = DrawHeight * 0.5f;
+                const auto VisualPos = Trans->GetInterpolatedPosition(mInterpolationAlpha);
                 DrawSpriteWithEffect(Draw,
                                      Img,
-                                     Trans->Position.X + RenderComp->VisualOffset.X - HW,
-                                     Trans->Position.Y + RenderComp->VisualOffset.Y + FlightBodyOffsetY - HH,
+                                     VisualPos.X + RenderComp->VisualOffset.X - HW,
+                                     VisualPos.Y + RenderComp->VisualOffset.Y + FlightBodyOffsetY - HH,
                                      DrawWidth,
                                      DrawHeight,
                                      RenderComp->Tint,
@@ -1434,9 +1542,10 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        const auto VisualPos = Trans ? Trans->GetInterpolatedPosition(mInterpolationAlpha) : Core::Math::Vec2{};
         if (!Trans || !RenderComp || !RenderComp->Visible ||
-            Trans->Position.X < CullMinX || Trans->Position.X > CullMaxX ||
-            Trans->Position.Y < CullMinY || Trans->Position.Y > CullMaxY)
+            VisualPos.X < CullMinX || VisualPos.X > CullMaxX ||
+            VisualPos.Y < CullMinY || VisualPos.Y > CullMaxY)
         {
             continue;
         }
@@ -1460,7 +1569,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                 const float HH = (float)Img.Height * 0.5f;
                 DrawSpriteWithEffect(
                     Draw, Img,
-                    Trans->Position.X - HW, Trans->Position.Y - HH,
+                    VisualPos.X - HW, VisualPos.Y - HH,
                     (float)Img.Width, (float)Img.Height,
                     RenderComp->Tint, RenderComp->Flipped,
                     ResolveSpriteVisualEffect(
@@ -1477,6 +1586,11 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                 if (Tree->Nodes[NodeIndex].ParentIndex < 0 && Tree->Nodes[NodeIndex].DrawAbove)
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
+    }
+
+    for (int EntityId : Entities.GetEntitiesWith<Game::Components::CommandComponent>())
+    {
+        DrawRallyIndicator(Draw, Entities, EntityId);
     }
 
     if (DebugEntityRenderEnabled() && DebugEntityFrames > 0)

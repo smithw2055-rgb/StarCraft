@@ -4,6 +4,7 @@
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Map/Map.h"
 #include "Game/IScriptVM.h"
+#include "Game/DataEnums.h"
 
 #include <cmath>
 #include <limits>
@@ -21,6 +22,67 @@ namespace
     constexpr int kTerranHeroVultureChkUnitID = 19;
     constexpr float kSpiderMineExplosionRadius = 64.0f;
     constexpr int kSpiderMineDamage = 125;
+
+    bool IsValidSpiderMineTriggerTarget(Core::ECS::EntityManager& EM,
+                                        int EntityID,
+                                        int MinePlayerID)
+    {
+        if (!EM.IsAlive(EntityID))
+            return false;
+
+        auto* Unit = EM.GetComponent<Components::UnitComponent>(EntityID);
+        auto* Trans = EM.GetComponent<Components::TransformComponent>(EntityID);
+        auto* Player = EM.GetComponent<Components::PlayerComponent>(EntityID);
+        if (!Unit || !Trans || !Player || Unit->HitPoints <= 0)
+            return false;
+
+        // Enemy check
+        if (Player->PlayerID == MinePlayerID)
+            return false;
+
+        // Cannot target units inside transports
+        if (Unit->LoadedInTransportID >= 0)
+            return false;
+
+        // Cannot target air units
+        auto* Path = EM.GetComponent<Components::PathfindingComponent>(EntityID);
+        if ((Path && Path->IsAir) || Game::Data::IsAirUnitType(Unit->ChkUnitID))
+            return false;
+
+        // Cannot target buildings
+        if (EM.GetComponent<Components::BuildingComponent>(EntityID))
+            return false;
+
+        // Cannot target resources
+        if (EM.GetComponent<Components::ResourceComponent>(EntityID))
+            return false;
+
+        // Hover units do not trigger spider mines:
+        // Terran Vulture (2, 19), Protoss Archon (68, 76), Dark Archon (63),
+        // SCV (7), Drone (41), Probe (64)
+        if (Unit->ChkUnitID == 2 || Unit->ChkUnitID == 19 ||
+            Unit->ChkUnitID == 68 || Unit->ChkUnitID == 76 ||
+            Unit->ChkUnitID == 63 ||
+            Unit->ChkUnitID == 7 || Unit->ChkUnitID == 41 || Unit->ChkUnitID == 64)
+        {
+            return false;
+        }
+
+        // Spider mines do not trigger on other spider mines
+        if (Unit->ChkUnitID == kTerranSpiderMineChkUnitID)
+            return false;
+
+        // Larva (35), Egg (36), Lurker Egg (97) do not trigger mines
+        if (Unit->ChkUnitID == 35 || Unit->ChkUnitID == 36 || Unit->ChkUnitID == 97)
+            return false;
+
+        // Undetected cloaked or burrowed units do not trigger mines
+        auto* Cloak = EM.GetComponent<Components::CloakComponent>(EntityID);
+        if (Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed))
+            return false;
+
+        return true;
+    }
 }
 
 NukeAndSpiderMineSystem::NukeAndSpiderMineSystem(
@@ -152,6 +214,17 @@ void NukeAndSpiderMineSystem::TriggerSpiderMine(int MineEntityID, int TargetEnti
 
 void NukeAndSpiderMineSystem::UpdateNuke(float DeltaTime)
 {
+    if (mNukeGhostEntityID >= 0)
+    {
+        auto& EM = mSystemMgr.GetEntityManager();
+        auto* GhostUnit = EM.GetComponent<Components::UnitComponent>(mNukeGhostEntityID);
+        if (!GhostUnit || GhostUnit->HitPoints <= 0)
+        {
+            CancelNuke(mNukeGhostEntityID);
+            return;
+        }
+    }
+
     if (!mNukeArmed)
     {
         mNukeArmTimer -= DeltaTime;
@@ -288,6 +361,20 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
         }
         else if (it->MineEntityID >= 0)
         {
+            if (!EM.IsAlive(it->MineEntityID))
+            {
+                it = mMines.erase(it);
+                continue;
+            }
+
+            auto* mineUnit = EM.GetComponent<Components::UnitComponent>(it->MineEntityID);
+            if (!mineUnit || mineUnit->HitPoints <= 0)
+            {
+                EM.DestroyEntity(it->MineEntityID);
+                it = mMines.erase(it);
+                continue;
+            }
+
             auto* spiderComp = EM.GetComponent<Components::SpiderMineComponent>(it->MineEntityID);
             auto* render = EM.GetComponent<Components::RenderComponent>(it->MineEntityID);
 
@@ -297,6 +384,10 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                 if (spiderComp->BurrowTimer <= 0.0f)
                 {
                     spiderComp->IsBurrowed = true;
+                    auto& cloak = EM.AddComponent<Components::CloakComponent>(it->MineEntityID);
+                    cloak.IsBurrowed = true;
+                    cloak.IsCloaked = true;
+                    cloak.IsPassiveCloak = true;
                     if (render) render->Visible = true;
                 }
             }
@@ -306,6 +397,12 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                 if (CheckSpiderMineTrigger(it->MineEntityID))
                 {
                     spiderComp->IsTriggered = true;
+                    if (auto* cloak = EM.GetComponent<Components::CloakComponent>(it->MineEntityID))
+                    {
+                        cloak->IsBurrowed = false;
+                        cloak->IsCloaked = false;
+                    }
+                    if (render) render->Visible = true;
                 }
             }
 
@@ -313,29 +410,35 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
             {
                 auto* trans = EM.GetComponent<Components::TransformComponent>(it->MineEntityID);
                 auto* targetTrans = EM.GetComponent<Components::TransformComponent>(spiderComp->ChasingEntityID);
+                auto* targetUnit = EM.GetComponent<Components::UnitComponent>(spiderComp->ChasingEntityID);
 
-                if (trans && targetTrans)
+                if (trans)
                 {
-                    float dx = targetTrans->Position.X - trans->Position.X;
-                    float dy = targetTrans->Position.Y - trans->Position.Y;
+                    bool TargetLost = !targetTrans || !targetUnit || targetUnit->HitPoints <= 0;
+                    if (!TargetLost && targetUnit->LoadedInTransportID >= 0)
+                    {
+                        TargetLost = true;
+                    }
+
+                    float speed = spiderComp->ChaseSpeed * DeltaTime;
+                    float dx = targetTrans ? (targetTrans->Position.X - trans->Position.X) : 0.0f;
+                    float dy = targetTrans ? (targetTrans->Position.Y - trans->Position.Y) : 0.0f;
                     float dist = std::sqrt(dx * dx + dy * dy);
 
-                    if (dist < 2.0f)
+                    if (TargetLost || dist <= std::max(12.0f, speed * 1.2f))
                     {
                         Components::CombatComponent combat;
                         combat.GroundDamage = kSpiderMineDamage;
-                        combat.GroundDmgType = Components::DamageType::Normal;
+                        combat.GroundDmgType = Components::DamageType::Explosive;
                         combat.Splash = Components::SplashType::Radial;
                         combat.SplashRadius = kSpiderMineExplosionRadius;
 
                         const int MineEntityID = it->MineEntityID;
-                        const Core::Math::Vec2 ExplosionPosition =
-                            trans->Position;
+                        const Core::Math::Vec2 ExplosionPosition = trans->Position;
                         Components::PlayerComponent MinePlayerCopy;
                         bool HasMinePlayer = false;
                         if (const auto* MinePlayer =
-                                EM.GetComponent<Components::PlayerComponent>(
-                                    MineEntityID))
+                                EM.GetComponent<Components::PlayerComponent>(MineEntityID))
                         {
                             MinePlayerCopy = *MinePlayer;
                             HasMinePlayer = true;
@@ -347,47 +450,32 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                         if (MineImageID != std::numeric_limits<uint32_t>::max())
                         {
                             const int EffectID = EM.CreateEntity();
-                            EM.AddComponent<Components::TransformComponent>(
-                                  EffectID)
-                                .Position = ExplosionPosition;
-                            auto& EffectRender =
-                                EM.AddComponent<Components::RenderComponent>(
-                                    EffectID);
+                            EM.AddComponent<Components::TransformComponent>(EffectID).Position = ExplosionPosition;
+                            auto& EffectRender = EM.AddComponent<Components::RenderComponent>(EffectID);
                             EffectRender.ImageID = MineImageID;
                             EffectRender.FrameIndex = 0;
                             EffectRender.TotalFrames = 1;
-                            EffectRender.Layer =
-                                Components::RenderLayer::Effects;
+                            EffectRender.Layer = Components::RenderLayer::Effects;
                             EffectRender.Visible = true;
 
-                            auto& Effect =
-                                EM.AddComponent<Components::EffectComponent>(
-                                    EffectID);
+                            auto& Effect = EM.AddComponent<Components::EffectComponent>(EffectID);
                             Effect.LifetimeRemaining = 8.0f;
-                            Effect.InitialAnimation =
-                                Game::IScriptAnims::Anim_Death;
+                            Effect.InitialAnimation = Game::IScriptAnims::Anim_Death;
                             Effect.DestroyWhenAnimationCompletes = true;
                             Effect.DrawAbove = true;
 
-                            auto& EffectUnit =
-                                EM.AddComponent<Components::UnitComponent>(
-                                    EffectID);
+                            auto& EffectUnit = EM.AddComponent<Components::UnitComponent>(EffectID);
                             EffectUnit.ChkUnitID = -1;
                             EffectUnit.HitPoints = 0;
                             EffectUnit.MaxHitPoints = 1;
                             EffectUnit.SupplyCost = 0;
                             if (HasMinePlayer)
                             {
-                                EM.AddComponent<Components::PlayerComponent>(
-                                    EffectID) = MinePlayerCopy;
+                                EM.AddComponent<Components::PlayerComponent>(EffectID) = MinePlayerCopy;
                             }
                         }
 
-                        const float RadiusSquared =
-                            kSpiderMineExplosionRadius *
-                            kSpiderMineExplosionRadius;
-                        const int MinePlayerID =
-                            HasMinePlayer ? MinePlayerCopy.PlayerID : -1;
+                        const float RadiusSquared = kSpiderMineExplosionRadius * kSpiderMineExplosionRadius;
                         const auto Targets = EM.GetEntitiesWith<
                             Components::TransformComponent,
                             Components::UnitComponent,
@@ -396,36 +484,20 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                         {
                             if (TargetID == MineEntityID)
                                 continue;
-                            const auto* TargetUnit =
-                                EM.GetComponent<Components::UnitComponent>(
-                                    TargetID);
-                            const auto* TargetPosition =
-                                EM.GetComponent<Components::TransformComponent>(
-                                    TargetID);
-                            const auto* TargetPlayer =
-                                EM.GetComponent<Components::PlayerComponent>(
-                                    TargetID);
-                            const auto* TargetPath =
-                                EM.GetComponent<Components::PathfindingComponent>(
-                                    TargetID);
-                            if (!TargetUnit || TargetUnit->HitPoints <= 0 ||
-                                !TargetPosition || !TargetPlayer ||
-                                (MinePlayerID >= 0 &&
-                                 TargetPlayer->PlayerID == MinePlayerID) ||
-                                (TargetPath && TargetPath->IsAir))
+                            const auto* TUnit = EM.GetComponent<Components::UnitComponent>(TargetID);
+                            const auto* TPos = EM.GetComponent<Components::TransformComponent>(TargetID);
+                            const auto* TPath = EM.GetComponent<Components::PathfindingComponent>(TargetID);
+                            if (!TUnit || TUnit->HitPoints <= 0 || !TPos ||
+                                (TPath && TPath->IsAir) || Game::Data::IsAirUnitType(TUnit->ChkUnitID))
                             {
                                 continue;
                             }
-                            const Core::Math::Vec2 Delta =
-                                TargetPosition->Position - ExplosionPosition;
-                            if (Delta.X * Delta.X + Delta.Y * Delta.Y >
-                                RadiusSquared)
+                            const Core::Math::Vec2 Delta = TPos->Position - ExplosionPosition;
+                            if (Delta.X * Delta.X + Delta.Y * Delta.Y > RadiusSquared)
                             {
                                 continue;
                             }
-                            CombatSystem::ApplyDamage(
-                                EM, TargetID, combat, MineEntityID,
-                                kSpiderMineDamage);
+                            CombatSystem::ApplyDamage(EM, TargetID, combat, MineEntityID, kSpiderMineDamage);
                         }
 
                         EM.DestroyEntity(MineEntityID);
@@ -433,7 +505,6 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                         continue;
                     }
 
-                    float speed = spiderComp->ChaseSpeed * DeltaTime;
                     float nDist = (dist > 0.0f) ? dist : 1.0f;
                     trans->Position.X += (dx / nDist) * speed;
                     trans->Position.Y += (dy / nDist) * speed;
@@ -454,29 +525,37 @@ bool NukeAndSpiderMineSystem::CheckSpiderMineTrigger(int MineEntityID)
 
     if (!mineTrans || !spiderComp) return false;
 
+    const int MinePlayerID = minePlayer ? minePlayer->PlayerID : -1;
+
     auto entities = EM.GetEntitiesWith<
         Components::TransformComponent,
         Components::UnitComponent,
         Components::PlayerComponent>();
 
+    int BestTargetID = -1;
+    float BestDist = spiderComp->TriggerRange;
+
     for (int entityID : entities)
     {
+        if (!IsValidSpiderMineTriggerTarget(EM, entityID, MinePlayerID))
+            continue;
+
         auto* trans = EM.GetComponent<Components::TransformComponent>(entityID);
-        auto* player = EM.GetComponent<Components::PlayerComponent>(entityID);
-        auto* unit = EM.GetComponent<Components::UnitComponent>(entityID);
-
-        if (!trans || !player || !unit || unit->HitPoints <= 0) continue;
-        if (minePlayer && player->PlayerID == minePlayer->PlayerID) continue;
-
         float dx = trans->Position.X - mineTrans->Position.X;
         float dy = trans->Position.Y - mineTrans->Position.Y;
         float dist = std::sqrt(dx * dx + dy * dy);
 
-        if (dist < spiderComp->TriggerRange)
+        if (dist < BestDist)
         {
-            spiderComp->ChasingEntityID = entityID;
-            return true;
+            BestDist = dist;
+            BestTargetID = entityID;
         }
+    }
+
+    if (BestTargetID >= 0)
+    {
+        spiderComp->ChasingEntityID = BestTargetID;
+        return true;
     }
 
     return false;

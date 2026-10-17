@@ -29,6 +29,7 @@ struct TilesetAtlas
     int CellHeight = 0;
     int Columns = 0;
     int FrameCount = 0;
+    std::vector<int> MegaIdxToSlot;
 };
 
 struct TilesetCreepFrame

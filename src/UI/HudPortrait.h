@@ -110,6 +110,33 @@ inline std::string ResolvePortraitKeyForChkUnitId(int ChkUnitId)
         case 93: return "ngastank";
         case 95: return "nlavacrit";
         case 96: return "nicecrit";
+
+        // Terran Buildings -> Terran Advisor
+        case 106: case 107: case 108: case 109: case 110:
+        case 111: case 112: case 113: case 114: case 115:
+        case 116: case 117: case 118: case 119: case 120:
+        case 121: case 122: case 123: case 124: case 125:
+        case 126: case 127: case 128: case 129: case 130:
+            return "tadvisor";
+
+        // Zerg Buildings -> Zerg Advisor
+        case 131: case 132: case 133: case 134: case 135:
+        case 136: case 137: case 138: case 139: case 140:
+        case 141: case 142: case 143: case 144: case 145:
+        case 146: case 147: case 148: case 149: case 150:
+        case 151: case 152: case 153:
+            return "zadvisor";
+
+        // Protoss Buildings -> Protoss Advisor
+        case 154: case 155: case 156: case 157: case 158:
+        case 159: case 160: case 161: case 162: case 163:
+        case 164: case 165: case 166: case 167: case 168:
+        case 169: case 170: case 171: case 172:
+            return "padvisor";
+
+        // Resources
+        case 176: case 177: case 178: return "nore";
+        case 188: return "ngassac";
         default: return {};
     }
 }

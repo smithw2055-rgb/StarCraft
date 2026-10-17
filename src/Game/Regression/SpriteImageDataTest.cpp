@@ -18,6 +18,7 @@
 #include <optional>
 #include <array>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace
@@ -1315,6 +1316,475 @@ int main()
     Require(DecodableShadowCount > 0,
         "shadow overlay relation resolves to decodable GRP frames");
 
-    std::printf("SpriteImageDataTest passed\n");
+    // circle14.grp is classic StarCraft's invisible projectile collision mask
+    // for weapons like Firebat flame thrower (weapon 25) and Psi Storm delivery.
+    const auto* FirebatGroundWeapon = Loader.FindWeaponByID(25);
+    Require(FirebatGroundWeapon != nullptr, "Firebat flame thrower weapons.dat entry");
+    const auto* FirebatFlingy = Loader.FindFlingyByID(FirebatGroundWeapon->FlingyID);
+    Require(FirebatFlingy != nullptr, "Flame thrower flingy entry");
+    const auto* FirebatSprite = Loader.FindSpriteByID(FirebatFlingy->SpriteID);
+    Require(FirebatSprite != nullptr && FirebatSprite->ImageID == 503,
+            "Flame thrower resolves to invisible projectile sprite 370 / image 503");
+    const std::string FirebatBulletPath = Loader.ResolveImageGrpPath(FirebatSprite->ImageID);
+    Require(FirebatBulletPath.find("circle14") != std::string::npos,
+            "Flame thrower projectile image maps to bullet/circle14.grp collision mask");
+
+    // Classic StarCraft melee weapons have FlingyID == 0 (no projectile)
+    const auto* ZealotGroundWeapon = Loader.FindWeaponByID(64);
+    Require(ZealotGroundWeapon != nullptr && ZealotGroundWeapon->FlingyID == 0,
+            "Zealot Psi Blades weapons.dat entry has FlingyID == 0 (no projectile)");
+    const auto* ZerglingGroundWeapon = Loader.FindWeaponByID(35);
+    Require(ZerglingGroundWeapon != nullptr && ZerglingGroundWeapon->FlingyID == 0,
+            "Zergling Claws weapons.dat entry has FlingyID == 0 (no projectile)");
+    const auto* UltraGroundWeapon = Loader.FindWeaponByID(40);
+    Require(UltraGroundWeapon != nullptr && UltraGroundWeapon->FlingyID == 0,
+            "Ultralisk Kaiser Blades weapons.dat entry has FlingyID == 0 (no projectile)");
+    {
+        std::ofstream Out("artifacts/weapon_audit_report.txt");
+        Out << "=== STARCRAFT WEAPONS VISUAL AUDIT REPORT ===\n";
+        Out << "Total Weapons in weapons.dat: " << Loader.GetWeapons().size() << "\n\n";
+
+        struct WeaponAuditEntry {
+            uint32_t WeaponID;
+            std::string Name;
+            uint16_t Behavior;
+            uint16_t SplashType;
+            uint32_t FlingyID;
+            uint32_t SpriteID;
+            uint32_t ImageID;
+            std::string GrpPath;
+            uint8_t ImageModifier;
+            uint32_t Width = 0;
+            uint32_t Height = 0;
+            uint32_t Frames = 0;
+            bool GrpExists = false;
+            std::vector<std::string> GroundOwners;
+            std::vector<std::string> AirOwners;
+        };
+
+        std::vector<WeaponAuditEntry> Circle14Weapons;
+        std::vector<WeaponAuditEntry> VisibleWeapons;
+        std::vector<WeaponAuditEntry> SpecialOrNoneWeapons;
+        std::vector<WeaponAuditEntry> MissingGrpWeapons;
+
+        for (uint32_t w = 0; w < (uint32_t)Loader.GetWeapons().size(); ++w)
+        {
+            const auto* W = Loader.FindWeaponByID(w);
+            if (!W) continue;
+            WeaponAuditEntry E;
+            E.WeaponID = w;
+            E.Name = W->Name;
+            E.Behavior = W->WeaponBehavior;
+            E.SplashType = W->SplashType;
+            E.FlingyID = W->FlingyID;
+
+            const auto* F = Loader.FindFlingyByID(W->FlingyID);
+            E.SpriteID = F ? F->SpriteID : UINT32_MAX;
+
+            const auto* S = F ? Loader.FindSpriteByID(F->SpriteID) : nullptr;
+            E.ImageID = S ? S->ImageID : UINT32_MAX;
+
+            const auto* Img = S ? Loader.FindImageByID(S->ImageID) : nullptr;
+            E.ImageModifier = Img ? Img->Modifier : 0;
+
+            E.GrpPath = S ? Loader.ResolveImageGrpPath(S->ImageID) : "";
+
+            if (W->Label > 0)
+            {
+                const auto* LabelStr = Loader.FindStatTxtString(W->Label - 1);
+                if (LabelStr) E.Name = *LabelStr;
+            }
+
+            // Check owners
+            for (uint32_t u = 0; u < (uint32_t)Loader.GetUnits().size(); ++u)
+            {
+                const auto* U = Loader.FindUnitByID(u);
+                if (!U) continue;
+                const std::string* UName = Loader.FindUnitName(u);
+                std::string NameStr = UName ? *UName : ("Unit_" + std::to_string(u));
+                if (U->GroundWeapon == w)
+                    E.GroundOwners.push_back(NameStr);
+                if (U->AirWeapon == w)
+                    E.AirOwners.push_back(NameStr);
+            }
+
+            // Check GRP
+            if (!E.GrpPath.empty())
+            {
+                auto GrpBytes = ReadSpriteAsset(E.GrpPath);
+                if (!GrpBytes.empty())
+                {
+                    E.GrpExists = true;
+                    auto Decoded = Resource::GrpDecoder::DecodeGrp(GrpBytes);
+                    if (Decoded.has_value())
+                    {
+                        E.Width = Decoded->Width;
+                        E.Height = Decoded->Height;
+                        E.Frames = (uint32_t)Decoded->Frames.size();
+                    }
+                }
+            }
+
+            std::string LowerGrp = E.GrpPath;
+            std::transform(LowerGrp.begin(), LowerGrp.end(), LowerGrp.begin(),
+                           [](unsigned char c){ return (char)std::tolower(c); });
+
+            if (E.FlingyID == 0)
+                SpecialOrNoneWeapons.push_back(E);
+            else if (LowerGrp.find("circle14") != std::string::npos)
+                Circle14Weapons.push_back(E);
+            else if (E.GrpPath.empty() || LowerGrp.find("none") != std::string::npos)
+                SpecialOrNoneWeapons.push_back(E);
+            else if (!E.GrpExists)
+                MissingGrpWeapons.push_back(E);
+            else
+                VisibleWeapons.push_back(E);
+        }
+
+        // Also check zmarker.grp content specifically
+        {
+            auto ZmarkerBytes = ReadSpriteAsset("zerg/zmarker.grp");
+            auto Decoded = Resource::GrpDecoder::DecodeGrp(ZmarkerBytes);
+            if (Decoded.has_value() && !Decoded->Frames.empty())
+            {
+                size_t NonZeroPixels = 0;
+                for (auto P : Decoded->RawFrameData)
+                    if (P != 0) ++NonZeroPixels;
+                Out << "--- ZMARKER.GRP DIAGNOSTICS ---\n";
+                Out << "Width: " << Decoded->Width << ", Height: " << Decoded->Height
+                    << ", Frames: " << Decoded->Frames.size()
+                    << ", NonZeroPixels: " << NonZeroPixels
+                    << " (Total Raw Bytes: " << Decoded->RawFrameData.size() << ")\n\n";
+            }
+        }
+
+        Out << "--- SUMMARY ---\n";
+        Out << "Circle14 (Invisible collision/delivery mask) count: " << Circle14Weapons.size() << "\n";
+        Out << "Visible projectile GRP count: " << VisibleWeapons.size() << "\n";
+        Out << "Special / None / Empty GRP count: " << SpecialOrNoneWeapons.size() << "\n";
+        Out << "Missing GRP files count: " << MissingGrpWeapons.size() << "\n\n";
+
+        auto DumpList = [&](const std::string& Title, const std::vector<WeaponAuditEntry>& List) {
+            Out << "=== " << Title << " (" << List.size() << ") ===\n";
+            for (const auto& E : List)
+            {
+                Out << "Weapon " << E.WeaponID << " [" << E.Name << "]:\n";
+                Out << "  Behavior: " << E.Behavior << ", SplashType: " << E.SplashType
+                    << ", Flingy: " << E.FlingyID << ", Sprite: " << E.SpriteID
+                    << ", Image: " << E.ImageID << ", ImageModifier: " << (int)E.ImageModifier << "\n";
+                Out << "  GrpPath: " << (E.GrpPath.empty() ? "<EMPTY>" : E.GrpPath)
+                    << " (Size: " << E.Width << "x" << E.Height << ", Frames: " << E.Frames << ")\n";
+                Out << "  Ground Owners: ";
+                for (const auto& O : E.GroundOwners) Out << O << ", ";
+                Out << "\n  Air Owners: ";
+                for (const auto& O : E.AirOwners) Out << O << ", ";
+                Out << "\n\n";
+            }
+        };
+
+        DumpList("CIRCLE14 COLLISION MASK WEAPONS", Circle14Weapons);
+        DumpList("SPECIAL / NONE / EMPTY GRP WEAPONS", SpecialOrNoneWeapons);
+        DumpList("MISSING GRP WEAPONS", MissingGrpWeapons);
+        DumpList("VISIBLE PROJECTILE WEAPONS", VisibleWeapons);
+    }
+
+    // Comprehensive images.dat audit for all 999 entries
+    {
+        std::ofstream ImgOut("artifacts/all_images_audit.txt");
+        ImgOut << "=== ALL IMAGES.DAT FULL AUDIT ===\n";
+        ImgOut << "Total Images: " << Loader.GetImages().size() << "\n\n";
+
+        std::set<std::string> UniqueGrps;
+        std::vector<std::string> SingleColorOrPlaceholderGrps;
+
+        for (uint32_t i = 0; i < (uint32_t)Loader.GetImages().size(); ++i)
+        {
+            const auto* Img = Loader.FindImageByID(i);
+            if (!Img) continue;
+            std::string Path = Loader.ResolveImageGrpPath(i);
+            if (Path.empty()) continue;
+
+            if (UniqueGrps.insert(Path).second)
+            {
+                std::string LowerPath = Path;
+                std::transform(LowerPath.begin(), LowerPath.end(), LowerPath.begin(),
+                               [](unsigned char c){ return (char)std::tolower(c); });
+
+                if (LowerPath.size() >= 4 && LowerPath.substr(LowerPath.size() - 4) == ".grp")
+                {
+                    auto Bytes = ReadSpriteAsset(Path);
+                    if (!Bytes.empty())
+                    {
+                        auto Decoded = Resource::GrpDecoder::DecodeGrp(Bytes);
+                        if (Decoded.has_value() && !Decoded->Frames.empty())
+                        {
+                            // Check unique non-zero pixel values
+                            std::set<uint8_t> UniquePixels;
+                            size_t NonZero = 0;
+                            for (auto P : Decoded->RawFrameData)
+                            {
+                                if (P != 0)
+                                {
+                                    UniquePixels.insert(P);
+                                    ++NonZero;
+                                }
+                            }
+
+                            // If single color palette index across entire GRP (like circle14 which is pure 255)
+                            if (UniquePixels.size() == 1 && NonZero > 0)
+                            {
+                                uint8_t ColorVal = *UniquePixels.begin();
+                                SingleColorOrPlaceholderGrps.push_back(
+                                    Path + " (Width: " + std::to_string(Decoded->Width) +
+                                    ", Height: " + std::to_string(Decoded->Height) +
+                                    ", Frames: " + std::to_string(Decoded->Frames.size()) +
+                                    ", Single Color Index: " + std::to_string((int)ColorVal) +
+                                    ", NonZeroPixels: " + std::to_string(NonZero) + ")");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ImgOut << "Unique GRP Files Referenced: " << UniqueGrps.size() << "\n";
+        ImgOut << "Single-Color / Mask Candidates: " << SingleColorOrPlaceholderGrps.size() << "\n\n";
+        ImgOut << "=== SINGLE-COLOR / MASK CANDIDATES ===\n";
+        for (const auto& S : SingleColorOrPlaceholderGrps)
+        {
+            ImgOut << "  " << S << "\n";
+        }
+
+        ImgOut << "\n=== ALL UNIQUE GRP FILES ===\n";
+        for (const auto& G : UniqueGrps)
+        {
+            ImgOut << "  " << G << "\n";
+        }
+    }
+
+    // Comprehensive 228 Units weapon resolution audit
+    {
+        std::ofstream UnitOut("artifacts/units_weapon_audit.txt");
+        UnitOut << "=== ALL 228 UNITS WEAPON VISUAL RESOLUTION AUDIT ===\n\n";
+
+        size_t TotalUnitsWithWeapons = 0;
+        size_t UnitsWithFlingyZero = 0;
+        size_t UnitsWithCircle14 = 0;
+        size_t UnitsWithVisibleProjectile = 0;
+
+        for (uint32_t u = 0; u < (uint32_t)Loader.GetUnits().size(); ++u)
+        {
+            const auto* U = Loader.FindUnitByID(u);
+            if (!U) continue;
+            const std::string* UName = Loader.FindUnitName(u);
+            std::string Name = UName ? *UName : ("Unit_" + std::to_string(u));
+
+            bool HasWeapon = (U->GroundWeapon < 130) || (U->AirWeapon < 130);
+            if (!HasWeapon && U->Subunit1ID < 228)
+            {
+                const auto* Sub = Loader.FindUnitByID(U->Subunit1ID);
+                if (Sub && (Sub->GroundWeapon < 130 || Sub->AirWeapon < 130))
+                    HasWeapon = true;
+            }
+
+            if (!HasWeapon) continue;
+            ++TotalUnitsWithWeapons;
+
+            UnitOut << "Unit " << u << " [" << Name << "]:\n";
+            auto AuditWeapon = [&](const char* TypeStr, uint16_t WID) {
+                if (WID >= 130)
+                {
+                    UnitOut << "  " << TypeStr << ": None (" << WID << ")\n";
+                    return;
+                }
+                const auto* W = Loader.FindWeaponByID(WID);
+                if (!W)
+                {
+                    UnitOut << "  " << TypeStr << ": Weapon " << WID << " not found!\n";
+                    return;
+                }
+                std::string WName = W->Name;
+                if (W->Label > 0)
+                {
+                    const auto* LStr = Loader.FindStatTxtString(W->Label - 1);
+                    if (LStr) WName = *LStr;
+                }
+                const auto* F = Loader.FindFlingyByID(W->FlingyID);
+                const auto* S = F ? Loader.FindSpriteByID(F->SpriteID) : nullptr;
+                std::string Grp = S ? Loader.ResolveImageGrpPath(S->ImageID) : "";
+
+                UnitOut << "  " << TypeStr << ": Weapon " << WID << " [" << WName
+                        << "], Flingy: " << W->FlingyID << ", Sprite: " << (F ? F->SpriteID : 0)
+                        << ", Image: " << (S ? S->ImageID : 0) << ", GRP: " << Grp;
+
+                std::string LowerGrp = Grp;
+                std::transform(LowerGrp.begin(), LowerGrp.end(), LowerGrp.begin(),
+                               [](unsigned char c){ return (char)std::tolower(c); });
+
+                if (W->FlingyID == 0)
+                {
+                    ++UnitsWithFlingyZero;
+                    UnitOut << " [MELEE / FLINGY 0 - NO PROJECTILE]";
+                }
+                else if (LowerGrp.find("circle14") != std::string::npos)
+                {
+                    ++UnitsWithCircle14;
+                    UnitOut << " [INVISIBLE COLLISION MASK]";
+                }
+                else
+                {
+                    ++UnitsWithVisibleProjectile;
+                    UnitOut << " [VISIBLE PROJECTILE]";
+                }
+                UnitOut << "\n";
+            };
+
+            AuditWeapon("Ground Weapon", U->GroundWeapon);
+            AuditWeapon("Air Weapon", U->AirWeapon);
+
+            if (U->Subunit1ID < 228)
+            {
+                const auto* Sub = Loader.FindUnitByID(U->Subunit1ID);
+                if (Sub)
+                {
+                    const std::string* SubName = Loader.FindUnitName(U->Subunit1ID);
+                    UnitOut << "  Subunit: " << U->Subunit1ID << " ["
+                            << (SubName ? *SubName : "Subunit") << "]\n";
+                    AuditWeapon("  Subunit Ground", Sub->GroundWeapon);
+                    AuditWeapon("  Subunit Air", Sub->AirWeapon);
+                }
+            }
+            UnitOut << "\n";
+        }
+
+        UnitOut << "--- UNIT WEAPON SUMMARY ---\n";
+        UnitOut << "Total Armed Units: " << TotalUnitsWithWeapons << "\n";
+        UnitOut << "Weapons with Flingy 0 (Melee): " << UnitsWithFlingyZero << "\n";
+        UnitOut << "Weapons with Circle14 (Collision): " << UnitsWithCircle14 << "\n";
+        UnitOut << "Weapons with Visible Projectile: " << UnitsWithVisibleProjectile << "\n";
+    }
+
+    // Lurker attack and blood/death overlay investigation
+    {
+        std::ofstream LurkOut("artifacts/lurker_spines_audit.txt");
+        LurkOut << "=== LURKER SPINES ATTACK & OVERLAY AUDIT ===\n\n";
+
+        // 1. Search all images related to blood or death in images.tbl
+        LurkOut << "--- BLOOD / DEATH IMAGES IN IMAGES.DAT ---\n";
+        for (uint32_t i = 0; i < (uint32_t)Loader.GetImages().size(); ++i)
+        {
+            std::string Path = Loader.ResolveImageGrpPath(i);
+            std::string Lower = Path;
+            std::transform(Lower.begin(), Lower.end(), Lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+            if (Lower.find("blood") != std::string::npos ||
+                Lower.find("corpse") != std::string::npos ||
+                Lower.find("splat") != std::string::npos)
+            {
+                const auto* Img = Loader.FindImageByID(i);
+                LurkOut << "Image " << i << " [" << Path << "], Modifier: "
+                        << (Img ? (int)Img->Modifier : 0)
+                        << ", IScriptID: " << (Img ? (int)Img->IScriptID : -1) << "\n";
+            }
+        }
+
+        // 2. Inspect Lurker (Image 921), Spines Controller (Image 985), and Spike (Image 961)
+        auto InspectImageAnims = [&](const char* Label, uint32_t ImageID) {
+            const auto* Img = Loader.FindImageByID(ImageID);
+            std::string Path = Loader.ResolveImageGrpPath(ImageID);
+            LurkOut << "\n--- " << Label << " (Image " << ImageID << " -> " << Path << ") ---\n";
+            if (!Img) { LurkOut << "Image not found\n"; return; }
+            LurkOut << "Modifier: " << (int)Img->Modifier << ", AlwaysVisible: " << Img->AlwaysVisible
+                    << ", HasIScript: " << Img->HasIScriptAnimations << ", IScriptID: " << Img->IScriptID << "\n";
+
+            const auto& ScriptsDatabase = Scripts;
+            for (int AnimID = 0; AnimID < 32; ++AnimID)
+            {
+                auto Probe = ProbeAnimation(ScriptsDatabase, ImageID, AnimID);
+                if (Probe.Present)
+                {
+                    LurkOut << "  Anim " << AnimID << ": "
+                            << "FrameChanges=" << Probe.FrameChanges
+                            << ", VisualEvents=" << Probe.VisualEvents << ", Overlays Emitted: ";
+                    for (int Ovr : Probe.VisualImages)
+                    {
+                        std::string OvrPath = Loader.ResolveImageGrpPath(Ovr);
+                        LurkOut << Ovr << " [" << OvrPath << "], ";
+                    }
+                    LurkOut << "\n";
+                }
+            }
+        };
+
+        auto DisasmScript = [&](const std::string& Label, int ScriptID) {
+            const auto* Script = Scripts.FindScript(ScriptID);
+            if (!Script) return;
+            LurkOut << "\n=== DISASSEMBLY FOR " << Label << " (Script " << ScriptID << ") ===\n";
+            const auto& Prog = Scripts.GetProgram().ProgramData;
+            for (size_t AnimID = 0; AnimID < Script->AnimationPC.size(); ++AnimID) {
+                uint32_t PC = Script->AnimationPC[AnimID];
+                if (PC == 0 || PC >= Prog.size()) continue;
+                LurkOut << "Animation " << AnimID << " (Entry PC=" << PC << "):\n";
+                uint32_t CurPC = PC;
+                for (int Step = 0; Step < 30 && CurPC < Prog.size(); ++Step) {
+                    uint8_t Op = Prog[CurPC];
+                    const char* OpName = Game::GetIScriptOpcodeName(Op);
+                    LurkOut << "  [" << CurPC << "] Op " << (int)Op << " (" << (OpName ? OpName : "?") << ")";
+                    if (Op == Game::IScriptOpcodes::Opc_End) {
+                        LurkOut << "\n";
+                        break;
+                    }
+                    if (Op == Game::IScriptOpcodes::Opc_Goto) {
+                        uint16_t Target = Prog[CurPC + 1] | (Prog[CurPC + 2] << 8);
+                        LurkOut << " -> " << Target << "\n";
+                        break;
+                    }
+                    if (Op == Game::IScriptOpcodes::Opc_PlayFram) {
+                        uint16_t Frame = Prog[CurPC + 1] | (Prog[CurPC + 2] << 8);
+                        LurkOut << " Frame=" << Frame;
+                        CurPC += 3;
+                    } else if (Op == Game::IScriptOpcodes::Opc_Wait) {
+                        LurkOut << " Ticks=" << (int)Prog[CurPC + 1];
+                        CurPC += 2;
+                    } else if (Op == Game::IScriptOpcodes::Opc_ImgOl || Op == Game::IScriptOpcodes::Opc_ImgUl) {
+                        uint16_t Img = Prog[CurPC + 1] | (Prog[CurPC + 2] << 8);
+                        int8_t X = (int8_t)Prog[CurPC + 3];
+                        int8_t Y = (int8_t)Prog[CurPC + 4];
+                        LurkOut << " Img=" << Img << " (" << Loader.ResolveImageGrpPath(Img) << ") X=" << (int)X << " Y=" << (int)Y;
+                        CurPC += 5;
+                    } else if (Op == Game::IScriptOpcodes::Opc_SprOl || Op == Game::IScriptOpcodes::Opc_SprUl ||
+                               Op == Game::IScriptOpcodes::Opc_HighSprOl || Op == Game::IScriptOpcodes::Opc_LowSprUl ||
+                               Op == Game::IScriptOpcodes::Opc_GrdSprOl) {
+                        uint16_t Spr = Prog[CurPC + 1] | (Prog[CurPC + 2] << 8);
+                        int8_t X = (int8_t)Prog[CurPC + 3];
+                        int8_t Y = (int8_t)Prog[CurPC + 4];
+                        LurkOut << " Spr=" << Spr << " X=" << (int)X << " Y=" << (int)Y;
+                        CurPC += 5;
+                    } else if (Op == Game::IScriptOpcodes::Opc_SigOrder) {
+                        LurkOut << " Sig=" << (int)Prog[CurPC + 1];
+                        CurPC += 2;
+                    } else if (Op == Game::IScriptOpcodes::Opc_DoGrdDamage) {
+                        CurPC += 1;
+                    } else if (Op == Game::IScriptOpcodes::Opc_AttackWith) {
+                        LurkOut << " Wpn=" << (int)Prog[CurPC + 1];
+                        CurPC += 2;
+                    } else {
+                        CurPC += 1;
+                    }
+                    LurkOut << "\n";
+                }
+            }
+        };
+
+        DisasmScript("LURKER UNIT", 354);
+        DisasmScript("LURKER SPINES CONTROLLER", 395);
+        DisasmScript("LURKER SPIKE EFFECT", 380);
+
+        InspectImageAnims("LURKER UNIT", 921);
+        InspectImageAnims("LURKER SPINES CONTROLLER", 985);
+        InspectImageAnims("LURKER SPIKE EFFECT", 961);
+    }
+
+    std::printf("SpriteImageDataTest passed (Audit generated)\n");
     return 0;
 }
+

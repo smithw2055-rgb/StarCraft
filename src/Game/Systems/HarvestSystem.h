@@ -54,7 +54,8 @@ public:
 private:
     void ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float DeltaTime);
     static int FindNearestDepot(Core::ECS::EntityManager& EM, int HarvesterID,
-                                Game::Components::ResourceType Type);
+                                Game::Components::ResourceType Type,
+                                int ExcludedDepotID = -1);
 
     Core::ECS::SystemManager& mSystemMgr;
 };

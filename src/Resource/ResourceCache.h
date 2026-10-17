@@ -69,6 +69,7 @@ public:
     // Tileset megatile textures: returns array of GPU images (one per megatile index)
     const std::vector<GpuImage>* GetTilesetImages(const std::string& TilesetName);
     const TilesetAtlas* GetTilesetAtlas(const std::string& TilesetName);
+    const TilesetAtlas* GetTilesetAtlasForMap(const std::string& TilesetName, const std::vector<uint16_t>* MegaTileIds);
     const std::vector<TilesetCreepFrame>* GetTilesetCreepFrames(const std::string& TilesetName);
 
     // Direct archive read (for raw files like scenario.chk)
@@ -83,6 +84,7 @@ public:
     const std::vector<std::string>* GetCommandIconUris();
     const std::vector<GpuImage>* GetCommandButtonSkins(CommandButtonSkinSet SkinSet);
     const std::vector<GpuImage>* GetWireframeFrames();
+    bool EnsureWireframeFrame(int FrameIndex);
     const ImageOpaqueBounds* GetWireframeOpaqueBounds(int FrameIndex) const;
     const std::vector<GpuImage>* GetCursorFrames(const std::string& CursorName);
     const PortraitClip* GetPortraitClip(const std::string& PortraitKey);
@@ -118,6 +120,9 @@ public:
     // Read raw file with case-insensitive variants
     std::optional<std::vector<uint8_t>> ReadWithFallback(const std::string& Path);
 
+    bool LoadHdConsoleGraphics();
+    bool LoadHdConsoleGraphicsForRace(const std::string& RaceName);
+
 private:
     bool LoadUIGraphics();
     std::optional<std::vector<uint8_t>> ReadUIFileWithUpperFallback(const std::string& Path);
@@ -125,7 +130,7 @@ private:
     bool LoadWicUIImage(const std::string& LogicalPath, GpuImage& Out, bool TransparentBlack = false);
     bool LoadNamedConsoleDds(const std::string& FileName, GpuImage& Out, bool TransparentBlack = false);
     bool BuildConsoleCompositeFromDds(GpuImage& Out);
-    bool LoadHdConsoleGraphics();
+    bool LoadNamedConsoleDdsForRace(const std::string& RaceName, const std::string& FileName, GpuImage& Out, bool TransparentBlack = false);
     bool LoadClassicConsoleGraphics();
     bool UploadDecodedUIFrames(const DecodedSprite& Sprite,
                                std::vector<GpuImage>& Out,
@@ -162,6 +167,7 @@ private:
     bool LoadCursorGraphics(const GrpDecodeOptions& CursorOptions);
     bool BuildTilesetImages(const std::string& TilesetName);
     bool BuildTilesetAtlas(const std::string& TilesetName);
+    bool BuildTilesetAtlasForMap(const std::string& TilesetName, const std::vector<uint16_t>* MegaTileIds);
     bool BuildTilesetCreepFrames(const std::string& TilesetName);
     const std::vector<GpuImage>* LoadSpriteFramesForPath(uint32_t CacheKey,
                                                          const std::string& GrpPath,

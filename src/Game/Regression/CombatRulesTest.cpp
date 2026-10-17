@@ -1432,6 +1432,36 @@ int main()
                 !EmpStatusCloak.IsCloaked,
         "EMP status drains energy, shields, and active cloak during combat updates");
 
+    int MatrixUnit = SpawnUnit(StatusDamageEM, {160.0f, 0.0f}, 0, false);
+    auto* MatrixUnitData =
+        StatusDamageEM.GetComponent<Game::Components::UnitComponent>(MatrixUnit);
+    MatrixUnitData->HitPoints = 100;
+    MatrixUnitData->MaxHitPoints = 100;
+    MatrixUnitData->Armor = 0;
+    MatrixUnitData->DefensiveMatrixPoints = 250;
+    StatusDamageEM.AddComponent<Game::Components::StatusEffectComponent>(MatrixUnit)
+        .AddEffect(Game::Components::StatusEffect::DefensiveMatrix, 35.0f, -1);
+
+    Game::Components::CombatComponent AttackerCombat;
+    AttackerCombat.GroundDmgType = Game::Components::DamageType::Normal;
+    AttackerCombat.GroundDamage = 50;
+
+    Game::Systems::CombatSystem::ApplyDamage(
+        StatusDamageEM, MatrixUnit, AttackerCombat, -1, 50);
+    Require(MatrixUnitData->DefensiveMatrixPoints == 200,
+        "Defensive Matrix absorbs incoming damage and updates matrix points");
+    Require(MatrixUnitData->HitPoints == 99,
+        "Defensive Matrix limits penetrated damage to 1 point while active");
+
+    StatusDamageEM.GetComponent<Game::Components::StatusEffectComponent>(MatrixUnit)
+        ->AddEffect(Game::Components::StatusEffect::EMP, 1.0f, -1);
+    StatusDamageCombat.Update(0.1f);
+    Require(MatrixUnitData->DefensiveMatrixPoints == 0,
+        "EMP clears Defensive Matrix points");
+    Require(!StatusDamageEM.GetComponent<Game::Components::StatusEffectComponent>(MatrixUnit)
+                ->HasEffect(Game::Components::StatusEffect::DefensiveMatrix),
+        "EMP removes Defensive Matrix status effect");
+
     Core::ECS::SystemManager StasisSysMgr;
     auto& StasisEM = StasisSysMgr.GetEntityManager();
     Game::Systems::BulletSystem StasisBullet(StasisSysMgr);
@@ -2861,6 +2891,120 @@ int main()
         "melee combatants spread laterally instead of stacking on the enemy center");
     Require(BackLineTarget.X < std::min(FrontATarget.X, FrontBTarget.X),
         "ranged combatants automatically form behind the front line");
+
+    // Test active cloaking energy drain and automatic decloak upon exhaustion
+    Core::ECS::SystemManager CloakSysMgr;
+    auto& CloakEM = CloakSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem CloakBullet(CloakSysMgr);
+    Game::Systems::CombatSystem CloakCombat(CloakSysMgr, CloakBullet);
+    const int CloakedWraith = SpawnDefUnit(CloakEM, "Wraith", {0.0f, 0.0f}, 0);
+    auto* WraithUnit = CloakEM.GetComponent<Game::Components::UnitComponent>(CloakedWraith);
+    WraithUnit->EnergyPoints = 2;
+    WraithUnit->MaxEnergyPoints = 200;
+    auto& WraithCloak = CloakEM.AddComponent<Game::Components::CloakComponent>(CloakedWraith);
+    WraithCloak.IsCloaked = true;
+    WraithCloak.CloakEnergyCost = 2.0f;
+    CloakCombat.Update(0.5f);
+    Require(WraithUnit->EnergyPoints == 1 && WraithCloak.IsCloaked,
+        "active cloaking drains energy over time while remaining cloaked");
+    CloakCombat.Update(0.6f);
+    Require(WraithUnit->EnergyPoints == 0 && !WraithCloak.IsCloaked,
+        "cloaked unit automatically decloaks when energy is depleted");
+
+    // Test Terran building burn-down when HP < 33%
+    Core::ECS::SystemManager BurnSysMgr;
+    auto& BurnEM = BurnSysMgr.GetEntityManager();
+    Game::Systems::BulletSystem BurnBullet(BurnSysMgr);
+    Game::Systems::CombatSystem BurnCombat(BurnSysMgr, BurnBullet);
+    const int BurningBarracks = SpawnDefUnit(BurnEM, "Barracks", {100.0f, 100.0f}, 0, true);
+    auto* BarracksUnit = BurnEM.GetComponent<Game::Components::UnitComponent>(BurningBarracks);
+    auto* BarracksBuilding = BurnEM.GetComponent<Game::Components::BuildingComponent>(BurningBarracks);
+    BarracksBuilding->UnderConstruction = false;
+    BarracksUnit->MaxHitPoints = 1000;
+    BarracksUnit->HitPoints = 200;
+    BurnCombat.Update(1.0f);
+    Require(BarracksUnit->HitPoints < 200,
+        "Terran building below 33% HP burns down over time");
+
+    // Test Disruption Web: ground units cannot attack beneath it, air units unaffected
+    {
+        Core::ECS::SystemManager DWebSysMgr;
+        auto& DWebEM = DWebSysMgr.GetEntityManager();
+        Game::Systems::BulletSystem DWebBullet(DWebSysMgr);
+        Game::Systems::CombatSystem DWebCombat(DWebSysMgr, DWebBullet);
+
+        const int WebbedMarine = SpawnDefUnit(DWebEM, "Marine", {100.0f, 100.0f}, 0);
+        AddGroundOnlyWeapon(DWebEM, WebbedMarine);
+
+        const int TargetGround = SpawnDefUnit(DWebEM, "Marine", {120.0f, 100.0f}, 1);
+
+        // Spawn Disruption Web covering (100, 100)
+        const int WebID = DWebEM.CreateEntity();
+        DWebEM.AddComponent<Game::Components::TransformComponent>(WebID).Position = {100.0f, 100.0f};
+        auto& WebArea = DWebEM.AddComponent<Game::Components::SpellAreaComponent>(WebID);
+        WebArea.Effect = Game::Components::StatusEffect::DisruptionWeb;
+        WebArea.Radius = 96.0f;
+        WebArea.DurationRemaining = 24.0f;
+
+        Game::Systems::CombatSystem::IssueAttack(DWebEM, {WebbedMarine}, TargetGround);
+        auto* TargetUnit = DWebEM.GetComponent<Game::Components::UnitComponent>(TargetGround);
+        const int TargetHpBefore = TargetUnit->HitPoints;
+
+        DWebCombat.Update(0.2f);
+        Require(TargetUnit->HitPoints == TargetHpBefore,
+            "ground unit under Disruption Web cannot attack");
+
+        // Air attacker under Disruption Web is unaffected and can attack
+        const int AirAttacker = SpawnDefUnit(DWebEM, "Scout", {100.0f, 100.0f}, 0);
+        AddGroundOnlyWeapon(DWebEM, AirAttacker);
+        auto* AirCombat = DWebEM.GetComponent<Game::Components::CombatComponent>(AirAttacker);
+        AirCombat->MyElevation = Game::Components::Elevation::Air;
+
+        Game::Systems::CombatSystem::IssueAttack(DWebEM, {AirAttacker}, TargetGround);
+        DWebCombat.Update(0.2f);
+        Require(TargetUnit->HitPoints < TargetHpBefore,
+            "air unit is unaffected by Disruption Web and can attack");
+    }
+
+    {
+        // Yamato Gun explosive damage verification
+        Core::ECS::SystemManager YamatoSysMgr;
+        auto& YamatoEM = YamatoSysMgr.GetEntityManager();
+        const int BCAttacker = SpawnDefUnit(YamatoEM, "Battlecruiser", {100.0f, 100.0f}, 0);
+        const int BCTarget = SpawnDefUnit(YamatoEM, "Battlecruiser", {150.0f, 100.0f}, 1);
+        auto* BCTargetUnit = YamatoEM.GetComponent<Game::Components::UnitComponent>(BCTarget);
+        Require(BCTargetUnit && BCTargetUnit->HitPoints == 500 && BCTargetUnit->Armor == 3,
+                "Battlecruiser spawns with 500 HP and 3 armor");
+
+        Game::Components::CombatComponent YamatoCombat;
+        YamatoCombat.AirDamage = 260;
+        YamatoCombat.GroundDamage = 260;
+        YamatoCombat.AirDmgType = Game::Components::DamageType::Explosive;
+        YamatoCombat.GroundDmgType = Game::Components::DamageType::Explosive;
+
+        Game::Systems::CombatSystem::ApplyDamage(YamatoEM, BCTarget, YamatoCombat, BCAttacker, 260);
+        Require(BCTargetUnit->HitPoints == 243,
+                "Yamato Gun deals 257 explosive damage to armored large Battlecruiser (260 - 3 armor)");
+    }
+
+    {
+        // Target priority verification: armed combat unit prioritized over closer building
+        Core::ECS::SystemManager PrioSysMgr;
+        auto& PrioEM = PrioSysMgr.GetEntityManager();
+        Game::Systems::BulletSystem PrioBulletSys(PrioSysMgr);
+        Game::Systems::CombatSystem PrioCombatSys(PrioSysMgr, PrioBulletSys);
+
+        const int MarineAttacker = SpawnDefUnit(PrioEM, "Marine", {100.0f, 100.0f}, 0);
+        // Pylon is only 30px away from Marine
+        const int CloserPylon = SpawnDefUnit(PrioEM, "Pylon", {130.0f, 100.0f}, 1, true);
+        (void)CloserPylon;
+        // Zealot is 70px away from Marine (further than Pylon, but within range 128px)
+        const int FurtherZealot = SpawnDefUnit(PrioEM, "Zealot", {170.0f, 100.0f}, 1);
+
+        const int SelectedTarget = Game::Systems::CombatSystem::FindNearestEnemy(PrioEM, MarineAttacker, 128.0f);
+        Require(SelectedTarget == FurtherZealot,
+                "Combat target acquisition prioritizes armed enemy unit over closer unarmed building");
+    }
 
     std::printf("CombatRulesTest passed\n");
     return 0;

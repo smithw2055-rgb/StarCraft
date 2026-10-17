@@ -357,6 +357,7 @@ MapLoader::Result MapLoader::Load(const std::string& ScmPath)
         Out.ChkUnits.push_back(U);
     }
 
+    Out.ChkDoodads = Parser.GetDoodads();
     Out.Loaded = true;
     Core::Utils::Logger::Info("MapLoader",
         std::string("Loaded ") + ScmPath + ": " +

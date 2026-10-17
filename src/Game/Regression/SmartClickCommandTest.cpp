@@ -355,6 +355,92 @@ namespace
         Require(Path && Path->RequestedIgnoreEntityID == Barracks,
             "repairing SCV approaches the building collision footprint");
     }
+
+    void TestScvSmartClicksDamagedFriendlyMechanicalUnitToRepair()
+    {
+        Core::ECS::EntityManager EM;
+        // ChkUnitID 5 is Siege Tank (Tank Mode)
+        const int Tank = CreateUnit(EM, 5, {160.0f, 96.0f}, 0);
+        auto* TankUnit = EM.GetComponent<Game::Components::UnitComponent>(Tank);
+        Require(TankUnit != nullptr, "tank has unit state");
+        TankUnit->HitPoints = 50;
+        TankUnit->MaxHitPoints = 150;
+
+        const int Scv = CreateUnit(EM, 7, {64.0f, 96.0f}, 0);
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {160.0f, 96.0f};
+        Target.AnyEntityID = Tank;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {Scv}, Target, Target.WorldPosition);
+
+        const auto* Command =
+            EM.GetComponent<Game::Components::CommandComponent>(Scv);
+        Require(Command &&
+                Command->CurrentCommand == Game::Components::CommandType::Repair &&
+                Command->TargetEntityID == Tank,
+            "right-clicking a damaged friendly Terran mechanical unit issues Repair");
+    }
+
+    void TestMedicSmartClicksDamagedFriendlyOrganicUnitToHeal()
+    {
+        Core::ECS::EntityManager EM;
+        // ChkUnitID 0 is Marine
+        const int Marine = CreateUnit(EM, 0, {160.0f, 96.0f}, 0);
+        auto* MarineUnit = EM.GetComponent<Game::Components::UnitComponent>(Marine);
+        Require(MarineUnit != nullptr, "marine has unit state");
+        MarineUnit->HitPoints = 20;
+        MarineUnit->MaxHitPoints = 40;
+
+        // ChkUnitID 34 is Medic
+        const int Medic = CreateUnit(EM, 34, {64.0f, 96.0f}, 0);
+        auto* MedicUnit = EM.GetComponent<Game::Components::UnitComponent>(Medic);
+        Require(MedicUnit != nullptr, "medic has unit state");
+        MedicUnit->EnergyPoints = 50;
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {160.0f, 96.0f};
+        Target.AnyEntityID = Marine;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {Medic}, Target, Target.WorldPosition);
+
+        const auto* Command =
+            EM.GetComponent<Game::Components::CommandComponent>(Medic);
+        Require(Command &&
+                Command->CurrentCommand == Game::Components::CommandType::Heal &&
+                Command->TargetEntityID == Marine,
+            "right-clicking a damaged friendly organic unit issues Heal to Medic");
+    }
+
+    void TestFriendlyProtossUnitSmartClicksShieldBatteryToRecharge()
+    {
+        Core::ECS::EntityManager EM;
+        // ChkUnitID 172 is Shield Battery
+        const int Battery = CreateCompletedBuilding(EM, "Shield Battery", {160.0f, 96.0f}, 0);
+        auto* BatteryUnit = EM.GetComponent<Game::Components::UnitComponent>(Battery);
+        Require(BatteryUnit != nullptr, "battery has unit state");
+        BatteryUnit->ChkUnitID = 172;
+        BatteryUnit->EnergyPoints = 100;
+        BatteryUnit->MaxEnergyPoints = 200;
+
+        // ChkUnitID 65 is Zealot
+        const int Zealot = CreateUnit(EM, 65, {128.0f, 96.0f}, 0);
+        auto* ZealotUnit = EM.GetComponent<Game::Components::UnitComponent>(Zealot);
+        Require(ZealotUnit != nullptr, "zealot has unit state");
+        ZealotUnit->UnitRace = Game::Components::Race::Protoss;
+        ZealotUnit->ShieldPoints = 10;
+        ZealotUnit->MaxShieldPoints = 60;
+
+        Game::Client::GameLoop::ClickTargetContext Target;
+        Target.WorldPosition = {160.0f, 96.0f};
+        Target.AnyEntityID = Battery;
+        Game::Client::GameLoop::ExecuteSmartClickCommand(
+            EM, {Zealot}, Target, Target.WorldPosition);
+
+        Require(ZealotUnit->ShieldPoints == 60,
+            "right-clicking nearby friendly Shield Battery restores full shields");
+        Require(BatteryUnit->EnergyPoints < 100,
+            "Shield Battery consumed energy restoring zealot shields");
+    }
 }
 
 int main()
@@ -366,6 +452,9 @@ int main()
     TestFriendlyUnitsSmartClickDropshipToBoard();
     TestScvsSmartClickIncompleteCommandCenterToAssist();
     TestScvSmartClicksDamagedFriendlyBuildingToRepair();
+    TestScvSmartClicksDamagedFriendlyMechanicalUnitToRepair();
+    TestMedicSmartClicksDamagedFriendlyOrganicUnitToHeal();
+    TestFriendlyProtossUnitSmartClicksShieldBatteryToRecharge();
 
     std::printf("SmartClickCommandTest passed\n");
     return 0;

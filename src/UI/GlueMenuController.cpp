@@ -198,6 +198,31 @@ void GlueMenuController::CacheElements()
         }
     }
 
+    mBriefingPage = Aero::DynamicCast<Aero::Border*>(Root->FindName("BriefingPage"));
+    mBriefingBackgroundRace = Aero::DynamicCast<Aero::Image*>(Root->FindName("BriefingBackgroundRace"));
+    mBriefingTitleText = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("BriefingTitleText"));
+    mBriefingObjectivesText = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("BriefingObjectivesText"));
+    mBriefingSubtitleSpeaker = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("BriefingSubtitleSpeaker"));
+    mBriefingSubtitleText = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName("BriefingSubtitleText"));
+    mBriefingStartBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("BriefingStartButton"));
+    mBriefingReplayBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("BriefingReplayButton"));
+    mBriefingBackBtn = Aero::DynamicCast<Aero::Button*>(Root->FindName("BriefingBackButton"));
+
+    if (mBriefingStartBtn) mBriefingStartBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnBriefingStart);
+    if (mBriefingReplayBtn) mBriefingReplayBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnBriefingReplay);
+    if (mBriefingBackBtn) mBriefingBackBtn->Click() += Aero::MakeDelegate(this, &GlueMenuController::OnBriefingBack);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        char Name[32];
+        snprintf(Name, sizeof(Name), "BriefingPortraitBorder%d", i);
+        mBriefingPortraitBorders[i] = Aero::DynamicCast<Aero::Border*>(Root->FindName(Name));
+        snprintf(Name, sizeof(Name), "BriefingPortrait%d", i);
+        mBriefingPortraits[i] = Aero::DynamicCast<GlueAnimatedImage*>(Root->FindName(Name));
+        snprintf(Name, sizeof(Name), "BriefingSpeaker%d", i);
+        mBriefingSpeakers[i] = Aero::DynamicCast<Aero::TextBlock*>(Root->FindName(Name));
+    }
+
     CacheAnimatedElements();
 }
 
@@ -260,6 +285,68 @@ void GlueMenuController::Update(double)
             else
                 Current += (Target - Current) * 0.18f;
             Mask->SetOpacity(Current);
+        }
+    }
+
+    if (mCurrentPage == Page::Briefing && !mBriefingInfo.Lines.empty())
+    {
+        if (mBriefingLineIndex < (int)mBriefingInfo.Lines.size())
+        {
+            mBriefingLineTimer -= 0.033f;
+            if (mBriefingLineTimer <= 0.0f)
+            {
+                ++mBriefingLineIndex;
+                if (mBriefingLineIndex < (int)mBriefingInfo.Lines.size())
+                {
+                    const auto& Line = mBriefingInfo.Lines[(size_t)mBriefingLineIndex];
+                    const int Slot = std::max(0, std::min(Line.Slot, 3));
+
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        if (mBriefingPortraitBorders[i])
+                            mBriefingPortraitBorders[i]->SetOpacity(i == Slot ? 1.0f : 0.45f);
+                    }
+
+                    if (mBriefingPortraits[Slot] && !Line.PortraitKey.empty())
+                    {
+                        std::string Webm = GetBriefingWebmPath(Line.PortraitKey, true);
+                        if (!Webm.empty())
+                        {
+                            mBriefingPortraits[Slot]->SetWebmSource(Webm, 15.0);
+                            mBriefingPortraits[Slot]->SetPlaybackActive(true, true);
+                        }
+                    }
+                    if (mBriefingSpeakers[Slot])
+                        mBriefingSpeakers[Slot]->SetText(Line.Speaker.c_str());
+
+                    if (mBriefingSubtitleSpeaker)
+                    {
+                        std::string Spk = Line.Speaker.empty() ? "Transmission:" : (Line.Speaker + ":");
+                        mBriefingSubtitleSpeaker->SetText(Spk.c_str());
+                    }
+                    if (mBriefingSubtitleText)
+                        mBriefingSubtitleText->SetText(Line.Text.c_str());
+
+                    if (!Line.ResolvedAudioFile.empty() && mAudioCallback)
+                        mAudioCallback(Line.ResolvedAudioFile);
+
+                    float Sec = Line.DurationMs > 0 ? ((float)Line.DurationMs / 1000.0f) : 4.0f;
+                    mBriefingLineTimer = std::max(2.5f, Sec + 0.5f);
+                }
+                else
+                {
+                    mBriefingLineTimer = 999999.0f;
+                    if (mBriefingSubtitleSpeaker)
+                        mBriefingSubtitleSpeaker->SetText(mLanguage == Language::Chinese ? "简报完成" : "Briefing Completed");
+                    if (mBriefingSubtitleText)
+                        mBriefingSubtitleText->SetText(mLanguage == Language::Chinese ? "所有战术部署已下达。点击“开始任务”进入战场。" : "All directives issued. Click 'Start Mission' to deploy.");
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        if (mBriefingPortraitBorders[i])
+                            mBriefingPortraitBorders[i]->SetOpacity(0.6f);
+                    }
+                }
+            }
         }
     }
 }
@@ -431,8 +518,7 @@ void GlueMenuController::OnStartExpansion(Aero::BaseComponent*, const Aero::Rout
 void GlueMenuController::OnCampaignContinue(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
 {
     const int Mission = std::max(0, GetUnlockedMissionCount() - 1);
-    if (mActionCallback)
-        mActionCallback(Game::Campaign::BuildCampaignMissionAction(mCampaignExpansion, mCampaignRace, Mission));
+    OpenBriefingPage(mCampaignExpansion, mCampaignRace, Mission);
 }
 
 void GlueMenuController::OnStartCustomGame(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
@@ -461,11 +547,105 @@ void GlueMenuController::OnCampaignMission(Aero::BaseComponent* Sender, const Ae
     {
         if (Sender == mCampaignMissionBtns[i])
         {
-            if (i < GetUnlockedMissionCount() && mActionCallback)
-                mActionCallback(Game::Campaign::BuildCampaignMissionAction(mCampaignExpansion, mCampaignRace, i));
+            if (i < GetUnlockedMissionCount())
+                OpenBriefingPage(mCampaignExpansion, mCampaignRace, i);
             return;
         }
     }
+}
+
+void GlueMenuController::OpenBriefingPage(bool Expansion, int Race, int Mission)
+{
+    mBriefingExpansion = Expansion;
+    mBriefingRace = Race;
+    mBriefingMission = Mission;
+    mBriefingInfo = LoadCampaignBriefingInfo(Expansion, Race, Mission, mLanguage == Language::Chinese);
+
+    if (mBriefingTitleText)
+    {
+        static constexpr const char* DefaultMissions[3][10] = {
+            {"Boot Camp", "Wasteland", "Backwater Station", "Desperate Alliance",
+             "The Jacobs Installation", "Revolution", "Norad II",
+             "The Big Push", "New Gettysburg", "The Hammer Falls"},
+            {"Among the Ruins", "Egression", "The New Dominion",
+             "Agent of the Swarm", "The Amerigo", "The Dark Templar",
+             "The Culling", "Eye for an Eye", "The Invasion of Aiur", "Full Circle"},
+            {"First Strike", "Into the Darkness", "Higher Ground",
+             "The Hunt for Tassadar", "Ambush!",
+             "Into the Flames", "To Chain the Beast", "The Trial of Tassadar",
+             "Shadow Hunters", "The Fall of Fenix"}
+        };
+        std::string Title = mBriefingInfo.Title.empty() ? DefaultMissions[Race][Mission] : mBriefingInfo.Title;
+        std::string Header = std::string(CampaignSetName(Expansion)) + " - " + CampaignRaceName(Race) + " " +
+            (mLanguage == Language::Chinese ? "任务 " : "Mission ") + std::to_string(Mission + 1) + ": " + Title;
+        mBriefingTitleText->SetText(Header.c_str());
+    }
+
+    if (mBriefingObjectivesText)
+    {
+        std::string Obj = mBriefingInfo.Objectives.empty() ? mBriefingInfo.Text : mBriefingInfo.Objectives;
+        mBriefingObjectivesText->SetText(Obj.c_str());
+    }
+
+    if (mBriefingStartBtn)
+        mBriefingStartBtn->SetContent(mLanguage == Language::Chinese ? "开始任务" : "Start Mission");
+    if (mBriefingReplayBtn)
+        mBriefingReplayBtn->SetContent(mLanguage == Language::Chinese ? "重新播放" : "Replay Briefing");
+    if (mBriefingBackBtn)
+        mBriefingBackBtn->SetContent(mLanguage == Language::Chinese ? "返回" : "Cancel");
+
+    SwitchToPage(Page::Briefing);
+    StartBriefingPlayback();
+}
+
+void GlueMenuController::StartBriefingPlayback()
+{
+    StopBriefingAudio();
+    mBriefingLineIndex = -1;
+    mBriefingLineTimer = 0.4f;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        if (mBriefingPortraits[i])
+        {
+            mBriefingPortraits[i]->ClearVideoSource();
+            mBriefingPortraits[i]->SetPlaybackActive(false);
+        }
+        if (mBriefingSpeakers[i])
+            mBriefingSpeakers[i]->SetText("");
+        if (mBriefingPortraitBorders[i])
+            mBriefingPortraitBorders[i]->SetOpacity(0.45f);
+    }
+
+    if (mBriefingSubtitleSpeaker)
+        mBriefingSubtitleSpeaker->SetText(mLanguage == Language::Chinese ? "建立通信..." : "Establishing Communications...");
+    if (mBriefingSubtitleText)
+        mBriefingSubtitleText->SetText(mLanguage == Language::Chinese ? "正在接入战役战术简报频率..." : "Connecting to mission briefing link...");
+}
+
+void GlueMenuController::StopBriefingAudio()
+{
+}
+
+void GlueMenuController::OnBriefingStart(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
+{
+    EmitMenuClick();
+    StopBriefingAudio();
+    if (mActionCallback)
+        mActionCallback(Game::Campaign::BuildCampaignMissionAction(mBriefingExpansion, mBriefingRace, mBriefingMission));
+}
+
+void GlueMenuController::OnBriefingReplay(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
+{
+    EmitMenuClick();
+    StartBriefingPlayback();
+}
+
+void GlueMenuController::OnBriefingBack(Aero::BaseComponent*, const Aero::RoutedEventArgs&)
+{
+    EmitMenuClick();
+    StopBriefingAudio();
+    SwitchToPage(Page::Campaign);
 }
 
 void GlueMenuController::SetSelectedMap(const std::string& MapName)
@@ -807,8 +987,7 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         {
             EmitMenuClick();
             const int Mission = std::max(0, GetUnlockedMissionCount() - 1);
-            if (mActionCallback)
-                mActionCallback(Game::Campaign::BuildCampaignMissionAction(mCampaignExpansion, mCampaignRace, Mission));
+            OpenBriefingPage(mCampaignExpansion, mCampaignRace, Mission);
             return true;
         }
         if (InRect(X, Y, 678.0f, 908.0f, 618.0f, 45.0f))
@@ -821,6 +1000,24 @@ bool GlueMenuController::HandleFallbackClick(float ViewX, float ViewY, float Vie
         {
             EmitMenuClick();
             SwitchToPage(Page::MainMenu);
+            return true;
+        }
+        break;
+
+    case Page::Briefing:
+        if (InRect(X, Y, 24.0f, 436.0f, 170.0f, 28.0f))
+        {
+            OnBriefingStart(nullptr, Aero::RoutedEventArgs());
+            return true;
+        }
+        if (InRect(X, Y, 235.0f, 436.0f, 170.0f, 28.0f))
+        {
+            OnBriefingReplay(nullptr, Aero::RoutedEventArgs());
+            return true;
+        }
+        if (InRect(X, Y, 446.0f, 436.0f, 170.0f, 28.0f))
+        {
+            OnBriefingBack(nullptr, Aero::RoutedEventArgs());
             return true;
         }
         break;
@@ -881,7 +1078,7 @@ void GlueMenuController::SwitchToPage(Page NewPage)
 
     Page OldPage = mCurrentPage;
     if (!((OldPage == Page::MainMenu && (NewPage == Page::SinglePlayer || NewPage == Page::Options)) ||
-          (OldPage == Page::Campaign && NewPage == Page::LoadGame)))
+          (OldPage == Page::Campaign && (NewPage == Page::LoadGame || NewPage == Page::Briefing))))
         SetPageVisibility(OldPage, false);
 
     mCurrentPage = NewPage;
@@ -934,6 +1131,7 @@ Aero::Border* GlueMenuController::GetPageBorder(Page Page)
         case Page::CustomGame:   return mCustomGamePage;
         case Page::Options:      return mOptionsPage;
         case Page::LoadGame:     return mLoadGamePage;
+        case Page::Briefing:     return mBriefingPage;
     }
     return nullptr;
 }

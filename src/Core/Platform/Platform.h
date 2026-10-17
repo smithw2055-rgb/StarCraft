@@ -7,6 +7,8 @@ namespace Core::Platform
     namespace KeyCode
     {
         constexpr int Escape = 256;
+        constexpr int Q = 81;
+        constexpr int R = 82;
         constexpr int F6 = 295;
         constexpr int F9 = 298;
     }

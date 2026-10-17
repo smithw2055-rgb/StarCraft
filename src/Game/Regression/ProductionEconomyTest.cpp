@@ -737,9 +737,9 @@ int main()
         "Zergling cannot enter a Hatchery queue because it must morph from Larva");
     auto* HatcheryProd = EM.GetComponent<Game::Components::ProductionComponent>(Hatchery);
     Require(!HatcheryProd || HatcheryProd->Queue.empty(),
-        "Hatchery production queue records the Zergling def id");
-    Require(Resources.Minerals == 200 - ZerglingDef.MineralCost,
-        "queued Zergling spends normalized Zerg unit costs");
+        "Hatchery production queue does not record the Zergling def id");
+    Require(Resources.Minerals == 200,
+        "rejected Hatchery queue does not spend resources");
 
     constexpr int ZergMorphPlayerID = 2;
     auto& ZergMorphResources = Game::Systems::HarvestSystem::GetResources(ZergMorphPlayerID);
@@ -1355,6 +1355,36 @@ int main()
             ArchonTransform->Position.Y == 600.0f,
         "Protoss Archon morph spawns at the midpoint between source templars");
 
+    // Test channeled Archon warp and charging shields
+    Game::Systems::ProtossSystem ProtossSys(SysMgr, nullptr);
+    const int TemplarC =
+        CreateCompletedUnit(EM, "High Templar", ProtossMorphPlayerID, {1000.0f, 600.0f});
+    const int TemplarD =
+        CreateCompletedUnit(EM, "High Templar", ProtossMorphPlayerID, {1040.0f, 600.0f});
+    Require(Game::Systems::ProtossSystem::StartArchonWarp(
+                EM, TemplarC, TemplarD, false, 2.0f, true),
+        "Protoss High Templar pair starts channeled Archon warp");
+    auto* WarpC = EM.GetComponent<Game::Components::ArchonWarpComponent>(TemplarC);
+    auto* WarpD = EM.GetComponent<Game::Components::ArchonWarpComponent>(TemplarD);
+    Require(WarpC && WarpD && WarpC->IsWarping && WarpD->IsWarping,
+        "both templars enter warping state");
+
+    // Partial update: channeling templars still alive
+    ProtossSys.Update(1.0f);
+    Require(EM.IsAlive(TemplarC) && EM.IsAlive(TemplarD),
+        "channeling templars survive partial warp time");
+
+    // Finish update: warp finishes and produces Archon with low initial shields charging up
+    EM.DestroyEntity(Archon);
+    ProtossSys.Update(1.1f);
+    Require(!EM.IsAlive(TemplarC) && !EM.IsAlive(TemplarD),
+        "completed channeled Archon warp consumes both source templars");
+    const int ChanneledArchon = FindUnitByDef(EM, "Archon", ProtossMorphPlayerID);
+    Require(ChanneledArchon > 0, "Channeled Archon entity spawned upon warp completion");
+    auto* ChanneledArchonUnit = EM.GetComponent<Game::Components::UnitComponent>(ChanneledArchon);
+    Require(ChanneledArchonUnit && ChanneledArchonUnit->ShieldPoints == 10,
+        "Channeled Archon spawns with initial 10 shields charging up");
+
     constexpr int AdvancedTechPlayerID = 12;
     auto& AdvancedTechResources =
         Game::Systems::HarvestSystem::GetResources(AdvancedTechPlayerID);
@@ -1775,6 +1805,116 @@ int main()
             !HallucinatedCarrierUnit->HangarBuildInProgress &&
             HangarResources.Minerals == 100,
         "hallucinated Carrier cannot spend minerals or construct real interceptors");
+
+    // Test 5-item production queue limit
+    {
+        const int QTestPlayerID = 5;
+        auto& QRes = Game::Systems::HarvestSystem::GetResources(QTestPlayerID);
+        QRes.Minerals = 10000;
+        QRes.VespeneGas = 10000;
+        QRes.SupplyMax = 200;
+        QRes.SupplyUsed = 0;
+        const int QBuilding = CreateCompletedBuilding(EM, "Barracks", QTestPlayerID);
+        const int TestMarineDefID = Game::Races::GetUnitDefID("Marine");
+        for (int i = 0; i < 5; ++i)
+        {
+            Require(Game::Systems::ProductionSystem::CanTrain(EM, QBuilding, TestMarineDefID),
+                "queue item within limit can be trained");
+            Require(Game::Systems::ProductionSystem::StartTrain(EM, QBuilding, TestMarineDefID),
+                "queue item added to building");
+        }
+        std::string QFailReason;
+        Require(!Game::Systems::ProductionSystem::CanTrain(EM, QBuilding, TestMarineDefID, &QFailReason) &&
+                QFailReason == "production queue is full",
+            "production queue cannot exceed 5 items");
+    }
+
+    // Test 200 hard supply cap
+    {
+        const int SupplyPlayerID = 6;
+        auto& SRes = Game::Systems::HarvestSystem::GetResources(SupplyPlayerID);
+        SRes.Minerals = 5000;
+        SRes.VespeneGas = 5000;
+        SRes.SupplyMax = 300; // Accrued beyond 200
+        SRes.SupplyUsed = 200; // Already at 200 cap
+        const int SBuilding = CreateCompletedBuilding(EM, "Barracks", SupplyPlayerID);
+        const int SupplyMarineDefID = Game::Races::GetUnitDefID("Marine");
+        std::string SFailReason;
+        Require(!Game::Systems::ProductionSystem::CanTrain(EM, SBuilding, SupplyMarineDefID, &SFailReason) &&
+                SFailReason == "not enough supply",
+            "training cannot exceed 200 supply even if SupplyMax > 200");
+    }
+
+    // Test Mutalisk morphs to Guardian and Devourer via Cocoon
+    {
+        Game::Systems::ZergSystem Zerg(SysMgr, nullptr);
+        const int MorphPlayerID = 7;
+        auto& MRes = Game::Systems::HarvestSystem::GetResources(MorphPlayerID);
+        MRes.Minerals = 1000;
+        MRes.VespeneGas = 1000;
+        MRes.SupplyMax = 200;
+        MRes.SupplyUsed = 10;
+
+        const int MutaA = CreateCompletedUnit(EM, "Mutalisk", MorphPlayerID, {500.0f, 500.0f});
+        const int MutaB = CreateCompletedUnit(EM, "Mutalisk", MorphPlayerID, {532.0f, 500.0f});
+
+        std::string MorphReason;
+        Require(!Game::Systems::ZergSystem::CanMorphMutaliskIntoGuardian(EM, MutaA, &MorphReason) &&
+                MorphReason == "Greater Spire is required",
+            "Guardian morph requires completed Greater Spire");
+        Require(!Game::Systems::ZergSystem::CanMorphMutaliskIntoDevourer(EM, MutaB, &MorphReason) &&
+                MorphReason == "Greater Spire is required",
+            "Devourer morph requires completed Greater Spire");
+
+        CreateCompletedBuilding(EM, "Greater Spire", MorphPlayerID);
+
+        Require(Game::Systems::ZergSystem::CanMorphMutaliskIntoGuardian(EM, MutaA),
+            "Guardian morph permitted with completed Greater Spire");
+        Require(Game::Systems::ZergSystem::StartMorphMutaliskIntoGuardian(EM, MutaA),
+            "Guardian morph successfully started");
+        Require(!EM.IsAlive(MutaA), "source Mutalisk consumed for Guardian");
+
+        // Verify Cocoon entity created
+        int CocoonA = -1;
+        for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent>())
+        {
+            auto* U = EM.GetComponent<Game::Components::UnitComponent>(Eid);
+            auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+            if (U && P && P->PlayerID == MorphPlayerID && U->ChkUnitID == 59)
+            {
+                CocoonA = Eid;
+                break;
+            }
+        }
+        Require(CocoonA > 0, "Zerg Cocoon created for Guardian morph");
+        auto* CocoonPath = EM.GetComponent<Game::Components::PathfindingComponent>(CocoonA);
+        Require(CocoonPath && CocoonPath->IsAir, "Cocoon is classified as an air unit");
+
+        Require(Game::Systems::ZergSystem::CanMorphMutaliskIntoDevourer(EM, MutaB),
+            "Devourer morph permitted with completed Greater Spire");
+        Require(Game::Systems::ZergSystem::StartMorphMutaliskIntoDevourer(EM, MutaB),
+            "Devourer morph successfully started");
+        Require(!EM.IsAlive(MutaB), "source Mutalisk consumed for Devourer");
+
+        // Advance morphs until completion
+        Zerg.Update(40.0f);
+        Require(!EM.IsAlive(CocoonA), "Cocoon destroyed upon morph completion");
+
+        bool FoundGuardian = false;
+        bool FoundDevourer = false;
+        for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent>())
+        {
+            auto* U = EM.GetComponent<Game::Components::UnitComponent>(Eid);
+            auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+            if (U && P && P->PlayerID == MorphPlayerID)
+            {
+                if (U->ChkUnitID == 44) FoundGuardian = true;
+                if (U->ChkUnitID == 62) FoundDevourer = true;
+            }
+        }
+        Require(FoundGuardian, "Guardian spawned upon Cocoon completion");
+        Require(FoundDevourer, "Devourer spawned upon Cocoon completion");
+    }
 
     std::printf("ProductionEconomyTest passed\n");
     return 0;

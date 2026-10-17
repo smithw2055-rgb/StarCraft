@@ -104,8 +104,12 @@ void AppRuntime::ResolveMapPath()
 void AppRuntime::UpdateFrameStats()
 {
     FrameCount++;
-    FpsTimer += Core::Platform::GetDeltaTime();
+    const float Dt = Core::Platform::GetDeltaTime();
+    FpsTimer += Dt;
     FpsFrames++;
+    if (Dt > MaxFrameTime)
+        MaxFrameTime = Dt;
+
     if (FpsTimer >= 1.0f)
     {
         FpsValue = FpsFrames;
@@ -114,6 +118,7 @@ void AppRuntime::UpdateFrameStats()
             if (LogFps[0] == '1')
             {
                 std::cout << "fps=" << FpsValue
+                          << " max_ms=" << (int)(MaxFrameTime * 1000.0f)
                           << " win=" << Core::Platform::GetWindowWidth() << "x" << Core::Platform::GetWindowHeight()
                           << " client=" << Core::Platform::GetClientWidth() << "x" << Core::Platform::GetClientHeight()
                           << " frame=" << FrameCount
@@ -123,6 +128,7 @@ void AppRuntime::UpdateFrameStats()
         }
         FpsTimer = 0.0f;
         FpsFrames = 0;
+        MaxFrameTime = 0.0f;
     }
 }
 

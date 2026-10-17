@@ -385,6 +385,42 @@ bool ResourceCache::ExportPreferredUIFramesForGui(const std::string& ClassicPath
                                                   const char* DebugLabel)
 {
 #ifdef _WIN32
+    const std::filesystem::path ExportDir = GetGuiExportDirectory();
+    const bool CanUseHd = mSources.UseExtractedAssets;
+    const std::string Stem = MakeGuiExportStem(ClassicPath, CanUseHd, AsMask);
+
+    // Fast path: if exported PNGs already exist in temp cache, skip expensive decoding and encoding
+    char TestName[128];
+    std::snprintf(TestName, sizeof(TestName), "%s_%03zu.png", Stem.c_str(), (size_t)0);
+    if (std::filesystem::exists(ExportDir / TestName))
+    {
+        std::vector<std::string> CachedUris;
+        size_t Idx = 0;
+        while (true)
+        {
+            char CurName[128];
+            std::snprintf(CurName, sizeof(CurName), "%s_%03zu.png", Stem.c_str(), Idx);
+            const std::filesystem::path CurPath = ExportDir / CurName;
+            if (!std::filesystem::exists(CurPath))
+                break;
+            std::string Uri = CurPath.string();
+            std::replace(Uri.begin(), Uri.end(), '\\', '/');
+            CachedUris.push_back(std::move(Uri));
+            ++Idx;
+        }
+        if (!CachedUris.empty())
+        {
+            OutUris = std::move(CachedUris);
+            if (DebugLabel)
+            {
+                Core::Utils::Logger::Info("ResourceCache",
+                    std::string("Using cached GUI ") + DebugLabel + " PNGs: " +
+                    std::to_string(OutUris.size()) + " frames");
+            }
+            return true;
+        }
+    }
+
     std::vector<DecodedRgbaImage> Frames;
     bool LoadedHd = false;
     if (mSources.UseExtractedAssets)
@@ -438,8 +474,6 @@ bool ResourceCache::ExportPreferredUIFramesForGui(const std::string& ClassicPath
     if (Frames.empty())
         return false;
 
-    const std::filesystem::path ExportDir = GetGuiExportDirectory();
-    const std::string Stem = MakeGuiExportStem(ClassicPath, LoadedHd, AsMask);
     std::vector<std::string> Uris;
     Uris.reserve(Frames.size());
     for (size_t I = 0; I < Frames.size(); ++I)
@@ -451,7 +485,7 @@ bool ResourceCache::ExportPreferredUIFramesForGui(const std::string& ClassicPath
         char Name[128];
         std::snprintf(Name, sizeof(Name), "%s_%03zu.png", Stem.c_str(), I);
         const std::filesystem::path OutPath = ExportDir / Name;
-        if (!WritePngRgba(OutPath, Image))
+        if (!std::filesystem::exists(OutPath) && !WritePngRgba(OutPath, Image))
             return false;
 
         std::string Uri = OutPath.string();

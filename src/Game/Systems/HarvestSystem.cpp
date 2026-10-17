@@ -88,6 +88,23 @@ namespace
         return Path->PathIndex >= (int)Path->Path.size();
     }
 
+    void RecordHarvestPathResult(HarvestComponent& Harvest, bool HasPath, const PathfindingComponent* Path = nullptr)
+    {
+        if (HasPath)
+        {
+            Harvest.ConsecutivePathFailures = 0;
+            Harvest.PathRetryTicks =
+                (Path && (IsMoveSettled(Path) || Path->Path.size() <= 1)) ? 8 : 0;
+            return;
+        }
+
+        Harvest.ConsecutivePathFailures =
+            std::min(Harvest.ConsecutivePathFailures + 1, 8);
+        Harvest.PathRetryTicks = std::min(
+            240,
+            24 << std::min(Harvest.ConsecutivePathFailures - 1, 3));
+    }
+
     float CollisionRadiusFromBounds(const PathfindingComponent* Path, float Fallback)
     {
         if (!Path)
@@ -136,6 +153,59 @@ namespace
             TargetTrans->Position.Y + NearestY
         };
         return From.DistanceTo(Nearest);
+    }
+    float CollisionBoundsGap(Core::ECS::EntityManager& EM,
+                             int FirstEntityID,
+                             int SecondEntityID)
+    {
+        const auto* FirstTransform =
+            EM.GetComponent<TransformComponent>(FirstEntityID);
+        const auto* SecondTransform =
+            EM.GetComponent<TransformComponent>(SecondEntityID);
+        if (!FirstTransform || !SecondTransform)
+            return std::numeric_limits<float>::max();
+
+        const auto ResolveBounds = [&](int EntityID)
+        {
+            struct Bounds
+            {
+                float Left;
+                float Up;
+                float Right;
+                float Down;
+            };
+            const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+            if (Path && Path->HasCollisionBounds)
+            {
+                return Bounds{
+                    (float)Path->CollisionLeft,
+                    (float)Path->CollisionUp,
+                    (float)Path->CollisionRight + 1.0f,
+                    (float)Path->CollisionDown + 1.0f};
+            }
+            const float Radius = Path && Path->CollisionRadius > 0
+                ? (float)Path->CollisionRadius
+                : 16.0f;
+            return Bounds{Radius, Radius, Radius, Radius};
+        };
+
+        const auto First = ResolveBounds(FirstEntityID);
+        const auto Second = ResolveBounds(SecondEntityID);
+        const float FirstMinX = FirstTransform->Position.X - First.Left;
+        const float FirstMaxX = FirstTransform->Position.X + First.Right;
+        const float FirstMinY = FirstTransform->Position.Y - First.Up;
+        const float FirstMaxY = FirstTransform->Position.Y + First.Down;
+        const float SecondMinX = SecondTransform->Position.X - Second.Left;
+        const float SecondMaxX = SecondTransform->Position.X + Second.Right;
+        const float SecondMinY = SecondTransform->Position.Y - Second.Up;
+        const float SecondMaxY = SecondTransform->Position.Y + Second.Down;
+        const float GapX = std::max(
+            0.0f,
+            std::max(SecondMinX - FirstMaxX, FirstMinX - SecondMaxX));
+        const float GapY = std::max(
+            0.0f,
+            std::max(SecondMinY - FirstMaxY, FirstMinY - SecondMaxY));
+        return std::sqrt(GapX * GapX + GapY * GapY);
     }
 
     void AddUniqueCandidate(std::vector<Core::Math::Vec2>& Candidates,
@@ -192,10 +262,10 @@ namespace
         if (const auto* Resource = EM.GetComponent<ResourceComponent>(ApproachID);
             Resource && Resource->Type == ResourceType::Minerals)
         {
-            // Mineral gatherers are temporarily non-colliding in the same way
-            // as openbw's gathering order, so let the SCV close the last few
-            // pixels instead of leaving a full worker-radius visual gap.
-            Margin = std::max(4.0f, WorkerRadius - 6.0f);
+            // A mineral is an interaction target, never a travel lane. Keep
+            // the complete worker footprint outside the mineral collision box
+            // so SCVs, Drones, and Probes touch the patch without entering it.
+            Margin = WorkerRadius + 2.0f;
         }
         const float Left = (float)TargetPath->CollisionLeft;
         const float Right = (float)TargetPath->CollisionRight;
@@ -492,6 +562,26 @@ namespace
         if (!GasTrans)
             return;
         (void)QueueIndex;
+        if (PathingIgnoreEntityID < 0)
+        {
+            if (const auto* Path = EM.GetComponent<PathfindingComponent>(HarvesterID))
+            {
+                if (Path->RequestedIgnoreEntityID >= 0 &&
+                    Path->RequestedIgnoreEntityID != GasBuildingID &&
+                    EM.GetComponent<BuildingComponent>(Path->RequestedIgnoreEntityID))
+                {
+                    if (const auto* Trans = EM.GetComponent<TransformComponent>(HarvesterID))
+                    {
+                        const float DepartureClearance =
+                            WorkerContactRange(EM, HarvesterID, Path, 2.0f);
+                        if (EntityEdgeDistance(EM, Trans->Position, Path->RequestedIgnoreEntityID) <= DepartureClearance)
+                        {
+                            PathingIgnoreEntityID = Path->RequestedIgnoreEntityID;
+                        }
+                    }
+                }
+            }
+        }
         IssueHarvestMove(
             EM,
             HarvesterID,
@@ -511,28 +601,31 @@ namespace
         return Resource->Type == ResourceType::VespeneGas ? 64.0f : 40.0f;
     }
 
-    bool IsWithinHarvestRange(Core::ECS::EntityManager& EM, int HarvesterID, int TargetResourceID)
+    bool IsWithinHarvestRange(Core::ECS::EntityManager& EM,
+                              int HarvesterID,
+                              int TargetResourceID)
     {
-        auto* HarvesterTrans = EM.GetComponent<TransformComponent>(HarvesterID);
-        auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetResourceID);
-        if (!HarvesterTrans || !TargetTrans)
-            return false;
-        if (auto* TargetPath = EM.GetComponent<PathfindingComponent>(TargetResourceID);
-            TargetPath && TargetPath->HasCollisionBounds)
+        // Mining starts only when the DAT collision boxes touch. Keep a tiny
+        // fixed-point allowance, but do not add path node tolerance here: that
+        // made workers mine visibly far away and left Partial endpoints in a
+        // state that was neither moving nor interacting.
+        const auto* Resource = EM.GetComponent<ResourceComponent>(TargetResourceID);
+        if (Resource && Resource->Type == ResourceType::VespeneGas)
         {
-            const auto* WorkerPath = EM.GetComponent<PathfindingComponent>(HarvesterID);
-            const float WorkerRadius = CollisionRadiusFromBounds(WorkerPath, 16.0f);
-            // Movement accepts a final approach point within NodeTolerance.
-            // Use the same tolerance for the resource contact test; otherwise
-            // asymmetric DAT bounds can leave a worker parked at a completed
-            // approach waypoint which is a few pixels outside the old range.
-            const float ArrivalTolerance =
-                WorkerPath ? std::max(2.0f, WorkerPath->NodeTolerance + 2.0f) : 2.0f;
-            return EntityEdgeDistance(EM, HarvesterTrans->Position, TargetResourceID) <=
-                   WorkerRadius + ArrivalTolerance;
+            constexpr float kGasDoorwayTolerance = 24.0f;
+            if (CollisionBoundsGap(EM, HarvesterID, TargetResourceID) <= kGasDoorwayTolerance)
+                return true;
+            if (const auto* Trans = EM.GetComponent<TransformComponent>(HarvesterID))
+            {
+                if (EntityEdgeDistance(EM, Trans->Position, TargetResourceID) <= kGasDoorwayTolerance)
+                    return true;
+            }
+            return false;
         }
-        return HarvesterTrans->Position.DistanceTo(TargetTrans->Position) <=
-               HarvestInteractionRange(EM, TargetResourceID);
+
+        constexpr float kInteractionGapTolerance = 2.0f;
+        return CollisionBoundsGap(EM, HarvesterID, TargetResourceID) <=
+               kInteractionGapTolerance;
     }
 
     Core::Math::Vec2 ResolveDepotDeliveryTarget(Core::ECS::EntityManager& EM,
@@ -603,14 +696,132 @@ namespace
                Delta.Y <= (float)DepotPath->CollisionDown - RequiredDepth;
     }
 
-    void IssueDepotReturnMove(Core::ECS::EntityManager& EM,
+    bool IssueMineralDepartureMove(Core::ECS::EntityManager& EM,
+                                   int HarvesterID,
+                                   int TargetResourceID)
+    {
+        const auto* Resource =
+            EM.GetComponent<ResourceComponent>(TargetResourceID);
+        const auto* WorkerTransform =
+            EM.GetComponent<TransformComponent>(HarvesterID);
+        const auto* MineralTransform =
+            EM.GetComponent<TransformComponent>(TargetResourceID);
+        auto* WorkerPath =
+            EM.GetComponent<PathfindingComponent>(HarvesterID);
+        const auto* MineralPath =
+            EM.GetComponent<PathfindingComponent>(TargetResourceID);
+        if (!Resource || Resource->Type != ResourceType::Minerals ||
+            !WorkerTransform || !MineralTransform ||
+            !WorkerPath || !MineralPath ||
+            CollisionBoundsGap(EM, HarvesterID, TargetResourceID) > 2.1f)
+        {
+            return false;
+        }
+
+        const float WorkerLeft = WorkerPath->HasCollisionBounds
+            ? (float)WorkerPath->CollisionLeft
+            : (float)WorkerPath->CollisionRadius;
+        const float WorkerRight = WorkerPath->HasCollisionBounds
+            ? (float)WorkerPath->CollisionRight
+            : (float)WorkerPath->CollisionRadius;
+        const float WorkerUp = WorkerPath->HasCollisionBounds
+            ? (float)WorkerPath->CollisionUp
+            : (float)WorkerPath->CollisionRadius;
+        const float WorkerDown = WorkerPath->HasCollisionBounds
+            ? (float)WorkerPath->CollisionDown
+            : (float)WorkerPath->CollisionRadius;
+        const float MineralLeft = MineralPath->HasCollisionBounds
+            ? (float)MineralPath->CollisionLeft
+            : (float)MineralPath->CollisionRadius;
+        const float MineralRight = MineralPath->HasCollisionBounds
+            ? (float)MineralPath->CollisionRight
+            : (float)MineralPath->CollisionRadius;
+        const float MineralUp = MineralPath->HasCollisionBounds
+            ? (float)MineralPath->CollisionUp
+            : (float)MineralPath->CollisionRadius;
+        const float MineralDown = MineralPath->HasCollisionBounds
+            ? (float)MineralPath->CollisionDown
+            : (float)MineralPath->CollisionRadius;
+
+        const float Left =
+            MineralTransform->Position.X - MineralLeft - WorkerRight;
+        const float Right =
+            MineralTransform->Position.X + MineralRight + WorkerLeft;
+        const float Top =
+            MineralTransform->Position.Y - MineralUp - WorkerDown;
+        const float Bottom =
+            MineralTransform->Position.Y + MineralDown + WorkerUp;
+        constexpr float DepartureClearance = 16.0f;
+        const auto Position = WorkerTransform->Position;
+        struct Candidate
+        {
+            float Distance;
+            int Side;
+            Core::Math::Vec2 Position;
+        };
+        std::array<Candidate, 4> Candidates{{
+            {std::abs(Position.X - Left), 0,
+             {Left - DepartureClearance, Position.Y}},
+            {std::abs(Position.X - Right), 1,
+             {Right + DepartureClearance, Position.Y}},
+            {std::abs(Position.Y - Top), 2,
+             {Position.X, Top - DepartureClearance}},
+            {std::abs(Position.Y - Bottom), 3,
+             {Position.X, Bottom + DepartureClearance}}
+        }};
+        std::sort(
+            Candidates.begin(), Candidates.end(),
+            [](const Candidate& A, const Candidate& B)
+            {
+                if (A.Distance != B.Distance)
+                    return A.Distance < B.Distance;
+                return A.Side < B.Side;
+            });
+
+        const auto& Departure = Candidates.front();
+        WorkerPath->Path = {Departure.Position};
+        WorkerPath->PathIndex = 0;
+        WorkerPath->RequestedDestination = Departure.Position;
+        WorkerPath->RequestedTargetEntityID = TargetResourceID;
+        WorkerPath->RequestedIgnoreEntityID = -1;
+        WorkerPath->RequestedAdditionalIgnoreEntityID = -1;
+        WorkerPath->NodeTolerance = 1.0f;
+        WorkerPath->BlockedByEntityID = -1;
+        WorkerPath->RepathFailCount = 0;
+        WorkerPath->LastRepathTime = 0.0f;
+        WorkerPath->HasRecentMoveFailure = false;
+        WorkerPath->RecentMoveFailureCooldown = 0.0f;
+        WorkerPath->RecentMoveFailureTicks = 0;
+        WorkerPath->StallTimer = 0.0f;
+        WorkerPath->HasLastWaypointDistance = false;
+        WorkerPath->DestinationStallTimer = 0.0f;
+        WorkerPath->HasLastDestinationDistance = false;
+        DebugHarvestLog(
+            "mineral-depart worker=" + std::to_string(HarvesterID) +
+            " resource=" + std::to_string(TargetResourceID) +
+            " side=" + std::to_string(Departure.Side) +
+            " target=" + std::to_string((int)Departure.Position.X) + "," +
+            std::to_string((int)Departure.Position.Y));
+        return true;
+    }
+    bool IssueDepotReturnMove(Core::ECS::EntityManager& EM,
                               int HarvesterID,
                               int TargetResourceID,
                               int DepotID)
     {
         const auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
         if (!DepotTrans)
-            return;
+            return false;
+
+        if (const auto* ExistingPath =
+                EM.GetComponent<PathfindingComponent>(HarvesterID);
+            ExistingPath && ExistingPath->HasRecentMoveFailure &&
+            ExistingPath->RecentMoveFailureTicks > 0)
+        {
+            // A blocked depot approach waits for the deterministic retry
+            // window instead of issuing the same searches every tick.
+            return false;
+        }
 
         const Core::Math::Vec2 DeliveryTarget =
             ResolveDepotDeliveryTarget(EM, HarvesterID, DepotID);
@@ -623,11 +834,24 @@ namespace
                 EM, HarvesterID, DepotTrans->Position, DepotID);
             RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, DepotTrans->Position);
         }
+        if (!HasPath)
+        {
+            std::vector<Core::Math::Vec2> Candidates;
+            AddBoundsApproachCandidates(Candidates, EM, HarvesterID, DepotID);
+            for (const auto& Candidate : Candidates)
+            {
+                if (CommandSystem::IssueMoveAndHasPath(EM, HarvesterID, Candidate, DepotID))
+                {
+                    RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, DepotTrans->Position);
+                    HasPath = true;
+                    break;
+                }
+            }
+        }
 
-        // A* can legitimately report a same-tile route with no waypoints.  A
-        // returning worker still has to travel the final few pixels into the
-        // depot, so preserve that short segment explicitly.  The movement
-        // system ignores DepotID for both collision resolution and repulsion.
+        // A same-tile query can have no waypoints while the worker still needs
+        // to move the final few pixels into the depot. Preserve that short
+        // deterministic segment and report it as a usable attempt.
         if (!HasPath && !IsInsideDepotDeliveryZone(EM, HarvesterID, DepotID))
         {
             auto* WorkerTrans = EM.GetComponent<TransformComponent>(HarvesterID);
@@ -647,16 +871,185 @@ namespace
                 Path->BlockedByEntityID = -1;
                 Path->HasRecentMoveFailure = false;
                 Path->RecentMoveFailureCooldown = 0.0f;
+                Path->RecentMoveFailureTicks = 0;
                 Path->StallTimer = 0.0f;
                 Path->HasLastWaypointDistance = false;
                 Path->DestinationStallTimer = 0.0f;
                 Path->HasLastDestinationDistance = false;
                 RestoreHarvestCommand(
                     EM, HarvesterID, TargetResourceID, DepotTrans->Position);
+                HasPath = true;
             }
         }
+        return HasPath;
     }
 
+    bool IssueAdjacentMineralEscapeMove(
+        Core::ECS::EntityManager& EM,
+        int HarvesterID,
+        HarvestComponent& Harvest,
+        PathfindingComponent& Path)
+    {
+        const int BlockerID = Path.BlockedByEntityID;
+        if (BlockerID < 0 || BlockerID == Harvest.TargetResourceID)
+            return false;
+
+        const auto* BlockerResource =
+            EM.GetComponent<ResourceComponent>(BlockerID);
+        const auto* WorkerTransform =
+            EM.GetComponent<TransformComponent>(HarvesterID);
+        const auto* BlockerTransform =
+            EM.GetComponent<TransformComponent>(BlockerID);
+        const auto* BlockerPath =
+            EM.GetComponent<PathfindingComponent>(BlockerID);
+        if (!BlockerResource ||
+            BlockerResource->Type != ResourceType::Minerals ||
+            !WorkerTransform || !BlockerTransform || !BlockerPath)
+        {
+            return false;
+        }
+
+        const float WorkerLeft = Path.HasCollisionBounds
+            ? (float)Path.CollisionLeft : (float)Path.CollisionRadius;
+        const float WorkerRight = Path.HasCollisionBounds
+            ? (float)Path.CollisionRight : (float)Path.CollisionRadius;
+        const float WorkerUp = Path.HasCollisionBounds
+            ? (float)Path.CollisionUp : (float)Path.CollisionRadius;
+        const float WorkerDown = Path.HasCollisionBounds
+            ? (float)Path.CollisionDown : (float)Path.CollisionRadius;
+        const float BlockerLeft = BlockerPath->HasCollisionBounds
+            ? (float)BlockerPath->CollisionLeft
+            : (float)BlockerPath->CollisionRadius;
+        const float BlockerRight = BlockerPath->HasCollisionBounds
+            ? (float)BlockerPath->CollisionRight
+            : (float)BlockerPath->CollisionRadius;
+        const float BlockerUp = BlockerPath->HasCollisionBounds
+            ? (float)BlockerPath->CollisionUp
+            : (float)BlockerPath->CollisionRadius;
+        const float BlockerDown = BlockerPath->HasCollisionBounds
+            ? (float)BlockerPath->CollisionDown
+            : (float)BlockerPath->CollisionRadius;
+
+        const float Left =
+            BlockerTransform->Position.X - BlockerLeft - WorkerRight;
+        const float Right =
+            BlockerTransform->Position.X + BlockerRight + WorkerLeft;
+        const float Top =
+            BlockerTransform->Position.Y - BlockerUp - WorkerDown;
+        const float Bottom =
+            BlockerTransform->Position.Y + BlockerDown + WorkerUp;
+        const auto Position = WorkerTransform->Position;
+        const bool IsEmbedded =
+            Position.X > Left && Position.X < Right &&
+            Position.Y > Top && Position.Y < Bottom;
+
+        struct EscapeCandidate
+        {
+            float Distance = 0.0f;
+            int Side = 0;
+            Core::Math::Vec2 Position;
+        };
+        std::vector<EscapeCandidate> Candidates;
+        if (IsEmbedded)
+        {
+            Candidates = {
+                {Position.X - Left, 0, {Left - 1.0f, Position.Y}},
+                {Right - Position.X, 1, {Right + 1.0f, Position.Y}},
+                {Position.Y - Top, 2, {Position.X, Top - 1.0f}},
+                {Bottom - Position.Y, 3, {Position.X, Bottom + 1.0f}}
+            };
+        }
+        else
+        {
+            // The worker may be just outside a neighboring mineral while its
+            // depot segment points through that mineral. Move to a corner on
+            // the worker's current side before replanning. Every candidate
+            // segment stays outside the expanded mineral rectangle.
+            // Keep the corner target beyond the ordinary movement node
+            // tolerance; otherwise a short 5-8 pixel sidestep is accepted as
+            // already reached and the worker never actually leaves the lane.
+            constexpr float Clearance = 16.0f;
+            if (Position.Y <= Top)
+            {
+                const float SafeY = std::min(Position.Y, Top - Clearance);
+                Candidates.push_back({
+                    Position.DistanceTo({Left - Clearance, SafeY}),
+                    4, {Left - Clearance, SafeY}});
+                Candidates.push_back({
+                    Position.DistanceTo({Right + Clearance, SafeY}),
+                    5, {Right + Clearance, SafeY}});
+            }
+            if (Position.Y >= Bottom)
+            {
+                const float SafeY = std::max(Position.Y, Bottom + Clearance);
+                Candidates.push_back({
+                    Position.DistanceTo({Left - Clearance, SafeY}),
+                    6, {Left - Clearance, SafeY}});
+                Candidates.push_back({
+                    Position.DistanceTo({Right + Clearance, SafeY}),
+                    7, {Right + Clearance, SafeY}});
+            }
+            if (Position.X <= Left)
+            {
+                const float SafeX = std::min(Position.X, Left - Clearance);
+                Candidates.push_back({
+                    Position.DistanceTo({SafeX, Top - Clearance}),
+                    8, {SafeX, Top - Clearance}});
+                Candidates.push_back({
+                    Position.DistanceTo({SafeX, Bottom + Clearance}),
+                    9, {SafeX, Bottom + Clearance}});
+            }
+            if (Position.X >= Right)
+            {
+                const float SafeX = std::max(Position.X, Right + Clearance);
+                Candidates.push_back({
+                    Position.DistanceTo({SafeX, Top - Clearance}),
+                    10, {SafeX, Top - Clearance}});
+                Candidates.push_back({
+                    Position.DistanceTo({SafeX, Bottom + Clearance}),
+                    11, {SafeX, Bottom + Clearance}});
+            }
+        }
+        if (Candidates.empty())
+            return false;
+        std::sort(
+            Candidates.begin(), Candidates.end(),
+            [](const EscapeCandidate& A, const EscapeCandidate& B)
+            {
+                if (A.Distance != B.Distance)
+                    return A.Distance < B.Distance;
+                return A.Side < B.Side;
+            });
+
+        const auto* ResourceTransform =
+            EM.GetComponent<TransformComponent>(Harvest.TargetResourceID);
+        for (const auto& Candidate : Candidates)
+        {
+            Path.HasRecentMoveFailure = false;
+            Path.RecentMoveFailureCooldown = 0.0f;
+            Path.RecentMoveFailureTicks = 0;
+            if (!CommandSystem::IssueMoveAndHasPath(
+                    EM, HarvesterID, Candidate.Position, BlockerID))
+            {
+                continue;
+            }
+            RestoreHarvestCommand(
+                EM, HarvesterID, Harvest.TargetResourceID,
+                ResourceTransform ? ResourceTransform->Position
+                                  : Candidate.Position);
+            DebugHarvestLog(
+                "return-mineral-escape worker=" +
+                std::to_string(HarvesterID) +
+                " blocker=" + std::to_string(BlockerID) +
+                " side=" + std::to_string(Candidate.Side) +
+                " mode=" + (IsEmbedded ? "embedded" : "detour") +
+                " target=" +
+                std::to_string((int)Candidate.Position.X) + "," +
+                std::to_string((int)Candidate.Position.Y));
+            return true;
+        }
+        return false;
+    }
     bool IssueHarvestMove(Core::ECS::EntityManager& EM,
                           int HarvesterID,
                           int TargetResourceID,
@@ -666,13 +1059,26 @@ namespace
                           int PathingIgnoreEntityID = -1)
     {
         const int ApproachID = ApproachEntityID >= 0 ? ApproachEntityID : TargetResourceID;
+        const auto* ApproachResource =
+            EM.GetComponent<ResourceComponent>(ApproachID);
+        const bool IsSolidMineral =
+            ApproachResource &&
+            ApproachResource->Type == ResourceType::Minerals;
         const int IgnoreID = PathingIgnoreEntityID >= 0
             ? PathingIgnoreEntityID
-            : ApproachID;
+            : (IsSolidMineral ? -1 : ApproachID);
+        if (const auto* ExistingPath =
+                EM.GetComponent<PathfindingComponent>(HarvesterID);
+            ExistingPath && ExistingPath->HasRecentMoveFailure &&
+            ExistingPath->RecentMoveFailureTicks > 0)
+        {
+            // A failed static approach is retried after one deterministic
+            // second, not on every simulation tick.
+            return IsWithinHarvestRange(
+                EM, HarvesterID, TargetResourceID);
+        }
         const auto Candidates = BuildApproachCandidates(
             EM, HarvesterID, TargetResourceID, TargetPosition, ApproachID, ApproachRange);
-        const Core::Math::Vec2 MoveTarget =
-            Candidates.empty() ? TargetPosition : Candidates.front();
 
         auto TryMove = [&](const Core::Math::Vec2& Candidate)
         {
@@ -681,11 +1087,32 @@ namespace
                 HarvesterID,
                 Candidate,
                 IgnoreID);
+            if (HasPath && IsSolidMineral)
+            {
+                // The minitile search may stop one 8-pixel cell outside the
+                // exact DAT contact point and report Partial/GoalBlocked.
+                // Finish with a short same-side segment. Runtime mineral
+                // collision stays enabled, so this can touch but never cross
+                // the patch.
+                if (auto* Path =
+                        EM.GetComponent<PathfindingComponent>(HarvesterID))
+                {
+                    Path->NodeTolerance = 1.0f;
+                    if (Path->Path.empty() ||
+                        Path->Path.back().DistanceTo(Candidate) > 0.5f)
+                    {
+                        Path->Path.push_back(Candidate);
+                    }
+                    Path->RequestedDestination = Candidate;
+                }
+            }
             RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
             return HasPath;
         };
 
         bool HasIssuedReachableMove = false;
+        constexpr int MaximumApproachPathAttempts = 4;
+        int ApproachPathAttempts = 0;
         for (const auto& Candidate : Candidates)
         {
             if (IsRecentFailedMoveTarget(
@@ -693,6 +1120,9 @@ namespace
             {
                 continue;
             }
+            if (ApproachPathAttempts >= MaximumApproachPathAttempts)
+                break;
+            ++ApproachPathAttempts;
             if (TryMove(Candidate))
             {
                 HasIssuedReachableMove = true;
@@ -700,12 +1130,18 @@ namespace
             }
         }
 
-        if (!HasIssuedReachableMove)
+        // If every candidate was suppressed by the recent-failure marker,
+        // permit one bounded retry set.  Do not run the complete candidate
+        // list twice and then issue the first point a third time.
+        if (!HasIssuedReachableMove && ApproachPathAttempts == 0)
         {
             if (auto* Path = EM.GetComponent<PathfindingComponent>(HarvesterID))
                 Path->HasRecentMoveFailure = false;
             for (const auto& Candidate : Candidates)
             {
+                if (ApproachPathAttempts >= MaximumApproachPathAttempts)
+                    break;
+                ++ApproachPathAttempts;
                 if (TryMove(Candidate))
                 {
                     HasIssuedReachableMove = true;
@@ -713,10 +1149,6 @@ namespace
                 }
             }
         }
-
-        if (!HasIssuedReachableMove)
-            HasIssuedReachableMove = CommandSystem::IssueMoveAndHasPath(
-                EM, HarvesterID, MoveTarget, IgnoreID);
 
         RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
         return HasIssuedReachableMove ||
@@ -800,6 +1232,20 @@ namespace
                               int ResourceID,
                               ResourceComponent& Resource)
     {
+        if (Resource.ActiveGathererEntityID >= 0)
+        {
+            const int ActiveID = Resource.ActiveGathererEntityID;
+            const auto* ActiveHarvest =
+                EM.GetComponent<HarvestComponent>(ActiveID);
+            if (!EM.IsAlive(ActiveID) ||
+                !ActiveHarvest ||
+                ActiveHarvest->TargetResourceID != ResourceID ||
+                ActiveHarvest->State != HarvestState::Mining)
+            {
+                Resource.ActiveGathererEntityID = -1;
+            }
+        }
+
         Resource.QueuedGatherers.erase(
             std::remove_if(
                 Resource.QueuedGatherers.begin(),
@@ -809,22 +1255,27 @@ namespace
                     if (!EM.IsAlive(GathererID))
                         return true;
                     auto* Harvest = EM.GetComponent<HarvestComponent>(GathererID);
-                    return !Harvest || Harvest->TargetResourceID != ResourceID;
+                    return !Harvest ||
+                        Harvest->TargetResourceID != ResourceID ||
+                        (Harvest->State != HarvestState::MovingToResource &&
+                         Harvest->State != HarvestState::QueuedAtResource &&
+                         Harvest->State != HarvestState::Mining);
                 }),
             Resource.QueuedGatherers.end());
 
-        // openbw joins WaitForGas only after a worker reaches the refinery.
-        // Our queue is created when the command is issued, so preserve the
-        // same arrival-order behavior by choosing the worker nearest any edge
-        // of the refinery whenever its gathering slot becomes free.
-        if (Resource.Type == ResourceType::VespeneGas &&
-            Resource.ActiveGathererEntityID < 0)
+        // Sort queued gatherers when slot is free: prioritize workers that
+        // have already arrived within harvest range, followed by distance.
+        if (Resource.ActiveGathererEntityID < 0 && !Resource.QueuedGatherers.empty())
         {
             std::stable_sort(
                 Resource.QueuedGatherers.begin(),
                 Resource.QueuedGatherers.end(),
                 [&](int A, int B)
                 {
+                    const bool AInRange = IsWithinHarvestRange(EM, A, ResourceID);
+                    const bool BInRange = IsWithinHarvestRange(EM, B, ResourceID);
+                    if (AInRange != BInRange)
+                        return AInRange;
                     const auto* AT = EM.GetComponent<TransformComponent>(A);
                     const auto* BT = EM.GetComponent<TransformComponent>(B);
                     if (!AT || !BT)
@@ -838,9 +1289,55 @@ namespace
         }
     }
 
+    int FindBalancedNearbyMineral(Core::ECS::EntityManager& EM,
+                                  int HarvesterID,
+                                  int AnchorResourceID)
+    {
+        const auto* WorkerTrans = EM.GetComponent<TransformComponent>(HarvesterID);
+        const auto* AnchorTrans = EM.GetComponent<TransformComponent>(AnchorResourceID);
+        if (!WorkerTrans || !AnchorTrans)
+            return AnchorResourceID;
+
+        constexpr float ClusterRange = 32.0f * 8.0f;
+        int BestID = AnchorResourceID;
+        size_t BestLoad = std::numeric_limits<size_t>::max();
+        float BestDistance = std::numeric_limits<float>::max();
+        for (int CandidateID :
+             EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        {
+            auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
+            const auto* CandidateTrans =
+                EM.GetComponent<TransformComponent>(CandidateID);
+            if (!Resource || !CandidateTrans ||
+                Resource->Type != ResourceType::Minerals ||
+                Resource->IsDepleted || Resource->Amount <= 0 ||
+                CandidateTrans->Position.DistanceTo(AnchorTrans->Position) >
+                    ClusterRange)
+            {
+                continue;
+            }
+
+            PruneQueuedGatherers(EM, CandidateID, *Resource);
+            const size_t Load = Resource->QueuedGatherers.size() +
+                (Resource->ActiveGathererEntityID >= 0 ? 1u : 0u);
+            const float Distance =
+                WorkerTrans->Position.DistanceTo(CandidateTrans->Position);
+            if (Load < BestLoad ||
+                (Load == BestLoad &&
+                 (Distance < BestDistance ||
+                  (Distance == BestDistance && CandidateID < BestID))))
+            {
+                BestLoad = Load;
+                BestDistance = Distance;
+                BestID = CandidateID;
+            }
+        }
+        return BestID;
+    }
     int FindAvailableNearbyMineral(Core::ECS::EntityManager& EM,
                                    int HarvesterID,
-                                   int CurrentResourceID)
+                                   int CurrentResourceID,
+                                   int ExcludedResourceID = -1)
     {
         const auto* WorkerTrans = EM.GetComponent<TransformComponent>(HarvesterID);
         const auto* CurrentTrans = EM.GetComponent<TransformComponent>(CurrentResourceID);
@@ -852,8 +1349,11 @@ namespace
         float BestDistance = std::numeric_limits<float>::max();
         for (int CandidateID : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
         {
-            if (CandidateID == CurrentResourceID)
+            if (CandidateID == CurrentResourceID ||
+                CandidateID == ExcludedResourceID)
+            {
                 continue;
+            }
             auto* Candidate = EM.GetComponent<ResourceComponent>(CandidateID);
             const auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
             if (!Candidate || !CandidateTrans ||
@@ -916,8 +1416,17 @@ namespace
         {
             return false;
         }
-        return Resource->QueuedGatherers.empty() ||
-               Resource->QueuedGatherers.front() == HarvesterID;
+        if (Resource->QueuedGatherers.empty() ||
+            Resource->QueuedGatherers.front() == HarvesterID)
+        {
+            return true;
+        }
+        if (IsWithinHarvestRange(EM, HarvesterID, ResourceID) &&
+            !IsWithinHarvestRange(EM, Resource->QueuedGatherers.front(), ResourceID))
+        {
+            return true;
+        }
+        return false;
     }
 
     void ClaimResource(Core::ECS::EntityManager& EM,
@@ -939,6 +1448,16 @@ namespace
         if (!Path || Path->BlockedByEntityID < 0 ||
             Path->BlockedByEntityID == Harvest.TargetResourceID)
         {
+            return false;
+        }
+
+        // Once the worker touches its current target, that semantic target
+        // wins over any stale adjacent-mineral blocker reported by the final
+        // segment. Otherwise tightly packed mineral fields can toggle the SCV
+        // between two touching patches every tick without ever mining.
+        if (IsWithinHarvestRange(EM, HarvesterID, Harvest.TargetResourceID))
+        {
+            Path->BlockedByEntityID = -1;
             return false;
         }
 
@@ -967,6 +1486,39 @@ namespace
         // patch behind it forever.
         const int PreviousResourceID = Harvest.TargetResourceID;
         ReleaseResourceAssignment(EM, PreviousResourceID, HarvesterID);
+        PruneQueuedGatherers(EM, BlockingMineralID, *BlockingResource);
+        const bool BlockingPatchBusy =
+            BlockingResource->ActiveGathererEntityID >= 0 ||
+            !BlockingResource->QueuedGatherers.empty();
+        if (BlockingPatchBusy)
+        {
+            const int Alternative = FindAvailableNearbyMineral(
+                EM, HarvesterID, BlockingMineralID, PreviousResourceID);
+            const auto* AlternativeTransform = Alternative >= 0
+                ? EM.GetComponent<TransformComponent>(Alternative)
+                : nullptr;
+            if (AlternativeTransform)
+            {
+                Harvest.TargetResourceID = Alternative;
+                Harvest.DesiredResourceID = Alternative;
+                Harvest.State = HarvestState::MovingToResource;
+                Harvest.QueuedAtResource = false;
+                QueueGathererForResource(EM, Alternative, HarvesterID);
+                if (IssueHarvestMove(
+                        EM, HarvesterID, Alternative,
+                        AlternativeTransform->Position))
+                {
+                    DebugHarvestLog(
+                        "blocked-mineral-spread worker=" +
+                        std::to_string(HarvesterID) +
+                        " old=" + std::to_string(PreviousResourceID) +
+                        " blocker=" + std::to_string(BlockingMineralID) +
+                        " new=" + std::to_string(Alternative));
+                    return true;
+                }
+                ReleaseResourceAssignment(EM, Alternative, HarvesterID);
+            }
+        }
         Harvest.TargetResourceID = BlockingMineralID;
         Harvest.DesiredResourceID = BlockingMineralID;
         Harvest.QueuedAtResource = true;
@@ -1084,8 +1636,25 @@ namespace
                                  HarvestComponent& Harvest,
                                  ResourceType Type,
                                  int PlayerID,
-                                 int DepartureIgnoreEntityID = -1)
+                                 int DepartureIgnoreEntityID = -1,
+                                 bool ExcludePreviousResource = false)
     {
+        if (Harvest.DesiredResourceID >= 0)
+        {
+            if (const auto* DesiredRes = EM.GetComponent<ResourceComponent>(Harvest.DesiredResourceID))
+            {
+                if (DesiredRes->Type == ResourceType::VespeneGas &&
+                    IsOwnedGasTarget(EM, Harvest.DesiredResourceID, PlayerID))
+                {
+                    Type = ResourceType::VespeneGas;
+                }
+                else if (DesiredRes->Type == ResourceType::Minerals &&
+                         !DesiredRes->IsDepleted && DesiredRes->Amount > 0)
+                {
+                    Type = ResourceType::Minerals;
+                }
+            }
+        }
         const int PreviousResource = Harvest.TargetResourceID;
         if (Type == ResourceType::Minerals)
         {
@@ -1100,6 +1669,7 @@ namespace
                 auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
                 auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
                 if (!Resource || !CandidateTrans ||
+                    (ExcludePreviousResource && CandidateID == PreviousResource) ||
                     Resource->Type != ResourceType::Minerals ||
                     Resource->IsDepleted || Resource->Amount <= 0)
                 {
@@ -1109,7 +1679,7 @@ namespace
                 const size_t Load = Resource->QueuedGatherers.size() +
                     (Resource->ActiveGathererEntityID >= 0 ? 1u : 0u);
                 const float PreferredBias =
-                    CandidateID == Harvest.DesiredResourceID ? -1000000.0f : 0.0f;
+                    CandidateID == Harvest.DesiredResourceID ? -48.0f : 0.0f;
                 Candidates.emplace_back(
                     PreferredBias +
                         HarvesterTrans->Position.DistanceTo(CandidateTrans->Position) +
@@ -1118,17 +1688,28 @@ namespace
             }
             std::sort(Candidates.begin(), Candidates.end());
 
+            constexpr int MaximumResourcePathAttempts = 8;
+            int ResourcePathAttempts = 0;
             for (const auto& [Distance, CandidateID] : Candidates)
             {
                 (void)Distance;
+                if (ResourcePathAttempts >= MaximumResourcePathAttempts)
+                    break;
+                ++ResourcePathAttempts;
                 auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
-                if (!CandidateTrans ||
-                    !IssueHarvestMove(
-                        EM, HarvesterID, CandidateID, CandidateTrans->Position,
-                        CandidateID, -1.0f, DepartureIgnoreEntityID))
-                {
+                if (!CandidateTrans)
                     continue;
-                }
+                const int SavedTargetResourceID = Harvest.TargetResourceID;
+                const HarvestState SavedState = Harvest.State;
+                Harvest.TargetResourceID = CandidateID;
+                Harvest.State = HarvestState::MovingToResource;
+                const bool HasPath = IssueHarvestMove(
+                    EM, HarvesterID, CandidateID, CandidateTrans->Position,
+                    CandidateID, -1.0f, DepartureIgnoreEntityID);
+                Harvest.TargetResourceID = SavedTargetResourceID;
+                Harvest.State = SavedState;
+                if (!HasPath)
+                    continue;
                 Harvest.TargetResourceID = CandidateID;
                 Harvest.DesiredResourceID = CandidateID;
                 Harvest.State = HarvestState::MovingToResource;
@@ -1276,12 +1857,30 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
                                  int TargetResourceID)
 {
     bool IssuedAny = false;
-    auto* ResTarget = EM.GetComponent<TransformComponent>(TargetResourceID);
+    auto* RequestedResource =
+        EM.GetComponent<ResourceComponent>(TargetResourceID);
     for (int ID : Units)
     {
-        if (!CanHarvest(EM, ID, TargetResourceID))
+        int AssignedResourceID = TargetResourceID;
+        if (RequestedResource &&
+            RequestedResource->Type == ResourceType::Minerals)
+        {
+            PruneQueuedGatherers(EM, TargetResourceID, *RequestedResource);
+            const size_t RequestedLoad =
+                RequestedResource->QueuedGatherers.size() +
+                (RequestedResource->ActiveGathererEntityID >= 0 ? 1u : 0u);
+            if (RequestedLoad > 0)
+            {
+                AssignedResourceID =
+                    FindBalancedNearbyMineral(EM, ID, TargetResourceID);
+            }
+        }
+
+        if (!CanHarvest(EM, ID, AssignedResourceID))
             continue;
 
+        auto* ResTarget =
+            EM.GetComponent<TransformComponent>(AssignedResourceID);
         auto* Harvest = EM.GetComponent<HarvestComponent>(ID);
         if (!Harvest)
             Harvest = &EM.AddComponent<HarvestComponent>(ID);
@@ -1289,8 +1888,8 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         LeaveGasBuilding(EM, ID, *Harvest);
         ReleaseResourceAssignment(EM, Harvest->TargetResourceID, ID);
         Harvest->State = HarvestState::MovingToResource;
-        Harvest->TargetResourceID = TargetResourceID;
-        Harvest->DesiredResourceID = TargetResourceID;
+        Harvest->TargetResourceID = AssignedResourceID;
+        Harvest->DesiredResourceID = AssignedResourceID;
         Harvest->ReturnBuildingID = -1;
         Harvest->QueuedAtResource = false;
 
@@ -1298,7 +1897,7 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
         if (!Cmd)
             Cmd = &EM.AddComponent<CommandComponent>(ID);
         Cmd->CurrentCommand = CommandType::Harvest;
-        Cmd->TargetEntityID = TargetResourceID;
+        Cmd->TargetEntityID = AssignedResourceID;
 
         // Reassigning a loaded worker must never delete its visible cargo.
         // Brood War returns the carried minerals/gas first, then continues
@@ -1312,7 +1911,7 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
             {
                 Harvest->State = HarvestState::MovingToDepot;
                 IssueDepotReturnMove(
-                    EM, ID, TargetResourceID, Harvest->ReturnBuildingID);
+                    EM, ID, AssignedResourceID, Harvest->ReturnBuildingID);
             }
             else
             {
@@ -1325,8 +1924,9 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
 
         if (ResTarget)
         {
-            QueueGathererForResource(EM, TargetResourceID, ID);
-            auto* Resource = EM.GetComponent<ResourceComponent>(TargetResourceID);
+            QueueGathererForResource(EM, AssignedResourceID, ID);
+            auto* Resource =
+                EM.GetComponent<ResourceComponent>(AssignedResourceID);
             size_t QueueIndex = 0;
             if (Resource)
             {
@@ -1344,16 +1944,18 @@ bool HarvestSystem::IssueHarvest(Core::ECS::EntityManager& EM,
                 IssueGasQueueMove(
                     EM,
                     ID,
-                    TargetResourceID,
+                    AssignedResourceID,
                     QueueIndex);
             }
             else
             {
-                IssueHarvestMove(EM, ID, TargetResourceID, ResTarget->Position);
+                IssueHarvestMove(
+                    EM, ID, AssignedResourceID, ResTarget->Position);
             }
             DebugHarvestLog(
                 "issue worker=" + std::to_string(ID) +
-                " resource=" + std::to_string(TargetResourceID) +
+                " requested=" + std::to_string(TargetResourceID) +
+                " resource=" + std::to_string(AssignedResourceID) +
                 " queue=" + std::to_string(QueueIndex));
         }
 
@@ -1376,7 +1978,8 @@ void HarvestSystem::Update(float DeltaTime)
 
 int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
                                     int HarvesterID,
-                                    ResourceType Type)
+                                    ResourceType Type,
+                                    int ExcludedDepotID)
 {
     auto* HarvesterTrans = EM.GetComponent<TransformComponent>(HarvesterID);
     auto* HarvesterPlayer = EM.GetComponent<PlayerComponent>(HarvesterID);
@@ -1393,6 +1996,8 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
     auto Depots = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
     for (int DepotID : Depots)
     {
+        if (DepotID == ExcludedDepotID)
+            continue;
         auto* DepotTrans = EM.GetComponent<TransformComponent>(DepotID);
         if (!DepotTrans || !IsValidDepotForReturn(EM, DepotID, PlayerID, Type))
             continue;
@@ -1459,6 +2064,8 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
     auto* WorkerOwner = EM.GetComponent<PlayerComponent>(ID);
     if (!Trans || !Harvest)
         return;
+    if (Harvest->PathRetryTicks > 0)
+        --Harvest->PathRetryTicks;
     if (!Unit || Unit->HitPoints <= 0)
     {
         LeaveGasBuilding(EM, ID, *Harvest);
@@ -1515,11 +2122,13 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 break;
             QueueGathererForResource(EM, Harvest->TargetResourceID, ID);
             PruneQueuedGatherers(EM, Harvest->TargetResourceID, *ResComp);
+            const bool InRange = IsWithinHarvestRange(EM, ID, Harvest->TargetResourceID);
             const bool HasGatherTurn =
                 ResComp->ActiveGathererEntityID == ID ||
                 (ResComp->ActiveGathererEntityID < 0 &&
-                 !ResComp->QueuedGatherers.empty() &&
-                 ResComp->QueuedGatherers.front() == ID);
+                 (!ResComp->QueuedGatherers.empty() &&
+                  (ResComp->QueuedGatherers.front() == ID ||
+                   (InRange && !IsWithinHarvestRange(EM, ResComp->QueuedGatherers.front(), Harvest->TargetResourceID)))));
             if (ResComp->Type == ResourceType::VespeneGas)
             {
                 size_t QueueIndex = 0;
@@ -1605,6 +2214,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 Harvest->InsideGasBuilding = true;
                 Harvest->State = HarvestState::Mining;
                 Harvest->QueuedAtResource = false;
+                RecordHarvestPathResult(*Harvest, true);
                 Harvest->MineTimer = 0.0f;
                 DebugHarvestLog(
                     "gas-enter worker=" + std::to_string(ID) +
@@ -1664,10 +2274,31 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 {
                     Harvest->State = HarvestState::MovingToResource;
                     Harvest->QueuedAtResource = false;
-                    if (IsMoveSettled(Path))
+                    if (IsMoveSettled(Path) && Harvest->PathRetryTicks == 0)
                     {
-                        IssueHarvestMove(
+                        const bool HasPath = IssueHarvestMove(
                             EM, ID, Harvest->TargetResourceID, ResTarget->Position);
+                        RecordHarvestPathResult(*Harvest, HasPath, EM.GetComponent<PathfindingComponent>(ID));
+                        if (!HasPath &&
+                            Harvest->ConsecutivePathFailures >= 3 &&
+                            ResComp->Type == ResourceType::Minerals)
+                        {
+                            const int PreviousResourceID = Harvest->TargetResourceID;
+                            if (RetargetHarvestResource(
+                                    EM, ID, *Harvest, ResComp->Type,
+                                    WorkerPlayerID, -1, true))
+                            {
+                                ReleaseResourceAssignment(
+                                    EM, PreviousResourceID, ID);
+                                RecordHarvestPathResult(*Harvest, true);
+                            }
+                            else if (Harvest->ConsecutivePathFailures >= 6)
+                            {
+                                Harvest->State = HarvestState::Idle;
+                                ReleaseResourceAssignment(
+                                    EM, PreviousResourceID, ID);
+                            }
+                        }
                     }
                 }
                 break;
@@ -1680,6 +2311,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     ClaimResource(EM, Harvest->TargetResourceID, ID);
                     Harvest->State = HarvestState::Mining;
                     Harvest->QueuedAtResource = false;
+                    RecordHarvestPathResult(*Harvest, true);
                     Harvest->MineTimer = 0.0f;
                     ClearMotion(EM, ID);
                     DebugHarvestLog(
@@ -1703,12 +2335,34 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 return;
             }
 
-            if (IsMoveSettled(Path))
+            if (IsMoveSettled(Path) && Harvest->PathRetryTicks == 0)
             {
                 Harvest->State = HarvestState::MovingToResource;
                 Harvest->QueuedAtResource = ResComp->ActiveGathererEntityID >= 0 &&
                     ResComp->ActiveGathererEntityID != ID;
-                IssueHarvestMove(EM, ID, Harvest->TargetResourceID, ResTarget->Position);
+                const bool HasPath = IssueHarvestMove(
+                    EM, ID, Harvest->TargetResourceID, ResTarget->Position);
+                RecordHarvestPathResult(*Harvest, HasPath, EM.GetComponent<PathfindingComponent>(ID));
+                if (!HasPath &&
+                    Harvest->ConsecutivePathFailures >= 3 &&
+                    ResComp->Type == ResourceType::Minerals)
+                {
+                    const int PreviousResourceID = Harvest->TargetResourceID;
+                    if (RetargetHarvestResource(
+                            EM, ID, *Harvest, ResComp->Type,
+                            WorkerPlayerID, -1, true))
+                    {
+                        ReleaseResourceAssignment(
+                            EM, PreviousResourceID, ID);
+                        RecordHarvestPathResult(*Harvest, true);
+                    }
+                    else if (Harvest->ConsecutivePathFailures >= 6)
+                    {
+                        Harvest->State = HarvestState::Idle;
+                        ReleaseResourceAssignment(
+                            EM, PreviousResourceID, ID);
+                    }
+                }
                 return;
             }
             break;
@@ -1855,31 +2509,118 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 Harvest->ReturnBuildingID = -1;
                 break;
             }
+            if (Path &&
+                Path->RequestedTargetEntityID ==
+                    Harvest->TargetResourceID &&
+                IsMoveSettled(Path))
+            {
+                if (Harvest->PathRetryTicks == 0)
+                {
+                    const bool HasPath = IssueDepotReturnMove(
+                        EM, ID, Harvest->TargetResourceID,
+                        Harvest->ReturnBuildingID);
+                    RecordHarvestPathResult(*Harvest, HasPath, EM.GetComponent<PathfindingComponent>(ID));
+                }
+                return;
+            }
 
-            // Approach goals are accepted using the pathfinder's node tolerance.
-            // Include that same tolerance here so a worker which has legitimately
-            // reached the depot edge cannot remain in an endless return/repath loop.
-            const float ArrivalTolerance =
-                Path ? std::max(2.0f, Path->NodeTolerance + 2.0f) : 2.0f;
-            const float DepositRange =
-                WorkerContactRange(EM, ID, Path, ArrivalTolerance);
+            // Resource delivery requires actual DAT collision-bound contact.
+            // Path node tolerance is only a navigation acceptance detail and
+            // must not enlarge the gameplay interaction range.
+            constexpr float DepositRange = 1.0f;
             const float Dist = EntityEdgeDistance(
                 EM, Trans->Position, Harvest->ReturnBuildingID);
+
+            if (!Harvest->HasLastReturnProgressPosition)
+            {
+                Harvest->LastReturnProgressPosition = Trans->Position;
+                Harvest->HasLastReturnProgressPosition = true;
+                Harvest->ReturnNoProgressTicks = 0;
+            }
+            else if (Trans->Position.DistanceTo(
+                         Harvest->LastReturnProgressPosition) >= 0.5f)
+            {
+                Harvest->LastReturnProgressPosition = Trans->Position;
+                Harvest->ReturnNoProgressTicks = 0;
+                Harvest->ReturnRecoveryAttempts = 0;
+            }
+            else
+            {
+                Harvest->ReturnNoProgressTicks =
+                    std::min(Harvest->ReturnNoProgressTicks + 1, 240);
+            }
+
+            constexpr int ReturnNoProgressRecoveryTicks = 72;
+            constexpr int AdjacentMineralEscapeTicks = 12;
+            if (Dist > DepositRange && Path &&
+                Harvest->ReturnNoProgressTicks >=
+                    AdjacentMineralEscapeTicks &&
+                IssueAdjacentMineralEscapeMove(
+                    EM, ID, *Harvest, *Path))
+            {
+                Harvest->ReturnNoProgressTicks = 0;
+                Harvest->LastReturnProgressPosition = Trans->Position;
+                return;
+            }
+            if (Dist > DepositRange &&
+                Harvest->ReturnNoProgressTicks >= ReturnNoProgressRecoveryTicks)
+            {
+                const int PreviousDepotID = Harvest->ReturnBuildingID;
+                Harvest->ReturnNoProgressTicks = 0;
+                Harvest->LastReturnProgressPosition = Trans->Position;
+                Harvest->ReturnRecoveryAttempts =
+                    std::min(Harvest->ReturnRecoveryAttempts + 1, 8);
+
+                int RecoveryDepotID = FindNearestDepot(
+                    EM, ID, Harvest->CarryingType, PreviousDepotID);
+                if (RecoveryDepotID < 0)
+                    RecoveryDepotID = PreviousDepotID;
+                Harvest->ReturnBuildingID = RecoveryDepotID;
+
+                if (Path)
+                {
+                    Path->Path.clear();
+                    Path->PathIndex = 0;
+                    Path->HasRecentMoveFailure = false;
+                    Path->RecentMoveFailureCooldown = 0.0f;
+                    Path->RecentMoveFailureTicks = 0;
+                }
+
+                const bool RecoveredPath = IssueDepotReturnMove(
+                    EM, ID, Harvest->TargetResourceID, RecoveryDepotID);
+                RecordHarvestPathResult(*Harvest, RecoveredPath);
+                DebugHarvestLog(
+                    "return-recover worker=" + std::to_string(ID) +
+                    " oldDepot=" + std::to_string(PreviousDepotID) +
+                    " depot=" + std::to_string(RecoveryDepotID) +
+                    " edgeDist=" + std::to_string((int)Dist) +
+                    " attempt=" +
+                    std::to_string(Harvest->ReturnRecoveryAttempts) +
+                    " hasPath=" + std::to_string(RecoveredPath ? 1 : 0));
+                return;
+            }
             DebugHarvestLog(
                 "return worker=" + std::to_string(ID) +
                 " depot=" + std::to_string(Harvest->ReturnBuildingID) +
+                " resource=" + std::to_string(Harvest->TargetResourceID) +
+                " pos=" + std::to_string((int)Trans->Position.X) + "," +
+                std::to_string((int)Trans->Position.Y) +
                 " dist=" + std::to_string((int)Dist) +
                 " range=" + std::to_string((int)DepositRange) +
                 " carry=" + std::to_string(Harvest->CarryingAmount) +
+                " blocked=" +
+                std::to_string(Path ? Path->BlockedByEntityID : -1) +
+                " status=" +
+                std::to_string(Path ? (int)Path->LastPathStatus : -1) +
                 " pathSize=" +
                 std::to_string(Path ? (int)Path->Path.size() : -1) +
                 " pathIndex=" +
                 std::to_string(Path ? Path->PathIndex : -1));
             // openbw completes ReturnMinerals when the worker reaches its
             // depot move target.  Keep our deeper delivery waypoint for the
-            // visual pass through the CC entrance, but also accept collision-
-            // edge contact so a settled/repathed SCV cannot loop forever at
-            // the depot boundary.
+            // visual pass through the CC entrance, but also accept the worker
+            // center reaching the depot DAT boundary so a settled/repathed SCV
+            // cannot loop forever at the entrance.
             if (IsInsideDepotDeliveryZone(EM, ID, Harvest->ReturnBuildingID) ||
                 Dist <= DepositRange)
             {
@@ -1902,6 +2643,10 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 Harvest->CarryingAmount = 0;
                 Harvest->CarryingType = ResourceType::None;
                 Harvest->ReturnBuildingID = -1;
+                Harvest->HasLastReturnProgressPosition = false;
+                Harvest->ReturnNoProgressTicks = 0;
+                Harvest->ReturnRecoveryAttempts = 0;
+                RecordHarvestPathResult(*Harvest, true);
                 const bool ResumedHarvest = RetargetHarvestResource(
                         EM,
                         ID,
@@ -1925,11 +2670,28 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     StopHarvesting();
                 }
             }
-            else if (IsMoveSettled(Path))
+            else if (IsMoveSettled(Path) && Harvest->PathRetryTicks == 0)
             {
-                IssueDepotReturnMove(
+                const bool HasPath = IssueDepotReturnMove(
                     EM, ID, Harvest->TargetResourceID,
                     Harvest->ReturnBuildingID);
+                RecordHarvestPathResult(*Harvest, HasPath, EM.GetComponent<PathfindingComponent>(ID));
+                if (!HasPath && Harvest->ConsecutivePathFailures == 3)
+                {
+                    const int AlternativeDepotID = FindNearestDepot(
+                        EM, ID, Harvest->CarryingType,
+                        Harvest->ReturnBuildingID);
+                    if (AlternativeDepotID >= 0)
+                    {
+                        Harvest->ReturnBuildingID = AlternativeDepotID;
+                        RecordHarvestPathResult(*Harvest, true);
+                        const bool AlternativeHasPath = IssueDepotReturnMove(
+                            EM, ID, Harvest->TargetResourceID,
+                            AlternativeDepotID);
+                        RecordHarvestPathResult(
+                            *Harvest, AlternativeHasPath);
+                    }
+                }
             }
             break;
         }

@@ -161,6 +161,12 @@ bool ResourceCache::BuildTilesetImages(const std::string& TilesetName)
 
 bool ResourceCache::BuildTilesetAtlas(const std::string& TilesetName)
 {
+    return BuildTilesetAtlasForMap(TilesetName, nullptr);
+}
+
+bool ResourceCache::BuildTilesetAtlasForMap(const std::string& TilesetName,
+                                            const std::vector<uint16_t>* MegaTileIds)
+{
     auto* Ts = LoadTilesetData(TilesetName);
     if (!Ts || !Ts->Loaded) return false;
 
@@ -188,30 +194,160 @@ bool ResourceCache::BuildTilesetAtlas(const std::string& TilesetName)
     }
 
 #ifdef _WIN32
-    auto HdFrames = LoadDdsGrpRgbaFrames(*HdMegatileData);
-    if (HdFrames && !HdFrames->empty())
+    auto Parsed = ParseDdsGrp(*HdMegatileData);
+    if (!Parsed || Parsed->Frames.empty())
     {
-        auto AtlasOpt = BuildAtlasFromFrames(*HdFrames);
-        if (AtlasOpt)
+        Core::Utils::Logger::Warning("ResourceCache",
+            "Failed to parse HD tileset header for Tileset/" + TilesetName + ".dds.vr4");
+        return false;
+    }
+
+    const int TotalFrames = static_cast<int>(Parsed->Frames.size());
+    std::vector<bool> Needed(TotalFrames, false);
+    Needed[0] = true; // Always include tile 0 (blank/fallback)
+
+    // Include CV5 group 1 creep megatiles (16 variants)
+    if (Ts->Cv5.size() >= 32)
+    {
+        for (size_t Variant = 0; Variant < 16; ++Variant)
         {
-            mTilesets.AtlasesByName[TilesetName] = std::move(*AtlasOpt);
-            const auto& Atlas = mTilesets.AtlasesByName[TilesetName];
-            Core::Utils::Logger::Info("ResourceCache",
-                "Loaded HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4: " +
-                std::to_string(Atlas.FrameCount) + " frames " +
-                std::to_string(Atlas.Image.Width) + "x" +
-                std::to_string(Atlas.Image.Height));
-            return true;
+            uint16_t MegaIdx = Ts->Cv5[16u + Variant];
+            if (MegaIdx < TotalFrames)
+                Needed[MegaIdx] = true;
         }
     }
-    Core::Utils::Logger::Warning("ResourceCache",
-        "Failed to build HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4");
+
+    if (MegaTileIds && !MegaTileIds->empty())
+    {
+        for (uint16_t RawTile : *MegaTileIds)
+        {
+            uint16_t MegaIdx = RawTile;
+            if (!Ts->Cv5.empty())
+            {
+                uint16_t Group = (RawTile >> 4) & 0x7FF;
+                uint16_t Sub = RawTile & 0xF;
+                size_t Cv5Off = (size_t)Group * 16 + Sub;
+                if (Cv5Off < Ts->Cv5.size())
+                    MegaIdx = Ts->Cv5[Cv5Off];
+            }
+            if (MegaIdx < TotalFrames)
+                Needed[MegaIdx] = true;
+        }
+    }
+    else
+    {
+        // Fallback: full atlas if no map tiles specified
+        std::fill(Needed.begin(), Needed.end(), true);
+    }
+
+    std::vector<int> MegaIdxToSlot(TotalFrames, -1);
+    std::vector<uint16_t> SlotToMegaIdx;
+    SlotToMegaIdx.reserve(TotalFrames);
+    for (int I = 0; I < TotalFrames; ++I)
+    {
+        if (Needed[I])
+        {
+            MegaIdxToSlot[I] = static_cast<int>(SlotToMegaIdx.size());
+            SlotToMegaIdx.push_back(static_cast<uint16_t>(I));
+        }
+    }
+
+    const int FrameCount = static_cast<int>(SlotToMegaIdx.size());
+    if (FrameCount == 0)
+        return false;
+
+    int FrameW = Parsed->Frames[0].Width;
+    int FrameH = Parsed->Frames[0].Height;
+    for (uint16_t MegaIdx : SlotToMegaIdx)
+    {
+        FrameW = std::max(FrameW, Parsed->Frames[MegaIdx].Width);
+        FrameH = std::max(FrameH, Parsed->Frames[MegaIdx].Height);
+    }
+    if (FrameW <= 0 || FrameH <= 0)
+        return false;
+
+    const int CellW = FrameW + 2;
+    const int CellH = FrameH + 2;
+    const int Columns = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(FrameCount)))));
+    const int Rows = (FrameCount + Columns - 1) / Columns;
+    const int AtlasW = Columns * CellW;
+    const int AtlasH = Rows * CellH;
+    std::vector<uint8_t> Pixels(static_cast<size_t>(AtlasW) * static_cast<size_t>(AtlasH) * 4u, 0);
+
+    for (int Slot = 0; Slot < FrameCount; ++Slot)
+    {
+        uint16_t MegaIdx = SlotToMegaIdx[Slot];
+        const auto& FrameInfo = Parsed->Frames[MegaIdx];
+        auto ImageOpt = LoadWicRgbaImageFromMemory(
+            HdMegatileData->data() + FrameInfo.DataOffset,
+            FrameInfo.ByteSize);
+        if (!ImageOpt || ImageOpt->Width <= 0 || ImageOpt->Height <= 0 || ImageOpt->Rgba.empty())
+            continue;
+
+        const int DstX = (Slot % Columns) * CellW + 1;
+        const int DstY = (Slot / Columns) * CellH + 1;
+        const int CurW = ImageOpt->Width;
+        const int CurH = ImageOpt->Height;
+
+        for (int Y = 0; Y < CurH; ++Y)
+        {
+            const size_t SrcOff = (size_t)Y * (size_t)CurW * 4u;
+            const size_t DstOff = ((size_t)(DstY + Y) * (size_t)AtlasW + (size_t)DstX) * 4u;
+            std::memcpy(&Pixels[DstOff], &ImageOpt->Rgba[SrcOff], (size_t)CurW * 4u);
+        }
+
+        // 1-pixel border replication for bilinear filtering
+        for (int Y = 0; Y < CurH; ++Y)
+        {
+            const size_t LeftSrc = ((size_t)(DstY + Y) * (size_t)AtlasW + (size_t)DstX) * 4u;
+            const size_t LeftDst = ((size_t)(DstY + Y) * (size_t)AtlasW + (size_t)(DstX - 1)) * 4u;
+            std::memcpy(&Pixels[LeftDst], &Pixels[LeftSrc], 4u);
+
+            const size_t RightSrc = ((size_t)(DstY + Y) * (size_t)AtlasW + (size_t)(DstX + CurW - 1)) * 4u;
+            const size_t RightDst = ((size_t)(DstY + Y) * (size_t)AtlasW + (size_t)(DstX + CurW)) * 4u;
+            std::memcpy(&Pixels[RightDst], &Pixels[RightSrc], 4u);
+        }
+
+        for (int X = -1; X <= CurW; ++X)
+        {
+            const size_t TopSrc = ((size_t)DstY * (size_t)AtlasW + (size_t)(DstX + X)) * 4u;
+            const size_t TopDst = ((size_t)(DstY - 1) * (size_t)AtlasW + (size_t)(DstX + X)) * 4u;
+            std::memcpy(&Pixels[TopDst], &Pixels[TopSrc], 4u);
+
+            const size_t BottomSrc = ((size_t)(DstY + CurH - 1) * (size_t)AtlasW + (size_t)(DstX + X)) * 4u;
+            const size_t BottomDst = ((size_t)(DstY + CurH) * (size_t)AtlasW + (size_t)(DstX + X)) * 4u;
+            std::memcpy(&Pixels[BottomDst], &Pixels[BottomSrc], 4u);
+        }
+    }
+
+    TilesetAtlas Atlas;
+    Atlas.Image = UploadRgbaFull(AtlasW, AtlasH, Pixels.data());
+    if (!Atlas.Image.Valid())
+        return false;
+
+    Atlas.FrameWidth = FrameW;
+    Atlas.FrameHeight = FrameH;
+    Atlas.CellWidth = CellW;
+    Atlas.CellHeight = CellH;
+    Atlas.Columns = Columns;
+    Atlas.FrameCount = FrameCount;
+    Atlas.MegaIdxToSlot = std::move(MegaIdxToSlot);
+
+    mTilesets.AtlasesByName[TilesetName] = std::move(Atlas);
+    const auto& StoredAtlas = mTilesets.AtlasesByName[TilesetName];
+    Core::Utils::Logger::Info("ResourceCache",
+        "Loaded HD tileset atlas from Tileset/" + TilesetName + ".dds.vr4: " +
+        std::to_string(StoredAtlas.FrameCount) + " unique frames " +
+        std::to_string(StoredAtlas.Image.Width) + "x" +
+        std::to_string(StoredAtlas.Image.Height) +
+        " (packed into " + std::to_string((AtlasW * AtlasH * 4) / (1024 * 1024)) + " MB texture)");
+    return true;
 #else
     Core::Utils::Logger::Info("ResourceCache",
         "HD tileset atlas decode is unavailable on this platform for Tileset/" +
         TilesetName + ".dds.vr4");
-#endif
     return false;
+#endif
 }
 
 const std::vector<GpuImage>* ResourceCache::GetTilesetImages(const std::string& TilesetName)
@@ -224,9 +360,15 @@ const std::vector<GpuImage>* ResourceCache::GetTilesetImages(const std::string& 
 
 const TilesetAtlas* ResourceCache::GetTilesetAtlas(const std::string& TilesetName)
 {
+    return GetTilesetAtlasForMap(TilesetName, nullptr);
+}
+
+const TilesetAtlas* ResourceCache::GetTilesetAtlasForMap(const std::string& TilesetName,
+                                                        const std::vector<uint16_t>* MegaTileIds)
+{
     auto It = mTilesets.AtlasesByName.find(TilesetName);
     if (It != mTilesets.AtlasesByName.end()) return &It->second;
-    if (BuildTilesetAtlas(TilesetName)) return &mTilesets.AtlasesByName[TilesetName];
+    if (BuildTilesetAtlasForMap(TilesetName, MegaTileIds)) return &mTilesets.AtlasesByName[TilesetName];
     return nullptr;
 }
 

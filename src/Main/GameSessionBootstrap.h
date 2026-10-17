@@ -229,6 +229,12 @@ inline bool IsAiObserverMatch()
     return Value && Value[0] != '\0' && Value[0] != '0';
 }
 
+inline bool IsAiObserverRevealToAi()
+{
+    const char* Value = std::getenv("STARCRAFT_AI_OBSERVER_REVEAL_TO_AI");
+    return Value && Value[0] != '\0' && Value[0] != '0';
+}
+
 inline bool IsCampaignMissionPath(std::string MapPath)
 {
     std::replace(MapPath.begin(), MapPath.end(), '\\', '/');
@@ -453,7 +459,10 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     Game::Systems::CommandSystem::SetMap(&Session.MutableEcsMap());
     Game::Systems::BuildingSystem::ResetPendingBuildOrders();
     Game::Systems::BuildingSystem::SetMap(&Session.MutableEcsMap());
+    Game::Systems::BuildingSystem::SetFogOfWarSystem(Session.GetFogSystem());
+    Game::Systems::CombatSystem::SetFogOfWarSystem(Session.GetFogSystem());
     Game::Systems::ProductionSystem::SetMap(&Session.MutableEcsMap());
+    Game::Systems::TransportSystem::SetMap(&Session.MutableEcsMap());
 }
 
 template <typename SpawnResourceEntityT, typename IsMineralUnitT, typename IsGeyserUnitT>
@@ -499,7 +508,10 @@ inline void EnsurePlayableStart(GameSession& Session,
     };
 
     bool HasTownHall = false;
+    int TownHallEntityId = -1;
     int WorkerCount = 0;
+    int OverlordCount = 0;
+    int LarvaCount = 0;
     Detail::StartRace Race = Detail::RaceFromScriptPlayer(Session, PlayerId);
     bool HasNearbyMinerals = false;
     bool HasNearbyGas = false;
@@ -535,6 +547,7 @@ inline void EnsurePlayableStart(GameSession& Session,
             Detail::IsTownHallForRace(Race, Unit->ChkUnitID))
         {
             HasTownHall = true;
+            TownHallEntityId = EntityId;
         }
         if (Owner == PlayerId &&
             !EM.GetComponent<Game::Components::BuildingComponent>(EntityId) &&
@@ -542,6 +555,14 @@ inline void EnsurePlayableStart(GameSession& Session,
             Detail::IsWorkerForRace(Race, Unit->ChkUnitID))
         {
             ++WorkerCount;
+        }
+        if (Owner == PlayerId && Unit->ChkUnitID == 42)
+        {
+            ++OverlordCount;
+        }
+        if (Owner == PlayerId && Unit->ChkUnitID == 35)
+        {
+            ++LarvaCount;
         }
         auto* Resource = EM.GetComponent<Game::Components::ResourceComponent>(EntityId);
         if (Resource && IsNearStart(Trans->Position))
@@ -557,7 +578,7 @@ inline void EnsurePlayableStart(GameSession& Session,
     {
         const int TownHallDefID = Detail::TownHallDefForRace(Race);
         if (TownHallDefID >= 0)
-            Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            TownHallEntityId = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
                 Session.Entities(), TownHallDefID, {(float)BaseX, (float)BaseY}, PlayerId);
         SpawnedAny = true;
     }
@@ -570,6 +591,42 @@ inline void EnsurePlayableStart(GameSession& Session,
                 Session.Entities(), WorkerDefID,
                 {(float)(BaseX - 36 + I * 24), (float)(BaseY + 64)}, PlayerId);
         SpawnedAny = true;
+    }
+
+    if (Race == Detail::StartRace::Zerg)
+    {
+        if (OverlordCount == 0)
+        {
+            const int OverlordDefID = Game::Races::GetUnitDefIDByChkUnitID(42);
+            if (OverlordDefID >= 0)
+            {
+                Game::Systems::ProductionSystem::DebugSpawnUnit(
+                    Session.Entities(), OverlordDefID,
+                    {(float)(BaseX + 64), (float)(BaseY - 64)}, PlayerId);
+                SpawnedAny = true;
+            }
+        }
+
+        if (LarvaCount < 3)
+        {
+            const int LarvaDefID = Game::Races::GetUnitDefIDByChkUnitID(35);
+            if (LarvaDefID >= 0)
+            {
+                for (int I = LarvaCount; I < 3; ++I)
+                {
+                    const int LarvaEid = Game::Systems::ProductionSystem::DebugSpawnUnit(
+                        Session.Entities(), LarvaDefID,
+                        {(float)(BaseX - 32 + I * 24), (float)(BaseY + 48)}, PlayerId);
+                    if (LarvaEid >= 0)
+                    {
+                        auto* LarvaComp = Session.Entities().GetComponent<Game::Components::LarvaComponent>(LarvaEid);
+                        auto& LLarva = LarvaComp ? *LarvaComp : Session.Entities().AddComponent<Game::Components::LarvaComponent>(LarvaEid);
+                        LLarva.ParentHatcheryEntityID = TownHallEntityId;
+                    }
+                    SpawnedAny = true;
+                }
+            }
+        }
     }
 
     const int Facing = PlayerId == 0 ? -1 : 1;
@@ -671,6 +728,8 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
             if (HasPlayerUnits[PlayerId])
                 Participants.push_back(PlayerId);
 
+        const bool RevealToAi = Detail::IsAiObserverRevealToAi();
+        auto* AiFog = RevealToAi ? nullptr : Session.GetFogSystem();
         for (size_t I = 0; I < Participants.size(); ++I)
         {
             const int PlayerId = Participants[I];
@@ -678,7 +737,7 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
             const auto Difficulty = Detail::AIDifficultyForPlayer(PlayerId);
             SysMgr.RegisterSystem(std::make_unique<Game::Systems::AIBrain>(
                 SysMgr, PlayerId, TargetPlayerId, false,
-                &Session.MutableEcsMap(), Difficulty, Session.GetFogSystem()));
+                &Session.MutableEcsMap(), Difficulty, AiFog));
             Core::Utils::Logger::Info(
                 "AiObserverMatch", "registered AIBrain player=" +
                 std::to_string(PlayerId) + " initial_target=" +
@@ -689,7 +748,8 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
             SysMgr, Participants));
         Core::Utils::Logger::Info(
             "AiObserverMatch", "observer match started participants=" +
-            std::to_string(Participants.size()) + " reveal_all=1");
+            std::to_string(Participants.size()) + " reveal_all=1 ai_reveal_all=" +
+            std::to_string(RevealToAi ? 1 : 0));
         return;
     }
 

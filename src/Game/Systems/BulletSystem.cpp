@@ -3,6 +3,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/GeyserState.h"
+#include "Game/Pathfinding/NavigationSpatialHash.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +22,28 @@ void BulletSystem::SetVisualResolver(VisualResolver Resolver)
 
 namespace
 {
+    static thread_local Game::Pathfinding::NavigationSpatialHash sBulletSpatialHash;
+    static const Game::Pathfinding::NavigationSpatialHash* sActiveBulletSpatialHash = nullptr;
+    static int sActiveHaloRockets = 0;
+
+    template<typename Fn>
+    static void ForNearbyUnits(Core::ECS::EntityManager& EM,
+                               float MinX, float MinY, float MaxX, float MaxY,
+                               Fn&& Handler)
+    {
+        if (sActiveBulletSpatialHash && !sActiveBulletSpatialHash->Empty())
+        {
+            static thread_local std::vector<int> sCandidateBuffer;
+            sActiveBulletSpatialHash->QueryInto(MinX, MinY, MaxX, MaxY, sCandidateBuffer);
+            for (int UID : sCandidateBuffer)
+                Handler(UID);
+        }
+        else
+        {
+            for (int UID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+                Handler(UID);
+        }
+    }
     static float SplashFalloff(float Distance,
                                float InnerRadius,
                                float MediumRadius,
@@ -272,6 +295,9 @@ namespace
         if (Status && Status->HasEffect(StatusEffect::DarkSwarm))
             return true;
 
+        if (!EM.HasAnyComponent<SpellAreaComponent>())
+            return false;
+
         const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetEntityID);
         if (!TargetTrans)
             return false;
@@ -493,20 +519,12 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
     }
     if (Visual && Visual->ImageID == kValkyrieHaloRocketImageID)
     {
-        int ActiveHaloRockets = 0;
-        for (int ExistingID :
-             EM.GetEntitiesWith<BulletComponent, RenderComponent>())
+        if (sActiveHaloRockets >= kMaxActiveHaloRockets)
         {
-            const auto* ExistingRender =
-                EM.GetComponent<RenderComponent>(ExistingID);
-            if (ExistingRender &&
-                ExistingRender->ImageID == kValkyrieHaloRocketImageID &&
-                ++ActiveHaloRockets >= kMaxActiveHaloRockets)
-            {
-                EM.DestroyEntity(BulletID);
-                return -1;
-            }
+            EM.DestroyEntity(BulletID);
+            return -1;
         }
+        ++sActiveHaloRockets;
     }
     if (Visual)
     {
@@ -781,9 +799,29 @@ void BulletSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
 
     auto& EM = mSystemMgr.GetEntityManager();
+
+    sBulletSpatialHash.Clear();
+    auto UnitEntities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    for (int UID : UnitEntities)
+    {
+        if (auto* T = EM.GetComponent<TransformComponent>(UID))
+            sBulletSpatialHash.Insert(UID, T->Position);
+    }
+    sActiveBulletSpatialHash = &sBulletSpatialHash;
+    struct BulletSpatialScope
+    {
+        ~BulletSpatialScope() { sActiveBulletSpatialHash = nullptr; }
+    } Scope;
+
+    sActiveHaloRockets = 0;
     auto Bullets = EM.GetEntitiesWith<TransformComponent, BulletComponent>();
     for (int ID : Bullets)
+    {
+        const auto* Render = EM.GetComponent<RenderComponent>(ID);
+        if (Render && Render->ImageID == kValkyrieHaloRocketImageID)
+            ++sActiveHaloRockets;
         UpdateBullet(EM, ID, DeltaTime);
+    }
 }
 
 bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
@@ -809,16 +847,19 @@ bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
     if (HitRadius <= 0.0f)
         return true;
 
-    for (int TargetID :
-         EM.GetEntitiesWith<TransformComponent, UnitComponent,
-                            PlayerComponent>())
+    const float MinX = BulletTrans->Position.X - HitRadius - 32.0f;
+    const float MaxX = BulletTrans->Position.X + HitRadius + 32.0f;
+    const float MinY = BulletTrans->Position.Y - HitRadius - 32.0f;
+    const float MaxY = BulletTrans->Position.Y + HitRadius + 32.0f;
+
+    ForNearbyUnits(EM, MinX, MinY, MaxX, MaxY, [&](int TargetID)
     {
         if (TargetID == Bullet->SourceEntityID ||
             std::find(Bullet->IScriptHitEntityIDs.begin(),
                       Bullet->IScriptHitEntityIDs.end(), TargetID) !=
                 Bullet->IScriptHitEntityIDs.end())
         {
-            continue;
+            return;
         }
 
         auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
@@ -830,17 +871,17 @@ bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
             IsProtectedResourceNode(EM, TargetID) ||
             IsInvulnerableByStatus(EM, TargetID))
         {
-            continue;
+            return;
         }
 
         const bool TargetIsAir = IsAirTarget(EM, TargetID);
         if (TargetIsAir ? !Bullet->CanTargetAir : !Bullet->CanTargetGround)
-            continue;
+            return;
         if (DistanceToBounds(BulletTrans->Position,
                              BoundsForEntity(EM, TargetID, *TargetTrans)) >
             HitRadius)
         {
-            continue;
+            return;
         }
 
         Bullet->IScriptHitEntityIDs.push_back(TargetID);
@@ -850,7 +891,7 @@ bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
             EM, TargetID, DamageCombat, Bullet->SourceEntityID,
             (Bullet->BaseDamage + Bullet->DamageUpgradeBonus) * 256,
             std::max(1, Bullet->HitCount), false);
-    }
+    });
     return true;
 }
 
@@ -1088,15 +1129,16 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
         if (DirectHitResolved && Bullet->RemainingBounces > 0 &&
             OwnerCanRetarget)
         {
-            for (int CandidateID :
-                 EM.GetEntitiesWith<TransformComponent, UnitComponent,
-                                    PlayerComponent>())
+            ForNearbyUnits(
+                EM, ImpactPos.X - 128.0f, ImpactPos.Y - 128.0f,
+                ImpactPos.X + 128.0f, ImpactPos.Y + 128.0f,
+                [&](int CandidateID)
             {
                 if (CandidateID == DirectHitID ||
                     CandidateID == Bullet->PreviousBounceTargetEntityID ||
                     CandidateID == Bullet->SourceEntityID)
                 {
-                    continue;
+                    return;
                 }
 
                 auto* CandidateUnit = EM.GetComponent<UnitComponent>(CandidateID);
@@ -1109,21 +1151,21 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                     IsProtectedResourceNode(EM, CandidateID) ||
                     IsInvulnerableByStatus(EM, CandidateID))
                 {
-                    continue;
+                    return;
                 }
 
                 const bool CandidateIsAir = IsAirTarget(EM, CandidateID);
                 if ((CandidateIsAir && !Bullet->CanTargetAir) ||
                     (!CandidateIsAir && !Bullet->CanTargetGround))
                 {
-                    continue;
+                    return;
                 }
 
                 if (const auto* Cloak =
                         EM.GetComponent<CloakComponent>(CandidateID);
                     Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed))
                 {
-                    continue;
+                    return;
                 }
                 if (SourcePlayerID >= 0 && SourcePlayerID < 8)
                 {
@@ -1131,7 +1173,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                             EM.GetComponent<VisionComponent>(CandidateID);
                         Vision && !Vision->VisibleToPlayer[SourcePlayerID])
                     {
-                        continue;
+                        return;
                     }
                 }
 
@@ -1168,7 +1210,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                     Bottom < ImpactPos.Y - 96.0f ||
                     Top > ImpactPos.Y + 96.0f)
                 {
-                    continue;
+                    return;
                 }
 
                 if (NextTargetID < 0 || Left < BestLeft ||
@@ -1180,7 +1222,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                     BestLeft = Left;
                     BestTop = Top;
                 }
-            }
+            });
         }
 
         if (NextTargetID >= 0)
@@ -1339,22 +1381,33 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
                            Splash == SplashType::Line ||
                            Splash == SplashType::Air;
 
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-    for (int UID : Units)
+    float MinX = Center.X - OuterRadius - 32.0f;
+    float MaxX = Center.X + OuterRadius + 32.0f;
+    float MinY = Center.Y - OuterRadius - 32.0f;
+    float MaxY = Center.Y + OuterRadius + 32.0f;
+    if (Splash == SplashType::Line)
+    {
+        MinX = std::min(LineStart.X, LineEnd.X) - OuterRadius - 32.0f;
+        MaxX = std::max(LineStart.X, LineEnd.X) + OuterRadius + 32.0f;
+        MinY = std::min(LineStart.Y, LineEnd.Y) - OuterRadius - 32.0f;
+        MaxY = std::max(LineStart.Y, LineEnd.Y) + OuterRadius + 32.0f;
+    }
+
+    ForNearbyUnits(EM, MinX, MinY, MaxX, MaxY, [&](int UID)
     {
         auto* UP = EM.GetComponent<PlayerComponent>(UID);
         auto* UT = EM.GetComponent<TransformComponent>(UID);
         auto* UU = EM.GetComponent<UnitComponent>(UID);
-        if (!UP || !UT || !UU || UU->HitPoints <= 0) continue;
-        if (IsProtectedResourceNode(EM, UID)) continue;
-        if (UID == SourceEntityID) continue;
+        if (!UP || !UT || !UU || UU->HitPoints <= 0) return;
+        if (IsProtectedResourceNode(EM, UID)) return;
+        if (UID == SourceEntityID) return;
         if (EnemyOnly &&
-            (UP->PlayerID == SourcePlayerID || UP->IsRescuePassive)) continue;
-        if (IsInvulnerableByStatus(EM, UID)) continue;
+            (UP->PlayerID == SourcePlayerID || UP->IsRescuePassive)) return;
+        if (IsInvulnerableByStatus(EM, UID)) return;
 
         const bool TargetIsAir = IsAirTarget(EM, UID);
-        if (Splash == SplashType::Air && !TargetIsAir) continue;
-        if (TargetIsAir ? !CanTargetAir : !CanTargetGround) continue;
+        if (Splash == SplashType::Air && !TargetIsAir) return;
+        if (TargetIsAir ? !CanTargetAir : !CanTargetGround) return;
 
         const CollisionBounds TargetBounds = BoundsForEntity(EM, UID, *UT);
 
@@ -1364,12 +1417,12 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         {
             Distance = DistanceSegmentToBounds(
                 LineStart, LineEnd, TargetBounds);
-            if (Distance > OuterRadius) continue;
+            if (Distance > OuterRadius) return;
         }
         else
         {
             Distance = DistanceToBounds(Center, TargetBounds);
-            if (Distance > OuterRadius) continue;
+            if (Distance > OuterRadius) return;
             if (Splash == SplashType::Air)
             {
                 float EffectiveMedium = MediumRadius > 0.0f
@@ -1384,7 +1437,7 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
             {
                 const float Falloff = SplashFalloff(
                     Distance, InnerRadius, MediumRadius, OuterRadius);
-                if (Falloff <= 0.0f) continue;
+                if (Falloff <= 0.0f) return;
                 DamageDivisor = Falloff >= 1.0f
                     ? 1
                     : (Falloff >= 0.5f ? 2 : 4);
@@ -1398,7 +1451,7 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         CombatSystem::ApplyDamageRaw(
             EM, UID, SplashCombat, SourceEntityID, DamageRaw,
             std::max(1, HitCount), false);
-    }
+    });
 }
 
 } // namespace Game::Systems

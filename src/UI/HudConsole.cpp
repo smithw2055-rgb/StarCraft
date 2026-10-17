@@ -96,7 +96,33 @@ bool Hud::DrawConsoleChrome(const HudLayout& Layout, int ViewportWidth)
             D.DrawSpriteFromImage(Image, (float)X, (float)Y, (float)PlaqueW, (float)PlaqueH, Render::Colors::White());
         };
 
-        DrawPlaque(ConsoleTimeImg, CenterOuterRect, false);
+        if (ConsoleTimeImg.Valid() && ConsoleTimeImg.Width > 0 && ConsoleTimeImg.Height > 0)
+        {
+            const float TimeScale = BaseScale * 1.05f;
+            const int BadgeW = std::max(60, (int)std::lround((float)ConsoleTimeImg.Width * TimeScale));
+            const int BadgeH = std::max(22, (int)std::lround((float)ConsoleTimeImg.Height * TimeScale));
+            const int BadgeX = CenterOuterRect.X + (CenterOuterRect.W - BadgeW) / 2;
+            const int BadgeY = CenterOuterRect.Y - BadgeH / 2 + 1;
+
+            D.DrawSpriteFromImage(ConsoleTimeImg,
+                                  (float)BadgeX, (float)BadgeY,
+                                  (float)BadgeW, (float)BadgeH,
+                                  Render::Colors::White());
+
+            const int TotalSeconds = std::max(0, (int)mState.MatchElapsedSeconds);
+            const int Minutes = TotalSeconds / 60;
+            const int Seconds = TotalSeconds % 60;
+            char TimeStr[16];
+            std::snprintf(TimeStr, sizeof(TimeStr), "%02d:%02d", Minutes, Seconds);
+
+            const float TextX = (float)BadgeX + (float)BadgeW * 0.5f - 18.0f;
+            const float TextY = (float)BadgeY + (float)BadgeH * 0.5f - 6.0f;
+            D.DrawText(TimeStr, TextX, TextY, 1.05f, Render::Color(245, 245, 255, 255));
+        }
+        else
+        {
+            DrawPlaque(ConsoleTimeImg, CenterOuterRect, false);
+        }
         DrawPlaque(ConsoleApmImg, CenterOuterRect, true);
     }
     else if (ConsoleImg.Valid())

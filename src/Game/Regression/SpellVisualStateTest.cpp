@@ -32,7 +32,8 @@ namespace
     {
         if (!Value)
         {
-            std::fprintf(stderr, "FAIL: %s\n", Message);
+            std::printf("FAIL: %s\n", Message);
+            std::fflush(stdout);
             std::exit(1);
         }
     }
@@ -72,6 +73,7 @@ namespace
         Unit.MaxHitPoints = Def.HitPoints;
         Unit.SupplyCost = Def.SupplyCost;
         Unit.SizeType = Def.SizeType;
+        Unit.Armor = Def.Armor;
         EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
         return EntityID;
     }
@@ -363,6 +365,36 @@ int main()
     Require(BroodlingCount == 2,
             "spawn broodling creates two complete broodling units");
 
+    // Replenish energy & cooldown for validation checks
+    EM.GetComponent<Game::Components::UnitComponent>(BroodlingCaster)->EnergyPoints = 200;
+    EM.RemoveComponent<Game::Components::SpellCooldown>(BroodlingCaster);
+
+    const int BroodlingBuildingTarget =
+        CreateUnit(EM, "Marine", BroodlingVictimPlayerID, {288.0f, 96.0f});
+    EM.AddComponent<Game::Components::BuildingComponent>(BroodlingBuildingTarget);
+    std::string RejectReason;
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, BroodlingCaster, Game::Systems::SpellType::SpawnBroodling,
+                BroodlingBuildingTarget, {}, &RejectReason) &&
+            RejectReason == "spawn broodling requires a non-building unit",
+            "spawn broodling rejects building targets");
+
+    const int BroodlingAirTarget =
+        CreateUnit(EM, "Mutalisk", BroodlingVictimPlayerID, {288.0f, 96.0f});
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, BroodlingCaster, Game::Systems::SpellType::SpawnBroodling,
+                BroodlingAirTarget, {}, &RejectReason) &&
+            RejectReason == "spawn broodling requires a live organic ground unit",
+            "spawn broodling rejects air targets");
+
+    const int BroodlingMechTarget =
+        CreateUnit(EM, "Vulture", BroodlingVictimPlayerID, {288.0f, 96.0f});
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, BroodlingCaster, Game::Systems::SpellType::SpawnBroodling,
+                BroodlingMechTarget, {}, &RejectReason) &&
+            RejectReason == "spawn broodling requires a live organic ground unit",
+            "spawn broodling rejects mechanical targets");
+
     constexpr int ConsumePlayerID = 6;
     constexpr int ConsumeEnemyPlayerID = 7;
     const int HydraliskDefID = Game::Races::GetUnitDefID("Hydralisk");
@@ -580,6 +612,12 @@ int main()
         CreateUnit(EM, "Marine", LockdownEnemyPlayerID, {800.0f, 192.0f});
     const int LockdownMechanicalTarget =
         CreateUnit(EM, "Vulture", LockdownEnemyPlayerID, {832.0f, 192.0f});
+    const int LockdownScvTarget =
+        CreateUnit(EM, "SCV", LockdownEnemyPlayerID, {848.0f, 192.0f});
+    const int LockdownProbeTarget =
+        CreateUnit(EM, "Probe", LockdownEnemyPlayerID, {864.0f, 192.0f});
+    const int LockdownZergTarget =
+        CreateUnit(EM, "Zergling", LockdownEnemyPlayerID, {880.0f, 192.0f});
 
     Require(!Game::Systems::SpellSystem::CanCastSpell(
                 EM, LockdownCaster, Game::Systems::SpellType::Lockdown,
@@ -589,6 +627,21 @@ int main()
                 EM, LockdownCaster, Game::Systems::SpellType::Lockdown,
                 LockdownBiologicalTarget),
             "lockdown cast fails on biological targets");
+
+    // SCV and Probe are mechanical units and valid lockdown targets; Zerg units are not
+    Require(Game::Systems::SpellSystem::CanCastSpell(
+                EM, LockdownCaster, Game::Systems::SpellType::Lockdown,
+                LockdownScvTarget),
+            "SCV is mechanical and can be targeted by lockdown");
+    Require(Game::Systems::SpellSystem::CanCastSpell(
+                EM, LockdownCaster, Game::Systems::SpellType::Lockdown,
+                LockdownProbeTarget),
+            "Probe is mechanical and can be targeted by lockdown");
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, LockdownCaster, Game::Systems::SpellType::Lockdown,
+                LockdownZergTarget),
+            "Zerg units are organic and cannot be targeted by lockdown");
+
     auto* LockdownCasterUnit =
         EM.GetComponent<Game::Components::UnitComponent>(LockdownCaster);
     Require(LockdownCasterUnit && LockdownCasterUnit->EnergyPoints == 150,
@@ -689,6 +742,212 @@ int main()
                 RecallCooldown->SpellType == (uint8_t)Game::Systems::SpellType::Recall &&
                 RecallCooldown->CooldownRemaining > 0.0f,
             "recall applies a spell cooldown after a successful cast");
+
+    // ==========================================
+    // Extended StarCraft Spells Regression Tests
+    // ==========================================
+    const int SpellCasterP1 = CreateCaster(EM, 1, {1000.0f, 1000.0f}, 250);
+    auto* SpellCasterUnit = EM.GetComponent<Game::Components::UnitComponent>(SpellCasterP1);
+    SpellCasterUnit->ShieldPoints = 100;
+    SpellCasterUnit->MaxShieldPoints = 100;
+
+    const int MarineP1 = CreateUnit(EM, "Marine", 1, {1020.0f, 1000.0f});
+    const int DragoonP2 = CreateUnit(EM, "Dragoon", 2, {1050.0f, 1000.0f});
+    const int ZealotP2 = CreateUnit(EM, "Zealot", 2, {1060.0f, 1000.0f});
+
+    auto ResetCaster = [&](int Energy = 200) {
+        SpellCasterUnit->EnergyPoints = Energy;
+        if (auto* CD = EM.GetComponent<Game::Components::SpellCooldown>(SpellCasterP1))
+        {
+            CD->CooldownRemaining = 0.0f;
+        }
+    };
+
+    // 1. Defensive Matrix
+    ResetCaster(250);
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::DefensiveMatrix, MarineP1),
+            "cast defensive matrix on friendly unit succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 150, "defensive matrix costs 100 energy");
+    auto* MarineUnit = EM.GetComponent<Game::Components::UnitComponent>(MarineP1);
+    auto* MarineStatus = EM.GetComponent<Game::Components::StatusEffectComponent>(MarineP1);
+    Require(MarineUnit && MarineUnit->DefensiveMatrixPoints == 250,
+            "defensive matrix provides 250 barrier points");
+    Require(MarineStatus && MarineStatus->HasEffect(Game::Components::StatusEffect::DefensiveMatrix),
+            "defensive matrix status effect active");
+
+    // 2. Irradiate
+    ResetCaster(150);
+    std::string FailReason;
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Irradiate, DragoonP2, {}, &FailReason),
+            "irradiate cannot target mechanical units");
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Irradiate, ZealotP2),
+            "irradiate can target organic units");
+    Require(SpellCasterUnit->EnergyPoints == 75, "irradiate costs 75 energy");
+    auto* ZealotStatus = EM.GetComponent<Game::Components::StatusEffectComponent>(ZealotP2);
+    Require(ZealotStatus && ZealotStatus->HasEffect(Game::Components::StatusEffect::Irradiate),
+            "target gains irradiate status effect");
+
+    // 3. Restoration
+    ResetCaster(200);
+    MarineStatus->AddEffect(Game::Components::StatusEffect::Blind, 100.0f);
+    MarineStatus->AddEffect(Game::Components::StatusEffect::Lockdown, 100.0f);
+    MarineStatus->AddEffect(Game::Components::StatusEffect::Parasite, 100.0f);
+    MarineStatus->AddEffect(Game::Components::StatusEffect::Plague, 100.0f);
+    MarineStatus->AddEffect(Game::Components::StatusEffect::Ensnare, 100.0f);
+    MarineUnit->AcidSporeCount = 5;
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Restoration, MarineP1),
+            "cast restoration on debuffed unit succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 150, "restoration costs 50 energy");
+    Require(!MarineStatus->HasEffect(Game::Components::StatusEffect::Blind) &&
+            !MarineStatus->HasEffect(Game::Components::StatusEffect::Lockdown) &&
+            !MarineStatus->HasEffect(Game::Components::StatusEffect::Parasite) &&
+            !MarineStatus->HasEffect(Game::Components::StatusEffect::Plague) &&
+            !MarineStatus->HasEffect(Game::Components::StatusEffect::Ensnare) &&
+            MarineUnit->AcidSporeCount == 0,
+            "restoration dispels all debuffs and acid spores");
+
+    // 4. Optical Flare
+    ResetCaster(150);
+    const int DetectorP2 = CreateUnit(EM, "Observer", 2, {1100.0f, 1000.0f});
+    auto* DetectorUnit = EM.GetComponent<Game::Components::UnitComponent>(DetectorP2);
+    DetectorUnit->IsDetector = true;
+    DetectorUnit->SightRange = 9;
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::OpticalFlare, DetectorP2),
+            "cast optical flare succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 75, "optical flare costs 75 energy");
+    auto* DetectorStatus = EM.GetComponent<Game::Components::StatusEffectComponent>(DetectorP2);
+    Require(DetectorStatus && DetectorStatus->HasEffect(Game::Components::StatusEffect::Blind),
+            "target gains blind status effect");
+    Require(DetectorUnit->SightRange == 1, "blind reduces sight range to 1");
+    Require(!DetectorUnit->IsDetector, "blind disables detector ability");
+
+    // Restoration cleanses Blind and restores sight range and detector capability
+    ResetCaster(100);
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Restoration, DetectorP2),
+            "restoration on blinded detector succeeds");
+    Require(!DetectorStatus->HasEffect(Game::Components::StatusEffect::Blind),
+            "restoration cleanses blind effect");
+    Require(DetectorUnit->SightRange == 9, "restoration restores normal sight range");
+    Require(DetectorUnit->IsDetector, "restoration restores detector capability");
+
+    // 5. Feedback
+    ResetCaster(100);
+    const int HighTemplarP2 = CreateUnit(EM, "High Templar", 2, {1150.0f, 1000.0f});
+    auto* HtUnit = EM.GetComponent<Game::Components::UnitComponent>(HighTemplarP2);
+    HtUnit->EnergyPoints = 180;
+    HtUnit->MaxEnergyPoints = 200;
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Feedback, HighTemplarP2),
+            "feedback cast on unit with energy succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 50, "feedback costs 50 energy");
+    Require(HtUnit->EnergyPoints == 0, "feedback completely drains target energy");
+
+    // 6. Maelstrom
+    ResetCaster(150);
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::Maelstrom, -1, {1055.0f, 1000.0f}),
+            "cast maelstrom at target position succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 50, "maelstrom costs 100 energy");
+    auto* DragoonStatus = EM.GetComponent<Game::Components::StatusEffectComponent>(DragoonP2);
+    Require(ZealotStatus && ZealotStatus->HasEffect(Game::Components::StatusEffect::Maelstrom),
+            "organic zealot in maelstrom area is affected");
+    Require(!DragoonStatus || !DragoonStatus->HasEffect(Game::Components::StatusEffect::Maelstrom),
+            "mechanical dragoon in maelstrom area is immune");
+
+    // 7. Mind Control
+    ResetCaster(200);
+    auto& P1Res = Game::Systems::HarvestSystem::GetResources(1);
+    auto& P2Res = Game::Systems::HarvestSystem::GetResources(2);
+    P1Res.SupplyUsed = 10;
+    P2Res.SupplyUsed = 10;
+    P1Res.SupplyMax = 50;
+    P2Res.SupplyMax = 50;
+
+    const int EnemyMarine = CreateUnit(EM, "Marine", 2, {1200.0f, 1000.0f});
+    SpellCasterUnit->ShieldPoints = 100;
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::MindControl, EnemyMarine),
+            "cast mind control on enemy unit succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 50, "mind control costs 150 energy");
+    Require(SpellCasterUnit->ShieldPoints == 0, "mind control completely depletes caster shields");
+    auto* ControlledPlayer = EM.GetComponent<Game::Components::PlayerComponent>(EnemyMarine);
+    Require(ControlledPlayer && ControlledPlayer->PlayerID == 1,
+            "target player ownership transferred to caster");
+    Require(P2Res.SupplyUsed == 9, "mind control deducts supply from original owner");
+    Require(P1Res.SupplyUsed == 11, "mind control adds supply to new owner");
+
+    // 8. Yamato Gun
+    ResetCaster(200);
+    const int YamatoTargetBC = CreateUnit(EM, "Battlecruiser", 2, {1250.0f, 1000.0f});
+    auto* YamatoTargetBCUnit = EM.GetComponent<Game::Components::UnitComponent>(YamatoTargetBC);
+    Require(YamatoTargetBCUnit && YamatoTargetBCUnit->HitPoints == 500, "Battlecruiser spawned with 500 HP");
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, SpellCasterP1, Game::Systems::SpellType::YamatoGun, YamatoTargetBC),
+            "cast yamato gun on battlecruiser succeeds");
+    Require(SpellCasterUnit->EnergyPoints == 50, "yamato gun costs 150 energy");
+
+    // 9. Infestation
+    const int CC = CreateUnit(EM, "CommandCenter", 2, {1300.0f, 1000.0f});
+    auto* CCUnit = EM.GetComponent<Game::Components::UnitComponent>(CC);
+    auto* CCPlayer = EM.GetComponent<Game::Components::PlayerComponent>(CC);
+    auto& CCBldg = EM.AddComponent<Game::Components::BuildingComponent>(CC);
+    Require(CCUnit && CCUnit->ChkUnitID == 106 && CCUnit->HitPoints == 1500,
+            "Terran Command Center spawned with 1500 HP");
+
+    const int InfestingQueen = CreateCaster(EM, 1, {1290.0f, 1000.0f}, 0);
+    FailReason.clear();
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC, {}, &FailReason),
+            "cannot infest healthy Command Center");
+    Require(!Game::Systems::SpellSystem::CastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC),
+            "cast infestation fails on healthy Command Center");
+
+    // Damaged but friendly should fail
+    CCUnit->HitPoints = 700;
+    CCPlayer->PlayerID = 1;
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC, {}, &FailReason),
+            "cannot infest friendly Command Center");
+
+    // Damaged enemy but lifted should fail
+    CCPlayer->PlayerID = 2;
+    CCBldg.IsLifted = true;
+    Require(!Game::Systems::SpellSystem::CanCastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC, {}, &FailReason),
+            "cannot infest lifted Command Center");
+
+    // Valid: Damaged enemy grounded Command Center (< 50% HP)
+    CCBldg.IsLifted = false;
+    CCBldg.BurnDamageAccumulator = 1.5f;
+    P2Res.SupplyMax = 50;
+
+    Require(Game::Systems::SpellSystem::CanCastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC),
+            "can cast infestation on damaged enemy Command Center");
+    Require(Game::Systems::SpellSystem::CastSpell(
+                EM, InfestingQueen, Game::Systems::SpellType::Infestation, CC),
+            "cast infestation succeeds");
+
+    Require(CCUnit->ChkUnitID == 130,
+            "Command Center converted to Infested Command Center (ChkUnitID 130)");
+    Require(CCUnit->UnitRace == Game::Components::Race::Zerg,
+            "Infested Command Center is Zerg race");
+    Require(CCUnit->HitPoints == CCUnit->MaxHitPoints,
+            "Infested Command Center HP restored to full (1500 HP)");
+    Require(CCBldg.BurnDamageAccumulator == 0.0f, "Infested Command Center burn damage accumulator reset");
+    Require(CCPlayer->PlayerID == 1,
+            "Infested Command Center transferred to Queen owner (Player 1)");
+    Require(P2Res.SupplyMax == 40,
+            "Terran player loses 10 SupplyMax from infested Command Center");
+    Require(!EM.IsAlive(InfestingQueen),
+            "Queen is consumed and destroyed upon infesting Command Center");
 
     std::printf("SpellVisualStateTest passed\n");
     return 0;

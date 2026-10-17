@@ -24,6 +24,10 @@ enum class TriggerOutcome : uint8_t
     Draw
 };
 
+bool IsBuildingUnitID(int ChkUnitID);
+bool IsFactoryUnitID(int ChkUnitID);
+bool MatchUnitGroup(int UnitID, uint16_t UnitGroup);
+
 struct TriggerRuntimeEvent
 {
     uint8_t ActionID = 0;
@@ -70,6 +74,7 @@ struct TriggerRuntimeConfig
     std::function<void(Core::Math::Vec2)> CenterView;
     std::function<void(Core::Math::Vec2)> MinimapPing;
     std::function<void(bool)> SetGamePaused;
+    std::function<uint32_t(int)> ResolveSubunitImageID;
 };
 
 class TriggerVM
@@ -116,6 +121,8 @@ private:
         size_t CurrentActionIndex = 0;
         std::array<uint8_t, SCRTrigger::kActionCount> ActionFlags{};
         bool Completed = false;
+        bool Waiting = false;
+        int WaitTimerMs = 0;
     };
 
     struct RunningAIScript

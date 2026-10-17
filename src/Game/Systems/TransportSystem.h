@@ -4,6 +4,8 @@
 #include "Core/Math/Vec2.h"
 #include <vector>
 
+namespace Game::Map { class GameMap; }
+
 namespace Game::Systems
 {
 
@@ -13,6 +15,8 @@ public:
     TransportSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "TransportSystem"; }
+
+    static void SetMap(const Game::Map::GameMap* Map);
 
     static bool CanLoad(Core::ECS::EntityManager& EM, int TransportID, int PassengerID,
                          std::string* OutReason = nullptr);
@@ -34,6 +38,10 @@ public:
 
     static constexpr int kMaxTransportCapacity = 8;
     static constexpr int kMaxBunkerCapacity = 4;
+
+    static int GetUnitSpaceRequired(int ChkUnitID);
+    static bool CanEnterBunker(int ChkUnitID);
+    static int GetLoadedSpace(Core::ECS::EntityManager& EM, int TransportID);
 
 private:
     Core::ECS::SystemManager& mSystemMgr;

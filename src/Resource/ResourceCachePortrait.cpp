@@ -108,26 +108,27 @@ namespace
             return &Clip.CurrentFrame;
         }
 
-        int AdvanceBudget = 180;
-        while (TimeSeconds >= Clip.NextFrameTimeSeconds && AdvanceBudget-- > 0)
+        // Drop stale backlog immediately so selecting/box-selecting units never stalls
+        if (TimeSeconds > Clip.NextFrameTimeSeconds + 0.15)
+        {
+            Clip.NextFrameTimeSeconds = TimeSeconds;
+        }
+
+        if (TimeSeconds >= Clip.NextFrameTimeSeconds)
         {
             DecodedVideoFrame Frame = {};
             if (!Clip.WebmDecoder.ReadNextFrame(Frame))
             {
                 const size_t NextSegment = Clip.WebmPaths.empty() ? 0 : (Clip.ActiveWebmPath + 1) % Clip.WebmPaths.size();
-                if (!OpenStreamingPortraitSegment(Clip, NextSegment))
-                    break;
+                OpenStreamingPortraitSegment(Clip, NextSegment);
             }
             else
             {
                 SetStreamingPortraitFrame(Clip, Frame);
             }
 
-            Clip.NextFrameTimeSeconds += std::max(0.01f, Clip.CurrentFrame.DurationSeconds);
-        }
-
-        if (AdvanceBudget <= 0)
             Clip.NextFrameTimeSeconds = TimeSeconds + std::max(0.01f, Clip.CurrentFrame.DurationSeconds);
+        }
 
         return Clip.CurrentFrame.Image.Valid() ? &Clip.CurrentFrame : nullptr;
     }

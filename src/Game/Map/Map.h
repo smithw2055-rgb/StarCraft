@@ -5,6 +5,7 @@
 #include <array>
 
 #include "Game/Components.h"
+#include "Game/Pathfinding/NavigationGrid.h"
 #include "Core/Math/Vec2.h"
 
 namespace Game::Map
@@ -59,6 +60,10 @@ public:
 
     int GetWidth() const { return mWidth; }
     int GetHeight() const { return mHeight; }
+    const Game::Pathfinding::NavigationGrid& GetNavigationGrid() const
+    {
+        return mNavigationGrid;
+    }
 
     Core::Math::Vec2 TileToWorld(int X, int Y) const;
     void WorldToTile(const Core::Math::Vec2& WorldPos, int& OutX, int& OutY) const;
@@ -77,10 +82,13 @@ public:
     void SetMegaTile(int X, int Y, uint16_t MegaTileID);
 
 private:
+    void UpdateNavigationBuildTile(int X, int Y);
+
     int mWidth = DefaultMapWidth;
     int mHeight = DefaultMapHeight;
     std::vector<Tile> mTiles;
     std::vector<StartLocationInfo> mStartLocations;
+    Game::Pathfinding::NavigationGrid mNavigationGrid;
 };
 
 } // namespace Game::Map

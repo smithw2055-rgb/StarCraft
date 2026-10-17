@@ -6,15 +6,23 @@
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/AStar.h"
+#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/Logger.h"
 
 #include <unordered_map>
+#include <map>
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <functional>
 #include <vector>
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <iostream>
 
 namespace Game::Systems
 {
@@ -23,6 +31,130 @@ using namespace Game::Components;
 
 namespace
 {
+    static const Game::Pathfinding::NavigationSpatialHash*
+        sActiveSpatialHash = nullptr;
+    static const Game::Pathfinding::NavigationSpatialHash*
+        sActiveStaticSpatialHash = nullptr;
+    static MovementNavigationStats* sActiveNavigationStats = nullptr;
+    static const std::vector<Core::ECS::EntityID>*
+        sLastPredictiveQuery = nullptr;
+    static Core::ECS::EntityID
+        sLastPredictiveQueryEntityID = -1;
+    static bool sLastPredictiveDesiredClear = false;
+
+    static bool IsStaticGroundBlocker(Core::ECS::EntityManager& EM, Core::ECS::EntityID ID);
+
+    struct StallDiagnosticTelemetry
+    {
+        uint64_t TotalStallEvents = 0;
+        uint64_t CliffElevationStalls = 0;
+        uint64_t WaterCoastStalls = 0;
+        uint64_t StaticBlockerStalls = 0;
+        uint64_t DynamicUnitStalls = 0;
+        uint64_t OtherStalls = 0;
+
+        struct HotspotKey
+        {
+            int TileX;
+            int TileY;
+            bool operator<(const HotspotKey& O) const {
+                if (TileX != O.TileX) return TileX < O.TileX;
+                return TileY < O.TileY;
+            }
+        };
+        struct HotspotInfo
+        {
+            uint64_t Count = 0;
+            std::string PrimaryReason;
+            int Height = 0;
+            int ChkUnitID = -1;
+        };
+        std::map<HotspotKey, HotspotInfo> Hotspots;
+        float LastReportTime = 0.0f;
+    };
+    static StallDiagnosticTelemetry sDiagnosticTelemetry;
+
+    static void MaybePrintStallTelemetryReport(float CurrentTime, bool Force = false)
+    {
+        if (!Force && CurrentTime - sDiagnosticTelemetry.LastReportTime < 5.0f)
+            return;
+        sDiagnosticTelemetry.LastReportTime = CurrentTime;
+
+        if (sDiagnosticTelemetry.TotalStallEvents == 0)
+            return;
+
+        std::ostringstream Oss;
+        Oss << "\n================ [PATHING STALL TELEMETRY REPORT] ================\n";
+        Oss << "Total Stall Events: " << sDiagnosticTelemetry.TotalStallEvents << "\n";
+        const float Total = (float)sDiagnosticTelemetry.TotalStallEvents;
+        Oss << " - Cliff/Elevation Edge  : " << sDiagnosticTelemetry.CliffElevationStalls
+            << " (" << std::fixed << std::setprecision(1) << (sDiagnosticTelemetry.CliffElevationStalls * 100.0f / Total) << "%)\n";
+        Oss << " - Water/Coast/Obstacle  : " << sDiagnosticTelemetry.WaterCoastStalls
+            << " (" << (sDiagnosticTelemetry.WaterCoastStalls * 100.0f / Total) << "%)\n";
+        Oss << " - Dynamic Unit Crowding : " << sDiagnosticTelemetry.DynamicUnitStalls
+            << " (" << (sDiagnosticTelemetry.DynamicUnitStalls * 100.0f / Total) << "%)\n";
+        Oss << " - Static Building Blocker: " << sDiagnosticTelemetry.StaticBlockerStalls
+            << " (" << (sDiagnosticTelemetry.StaticBlockerStalls * 100.0f / Total) << "%)\n";
+        Oss << " - Other/Transient       : " << sDiagnosticTelemetry.OtherStalls
+            << " (" << (sDiagnosticTelemetry.OtherStalls * 100.0f / Total) << "%)\n";
+        Oss << "Top Stall Hotspots:\n";
+
+        std::vector<std::pair<StallDiagnosticTelemetry::HotspotKey, StallDiagnosticTelemetry::HotspotInfo>> SortedHotspots(
+            sDiagnosticTelemetry.Hotspots.begin(), sDiagnosticTelemetry.Hotspots.end());
+        std::sort(SortedHotspots.begin(), SortedHotspots.end(), [](const auto& A, const auto& B) {
+            return A.second.Count > B.second.Count;
+        });
+        size_t Shown = 0;
+        for (const auto& Entry : SortedHotspots)
+        {
+            if (++Shown > 5) break;
+            Oss << "   #" << Shown << " Tile(" << Entry.first.TileX << ", " << Entry.first.TileY << ")"
+                << " Height=" << Entry.second.Height
+                << " Reason=" << Entry.second.PrimaryReason
+                << " ChkUnit=" << Entry.second.ChkUnitID
+                << " Stalls=" << Entry.second.Count << "\n";
+        }
+        Oss << "==================================================================";
+        Core::Utils::Logger::Info("PathingTelemetry", Oss.str());
+        std::cout << Oss.str() << std::endl;
+    }
+
+    static const std::vector<Core::ECS::EntityID>& QueryNearbyEntities(
+        Core::ECS::EntityManager& EM,
+        float MinimumX, float MinimumY, float MaximumX, float MaximumY)
+    {
+        static thread_local std::vector<Core::ECS::EntityID> Result;
+        if (sActiveSpatialHash)
+        {
+            sActiveSpatialHash->QueryInto(
+                MinimumX, MinimumY, MaximumX, MaximumY, Result);
+            if (sActiveNavigationStats)
+                sActiveNavigationStats->NeighborPairs += Result.size();
+            return Result;
+        }
+        Result = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        if (sActiveNavigationStats)
+            sActiveNavigationStats->NeighborPairs += Result.size();
+        return Result;
+    }
+
+    static const std::vector<Core::ECS::EntityID>& QueryNearbyStaticEntities(
+        Core::ECS::EntityManager& EM,
+        float MinimumX, float MinimumY, float MaximumX, float MaximumY)
+    {
+        static thread_local std::vector<Core::ECS::EntityID> Result;
+        if (sActiveStaticSpatialHash)
+        {
+            sActiveStaticSpatialHash->QueryInto(
+                MinimumX, MinimumY, MaximumX, MaximumY, Result);
+            if (sActiveNavigationStats)
+                sActiveNavigationStats->NeighborPairs += Result.size();
+            return Result;
+        }
+        Result = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        return Result;
+    }
+
     static bool PathingDebugEnabled()
     {
         const char* Value = std::getenv("STARCRAFT_DEBUG_PATHING");
@@ -33,34 +165,102 @@ namespace
                                  Core::ECS::EntityID EntityID,
                                  const TransformComponent& Transform,
                                  const PathfindingComponent& Path,
-                                 const char* Phase)
+                                 const char* Phase,
+                                 const Game::Map::GameMap* Map)
     {
-        if (!PathingDebugEnabled())
-            return;
+        if (sActiveNavigationStats)
+            ++sActiveNavigationStats->StuckEvents;
+
+        ++sDiagnosticTelemetry.TotalStallEvents;
+        int CurTileX = 0;
+        int CurTileY = 0;
+        int CurHeight = 0;
+        bool CurWalkable = true;
+        if (Map)
+        {
+            Map->WorldToTile(Transform.Position, CurTileX, CurTileY);
+            CurHeight = Map->GetGroundHeight(CurTileX, CurTileY);
+            CurWalkable = Map->IsWalkable(CurTileX, CurTileY);
+        }
+
+        std::string Cause = "Other";
+        if (Path.BlockedByEntityID >= 0)
+        {
+            if (IsStaticGroundBlocker(EM, Path.BlockedByEntityID))
+                Cause = "StaticBlocker";
+            else
+                Cause = "DynamicUnit";
+        }
+        else if (Map)
+        {
+            // Examine 8-neighbors to determine if stall is on a cliff or water/coast edge
+            bool NearCliff = false;
+            bool NearWaterOrUnwalkable = false;
+            for (int DY = -1; DY <= 1; ++DY)
+            {
+                for (int DX = -1; DX <= 1; ++DX)
+                {
+                    if (DX == 0 && DY == 0) continue;
+                    int NX = CurTileX + DX;
+                    int NY = CurTileY + DY;
+                    if (!Map->IsInBounds(NX, NY))
+                    {
+                        NearWaterOrUnwalkable = true;
+                        continue;
+                    }
+                    if (!Map->IsWalkable(NX, NY))
+                    {
+                        const auto& Tile = Map->GetTile(NX, NY);
+                        if (Tile.Terrain == TerrainType::Water)
+                            NearWaterOrUnwalkable = true;
+                        else
+                            NearCliff = true;
+                    }
+                    else if (std::abs(Map->GetGroundHeight(NX, NY) - CurHeight) >= 1 &&
+                             !Map->CanTraverseGround(CurTileX, CurTileY, NX, NY))
+                    {
+                        NearCliff = true;
+                    }
+                }
+            }
+            if (NearCliff)
+                Cause = "CliffElevationEdge";
+            else if (NearWaterOrUnwalkable)
+                Cause = "WaterCoastEdge";
+        }
+
+        if (Cause == "CliffElevationEdge") ++sDiagnosticTelemetry.CliffElevationStalls;
+        else if (Cause == "WaterCoastEdge") ++sDiagnosticTelemetry.WaterCoastStalls;
+        else if (Cause == "StaticBlocker") ++sDiagnosticTelemetry.StaticBlockerStalls;
+        else if (Cause == "DynamicUnit") ++sDiagnosticTelemetry.DynamicUnitStalls;
+        else ++sDiagnosticTelemetry.OtherStalls;
+
         const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-        const auto* Command = EM.GetComponent<CommandComponent>(EntityID);
-        const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
-        const auto* BlockerUnit = Path.BlockedByEntityID >= 0
-            ? EM.GetComponent<UnitComponent>(Path.BlockedByEntityID)
-            : nullptr;
-        Core::Utils::Logger::Info("Pathing",
-            std::string("stall phase=") + Phase +
-            " entity=" + std::to_string(EntityID) +
-            " chk=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
-            " command=" + std::to_string(
-                Command ? (int)Command->CurrentCommand : -1) +
-            " pos=" + std::to_string((int)Transform.Position.X) + "," +
-                std::to_string((int)Transform.Position.Y) +
-            " target=" + std::to_string((int)Path.RequestedDestination.X) + "," +
-                std::to_string((int)Path.RequestedDestination.Y) +
-            " blocker=" + std::to_string(Path.BlockedByEntityID) +
-            " blocker_chk=" + std::to_string(BlockerUnit ? BlockerUnit->ChkUnitID : -1) +
-            " ignore=" + std::to_string(Path.RequestedIgnoreEntityID) +
-            " harvest_target=" + std::to_string(Harvest ? Harvest->TargetResourceID : -1) +
-            " harvest_state=" + std::to_string(Harvest ? (int)Harvest->State : -1) +
-            " repath=" + std::to_string(Path.RepathFailCount) +
-            " nodes=" + std::to_string(Path.Path.size()) +
-            " index=" + std::to_string(Path.PathIndex));
+        auto& Hotspot = sDiagnosticTelemetry.Hotspots[{CurTileX, CurTileY}];
+        ++Hotspot.Count;
+        Hotspot.PrimaryReason = Cause;
+        Hotspot.Height = CurHeight;
+        Hotspot.ChkUnitID = Unit ? Unit->ChkUnitID : -1;
+
+        if (PathingDebugEnabled())
+        {
+            const auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+            const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+            Core::Utils::Logger::Info("Pathing",
+                std::string("stall cause=") + Cause +
+                " phase=" + Phase +
+                " entity=" + std::to_string(EntityID) +
+                " chk=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
+                " tile=" + std::to_string(CurTileX) + "," + std::to_string(CurTileY) +
+                " height=" + std::to_string(CurHeight) +
+                " pos=" + std::to_string((int)Transform.Position.X) + "," +
+                    std::to_string((int)Transform.Position.Y) +
+                " target=" + std::to_string((int)Path.RequestedDestination.X) + "," +
+                    std::to_string((int)Path.RequestedDestination.Y) +
+                " blocker=" + std::to_string(Path.BlockedByEntityID) +
+                " cmd=" + std::to_string(Command ? (int)Command->CurrentCommand : -1) +
+                " harvest=" + std::to_string(Harvest ? (int)Harvest->State : -1));
+        }
     }
 
     static bool IsSiegedTankUnit(int ChkUnitID)
@@ -113,6 +313,39 @@ namespace
         float Bottom = 16.0f;
         Core::Math::Vec2 Position;
     };
+
+    struct MovementEntitySnapshot
+    {
+        uint32_t Generation = 0;
+        TransformComponent* Transform = nullptr;
+        UnitComponent* Unit = nullptr;
+        PathfindingComponent* Path = nullptr;
+        CommandComponent* Command = nullptr;
+        PlayerComponent* Player = nullptr;
+        StaticBlockerRect CollisionRect;
+        int CommandPriority = 0;
+        bool StaticGroundBlocker = false;
+        bool ActiveHarvester = false;
+        bool AssignedConstructionWorker = false;
+    };
+
+    static const std::vector<MovementEntitySnapshot>*
+        sActiveMovementSnapshots = nullptr;
+    static uint32_t sActiveMovementSnapshotGeneration = 0;
+
+    static const MovementEntitySnapshot* ActiveMovementSnapshot(
+        Core::ECS::EntityID EntityID)
+    {
+        if (!sActiveMovementSnapshots || EntityID < 0 ||
+            (size_t)EntityID >= sActiveMovementSnapshots->size())
+        {
+            return nullptr;
+        }
+        const auto& Snapshot =
+            (*sActiveMovementSnapshots)[(size_t)EntityID];
+        return Snapshot.Generation == sActiveMovementSnapshotGeneration
+            ? &Snapshot : nullptr;
+    }
 
     static int CollisionRadiusFromBounds(const PathfindingComponent& Path)
     {
@@ -183,9 +416,26 @@ namespace
         Path.CurrentSpeed = 0.0f;
         Path.TargetSpeed = 0.0f;
         Path.CurrentVelocity = {0.0f, 0.0f};
+        Path.FixedVelocity = Core::Math::FixedVec2::Zero();
         Path.StallTimer = 0.0f;
+        Path.StallTicks = 0;
         Path.HasLastWaypointDistance = false;
         Path.BlockedByEntityID = -1;
+    }
+
+    static void CommitAuthoritativePosition(
+        TransformComponent& Transform,
+        PathfindingComponent& Path,
+        const Core::Math::Vec2& Position,
+        const Core::Math::Vec2& Velocity)
+    {
+        Path.FixedPosition = Core::Math::FixedVec2(Position.X, Position.Y);
+        Path.FixedVelocity = Core::Math::FixedVec2(Velocity.X, Velocity.Y);
+        Path.HasFixedPosition = true;
+        Transform.Position = {
+            Path.FixedPosition.X.AsFloat(),
+            Path.FixedPosition.Y.AsFloat()
+        };
     }
 
     static bool IsMovementCommand(CommandType Type)
@@ -200,15 +450,118 @@ namespace
                Type == CommandType::Follow;
     }
 
-    static bool ShouldHaveMovementSpeed(const TransformComponent* Trans,
+    static bool IsSatisfiedInteractionPartial(
+        const TransformComponent* Transform,
+        const PathfindingComponent& Path)
+    {
+        if (!Transform ||
+            Path.LastPathStatus !=
+                Game::Pathfinding::PathStatus::Partial)
+        {
+            return false;
+        }
+        const float Tolerance = std::max(
+            Path.NodeTolerance,
+            (float)CollisionRadiusFromBounds(Path));
+        return Transform->Position.DistanceTo(
+            Path.ResolvedPathDestination) <= Tolerance;
+    }
+
+    static bool IsArrivedAtDestinationCluster(
+        Core::ECS::EntityManager& EM,
+        Core::ECS::EntityID MovingID,
+        const TransformComponent* Trans,
+        const PathfindingComponent& Path,
+        const CommandComponent* Cmd,
+        const Core::Math::Vec2& TargetDestination)
+    {
+        if (!Trans || !Cmd || !IsMovementCommand(Cmd->CurrentCommand))
+            return false;
+        if (Cmd->CurrentCommand == CommandType::Harvest ||
+            Cmd->CurrentCommand == CommandType::Build ||
+            Cmd->CurrentCommand == CommandType::Repair)
+        {
+            return false;
+        }
+
+        const float MovingRadius = (float)CollisionRadiusFromBounds(Path);
+        const float DistToDest = Trans->Position.DistanceTo(TargetDestination);
+
+        const auto CheckBlocker = [&](Core::ECS::EntityID BlockerID) -> bool
+        {
+            if (BlockerID < 0 || BlockerID == MovingID)
+                return false;
+
+            const auto* OtherUnit = EM.GetComponent<UnitComponent>(BlockerID);
+            const auto* OtherPlayer = EM.GetComponent<PlayerComponent>(BlockerID);
+            const auto* MyPlayer = EM.GetComponent<PlayerComponent>(MovingID);
+            const auto* OtherTrans = EM.GetComponent<TransformComponent>(BlockerID);
+            const auto* OtherPath = EM.GetComponent<PathfindingComponent>(BlockerID);
+
+            if (OtherUnit && OtherUnit->HitPoints > 0 &&
+                OtherTrans && OtherPath &&
+                OtherPath->IsAir == Path.IsAir &&
+                OtherPlayer && MyPlayer &&
+                OtherPlayer->PlayerID == MyPlayer->PlayerID)
+            {
+                const bool OtherStopped =
+                    OtherPath->CurrentVelocity.LengthSq() < 0.1f &&
+                    OtherPath->CurrentSpeed < 1.0f;
+                if (OtherStopped)
+                {
+                    const float OtherRadius = (float)CollisionRadiusFromBounds(*OtherPath);
+                    const float OtherDistToDest = OtherTrans->Position.DistanceTo(TargetDestination);
+                    const float BlockerMaxDist = OtherRadius + Path.NodeTolerance;
+                    if (OtherDistToDest <= BlockerMaxDist)
+                    {
+                        const float SepDist = Trans->Position.DistanceTo(OtherTrans->Position);
+                        const float MaxSep = MovingRadius + OtherRadius + Path.NodeTolerance;
+                        if (SepDist <= MaxSep)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+
+        if (CheckBlocker(Path.BlockedByEntityID))
+            return true;
+
+        if (sActiveSpatialHash && DistToDest <= MovingRadius * 3.0f + 48.0f)
+        {
+            static thread_local std::vector<Core::ECS::EntityID> DestNeighbors;
+            DestNeighbors.clear();
+            sActiveSpatialHash->QueryInto(
+                TargetDestination.X - 64.0f, TargetDestination.Y - 64.0f,
+                TargetDestination.X + 64.0f, TargetDestination.Y + 64.0f,
+                DestNeighbors);
+            for (auto OtherID : DestNeighbors)
+            {
+                if (CheckBlocker(OtherID))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    static bool ShouldHaveMovementSpeed(Core::ECS::EntityManager& EM,
+                                        Core::ECS::EntityID ID,
+                                        const TransformComponent* Trans,
                                         const CommandComponent* Cmd,
                                         const PathfindingComponent& Path)
     {
+        if (IsArrivedAtDestinationCluster(EM, ID, Trans, Path, Cmd, Path.RequestedDestination))
+            return false;
         if (Path.PathIndex < (int)Path.Path.size())
             return true;
         if (Path.CurrentSpeed > 0.01f || Path.CurrentVelocity.LengthSq() > 0.01f)
             return true;
         if (!Trans || !Cmd || !IsMovementCommand(Cmd->CurrentCommand))
+            return false;
+        if (IsSatisfiedInteractionPartial(Trans, Path))
             return false;
 
         const float ArrivalTolerance =
@@ -243,7 +596,12 @@ namespace
             Path.HasRecentMoveFailure = true;
             Path.RecentFailedMoveTarget = Path.Path.back();
         }
-        Path.RecentMoveFailureCooldown = 1.0f;
+        Path.ConsecutiveMoveFailures =
+            std::min(Path.ConsecutiveMoveFailures + 1, 8);
+        const int BackoffTicks = std::min(
+            240, 24 << std::min(Path.ConsecutiveMoveFailures - 1, 3));
+        Path.RecentMoveFailureCooldown = (float)BackoffTicks / 24.0f;
+        Path.RecentMoveFailureTicks = BackoffTicks;
         ClearMotion(Path);
     }
 
@@ -253,28 +611,38 @@ namespace
                                       float AppliedDistance,
                                       float DeltaTime)
     {
-        const bool MadeProgress = AppliedDistance > 0.05f &&
-                                  NewDistance < OldDistance - 0.25f;
+        const float ProgressEpsilon =
+            Path.BlockedByEntityID >= 0 ? 0.25f : (1.0f / 256.0f);
+        const float MinApplied =
+            Path.BlockedByEntityID >= 0 ? 0.05f : (1.0f / 256.0f);
+        const bool MadeProgress =
+            AppliedDistance >= MinApplied &&
+            NewDistance <= OldDistance - ProgressEpsilon;
         if (MadeProgress)
         {
             Path.StallTimer = 0.0f;
+            Path.StallTicks = 0;
             Path.LastWaypointDistance = NewDistance;
             Path.HasLastWaypointDistance = true;
             return true;
         }
 
         if (Path.HasLastWaypointDistance &&
-            NewDistance < Path.LastWaypointDistance - 0.25f)
+            NewDistance <=
+                Path.LastWaypointDistance - ProgressEpsilon)
         {
             Path.StallTimer = 0.0f;
+            Path.StallTicks = 0;
             Path.LastWaypointDistance = NewDistance;
             return true;
         }
 
-        Path.StallTimer += DeltaTime;
+        (void)DeltaTime;
+        ++Path.StallTicks;
+        Path.StallTimer = (float)Path.StallTicks / 24.0f;
         Path.LastWaypointDistance = NewDistance;
         Path.HasLastWaypointDistance = true;
-        return Path.StallTimer < 0.45f;
+        return Path.StallTicks < 11;
     }
 
     static bool TrackDestinationProgress(PathfindingComponent& Path,
@@ -284,6 +652,13 @@ namespace
     {
         if (Path.RequestedDestination.LengthSq() <= 0.0f)
             return true;
+        if (Path.PathIndex + 1 < (int)Path.Path.size())
+        {
+            Path.DestinationStallTimer = 0.0f;
+            Path.DestinationStallTicks = 0;
+            Path.HasLastDestinationDistance = false;
+            return true;
+        }
         if (AppliedDistance <= 0.05f)
             return true;
 
@@ -294,6 +669,7 @@ namespace
         {
             Path.RepathFailCount = 0;
             Path.DestinationStallTimer = 0.0f;
+            Path.DestinationStallTicks = 0;
             Path.LastDestinationDistance = Distance;
             Path.HasLastDestinationDistance = true;
             return true;
@@ -304,14 +680,18 @@ namespace
         {
             Path.RepathFailCount = 0;
             Path.DestinationStallTimer = 0.0f;
+            Path.DestinationStallTicks = 0;
             Path.LastDestinationDistance = Distance;
             Path.HasLastDestinationDistance = true;
             return true;
         }
 
-        Path.DestinationStallTimer += DeltaTime;
+        (void)DeltaTime;
+        ++Path.DestinationStallTicks;
+        Path.DestinationStallTimer =
+            (float)Path.DestinationStallTicks / 24.0f;
         Path.HasLastDestinationDistance = true;
-        return Path.DestinationStallTimer < 8.0f;
+        return Path.DestinationStallTicks < 192;
     }
 
     static float MovementSpeedMultiplier(const StatusEffectComponent* Status)
@@ -331,60 +711,45 @@ namespace
         return 1.0f;
     }
 
-    static bool IsWalkableWorldPosition(const Game::Map::GameMap& Map,
-                                        const Core::Math::Vec2& Position,
-                                        float ClearanceRadius)
-    {
-        int TileX = 0;
-        int TileY = 0;
-        Map.WorldToTile(Position, TileX, TileY);
-        if (!Map.IsInBounds(TileX, TileY) || !Map.IsWalkable(TileX, TileY))
-            return false;
-        if (ClearanceRadius <= 16.0f)
-            return true;
-
-        const float R = ClearanceRadius - 1.0f;
-        const Core::Math::Vec2 Samples[] = {
-            {Position.X - R, Position.Y},
-            {Position.X + R, Position.Y},
-            {Position.X, Position.Y - R},
-            {Position.X, Position.Y + R},
-            {Position.X - R, Position.Y - R},
-            {Position.X + R, Position.Y - R},
-            {Position.X - R, Position.Y + R},
-            {Position.X + R, Position.Y + R}
-        };
-        for (const auto& Sample : Samples)
-        {
-            int SX = 0;
-            int SY = 0;
-            Map.WorldToTile(Sample, SX, SY);
-            if (!Map.IsInBounds(SX, SY) || !Map.IsWalkable(SX, SY) ||
-                !Map.CanTraverseGround(Position, Sample))
-                return false;
-        }
-        return true;
-    }
-
     static Core::Math::Vec2 ResolveMapWalkability(const Game::Map::GameMap* Map,
                                                   Core::Math::Vec2 Current,
                                                   Core::Math::Vec2 Proposed,
-                                                  float MovingRadius,
+                                                  const PathfindingComponent& Path,
                                                   bool IsAir)
     {
-        if (IsAir || !Map ||
-            (Map->CanTraverseGround(Current, Proposed) &&
-             IsWalkableWorldPosition(*Map, Proposed, MovingRadius)))
+        if (IsAir || !Map)
+            return Proposed;
+
+        Game::Pathfinding::NavigationFootprint Footprint;
+        if (Path.HasCollisionBounds)
+        {
+            Footprint = {
+                Path.CollisionLeft, Path.CollisionUp,
+                Path.CollisionRight, Path.CollisionDown};
+        }
+        else
+        {
+            Footprint = {
+                Path.CollisionRadius, Path.CollisionRadius,
+                Path.CollisionRadius, Path.CollisionRadius};
+        }
+        const auto& Grid = Map->GetNavigationGrid();
+        const auto CanUse = [&](const Core::Math::Vec2& Candidate)
+        {
+            return Grid.CanTraverseWorld(
+                Current, Candidate, Footprint,
+                Path.RequestedIgnoreEntityID,
+                Path.RequestedAdditionalIgnoreEntityID);
+        };
+        if (CanUse(Proposed))
             return Proposed;
 
         const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
-        if (Map->CanTraverseGround(Current, SlideX) &&
-            IsWalkableWorldPosition(*Map, SlideX, MovingRadius))
+        if (CanUse(SlideX))
             return SlideX;
 
         const Core::Math::Vec2 SlideY{Current.X, Proposed.Y};
-        if (Map->CanTraverseGround(Current, SlideY) &&
-            IsWalkableWorldPosition(*Map, SlideY, MovingRadius))
+        if (CanUse(SlideY))
             return SlideY;
 
         return Current;
@@ -447,13 +812,70 @@ namespace
                IsResourceDepotUnit(DepotUnit->ChkUnitID);
     }
 
+    static bool IsEmbeddedInStaticBlocker(Core::ECS::EntityManager& EM,
+                                           Core::ECS::EntityID MovingID,
+                                           Core::ECS::EntityID BlockerID,
+                                           const Core::Math::Vec2& Position);
+
     static bool ShouldIgnoreStaticBlockerAtRuntime(
         Core::ECS::EntityManager& EM,
         Core::ECS::EntityID MovingID,
         Core::ECS::EntityID BlockerID)
     {
         const auto* Path = EM.GetComponent<PathfindingComponent>(MovingID);
-        if (!Path || Path->RequestedIgnoreEntityID != BlockerID)
+        if (!Path)
+            return false;
+
+        const auto* Harvest = EM.GetComponent<HarvestComponent>(MovingID);
+        if (Harvest && Harvest->State == HarvestState::MovingToDepot &&
+            BlockerID == Path->RequestedIgnoreEntityID)
+        {
+            const auto* BlockerResource =
+                EM.GetComponent<ResourceComponent>(BlockerID);
+            const auto* Position =
+                EM.GetComponent<TransformComponent>(MovingID);
+            if (BlockerResource &&
+                BlockerResource->Type == ResourceType::Minerals &&
+                Position && IsEmbeddedInStaticBlocker(
+                    EM, MovingID, BlockerID, Position->Position))
+            {
+                return true;
+            }
+        }
+        if (Harvest && Harvest->State == HarvestState::MovingToDepot &&
+            BlockerID == Harvest->TargetResourceID)
+        {
+            const auto* Position =
+                EM.GetComponent<TransformComponent>(MovingID);
+            // Mineral gathering intentionally lets a worker enter the patch's
+            // collision box. The return order ignores the depot, so without
+            // this source-side exception runtime collision resolution pushes
+            // the first departure step back into the mineral indefinitely.
+            // Ignore only while the worker is still embedded; once it clears
+            // the patch, normal mineral collision becomes active again.
+            if (Position && IsEmbeddedInStaticBlocker(
+                    EM, MovingID, BlockerID, Position->Position))
+            {
+                return true;
+            }
+        }
+
+        // Symmetrically, after depositing resources at a depot, the worker starts
+        // moving toward a resource patch. Allow it to clear the depot's footprint
+        // without being jammed by the depot boundary.
+        if (Harvest && Harvest->State == HarvestState::MovingToResource &&
+            IsOwnedResourceDepot(EM, MovingID, BlockerID))
+        {
+            const auto* Position =
+                EM.GetComponent<TransformComponent>(MovingID);
+            if (Position && IsEmbeddedInStaticBlocker(
+                    EM, MovingID, BlockerID, Position->Position))
+            {
+                return true;
+            }
+        }
+
+        if (Path->RequestedIgnoreEntityID != BlockerID)
             return false;
 
         // A Terran builder is the only ordinary unit allowed to enter a
@@ -466,15 +888,24 @@ namespace
             return true;
         }
 
-        const auto* Harvest = EM.GetComponent<HarvestComponent>(MovingID);
         if (!Harvest || Harvest->State == HarvestState::Idle)
             return false;
 
-        if (BlockerID == Harvest->TargetResourceID ||
-            BlockerID == Harvest->ReturnBuildingID)
+        if (BlockerID == Harvest->TargetResourceID)
         {
+            const auto* TargetResource =
+                EM.GetComponent<ResourceComponent>(BlockerID);
+            // Minerals remain solid even when they are the command target.
+            // HarvestSystem routes workers to an external contact point.
+            if (TargetResource &&
+                TargetResource->Type == ResourceType::Minerals)
+            {
+                return false;
+            }
             return true;
         }
+        if (BlockerID == Harvest->ReturnBuildingID)
+            return true;
 
         // Immediately after depositing, HarvestSystem temporarily keeps the
         // depot as the ignored blocker so the worker can leave the footprint.
@@ -493,7 +924,13 @@ namespace
         if (IsAir)
             return Proposed;
 
-        auto Blockers = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        constexpr float kMaximumCollisionExtent = 128.0f;
+        const auto& Blockers = QueryNearbyStaticEntities(
+            EM,
+            Proposed.X - kMaximumCollisionExtent,
+            Proposed.Y - kMaximumCollisionExtent,
+            Proposed.X + kMaximumCollisionExtent,
+            Proposed.Y + kMaximumCollisionExtent);
         auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID);
         if (!MovingPath)
             return Proposed;
@@ -666,7 +1103,11 @@ namespace
         Core::Math::Vec2 Current,
         Core::Math::Vec2 Proposed)
     {
-        auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID);
+        const auto* MovingSnapshot =
+            ActiveMovementSnapshot(MovingID);
+        auto* MovingPath = MovingSnapshot
+            ? MovingSnapshot->Path
+            : EM.GetComponent<PathfindingComponent>(MovingID);
         if (!MovingPath || MovingPath->IsAir)
             return -1;
 
@@ -679,15 +1120,57 @@ namespace
 
         const StaticBlockerRect MovingRect =
             DynamicCollisionRectForPath(*MovingPath);
-        auto Units = EM.GetEntitiesWith<TransformComponent,
-                                        UnitComponent,
-                                        PathfindingComponent>();
+        // Mobile unit boxes are substantially smaller than buildings.  A
+        // 96-pixel envelope covers the largest ground-unit pair plus one
+        // complete simulation step without pulling several unrelated hash
+        // cells into every confirmation query.
+        constexpr float kDynamicQueryExtent = 96.0f;
+        const float MinimumX =
+            std::min(Current.X, Proposed.X) - kDynamicQueryExtent;
+        const float MinimumY =
+            std::min(Current.Y, Proposed.Y) - kDynamicQueryExtent;
+        const float MaximumX =
+            std::max(Current.X, Proposed.X) + kDynamicQueryExtent;
+        const float MaximumY =
+            std::max(Current.Y, Proposed.Y) + kDynamicQueryExtent;
+        const std::vector<Core::ECS::EntityID>* UnitsPointer = nullptr;
+        if (sLastPredictiveQuery &&
+            sLastPredictiveQueryEntityID == MovingID &&
+            sLastPredictiveDesiredClear)
+        {
+            sLastPredictiveQuery = nullptr;
+            sLastPredictiveQueryEntityID = -1;
+            sLastPredictiveDesiredClear = false;
+            return -1;
+        }
+        if (sLastPredictiveQuery &&
+            sLastPredictiveQueryEntityID == MovingID)
+        {
+            UnitsPointer = sLastPredictiveQuery;
+        }
+        else
+        {
+            UnitsPointer = &QueryNearbyEntities(
+                EM, MinimumX, MinimumY, MaximumX, MaximumY);
+        }
+        const auto& Units = *UnitsPointer;
+        sLastPredictiveQuery = nullptr;
+        sLastPredictiveQueryEntityID = -1;
+        sLastPredictiveDesiredClear = false;
         for (auto OtherID : Units)
         {
-            if (OtherID == MovingID || IsStaticGroundBlocker(EM, OtherID))
+            const auto* OtherSnapshot =
+                ActiveMovementSnapshot(OtherID);
+            if (OtherID == MovingID ||
+                (OtherSnapshot &&
+                 OtherSnapshot->StaticGroundBlocker) ||
+                (!OtherSnapshot && !sActiveSpatialHash &&
+                 IsStaticGroundBlocker(EM, OtherID)))
                 continue;
 
-            if (IsAssignedConstructionWorker(EM, OtherID))
+            if (OtherSnapshot
+                    ? OtherSnapshot->AssignedConstructionWorker
+                    : IsAssignedConstructionWorker(EM, OtherID))
                 continue;
 
             // OpenBW's unit_can_collide_with() gives gathering workers a
@@ -697,9 +1180,15 @@ namespace
             if (IsActiveHarvester(EM, MovingID))
                 continue;
 
-            auto* OtherTrans = EM.GetComponent<TransformComponent>(OtherID);
-            auto* OtherUnit = EM.GetComponent<UnitComponent>(OtherID);
-            auto* OtherPath = EM.GetComponent<PathfindingComponent>(OtherID);
+            auto* OtherTrans = OtherSnapshot
+                ? OtherSnapshot->Transform
+                : EM.GetComponent<TransformComponent>(OtherID);
+            auto* OtherUnit = OtherSnapshot
+                ? OtherSnapshot->Unit
+                : EM.GetComponent<UnitComponent>(OtherID);
+            auto* OtherPath = OtherSnapshot
+                ? OtherSnapshot->Path
+                : EM.GetComponent<PathfindingComponent>(OtherID);
             if (!OtherTrans || !OtherUnit || !OtherPath ||
                 OtherUnit->HitPoints <= 0 || OtherPath->IsAir)
             {
@@ -749,86 +1238,559 @@ namespace
         return -1;
     }
 
-    static Core::Math::Vec2 ResolveDynamicUnitBlockers(
+    static int MovementCommandPriority(const CommandComponent* Command)
+    {
+        if (!Command)
+            return 0;
+        switch (Command->CurrentCommand)
+        {
+            case CommandType::HoldPosition:
+                return 5;
+            case CommandType::Harvest:
+            case CommandType::Build:
+            case CommandType::Repair:
+                return 4;
+            case CommandType::Attack:
+            case CommandType::AttackMove:
+                return 3;
+            case CommandType::Patrol:
+            case CommandType::Follow:
+                return 2;
+            case CommandType::Move:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+
+    struct AvoidanceCandidate
+    {
+        int Index = 18;
+        int DirectionOffset = 0;
+        int SpeedPercent = 0;
+        Core::Math::FixedVec2 Velocity;
+        int CollisionTick = 13;
+        int64_t Progress = 0;
+        int Deviation = 256;
+        int Slowdown = 2;
+    };
+
+    static Core::Math::FixedVec2 QuantizedDirectionVelocity(
+        int DirectionIndex, float Speed, int SpeedPercent)
+    {
+        static const std::array<std::pair<int16_t, int16_t>, 256>
+            DirectionTable = []
+            {
+                std::array<std::pair<int16_t, int16_t>, 256> Table{};
+                constexpr double kTau = 6.28318530717958647692;
+                for (int Index = 0; Index < 256; ++Index)
+                {
+                    const double Angle =
+                        (double)Index * kTau / 256.0;
+                    Table[(size_t)Index] = {
+                        (int16_t)std::lround(std::cos(Angle) * 256.0),
+                        (int16_t)std::lround(std::sin(Angle) * 256.0)};
+                }
+                return Table;
+            }();
+        const auto [DirectionX, DirectionY] =
+            DirectionTable[(size_t)(DirectionIndex & 255)];
+        const int SpeedRaw =
+            Core::Math::fp8::FromFloat(Speed).raw_value;
+        return {
+            Core::Math::fp8::FromRaw(
+                (Core::Math::fp8::raw_type)(
+                    (int64_t)DirectionX * SpeedRaw *
+                    SpeedPercent / (256 * 100))),
+            Core::Math::fp8::FromRaw(
+                (Core::Math::fp8::raw_type)(
+                    (int64_t)DirectionY * SpeedRaw *
+                    SpeedPercent / (256 * 100)))
+        };
+    }
+
+    static bool SweptAxisInterval(
+        int64_t Delta,
+        int64_t RelativeVelocity,
+        int64_t LowerBound,
+        int64_t UpperBound,
+        int64_t& InOutEntry,
+        int64_t& InOutExit)
+    {
+        if (RelativeVelocity == 0)
+            return Delta > LowerBound && Delta < UpperBound;
+
+        constexpr int64_t kTickQ16Scale = 24LL * 65536LL;
+        int64_t First =
+            (LowerBound - Delta) * kTickQ16Scale /
+            RelativeVelocity;
+        int64_t Second =
+            (UpperBound - Delta) * kTickQ16Scale /
+            RelativeVelocity;
+        if (First > Second)
+            std::swap(First, Second);
+        InOutEntry = std::max(InOutEntry, First);
+        InOutExit = std::min(InOutExit, Second);
+        return InOutEntry <= InOutExit;
+    }
+
+    static int SweptAabbCollisionTick(
+        const Core::Math::FixedVec2& MovingStart,
+        const Core::Math::FixedVec2& MovingVelocity,
+        const StaticBlockerRect& MovingRect,
+        const Core::Math::FixedVec2& OtherStart,
+        const Core::Math::FixedVec2& OtherVelocity,
+        const StaticBlockerRect& OtherRect)
+    {
+        constexpr int64_t kHorizonQ16 = 12LL * 65536LL;
+        int64_t Entry = 0;
+        int64_t Exit = kHorizonQ16;
+        const int64_t DeltaX =
+            (int64_t)OtherStart.X.raw_value -
+            (int64_t)MovingStart.X.raw_value;
+        const int64_t DeltaY =
+            (int64_t)OtherStart.Y.raw_value -
+            (int64_t)MovingStart.Y.raw_value;
+        const int64_t RelativeX =
+            (int64_t)OtherVelocity.X.raw_value -
+            (int64_t)MovingVelocity.X.raw_value;
+        const int64_t RelativeY =
+            (int64_t)OtherVelocity.Y.raw_value -
+            (int64_t)MovingVelocity.Y.raw_value;
+        const int64_t LowerX = -(int64_t)std::lround(
+            (OtherRect.Right + MovingRect.Left) * 256.0f);
+        const int64_t UpperX = (int64_t)std::lround(
+            (MovingRect.Right + OtherRect.Left) * 256.0f);
+        const int64_t LowerY = -(int64_t)std::lround(
+            (OtherRect.Bottom + MovingRect.Top) * 256.0f);
+        const int64_t UpperY = (int64_t)std::lround(
+            (MovingRect.Bottom + OtherRect.Top) * 256.0f);
+        if (!SweptAxisInterval(
+                DeltaX, RelativeX, LowerX, UpperX, Entry, Exit) ||
+            !SweptAxisInterval(
+                DeltaY, RelativeY, LowerY, UpperY, Entry, Exit) ||
+            Exit < 0 || Entry > kHorizonQ16)
+        {
+            return 13;
+        }
+        Entry = std::max<int64_t>(0, Entry);
+        return std::clamp(
+            (int)((Entry + 65535LL) / 65536LL), 1, 12);
+    }
+
+    struct PredictiveNeighbor
+    {
+        Core::ECS::EntityID EntityID = -1;
+        Core::Math::FixedVec2 Start;
+        Core::Math::FixedVec2 Velocity;
+        StaticBlockerRect Rect;
+        int64_t DistanceSquared = 0;
+        int CommandPriority = 0;
+        bool IsMoving = false;
+    };
+
+    static int PredictedCollisionTick(
+        const Core::Math::FixedVec2& Start,
+        const StaticBlockerRect& MovingRect,
+        int MovingPriority,
+        Core::ECS::EntityID MovingID,
+        const Core::Math::FixedVec2& CandidateVelocity,
+        const std::vector<PredictiveNeighbor>& Neighbors,
+        Core::ECS::EntityID* OutBlockerID = nullptr)
+    {
+        int EarliestTick = 13;
+        Core::ECS::EntityID EarliestBlocker = -1;
+        for (const auto& Other : Neighbors)
+        {
+            const bool MovingKeepsRoute =
+                Other.IsMoving &&
+                (MovingPriority > Other.CommandPriority ||
+                 (MovingPriority == Other.CommandPriority &&
+                  MovingID < Other.EntityID));
+            if (MovingKeepsRoute)
+                continue;
+            const int CollisionTick = SweptAabbCollisionTick(
+                Start, CandidateVelocity, MovingRect,
+                Other.Start, Other.Velocity, Other.Rect);
+            if (CollisionTick < EarliestTick ||
+                (CollisionTick == EarliestTick &&
+                 Other.EntityID < EarliestBlocker))
+            {
+                EarliestTick = CollisionTick;
+                EarliestBlocker = Other.EntityID;
+            }
+            if (EarliestTick == 1)
+                break;
+        }
+        if (OutBlockerID)
+            *OutBlockerID = EarliestBlocker;
+        return EarliestTick;
+    }
+
+    static Core::Math::Vec2 SelectPredictiveAvoidanceDirection(
         Core::ECS::EntityManager& EM,
         Core::ECS::EntityID MovingID,
-        Core::Math::Vec2 Current,
-        Core::Math::Vec2 Proposed,
-        Core::Math::Vec2 MoveDir,
-        bool IsAir)
+        const Core::Math::Vec2& DesiredDirection,
+        float Speed)
     {
-        if (IsAir)
-            return Proposed;
+        const auto* MovingSnapshot =
+            ActiveMovementSnapshot(MovingID);
+        const auto* MovingTransform = MovingSnapshot
+            ? MovingSnapshot->Transform
+            : EM.GetComponent<TransformComponent>(MovingID);
+        auto* MovingPath = MovingSnapshot
+            ? MovingSnapshot->Path
+            : EM.GetComponent<PathfindingComponent>(MovingID);
+        if (!MovingTransform || !MovingPath || Speed <= 0.0f)
+            return DesiredDirection;
 
-        const Core::ECS::EntityID BlockerID =
-            FindDynamicUnitCollision(EM, MovingID, Current, Proposed);
-        if (BlockerID < 0)
-            return Proposed;
-
-        if (auto* MovingPath = EM.GetComponent<PathfindingComponent>(MovingID))
-            MovingPath->BlockedByEntityID = BlockerID;
-
-        // A friendly mobile unit is a soft reservation. Ask it to yield a small
-        // amount instead of forcing the whole selected group to wait forever.
-        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
-        const auto* BlockerPlayer = EM.GetComponent<PlayerComponent>(BlockerID);
-        auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
-        auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
-        const auto* BlockerCommand = EM.GetComponent<CommandComponent>(BlockerID);
-        if (MovingPlayer && BlockerPlayer && BlockerPath && BlockerTrans &&
-            MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
-            CanMoveEntity(EM, BlockerID) &&
-            (!BlockerCommand || BlockerCommand->CurrentCommand != CommandType::HoldPosition))
+        constexpr double kDirectionScale =
+            256.0 / 6.28318530717958647692;
+        int DesiredIndex = (int)std::lround(
+            std::atan2(DesiredDirection.Y, DesiredDirection.X) *
+            kDirectionScale);
+        DesiredIndex &= 255;
+        if (MovingPath->IsAir ||
+            IsActiveHarvester(EM, MovingID) ||
+            IsAssignedConstructionWorker(EM, MovingID))
         {
-            Core::Math::Vec2 Lateral{-MoveDir.Y, MoveDir.X};
-            if (MovingID > BlockerID)
-                Lateral = Lateral * -1.0f;
-            const Core::Math::Vec2 YieldDirection =
-                (MoveDir * 0.35f + Lateral).Normalized();
-            BlockerPath->FriendlyYieldVector =
-                BlockerPath->FriendlyYieldVector + YieldDirection;
+            return DesiredDirection;
         }
 
-        const Core::Math::Vec2 SlideX{Proposed.X, Current.Y};
-        if ((SlideX - Current).LengthSq() > 0.001f &&
-            FindDynamicUnitCollision(EM, MovingID, Current, SlideX) < 0)
+        // Candidate velocities are pixels per second; SweptAxisInterval
+        // converts that rate to the fixed 24 Hz prediction horizon.
+        const float PredictionExtent = std::clamp(
+            Speed * (12.0f / 24.0f) + 48.0f, 64.0f, 128.0f);
+        const auto& NeighborIDs = QueryNearbyEntities(
+            EM,
+            MovingTransform->Position.X - PredictionExtent,
+            MovingTransform->Position.Y - PredictionExtent,
+            MovingTransform->Position.X + PredictionExtent,
+            MovingTransform->Position.Y + PredictionExtent);
+        sLastPredictiveQuery = &NeighborIDs;
+        sLastPredictiveQueryEntityID = MovingID;
+        sLastPredictiveDesiredClear = false;
+
+        if (NeighborIDs.empty() || (NeighborIDs.size() == 1 && NeighborIDs[0] == MovingID))
         {
-            return SlideX;
+            sLastPredictiveDesiredClear = true;
+            return DesiredDirection;
         }
 
-        const Core::Math::Vec2 SlideY{Current.X, Proposed.Y};
-        if ((SlideY - Current).LengthSq() > 0.001f &&
-            FindDynamicUnitCollision(EM, MovingID, Current, SlideY) < 0)
+        const Core::Math::FixedVec2 MovingStart =
+            MovingPath->HasFixedPosition
+                ? MovingPath->FixedPosition
+                : Core::Math::FixedVec2(
+                    MovingTransform->Position.X,
+                    MovingTransform->Position.Y);
+        const StaticBlockerRect MovingRect =
+            DynamicCollisionRectForPath(*MovingPath);
+        const int MovingPriority = MovingSnapshot
+            ? MovingSnapshot->CommandPriority
+            : MovementCommandPriority(
+                EM.GetComponent<CommandComponent>(MovingID));
+        const Core::Math::FixedVec2 DesiredFullVelocity =
+            QuantizedDirectionVelocity(DesiredIndex, Speed, 100);
+        int DesiredCollisionTick = 13;
+        static thread_local std::vector<PredictiveNeighbor>
+            PredictiveNeighbors;
+        PredictiveNeighbors.clear();
+        constexpr size_t kMaximumPredictiveNeighbors = 8;
+        if (PredictiveNeighbors.capacity() <
+            kMaximumPredictiveNeighbors)
         {
-            return SlideY;
+            PredictiveNeighbors.reserve(
+                kMaximumPredictiveNeighbors);
+        }
+        const auto Nearer = [](
+            const PredictiveNeighbor& A,
+            const PredictiveNeighbor& B)
+        {
+            if (A.DistanceSquared != B.DistanceSquared)
+                return A.DistanceSquared < B.DistanceSquared;
+            return A.EntityID < B.EntityID;
+        };
+        for (const auto OtherID : NeighborIDs)
+        {
+            const auto* OtherSnapshot =
+                ActiveMovementSnapshot(OtherID);
+            if (OtherID == MovingID ||
+                (OtherSnapshot &&
+                 OtherSnapshot->StaticGroundBlocker) ||
+                (!OtherSnapshot && !sActiveSpatialHash &&
+                 IsStaticGroundBlocker(EM, OtherID)) ||
+                (OtherSnapshot
+                    ? OtherSnapshot->AssignedConstructionWorker
+                    : IsAssignedConstructionWorker(EM, OtherID)))
+            {
+                continue;
+            }
+            const auto* OtherTransform = OtherSnapshot
+                ? OtherSnapshot->Transform
+                : EM.GetComponent<TransformComponent>(OtherID);
+            const auto* OtherUnit = OtherSnapshot
+                ? OtherSnapshot->Unit
+                : EM.GetComponent<UnitComponent>(OtherID);
+            const auto* OtherPath = OtherSnapshot
+                ? OtherSnapshot->Path
+                : EM.GetComponent<PathfindingComponent>(OtherID);
+            if (!OtherTransform || !OtherUnit || !OtherPath ||
+                OtherUnit->HitPoints <= 0 ||
+                OtherPath->IsAir != MovingPath->IsAir)
+            {
+                continue;
+            }
+            PredictiveNeighbor Other;
+            Other.EntityID = OtherID;
+            Other.Start = OtherPath->HasFixedPosition
+                ? OtherPath->FixedPosition
+                : Core::Math::FixedVec2(
+                    OtherTransform->Position.X,
+                    OtherTransform->Position.Y);
+            Other.Velocity = Core::Math::FixedVec2(
+                OtherPath->CurrentVelocity.X,
+                OtherPath->CurrentVelocity.Y);
+            Other.Rect = OtherSnapshot
+                ? OtherSnapshot->CollisionRect
+                : DynamicCollisionRectForPath(*OtherPath);
+            const int64_t NeighborDeltaX =
+                (int64_t)Other.Start.X.raw_value -
+                (int64_t)MovingStart.X.raw_value;
+            const int64_t NeighborDeltaY =
+                (int64_t)Other.Start.Y.raw_value -
+                (int64_t)MovingStart.Y.raw_value;
+            Other.DistanceSquared =
+                NeighborDeltaX * NeighborDeltaX +
+                NeighborDeltaY * NeighborDeltaY;
+            Other.CommandPriority = OtherSnapshot
+                ? OtherSnapshot->CommandPriority
+                : MovementCommandPriority(
+                    EM.GetComponent<CommandComponent>(OtherID));
+            Other.IsMoving =
+                Other.Velocity.X.raw_value != 0 ||
+                Other.Velocity.Y.raw_value != 0;
+            const bool MovingKeepsRoute =
+                Other.IsMoving &&
+                (MovingPriority > Other.CommandPriority ||
+                 (MovingPriority == Other.CommandPriority &&
+                  MovingID < Other.EntityID));
+            if (!MovingKeepsRoute)
+            {
+                DesiredCollisionTick = std::min(
+                    DesiredCollisionTick,
+                    SweptAabbCollisionTick(
+                        MovingStart, DesiredFullVelocity,
+                        MovingRect, Other.Start, Other.Velocity,
+                        Other.Rect));
+            }
+            if (PredictiveNeighbors.size() >=
+                    kMaximumPredictiveNeighbors &&
+                !Nearer(Other, PredictiveNeighbors.front()))
+            {
+                continue;
+            }
+            if (PredictiveNeighbors.size() <
+                kMaximumPredictiveNeighbors)
+            {
+                PredictiveNeighbors.push_back(Other);
+                std::push_heap(
+                    PredictiveNeighbors.begin(),
+                    PredictiveNeighbors.end(), Nearer);
+            }
+            else
+            {
+                std::pop_heap(
+                    PredictiveNeighbors.begin(),
+                    PredictiveNeighbors.end(), Nearer);
+                PredictiveNeighbors.back() = Other;
+                std::push_heap(
+                    PredictiveNeighbors.begin(),
+                    PredictiveNeighbors.end(), Nearer);
+            }
         }
 
-        const float Step = (Proposed - Current).Length();
-        if (Step > 0.001f)
+        if (DesiredCollisionTick > 12)
         {
-            Core::Math::Vec2 Lateral{-MoveDir.Y, MoveDir.X};
-            if (MovingID > BlockerID)
-                Lateral = Lateral * -1.0f;
-            Core::Math::Vec2 Diagonal = (MoveDir * 0.35f + Lateral).Normalized();
-            Core::Math::Vec2 Slide = Current + Diagonal * Step;
-            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
-                return Slide;
-
-            Diagonal = (MoveDir * 0.35f - Lateral).Normalized();
-            Slide = Current + Diagonal * Step;
-            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
-                return Slide;
-
-            Slide = Current + Lateral * Step;
-            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
-                return Slide;
-
-            Slide = Current - Lateral * Step;
-            if (FindDynamicUnitCollision(EM, MovingID, Current, Slide) < 0)
-                return Slide;
+            sLastPredictiveDesiredClear = true;
+            return DesiredDirection;
         }
 
-        return Current;
+        // A hash cell can become extremely dense while two formations pass a
+        // choke.  Only the nearest collision constraints can affect the next
+        // half-second choice; farther units are reconsidered on the next tick.
+        // Keeping a deterministic bounded working set prevents one congested
+        // cell from turning the fixed 19-candidate evaluation into O(n^2).
+        std::sort(
+            PredictiveNeighbors.begin(),
+            PredictiveNeighbors.end(),
+            [](const PredictiveNeighbor& A,
+               const PredictiveNeighbor& B)
+            {
+                return A.EntityID < B.EntityID;
+            });
+
+        // Spawn/load can begin with two collision boxes already overlapping.
+        // Give that degenerate state a deterministic separating candidate
+        // before evaluating future collisions; otherwise every predicted
+        // candidate has collision time one and "stop" can become permanent.
+        if (!MovingPath->IsAir &&
+            !PredictiveNeighbors.empty())
+        {
+            Core::Math::Vec2 Separation;
+            for (const auto& Other : PredictiveNeighbors)
+            {
+                Separation = Separation + DynamicCollisionSeparation(
+                    MovingTransform->Position, MovingRect,
+                    {Other.Start.X.AsFloat(), Other.Start.Y.AsFloat()},
+                    Other.Rect, MovingID > Other.EntityID);
+            }
+            const Core::Math::Vec2 LateralSeparation =
+                Separation -
+                DesiredDirection * Separation.Dot(DesiredDirection);
+            if (LateralSeparation.LengthSq() > 0.001f)
+            {
+                return LateralSeparation.Normalized();
+            }
+        }
+
+        static constexpr int DirectionOffsets[9] =
+            {0, 8, -8, 16, -16, 32, -32, 64, -64};
+        std::array<AvoidanceCandidate, 19> Candidates{};
+        size_t CandidateCount = 0;
+        for (int DirectionOrdinal = 0;
+             DirectionOrdinal < 9; ++DirectionOrdinal)
+        {
+            for (int SpeedOrdinal = 0; SpeedOrdinal < 2; ++SpeedOrdinal)
+            {
+                AvoidanceCandidate Candidate;
+                Candidate.Index = DirectionOrdinal * 2 + SpeedOrdinal;
+                Candidate.DirectionOffset =
+                    DirectionOffsets[DirectionOrdinal];
+                Candidate.SpeedPercent =
+                    SpeedOrdinal == 0 ? 100 : 50;
+                Candidate.Velocity = QuantizedDirectionVelocity(
+                    DesiredIndex + Candidate.DirectionOffset,
+                    Speed, Candidate.SpeedPercent);
+                Candidate.CollisionTick = PredictedCollisionTick(
+                    MovingStart, MovingRect, MovingPriority, MovingID,
+                    Candidate.Velocity, PredictiveNeighbors);
+                if (Candidate.Index == 0 &&
+                    Candidate.CollisionTick > 12)
+                {
+                    return DesiredDirection;
+                }
+                Candidate.Progress =
+                    (int64_t)Candidate.Velocity.X.raw_value *
+                        Core::Math::fp8::FromFloat(
+                            DesiredDirection.X).raw_value +
+                    (int64_t)Candidate.Velocity.Y.raw_value *
+                        Core::Math::fp8::FromFloat(
+                            DesiredDirection.Y).raw_value;
+                Candidate.Deviation =
+                    std::abs(Candidate.DirectionOffset);
+                Candidate.Slowdown = SpeedOrdinal;
+                Candidates[CandidateCount++] = Candidate;
+            }
+        }
+        AvoidanceCandidate Stop;
+        Stop.CollisionTick = PredictedCollisionTick(
+            MovingStart, MovingRect, MovingPriority, MovingID,
+            Stop.Velocity, PredictiveNeighbors);
+        Candidates[CandidateCount++] = Stop;
+
+        // Preserve classic straight-line motion until the full-speed desired
+        // velocity predicts a collision inside the twelve-tick horizon.
+        if (Candidates.front().CollisionTick > 12)
+            return DesiredDirection;
+        if (sActiveNavigationStats)
+        {
+            for (size_t Index = 0; Index < CandidateCount; ++Index)
+            {
+                const auto& Candidate = Candidates[Index];
+                if (Candidate.CollisionTick <= 12)
+                    ++sActiveNavigationStats->CandidatesRejected;
+            }
+        }
+
+        const auto* MovingPlayer = MovingSnapshot
+            ? MovingSnapshot->Player
+            : EM.GetComponent<PlayerComponent>(MovingID);
+        Core::ECS::EntityID PredictedBlockerID = -1;
+        PredictedCollisionTick(
+            MovingStart, MovingRect, MovingPriority, MovingID,
+            Candidates.front().Velocity, PredictiveNeighbors,
+            &PredictedBlockerID);
+        MovingPath->BlockedByEntityID = PredictedBlockerID;
+        for (const auto& Other : PredictiveNeighbors)
+        {
+            const auto OtherID = Other.EntityID;
+            const auto* OtherSnapshot =
+                ActiveMovementSnapshot(OtherID);
+            auto* OtherPath = OtherSnapshot
+                ? OtherSnapshot->Path
+                : EM.GetComponent<PathfindingComponent>(OtherID);
+            const auto* OtherPlayer = OtherSnapshot
+                ? OtherSnapshot->Player
+                : EM.GetComponent<PlayerComponent>(OtherID);
+            const auto* OtherCommand = OtherSnapshot
+                ? OtherSnapshot->Command
+                : EM.GetComponent<CommandComponent>(OtherID);
+            if (OtherID == MovingID || !OtherPath || !OtherPlayer ||
+                !MovingPlayer ||
+                OtherPlayer->PlayerID != MovingPlayer->PlayerID ||
+                OtherPath->CurrentVelocity.LengthSq() > 0.01f ||
+                MovementCommandPriority(OtherCommand) >= 4)
+            {
+                continue;
+            }
+            const bool MovingKeepsRoute =
+                Other.IsMoving &&
+                (MovingPriority > Other.CommandPriority ||
+                 (MovingPriority == Other.CommandPriority &&
+                  MovingID < Other.EntityID));
+            if (MovingKeepsRoute ||
+                SweptAabbCollisionTick(
+                    MovingStart, Candidates.front().Velocity, MovingRect,
+                    Other.Start, Other.Velocity, Other.Rect) > 12)
+            {
+                continue;
+            }
+            Core::Math::Vec2 Yield{
+                -DesiredDirection.Y, DesiredDirection.X};
+            if (MovingID > OtherID)
+                Yield = Yield * -1.0f;
+            OtherPath->FriendlyYieldVector =
+                OtherPath->FriendlyYieldVector + Yield;
+        }
+
+        const auto Better = [](const AvoidanceCandidate& A,
+                               const AvoidanceCandidate& B)
+        {
+            if (A.CollisionTick != B.CollisionTick)
+                return A.CollisionTick > B.CollisionTick;
+            if (A.Progress != B.Progress)
+                return A.Progress > B.Progress;
+            if (A.Deviation != B.Deviation)
+                return A.Deviation < B.Deviation;
+            if (A.Slowdown != B.Slowdown)
+                return A.Slowdown < B.Slowdown;
+            return A.Index < B.Index;
+        };
+        const AvoidanceCandidate* Best = &Candidates.front();
+        for (size_t Index = 0; Index < CandidateCount; ++Index)
+        {
+            const auto& Candidate = Candidates[Index];
+            if (Better(Candidate, *Best))
+                Best = &Candidate;
+        }
+
+        if (Best->SpeedPercent <= 0)
+            return {};
+        const float VelocityX = Best->Velocity.X.AsFloat();
+        const float VelocityY = Best->Velocity.Y.AsFloat();
+        const Core::Math::Vec2 Direction{VelocityX, VelocityY};
+        return Direction.LengthSq() > 0.0001f
+            ? Direction.Normalized() : Core::Math::Vec2{};
     }
 
     static int TerrainClearanceForPath(const PathfindingComponent& Path)
@@ -846,6 +1808,8 @@ namespace
     {
         if (const auto Callback = MovementSystem::GetPathRequestCallback())
         {
+            if (sActiveNavigationStats)
+                ++sActiveNavigationStats->RepathRequests;
             return Callback(
                 EM,
                 EntityID,
@@ -1002,6 +1966,7 @@ namespace
             RefreshedPath->RequestedDestination = FinalDestination;
             RefreshedPath->RequestedTargetEntityID = RequestedTargetEntityID;
             RefreshedPath->RequestedIgnoreEntityID = RequestedIgnoreEntityID;
+            RefreshedPath->LastRepathTime = 0.0f;
             return !RefreshedPath->Path.empty();
         }
         return false;
@@ -1023,6 +1988,7 @@ namespace
                     // Keeping the expired timer/baseline makes it look stalled
                     // again on the very next frame and creates a repath storm.
                     Path.StallTimer = 0.0f;
+                    Path.StallTicks = 0;
                     Path.HasLastWaypointDistance = false;
                 }
                 return Refreshed;
@@ -1064,6 +2030,28 @@ namespace
             return RefreshAndRestartWaypointTracking(true);
         }
 
+        if (Path.LastPathStatus ==
+                Game::Pathfinding::PathStatus::Partial &&
+            Path.RequestedIgnoreEntityID >= 0)
+        {
+            // A valid interaction Partial that cannot execute its first local
+            // leg is a waiting/retarget condition, not proof that the semantic
+            // target is unreachable. Hand the settled endpoint back to the
+            // owning harvest/build system, which applies its deterministic
+            // retry window or selects another contact point.
+            if (const auto* Transform =
+                    EM.GetComponent<TransformComponent>(EntityID))
+            {
+                Path.ResolvedPathDestination = Transform->Position;
+            }
+            Path.Path.clear();
+            Path.PathIndex = 0;
+            ClearMotion(Path);
+            Path.HasRecentMoveFailure = false;
+            Path.RepathFailCount = 0;
+            return false;
+        }
+
         MarkMoveTargetFailed(Path);
         Path.RepathFailCount = 0;
         return false;
@@ -1089,28 +2077,99 @@ namespace
         return true;
     }
 
-    static bool IsFriendlyTemporaryUnitBlocker(Core::ECS::EntityManager& EM,
-                                               Core::ECS::EntityID MovingID,
-                                               const PathfindingComponent& Path)
-    {
-        if (!IsTemporaryUnitBlocker(EM, Path))
-            return false;
-        const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
-        const auto* BlockingPlayer =
-            EM.GetComponent<PlayerComponent>(Path.BlockedByEntityID);
-        return MovingPlayer && BlockingPlayer &&
-               MovingPlayer->PlayerID == BlockingPlayer->PlayerID;
-    }
-
-    static constexpr float kRepulseForce = 80.0f;     // push force scalar
 } // anonymous namespace
 
 void MovementSystem::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f) return;
 
+    static float sElapsedSimulationTime = 0.0f;
+    sElapsedSimulationTime += DeltaTime;
+    MaybePrintStallTelemetryReport(sElapsedSimulationTime);
+
     auto& EM = mSystemMgr.GetEntityManager();
+    mLastNavigationStats = {};
+    sActiveNavigationStats = &mLastNavigationStats;
+    if (const auto SyncNavigation =
+        MovementSystem::GetNavigationSyncCallback())
+    {
+        SyncNavigation(EM, mMap);
+    }
     auto Entities = EM.GetEntitiesWith<TransformComponent, PathfindingComponent>();
+    auto UnitEntities =
+        EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    static thread_local Game::Pathfinding::NavigationSpatialHash SpatialHash;
+    static thread_local Game::Pathfinding::NavigationSpatialHash StaticSpatialHash;
+    SpatialHash.Clear();
+    StaticSpatialHash.Clear();
+    static thread_local std::vector<MovementEntitySnapshot> Snapshots;
+    static thread_local uint32_t SnapshotGeneration = 0;
+    ++SnapshotGeneration;
+    if (SnapshotGeneration == 0)
+    {
+        for (auto& Snapshot : Snapshots)
+            Snapshot.Generation = 0;
+        ++SnapshotGeneration;
+    }
+    if (!UnitEntities.empty())
+    {
+        const size_t RequiredSize =
+            (size_t)UnitEntities.back() + 1;
+        if (Snapshots.size() < RequiredSize)
+            Snapshots.resize(RequiredSize);
+    }
+    for (const auto ID : UnitEntities)
+    {
+        auto& Snapshot = Snapshots[(size_t)ID];
+        Snapshot = {};
+        Snapshot.Generation = SnapshotGeneration;
+        Snapshot.Transform = EM.GetComponent<TransformComponent>(ID);
+        Snapshot.Unit = EM.GetComponent<UnitComponent>(ID);
+        Snapshot.Path = EM.GetComponent<PathfindingComponent>(ID);
+        Snapshot.Command = EM.GetComponent<CommandComponent>(ID);
+        Snapshot.Player = EM.GetComponent<PlayerComponent>(ID);
+        Snapshot.StaticGroundBlocker = IsStaticGroundBlocker(EM, ID);
+        Snapshot.ActiveHarvester = IsActiveHarvester(EM, ID);
+        Snapshot.AssignedConstructionWorker =
+            IsAssignedConstructionWorker(EM, ID);
+        Snapshot.CommandPriority =
+            MovementCommandPriority(Snapshot.Command);
+        if (Snapshot.Path)
+            Snapshot.CollisionRect =
+                DynamicCollisionRectForPath(*Snapshot.Path);
+        if (!Snapshot.Transform)
+            continue;
+        if (Snapshot.StaticGroundBlocker)
+            StaticSpatialHash.Insert(ID, Snapshot.Transform->Position);
+        else
+            SpatialHash.Insert(ID, Snapshot.Transform->Position);
+    }
+    struct SpatialHashScope
+    {
+        explicit SpatialHashScope(
+            const Game::Pathfinding::NavigationSpatialHash& Hash,
+            const Game::Pathfinding::NavigationSpatialHash& StaticHash,
+            const std::vector<MovementEntitySnapshot>& EntitySnapshots,
+            uint32_t SnapshotGeneration)
+        {
+            sActiveSpatialHash = &Hash;
+            sActiveStaticSpatialHash = &StaticHash;
+            sActiveMovementSnapshots = &EntitySnapshots;
+            sActiveMovementSnapshotGeneration = SnapshotGeneration;
+        }
+        ~SpatialHashScope()
+        {
+            sActiveSpatialHash = nullptr;
+            sActiveStaticSpatialHash = nullptr;
+            sActiveMovementSnapshots = nullptr;
+            sActiveMovementSnapshotGeneration = 0;
+            sLastPredictiveQuery = nullptr;
+            sLastPredictiveQueryEntityID = -1;
+            sLastPredictiveDesiredClear = false;
+            sActiveNavigationStats = nullptr;
+        }
+    } ActiveSpatialHash(
+        SpatialHash, StaticSpatialHash, Snapshots, SnapshotGeneration);
 
     // Clamp delta to prevent large jumps on frame spikes
     float Dt = std::min(DeltaTime, 0.1f);
@@ -1123,6 +2182,14 @@ void MovementSystem::Update(float DeltaTime)
         auto* Trans = EM.GetComponent<TransformComponent>(ID);
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
         if (!PathComp) continue;
+
+        if (Trans && !PathComp->HasFixedPosition)
+        {
+            PathComp->FixedPosition =
+                Core::Math::FixedVec2(Trans->Position.X, Trans->Position.Y);
+            PathComp->FixedVelocity = Core::Math::FixedVec2::Zero();
+            PathComp->HasFixedPosition = true;
+        }
         // BulletSystem owns projectile integration. The path component exists
         // only to expose the flight direction to the IScript animation layer.
         if (EM.GetComponent<BulletComponent>(ID))
@@ -1130,9 +2197,18 @@ void MovementSystem::Update(float DeltaTime)
 
         if (PathComp->HasRecentMoveFailure)
         {
+            if (PathComp->RecentMoveFailureTicks <= 0 &&
+                PathComp->RecentMoveFailureCooldown > 0.0f)
+            {
+                PathComp->RecentMoveFailureTicks = std::max(
+                    1, (int)std::ceil(
+                        PathComp->RecentMoveFailureCooldown * 24.0f));
+            }
+            PathComp->RecentMoveFailureTicks =
+                std::max(0, PathComp->RecentMoveFailureTicks - 1);
             PathComp->RecentMoveFailureCooldown =
-                std::max(0.0f, PathComp->RecentMoveFailureCooldown - Dt);
-            if (PathComp->RecentMoveFailureCooldown <= 0.0f)
+                (float)PathComp->RecentMoveFailureTicks / 24.0f;
+            if (PathComp->RecentMoveFailureTicks <= 0)
                 PathComp->HasRecentMoveFailure = false;
         }
 
@@ -1147,7 +2223,7 @@ void MovementSystem::Update(float DeltaTime)
         }
 
         const bool HasMovementSpeedIntent =
-            ShouldHaveMovementSpeed(Trans, Cmd, *PathComp);
+            ShouldHaveMovementSpeed(EM, ID, Trans, Cmd, *PathComp);
         if (!HasMovementSpeedIntent)
         {
             PathComp->TargetSpeed = 0.0f;
@@ -1182,76 +2258,6 @@ void MovementSystem::Update(float DeltaTime)
 
         // Per-frame accumulation
         PathComp->RepulseVector = {0.0f, 0.0f};
-    }
-
-    // --- Repulse field: collect all unit positions ---
-    // For each unit, check nearby units and compute push vectors
-    for (auto ID : Entities)
-    {
-        auto* TransA = EM.GetComponent<TransformComponent>(ID);
-        auto* PathA = EM.GetComponent<PathfindingComponent>(ID);
-        if (!TransA || !PathA || PathA->IsAir) continue;
-
-        if (IsAssignedConstructionWorker(EM, ID))
-            continue;
-
-        for (auto ID2 : Entities)
-        {
-            if (ID == ID2) continue;
-            if (IsActiveHarvester(EM, ID))
-                continue;
-            if (IsAssignedConstructionWorker(EM, ID2))
-                continue;
-            auto* TransB = EM.GetComponent<TransformComponent>(ID2);
-            auto* PathB = EM.GetComponent<PathfindingComponent>(ID2);
-            if (!TransB || !PathB || PathB->IsAir) continue;
-
-            const StaticBlockerRect RectA = CollisionRectForPath(*PathA);
-            const StaticBlockerRect RectB = CollisionRectForPath(*PathB);
-            const Core::Math::Vec2 Separation = DynamicCollisionSeparation(
-                TransA->Position, RectA, TransB->Position, RectB, ID > ID2);
-            const float Overlap = Separation.Length();
-            if (Overlap > 0.001f)
-            {
-                const Core::Math::Vec2 Push = Separation.Normalized();
-                float Force = Overlap * kRepulseForce * Dt;
-                PathA->RepulseVector = PathA->RepulseVector + Push * Force;
-            }
-        }
-
-        auto Blockers = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-        for (auto BlockerID : Blockers)
-        {
-            if (BlockerID == ID || !IsStaticGroundBlocker(EM, BlockerID))
-                continue;
-            // Keep repulsion consistent with the hard-collision exception.
-            // A planning-only target ignore must never become a physical
-            // pass-through here.
-            if (ShouldIgnoreStaticBlockerAtRuntime(EM, ID, BlockerID))
-                continue;
-
-            auto* BlockerTrans = EM.GetComponent<TransformComponent>(BlockerID);
-            auto* BlockerUnit = EM.GetComponent<UnitComponent>(BlockerID);
-            auto* BlockerBuilding = EM.GetComponent<BuildingComponent>(BlockerID);
-            auto* BlockerResource = EM.GetComponent<ResourceComponent>(BlockerID);
-            auto* BlockerPath = EM.GetComponent<PathfindingComponent>(BlockerID);
-            if (!BlockerTrans || !BlockerUnit)
-                continue;
-
-            const StaticBlockerRect Rect = StaticBlockerRectForEntity(
-                BlockerUnit, BlockerBuilding, BlockerResource, BlockerPath);
-            const StaticBlockerRect MovingRect = CollisionRectForPath(*PathA);
-            const Core::Math::Vec2 Separation = DynamicCollisionSeparation(
-                TransA->Position, MovingRect,
-                BlockerTrans->Position, Rect, ID > BlockerID);
-            const float Overlap = Separation.Length();
-            if (Overlap > 0.001f)
-            {
-                const Core::Math::Vec2 Push = Separation.Normalized();
-                float Force = Overlap * kRepulseForce * Dt;
-                PathA->RepulseVector = PathA->RepulseVector + Push * Force;
-            }
-        }
     }
 
     // --- Movement update ---
@@ -1322,9 +2328,11 @@ void MovementSystem::Update(float DeltaTime)
             Yielded = ResolveStaticBlockers(EM, ID, Yielded, YieldDir, PathComp->IsAir);
             Yielded = ResolveMapWalkability(
                 mMap, Trans->Position, Yielded,
-                (float)TerrainClearanceForPath(*PathComp), PathComp->IsAir);
+                *PathComp, PathComp->IsAir);
             if (FindDynamicUnitCollision(EM, ID, Trans->Position, Yielded) < 0)
-                Trans->Position = Yielded;
+                CommitAuthoritativePosition(
+                    *Trans, *PathComp, Yielded,
+                    YieldDir * kFriendlyYieldSpeed);
         }
 
         // Stop/HoldPosition: clear path, don't move.
@@ -1360,9 +2368,10 @@ void MovementSystem::Update(float DeltaTime)
                 (Cmd->CurrentCommand == CommandType::Move ||
                  Cmd->CurrentCommand == CommandType::AttackMove ||
                   Cmd->CurrentCommand == CommandType::Follow ||
-                  Cmd->CurrentCommand == CommandType::Build ||
                   Cmd->CurrentCommand == CommandType::Harvest) &&
+                !IsSatisfiedInteractionPartial(Trans, *PathComp) &&
                 !RecentlyFailedCurrentRequest(*PathComp) &&
+                PathComp->LastRepathTime >= 0.5f &&
                 Trans->Position.DistanceTo(PathComp->RequestedDestination) >
                     std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp)))
             {
@@ -1435,14 +2444,24 @@ void MovementSystem::Update(float DeltaTime)
             float Dist = ToTarget.Length();
             const float MovingRadius = (float)CollisionRadiusFromBounds(*PathComp);
             const bool IsFinalWaypoint = PathComp->PathIndex >= (int)Path.size() - 1;
+            const bool PreciseInteractionEndpoint =
+                Cmd &&
+                (Cmd->CurrentCommand == CommandType::Harvest ||
+                 Cmd->CurrentCommand == CommandType::Build ||
+                 Cmd->CurrentCommand == CommandType::Repair);
             const float ArrivalTolerance = IsFinalWaypoint
-                ? std::max(PathComp->NodeTolerance, MovingRadius)
+                ? (PreciseInteractionEndpoint
+                    ? PathComp->NodeTolerance
+                    : std::max(PathComp->NodeTolerance, MovingRadius))
                 : PathComp->NodeTolerance;
 
-            if (Dist < ArrivalTolerance)
+            const bool ArrivedCluster = IsFinalWaypoint && !PreciseInteractionEndpoint &&
+                IsArrivedAtDestinationCluster(EM, ID, Trans, *PathComp, Cmd, Waypoint);
+            if (Dist < ArrivalTolerance || ArrivedCluster)
             {
                 PathComp->PathIndex++;
                 PathComp->StallTimer = 0.0f;
+                PathComp->StallTicks = 0;
                 PathComp->HasLastWaypointDistance = false;
                 continue;
             }
@@ -1463,34 +2482,41 @@ void MovementSystem::Update(float DeltaTime)
             // Desired move direction (toward waypoint)
             MoveDir = ToTarget.Normalized();
 
-            // Apply repulse vector (push away from nearby units)
-            Core::Math::Vec2 ActualMove = MoveDir;
-            if (PathComp->RepulseVector.Length() > 0.0f)
+            PathComp->BlockedByEntityID = -1;
+            const Core::Math::Vec2 ActualMove =
+                SelectPredictiveAvoidanceDirection(
+                    EM, ID, MoveDir, CurSpd);
+
+            const bool ArrivedClusterPostPredict = IsFinalWaypoint && !PreciseInteractionEndpoint &&
+                IsArrivedAtDestinationCluster(EM, ID, Trans, *PathComp, Cmd, Waypoint);
+            if (ArrivedClusterPostPredict)
             {
-                Core::Math::Vec2 Avoid = PathComp->RepulseVector.Normalized();
-                Core::Math::Vec2 LateralAvoid = Avoid - MoveDir * Avoid.Dot(MoveDir);
-                if (LateralAvoid.Length() > 0.001f)
-                {
-                    ActualMove = (MoveDir + LateralAvoid.Normalized() * 0.45f).Normalized();
-                }
+                PathComp->PathIndex++;
+                PathComp->StallTimer = 0.0f;
+                PathComp->StallTicks = 0;
+                PathComp->HasLastWaypointDistance = false;
+                break;
             }
 
             // Turn-rate smoothing
-            float DesiredAngle = atan2f(ActualMove.Y, ActualMove.X);
-            float Current = PathComp->FacingAngle;
-            float Diff = DesiredAngle - Current;
-            // Normalize to [-PI, PI]
-            while (Diff > 3.14159265359f) Diff -= 6.28318530718f;
-            while (Diff < -3.14159265359f) Diff += 6.28318530718f;
-            float MaxTurn = PathComp->TurnRate * Dt;
-            if (std::fabs(Diff) <= MaxTurn)
-                PathComp->FacingAngle = DesiredAngle;
-            else
-                PathComp->FacingAngle += (Diff > 0.0f ? MaxTurn : -MaxTurn);
+            if (ActualMove.LengthSq() >= 0.0001f)
+            {
+                float DesiredAngle = atan2f(ActualMove.Y, ActualMove.X);
+                float Current = PathComp->FacingAngle;
+                float Diff = DesiredAngle - Current;
+                // Normalize to [-PI, PI]
+                while (Diff > 3.14159265359f) Diff -= 6.28318530718f;
+                while (Diff < -3.14159265359f) Diff += 6.28318530718f;
+                float MaxTurn = PathComp->TurnRate * Dt;
+                if (std::fabs(Diff) <= MaxTurn)
+                    PathComp->FacingAngle = DesiredAngle;
+                else
+                    PathComp->FacingAngle += (Diff > 0.0f ? MaxTurn : -MaxTurn);
+            }
 
-            // Move along the actual direction (not facing)
+            // Move along the actual movement direction
+            MoveDir = ActualMove;
             float MoveAmount = CurSpd * Dt;
-            PathComp->BlockedByEntityID = -1;
             if (MoveAmount > Dist)
             {
                 const float OldDistance = Dist;
@@ -1501,19 +2527,11 @@ void MovementSystem::Update(float DeltaTime)
                     IsEmbeddedInStaticBlocker(
                         EM, ID, PathComp->BlockedByEntityID, Trans->Position);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
-                Proposed = ResolveDynamicUnitBlockers(
-                    EM, ID, Trans->Position, Proposed, MoveDir, PathComp->IsAir);
-                Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, MoveDir, PathComp->IsAir);
-                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
+                    *PathComp, PathComp->IsAir);
                 if (!EscapingStaticOverlap)
                     Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, MoveDir, PathComp->IsAir);
-                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
                 if (const auto BlockerID = FindDynamicUnitCollision(
                         EM, ID, Trans->Position, Proposed);
                     BlockerID >= 0)
@@ -1522,7 +2540,11 @@ void MovementSystem::Update(float DeltaTime)
                     Proposed = Trans->Position;
                 }
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
-                Trans->Position = Proposed;
+                CommitAuthoritativePosition(
+                    *Trans, *PathComp, Proposed,
+                    AppliedMove.Length() > 0.001f
+                        ? AppliedMove.Normalized() * TargetSpd
+                        : Core::Math::Vec2{});
                 const float AppliedDistance = AppliedMove.Length();
                 const float NewDistance = (Waypoint - Trans->Position).Length();
                 if (!PathComp->IsAir &&
@@ -1531,35 +2553,42 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
-                    LogMovementStall(EM, ID, *Trans, *PathComp, "waypoint");
-                    if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
+                    LogMovementStall(EM, ID, *Trans, *PathComp, "waypoint", mMap);
+                    if (PathComp->LastRepathTime >= 0.5f)
                     {
-                        const int AvoidEntityID = PathComp->BlockedByEntityID;
-                        if (PathComp->RepathFailCount < 2 && mMap &&
-                            RefreshPathForCurrentRequest(
-                                EM, ID, mMap, false, AvoidEntityID))
+                        PathComp->LastRepathTime = 0.0f;
+                        if (IsTemporaryUnitBlocker(EM, *PathComp))
                         {
+                            const int AvoidEntityID = PathComp->BlockedByEntityID;
+                            if (PathComp->RepathFailCount < 2 && mMap &&
+                                RefreshPathForCurrentRequest(
+                                    EM, ID, mMap, false, AvoidEntityID))
+                            {
+                                ++PathComp->RepathFailCount;
+                                PathComp->StallTimer = 0.0f;
+                                PathComp->StallTicks = 0;
+                                PathComp->HasLastWaypointDistance = false;
+                                break;
+                            }
                             ++PathComp->RepathFailCount;
-                            PathComp->StallTimer = 0.0f;
-                            PathComp->HasLastWaypointDistance = false;
+                        }
+                        else if (!HandleMovementStall(EM, ID, *PathComp, mMap))
+                        {
+                            if (Cmd && Cmd->HasPendingOrders() &&
+                                Cmd->CurrentCommand != CommandType::Build)
+                            {
+                                CommandSystem::AdvanceQueue(EM, ID);
+                            }
                             break;
                         }
-                        PathComp->CurrentSpeed = 0.0f;
-                        PathComp->CurrentVelocity = {0.0f, 0.0f};
-                        // Do not erase the stall after a failed friendly-unit
-                        // detour. Escalate through the normal reroute/retry
-                        // sequence instead of retrying the same blocker forever.
-                        HandleMovementStall(EM, ID, *PathComp, mMap);
-                        break;
                     }
-                    if (!HandleMovementStall(EM, ID, *PathComp, mMap))
-                        break;
                     break;
                 }
-                if (NewDistance <= ArrivalTolerance)
+                if (NewDistance < ArrivalTolerance)
                 {
                     PathComp->PathIndex++;
                     PathComp->StallTimer = 0.0f;
+                    PathComp->StallTicks = 0;
                     PathComp->HasLastWaypointDistance = false;
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
@@ -1569,27 +2598,19 @@ void MovementSystem::Update(float DeltaTime)
             else
             {
                 const float OldDistance = Dist;
-                Core::Math::Vec2 Proposed = Trans->Position + ActualMove * MoveAmount;
+                Core::Math::Vec2 Proposed = Trans->Position + MoveDir * MoveAmount;
                 Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, ActualMove, PathComp->IsAir);
+                    EM, ID, Proposed, MoveDir, PathComp->IsAir);
                 const bool EscapingStaticOverlap =
                     !IsActiveHarvester(EM, ID) &&
                     IsEmbeddedInStaticBlocker(
                         EM, ID, PathComp->BlockedByEntityID, Trans->Position);
                 Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
-                Proposed = ResolveDynamicUnitBlockers(
-                    EM, ID, Trans->Position, Proposed, ActualMove, PathComp->IsAir);
-                Proposed = ResolveStaticBlockers(
-                    EM, ID, Proposed, ActualMove, PathComp->IsAir);
-                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
+                    *PathComp, PathComp->IsAir);
                 if (!EscapingStaticOverlap)
                     Proposed = PreventBackwardStep(Trans->Position, Proposed, MoveDir);
                 Proposed = ResolveStaticBlockers(
                     EM, ID, Proposed, MoveDir, PathComp->IsAir);
-                Proposed = ResolveMapWalkability(mMap, Trans->Position, Proposed,
-                    MovingRadius, PathComp->IsAir);
                 if (const auto BlockerID = FindDynamicUnitCollision(
                         EM, ID, Trans->Position, Proposed);
                     BlockerID >= 0)
@@ -1598,7 +2619,11 @@ void MovementSystem::Update(float DeltaTime)
                     Proposed = Trans->Position;
                 }
                 const Core::Math::Vec2 AppliedMove = Proposed - Trans->Position;
-                Trans->Position = Proposed;
+                CommitAuthoritativePosition(
+                    *Trans, *PathComp, Proposed,
+                    AppliedMove.Length() > 0.001f
+                        ? AppliedMove.Normalized() * CurSpd
+                        : Core::Math::Vec2{});
                 const float AppliedDistance = AppliedMove.Length();
                 const float NewDistance = (Waypoint - Trans->Position).Length();
                 if (!PathComp->IsAir &&
@@ -1607,26 +2632,35 @@ void MovementSystem::Update(float DeltaTime)
                      !TrackDestinationProgress(*PathComp, *Trans,
                                                AppliedDistance, Dt)))
                 {
-                    LogMovementStall(EM, ID, *Trans, *PathComp, "segment");
-                    if (IsFriendlyTemporaryUnitBlocker(EM, ID, *PathComp))
+                    LogMovementStall(EM, ID, *Trans, *PathComp, "segment", mMap);
+                    if (PathComp->LastRepathTime >= 0.5f)
                     {
-                        const int AvoidEntityID = PathComp->BlockedByEntityID;
-                        if (PathComp->RepathFailCount < 2 && mMap &&
-                            RefreshPathForCurrentRequest(
-                                EM, ID, mMap, false, AvoidEntityID))
+                        PathComp->LastRepathTime = 0.0f;
+                        if (IsTemporaryUnitBlocker(EM, *PathComp))
                         {
+                            const int AvoidEntityID = PathComp->BlockedByEntityID;
+                            if (PathComp->RepathFailCount < 2 && mMap &&
+                                RefreshPathForCurrentRequest(
+                                    EM, ID, mMap, false, AvoidEntityID))
+                            {
+                                ++PathComp->RepathFailCount;
+                                PathComp->StallTimer = 0.0f;
+                                PathComp->StallTicks = 0;
+                                PathComp->HasLastWaypointDistance = false;
+                                break;
+                            }
                             ++PathComp->RepathFailCount;
-                            PathComp->StallTimer = 0.0f;
-                            PathComp->HasLastWaypointDistance = false;
+                        }
+                        else if (!HandleMovementStall(EM, ID, *PathComp, mMap))
+                        {
+                            if (Cmd && Cmd->HasPendingOrders() &&
+                                Cmd->CurrentCommand != CommandType::Build)
+                            {
+                                CommandSystem::AdvanceQueue(EM, ID);
+                            }
                             break;
                         }
-                        PathComp->CurrentSpeed = 0.0f;
-                        PathComp->CurrentVelocity = {0.0f, 0.0f};
-                        HandleMovementStall(EM, ID, *PathComp, mMap);
-                        break;
                     }
-                    if (!HandleMovementStall(EM, ID, *PathComp, mMap))
-                        break;
                     break;
                 }
                 PathComp->CurrentVelocity = AppliedMove.Length() > 0.001f ?
@@ -1638,8 +2672,13 @@ void MovementSystem::Update(float DeltaTime)
 
         if (PathComp->PathIndex >= (int)Path.size())
         {
+            const bool ArrivedCluster = IsArrivedAtDestinationCluster(
+                EM, ID, Trans, *PathComp, Cmd, PathComp->RequestedDestination);
             const bool NeedsContinuation =
-                Trans->Position.DistanceTo(PathComp->RequestedDestination) >
+                !ArrivedCluster &&
+                !IsSatisfiedInteractionPartial(Trans, *PathComp) &&
+                Trans->Position.DistanceTo(
+                    PathComp->RequestedDestination) >
                 std::max(PathComp->NodeTolerance, (float)CollisionRadiusFromBounds(*PathComp));
             const int FailedStaticBlockerID =
                 PathComp->HasRecentMoveFailure &&
@@ -1655,16 +2694,18 @@ void MovementSystem::Update(float DeltaTime)
                 (Cmd->CurrentCommand == CommandType::Move ||
                  Cmd->CurrentCommand == CommandType::AttackMove ||
                   Cmd->CurrentCommand == CommandType::Follow ||
-                  Cmd->CurrentCommand == CommandType::Build ||
                   Cmd->CurrentCommand == CommandType::Harvest) &&
                 !RecentlyFailedCurrentRequest(*PathComp))
             {
-                if (!RefreshPathForCurrentRequest(EM, ID, mMap, false))
+                if (PathComp->LastRepathTime >= 0.5f)
                 {
-                    MarkMoveTargetFailed(*PathComp);
-                    if (Cmd->HasPendingOrders() &&
-                        Cmd->CurrentCommand != CommandType::Build)
-                        CommandSystem::AdvanceQueue(EM, ID);
+                    if (!RefreshPathForCurrentRequest(EM, ID, mMap, false))
+                    {
+                        MarkMoveTargetFailed(*PathComp);
+                        if (Cmd->HasPendingOrders() &&
+                            Cmd->CurrentCommand != CommandType::Build)
+                            CommandSystem::AdvanceQueue(EM, ID);
+                    }
                 }
             }
             else if (Cmd &&

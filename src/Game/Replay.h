@@ -146,7 +146,7 @@ private:
         uint32_t Frame = 0;
         uint32_t ActionCount = ReadBits(16);
 
-        for (uint32_t i = 0; i < ActionCount && Pos < mCompressedData.size(); ++i)
+        for (uint32_t i = 0; i < ActionCount && (Pos < mCompressedData.size() || BitsRemaining > 0); ++i)
         {
             ReplayAction Action;
             uint32_t Delta = ReadBits(8);
@@ -186,8 +186,18 @@ private:
     }
 
     uint8_t ReadU8() { return mReadPos < mData.size() ? mData[mReadPos++] : 0; }
-    uint16_t ReadU16() { return (uint16_t)(ReadU8() | (ReadU8() << 8)); }
-    uint32_t ReadU32() { return (uint32_t)(ReadU16() | (ReadU16() << 16)); }
+    uint16_t ReadU16()
+    {
+        uint16_t B0 = ReadU8();
+        uint16_t B1 = ReadU8();
+        return (uint16_t)(B0 | (B1 << 8));
+    }
+    uint32_t ReadU32()
+    {
+        uint32_t W0 = ReadU16();
+        uint32_t W1 = ReadU16();
+        return W0 | (W1 << 16);
+    }
 
     ReplayHeader mHeader;
     std::vector<ReplayAction> mActions;
@@ -279,9 +289,10 @@ public:
         std::vector<uint8_t> Compressed = BitCompressActions();
         Result.insert(Result.end(), Compressed.begin(), Compressed.end());
 
-        // Fix up sizes
-        uint32_t* Ptr = (uint32_t*)&Result[GameInfoSizePos];
-        *Ptr = GameInfoSize;
+        // Fix up sizes safely without strict aliasing violations
+        uint32_t HeaderSize = (uint32_t)(Result.size() - 4);
+        std::memcpy(&Result[HeaderSizePos], &HeaderSize, sizeof(uint32_t));
+        std::memcpy(&Result[GameInfoSizePos], &GameInfoSize, sizeof(uint32_t));
 
         return Result;
     }

@@ -205,10 +205,11 @@ bool ZergSystem::CanUnitBurrow(int ChkUnitID, uint32_t ImageID)
         case 38:  // Hydralisk
         case 41:  // Drone
         case 46:  // Defiler
-        case 50:  // Infested Kerrigan
-        case 51:  // Unclean One
-        case 53:  // Hunter Killer
-        case 54:  // Devouring One
+        case 50:  // Infested Terran
+        case 51:  // Hero Infested Kerrigan
+        case 52:  // Hero Unclean One (Defiler)
+        case 53:  // Hero Hunter Killer (Hydralisk)
+        case 54:  // Hero Devouring One (Zergling)
         case 103: // Lurker
             return true;
         default:
@@ -266,7 +267,9 @@ void ZergSystem::Update(float DeltaTime)
 
     if (!sMap || mCreepGrid.empty())
     {
+        ProcessLarvae(EM, DeltaTime);
         ProcessZergRegeneration(EM, DeltaTime);
+        ProcessMorphs(EM, DeltaTime);
         return;
     }
 
@@ -856,7 +859,8 @@ bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     }
 
     // Check supply
-    if (Res.SupplyUsed + UnitDef.SupplyCost > Res.SupplyMax)
+    const int EffectiveSupplyMax = std::min(200, Res.SupplyMax);
+    if (Res.SupplyUsed + UnitDef.SupplyCost > EffectiveSupplyMax)
     {
         if (OutReason) *OutReason = "not enough supply";
         return false;
@@ -1015,7 +1019,8 @@ bool ZergSystem::CanMorphHydraliskIntoLurker(
 
     const int AdditionalSupply =
         std::max(0, LurkerDef.SupplyCost - Unit->SupplyCost);
-    if (Res.SupplyUsed + AdditionalSupply > Res.SupplyMax)
+    const int EffectiveSupplyMax = std::min(200, Res.SupplyMax);
+    if (Res.SupplyUsed + AdditionalSupply > EffectiveSupplyMax)
     {
         if (OutReason) *OutReason = "not enough supply";
         return false;
@@ -1105,6 +1110,312 @@ bool ZergSystem::StartMorphHydraliskIntoLurker(
     Logger::Info(
         "ZergSystem", "Player " + std::to_string(PlayerID) +
         " started Hydralisk -> Lurker morph (Lurker Egg " +
+        std::to_string(EggID) + ")");
+    return true;
+}
+
+bool ZergSystem::CanMorphMutaliskIntoGuardian(
+    Core::ECS::EntityManager& EM, int MutaliskID, std::string* OutReason)
+{
+    if (!EM.IsAlive(MutaliskID))
+    {
+        if (OutReason) *OutReason = "Mutalisk is dead";
+        return false;
+    }
+    const auto* Unit = EM.GetComponent<UnitComponent>(MutaliskID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(MutaliskID);
+    if (!Unit || !Player)
+    {
+        if (OutReason) *OutReason = "Mutalisk missing required components";
+        return false;
+    }
+    if (Unit->UnitRace != Race::Zerg || Unit->ChkUnitID != 43)
+    {
+        if (OutReason) *OutReason = "unit is not a Mutalisk";
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        if (OutReason) *OutReason = "Mutalisk is dead";
+        return false;
+    }
+    if (!EM.GetComponent<TransformComponent>(MutaliskID))
+    {
+        if (OutReason) *OutReason = "Mutalisk is missing transform";
+        return false;
+    }
+    if (const auto* Morph = EM.GetComponent<MorphComponent>(MutaliskID);
+        Morph && Morph->IsMorphing)
+    {
+        if (OutReason) *OutReason = "Mutalisk is already morphing";
+        return false;
+    }
+
+    const int GreaterSpireDefID = NormalizeDefIDForRace(
+        Game::Races::GetUnitDefID("Greater Spire"), Race::Zerg);
+    if (!HasCompletedBuildingDef(EM, Player->PlayerID, GreaterSpireDefID))
+    {
+        if (OutReason) *OutReason = "Greater Spire is required";
+        return false;
+    }
+
+    const int GuardianDefID = Game::Races::GetUnitDefID("Guardian");
+    const auto& GuardianDef = Game::Races::GetUnitDefByID(GuardianDefID);
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < GuardianDef.MineralCost ||
+        Res.VespeneGas < GuardianDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    const int AdditionalSupply =
+        std::max(0, GuardianDef.SupplyCost - Unit->SupplyCost);
+    const int EffectiveSupplyMax = std::min(200, Res.SupplyMax);
+    if (Res.SupplyUsed + AdditionalSupply > EffectiveSupplyMax)
+    {
+        if (OutReason) *OutReason = "not enough supply";
+        return false;
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphMutaliskIntoGuardian(
+    Core::ECS::EntityManager& EM, int MutaliskID)
+{
+    std::string Reason;
+    if (!CanMorphMutaliskIntoGuardian(EM, MutaliskID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph Mutalisk into Guardian: " + Reason);
+        return false;
+    }
+
+    auto* SourceUnit = EM.GetComponent<UnitComponent>(MutaliskID);
+    auto* SourcePlayer = EM.GetComponent<PlayerComponent>(MutaliskID);
+    auto* SourceTransform = EM.GetComponent<TransformComponent>(MutaliskID);
+    if (!SourceUnit || !SourcePlayer || !SourceTransform)
+        return false;
+
+    const int PlayerID = SourcePlayer->PlayerID;
+    const int SourceSupply = SourceUnit->SupplyCost;
+    const Core::Math::Vec2 MorphPosition = SourceTransform->Position;
+    const int GuardianDefID = Game::Races::GetUnitDefID("Guardian");
+    const auto& GuardianDef = Game::Races::GetUnitDefByID(GuardianDefID);
+
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= GuardianDef.MineralCost;
+    Res.VespeneGas -= GuardianDef.GasCost;
+    Res.SupplyUsed +=
+        std::max(0, GuardianDef.SupplyCost - SourceSupply);
+
+    constexpr int CocoonChkUnitID = 59;
+    constexpr int CocoonHitPoints = 200;
+    constexpr int CocoonArmor = 10;
+    const int EggID = EM.CreateEntity();
+    auto& EggTransform = EM.AddComponent<TransformComponent>(EggID);
+    auto& EggUnit = EM.AddComponent<UnitComponent>(EggID);
+    auto& EggPlayer = EM.AddComponent<PlayerComponent>(EggID);
+    auto& EggBuilding = EM.AddComponent<BuildingComponent>(EggID);
+    auto& EggMorph = EM.AddComponent<MorphComponent>(EggID);
+    auto& EggPath = EM.AddComponent<PathfindingComponent>(EggID);
+    auto& EggRender = EM.AddComponent<RenderComponent>(EggID);
+
+    EggTransform.Position = MorphPosition;
+    EggPlayer.PlayerID = PlayerID;
+
+    EggUnit.ChkUnitID = CocoonChkUnitID;
+    EggUnit.UnitRace = Race::Zerg;
+    EggUnit.MaxHitPoints = CocoonHitPoints;
+    EggUnit.HitPoints = SourceUnit->MaxHitPoints > 0
+        ? std::clamp(SourceUnit->HitPoints * CocoonHitPoints /
+                         SourceUnit->MaxHitPoints,
+                     1, CocoonHitPoints)
+        : CocoonHitPoints;
+    EggUnit.Armor = CocoonArmor;
+    EggUnit.SupplyCost = 0;
+    EggUnit.Speed = 0.0f;
+    EggUnit.SightRange = 4;
+    EggUnit.SizeType = UnitSize::Medium;
+
+    EggBuilding.IsBuilding = true;
+    EggBuilding.UnderConstruction = true;
+    EggBuilding.BuildProgress = 0.0f;
+    EggBuilding.TotalBuildTime = (float)GuardianDef.BuildTime;
+    EggBuilding.BuildingDefID = -1;
+    EggBuilding.BuildTimeRemaining = (float)GuardianDef.BuildTime;
+    EggBuilding.IsOrganic = true;
+
+    EggMorph.MorphTargetDefID = GuardianDefID;
+    EggMorph.MorphDuration = (float)GuardianDef.BuildTime;
+    EggMorph.MorphTimer = (float)GuardianDef.BuildTime;
+    EggMorph.IsMorphing = true;
+    EggMorph.SourceUnitID = MutaliskID;
+
+    EggPath.IsAir = true;
+    ApplyCollisionBounds(
+        EggPath, ResolveCollisionBounds(CocoonChkUnitID));
+    EggRender.ImageID = ResolveImageID(CocoonChkUnitID);
+
+    EM.DestroyEntity(MutaliskID);
+
+    Logger::Info(
+        "ZergSystem", "Player " + std::to_string(PlayerID) +
+        " started Mutalisk -> Guardian morph (Cocoon " +
+        std::to_string(EggID) + ")");
+    return true;
+}
+
+bool ZergSystem::CanMorphMutaliskIntoDevourer(
+    Core::ECS::EntityManager& EM, int MutaliskID, std::string* OutReason)
+{
+    if (!EM.IsAlive(MutaliskID))
+    {
+        if (OutReason) *OutReason = "Mutalisk is dead";
+        return false;
+    }
+    const auto* Unit = EM.GetComponent<UnitComponent>(MutaliskID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(MutaliskID);
+    if (!Unit || !Player)
+    {
+        if (OutReason) *OutReason = "Mutalisk missing required components";
+        return false;
+    }
+    if (Unit->UnitRace != Race::Zerg || Unit->ChkUnitID != 43)
+    {
+        if (OutReason) *OutReason = "unit is not a Mutalisk";
+        return false;
+    }
+    if (Unit->HitPoints <= 0)
+    {
+        if (OutReason) *OutReason = "Mutalisk is dead";
+        return false;
+    }
+    if (!EM.GetComponent<TransformComponent>(MutaliskID))
+    {
+        if (OutReason) *OutReason = "Mutalisk is missing transform";
+        return false;
+    }
+    if (const auto* Morph = EM.GetComponent<MorphComponent>(MutaliskID);
+        Morph && Morph->IsMorphing)
+    {
+        if (OutReason) *OutReason = "Mutalisk is already morphing";
+        return false;
+    }
+
+    const int GreaterSpireDefID = NormalizeDefIDForRace(
+        Game::Races::GetUnitDefID("Greater Spire"), Race::Zerg);
+    if (!HasCompletedBuildingDef(EM, Player->PlayerID, GreaterSpireDefID))
+    {
+        if (OutReason) *OutReason = "Greater Spire is required";
+        return false;
+    }
+
+    const int DevourerDefID = Game::Races::GetUnitDefID("Devourer");
+    const auto& DevourerDef = Game::Races::GetUnitDefByID(DevourerDefID);
+
+    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    if (Res.Minerals < DevourerDef.MineralCost ||
+        Res.VespeneGas < DevourerDef.GasCost)
+    {
+        if (OutReason) *OutReason = "not enough resources";
+        return false;
+    }
+
+    const int AdditionalSupply =
+        std::max(0, DevourerDef.SupplyCost - Unit->SupplyCost);
+    const int EffectiveSupplyMax = std::min(200, Res.SupplyMax);
+    if (Res.SupplyUsed + AdditionalSupply > EffectiveSupplyMax)
+    {
+        if (OutReason) *OutReason = "not enough supply";
+        return false;
+    }
+
+    return true;
+}
+
+bool ZergSystem::StartMorphMutaliskIntoDevourer(
+    Core::ECS::EntityManager& EM, int MutaliskID)
+{
+    std::string Reason;
+    if (!CanMorphMutaliskIntoDevourer(EM, MutaliskID, &Reason))
+    {
+        Logger::Debug("ZergSystem", "Cannot morph Mutalisk into Devourer: " + Reason);
+        return false;
+    }
+
+    auto* SourceUnit = EM.GetComponent<UnitComponent>(MutaliskID);
+    auto* SourcePlayer = EM.GetComponent<PlayerComponent>(MutaliskID);
+    auto* SourceTransform = EM.GetComponent<TransformComponent>(MutaliskID);
+    if (!SourceUnit || !SourcePlayer || !SourceTransform)
+        return false;
+
+    const int PlayerID = SourcePlayer->PlayerID;
+    const int SourceSupply = SourceUnit->SupplyCost;
+    const Core::Math::Vec2 MorphPosition = SourceTransform->Position;
+    const int DevourerDefID = Game::Races::GetUnitDefID("Devourer");
+    const auto& DevourerDef = Game::Races::GetUnitDefByID(DevourerDefID);
+
+    auto& Res = HarvestSystem::GetResources(PlayerID);
+    Res.Minerals -= DevourerDef.MineralCost;
+    Res.VespeneGas -= DevourerDef.GasCost;
+    Res.SupplyUsed +=
+        std::max(0, DevourerDef.SupplyCost - SourceSupply);
+
+    constexpr int CocoonChkUnitID = 59;
+    constexpr int CocoonHitPoints = 200;
+    constexpr int CocoonArmor = 10;
+    const int EggID = EM.CreateEntity();
+    auto& EggTransform = EM.AddComponent<TransformComponent>(EggID);
+    auto& EggUnit = EM.AddComponent<UnitComponent>(EggID);
+    auto& EggPlayer = EM.AddComponent<PlayerComponent>(EggID);
+    auto& EggBuilding = EM.AddComponent<BuildingComponent>(EggID);
+    auto& EggMorph = EM.AddComponent<MorphComponent>(EggID);
+    auto& EggPath = EM.AddComponent<PathfindingComponent>(EggID);
+    auto& EggRender = EM.AddComponent<RenderComponent>(EggID);
+
+    EggTransform.Position = MorphPosition;
+    EggPlayer.PlayerID = PlayerID;
+
+    EggUnit.ChkUnitID = CocoonChkUnitID;
+    EggUnit.UnitRace = Race::Zerg;
+    EggUnit.MaxHitPoints = CocoonHitPoints;
+    EggUnit.HitPoints = SourceUnit->MaxHitPoints > 0
+        ? std::clamp(SourceUnit->HitPoints * CocoonHitPoints /
+                         SourceUnit->MaxHitPoints,
+                     1, CocoonHitPoints)
+        : CocoonHitPoints;
+    EggUnit.Armor = CocoonArmor;
+    EggUnit.SupplyCost = 0;
+    EggUnit.Speed = 0.0f;
+    EggUnit.SightRange = 4;
+    EggUnit.SizeType = UnitSize::Medium;
+
+    EggBuilding.IsBuilding = true;
+    EggBuilding.UnderConstruction = true;
+    EggBuilding.BuildProgress = 0.0f;
+    EggBuilding.TotalBuildTime = (float)DevourerDef.BuildTime;
+    EggBuilding.BuildingDefID = -1;
+    EggBuilding.BuildTimeRemaining = (float)DevourerDef.BuildTime;
+    EggBuilding.IsOrganic = true;
+
+    EggMorph.MorphTargetDefID = DevourerDefID;
+    EggMorph.MorphDuration = (float)DevourerDef.BuildTime;
+    EggMorph.MorphTimer = (float)DevourerDef.BuildTime;
+    EggMorph.IsMorphing = true;
+    EggMorph.SourceUnitID = MutaliskID;
+
+    EggPath.IsAir = true;
+    ApplyCollisionBounds(
+        EggPath, ResolveCollisionBounds(CocoonChkUnitID));
+    EggRender.ImageID = ResolveImageID(CocoonChkUnitID);
+
+    EM.DestroyEntity(MutaliskID);
+
+    Logger::Info(
+        "ZergSystem", "Player " + std::to_string(PlayerID) +
+        " started Mutalisk -> Devourer morph (Cocoon " +
         std::to_string(EggID) + ")");
     return true;
 }

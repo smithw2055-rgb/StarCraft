@@ -24,6 +24,7 @@ struct AppRuntime
     float FpsTimer = 0.0f;
     int FpsFrames = 0;
     int FpsValue = 0;
+    float MaxFrameTime = 0.0f;
     std::string InstallPath;
     std::string MapPath;
     std::string MapPathOverride;

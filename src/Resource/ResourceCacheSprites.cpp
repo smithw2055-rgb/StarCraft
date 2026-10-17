@@ -230,9 +230,12 @@ const std::vector<GpuImage>* ResourceCache::GetDatImageFrames(uint32_t ImageID)
     // Nexus large-shield table). They are reached by valid iscript next-image
     // opcodes but are not GRP bitmaps. Feeding their binary offsets into the
     // GRP decoder produced the translucent ring seen under Protoss bases.
+    // Similarly, bullet/circle14.grp is classic StarCraft's invisible projectile /
+    // collision delivery mask that must never be uploaded as an in-world sprite.
     const std::string LowerGrpPath = ToLowerCopy(GrpPath);
     if (LowerGrpPath.size() < 4 ||
-        LowerGrpPath.substr(LowerGrpPath.size() - 4) != ".grp")
+        LowerGrpPath.substr(LowerGrpPath.size() - 4) != ".grp" ||
+        LowerGrpPath.find("circle14") != std::string::npos)
     {
         return nullptr;
     }

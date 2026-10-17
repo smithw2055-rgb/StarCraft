@@ -3,6 +3,21 @@
 
 #include "Core/Utils/Logger.h"
 
+#include <cstring>
+#include <algorithm>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifdef DrawText
+#undef DrawText
+#endif
+#endif
+
 namespace Render
 {
 
@@ -201,9 +216,11 @@ static const uint8_t kFont5x7[][5] = {
     {0x08,0x04,0x08,0x10,0x08},
 };
 
+
+
 bool BitmapFont::Init()
 {
-    std::vector<uint8_t> Pixels(AtlasW * AtlasH * 4, 0);
+    mPixels.assign(AtlasW * AtlasH * 4, 0);
     int NumChars = (int)(sizeof(kFont5x7) / sizeof(kFont5x7[0]));
 
     for (int C = 0; C < NumChars; C++)
@@ -225,26 +242,35 @@ bool BitmapFont::Init()
                     int Px = OriginX + X;
                     int Py = OriginY + Y;
                     int Off = (Py * AtlasW + Px) * 4;
-                    Pixels[Off + 0] = 255;
-                    Pixels[Off + 1] = 255;
-                    Pixels[Off + 2] = 255;
-                    Pixels[Off + 3] = 255;
+                    mPixels[Off + 0] = 255;
+                    mPixels[Off + 1] = 255;
+                    mPixels[Off + 2] = 255;
+                    mPixels[Off + 3] = 255;
                 }
             }
         }
     }
 
+    UpdateGpuTexture();
+    return mTexture.Image.id != 0;
+}
+
+void BitmapFont::UpdateGpuTexture()
+{
+    if (mTexture.View.id) { sg_destroy_view(Render::ToSokol(mTexture.View)); mTexture.View = {}; }
+    if (mTexture.Image.id) { sg_destroy_image(Render::ToSokol(mTexture.Image)); mTexture.Image = {}; }
+
     sg_image_desc Desc = {};
     Desc.width = AtlasW;
     Desc.height = AtlasH;
     Desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-    Desc.data.mip_levels[0] = { Pixels.data(), Pixels.size() };
-    Desc.label = "bitmap-font";
+    Desc.data.mip_levels[0] = { mPixels.data(), mPixels.size() };
+    Desc.label = "bitmap-font-atlas";
     mTexture.Image = Render::FromSokol(sg_make_image(&Desc));
     if (mTexture.Image.id == 0)
     {
         Core::Utils::Logger::Error("BitmapFont", "sg_make_image failed");
-        return false;
+        return;
     }
 
     sg_view_desc VDesc = {};
@@ -256,15 +282,16 @@ bool BitmapFont::Init()
         sg_destroy_image(Render::ToSokol(mTexture.Image));
         mTexture.Image = {};
         Core::Utils::Logger::Error("BitmapFont", "sg_make_view failed");
-        return false;
     }
-    return true;
 }
 
 void BitmapFont::Shutdown()
 {
     if (mTexture.View.id) { sg_destroy_view(Render::ToSokol(mTexture.View)); mTexture.View = {}; }
     if (mTexture.Image.id) { sg_destroy_image(Render::ToSokol(mTexture.Image)); mTexture.Image = {}; }
+    mPixels.clear();
+    mUnicodeSlots.clear();
+    mNextSlot = 0;
 }
 
 void BitmapFont::GetCharUV(char C, float UV[4]) const
@@ -282,9 +309,150 @@ void BitmapFont::GetCharUV(char C, float UV[4]) const
     UV[0] = U0; UV[1] = V0; UV[2] = U1; UV[3] = V1;
 }
 
+#if defined(_WIN32)
+void BitmapFont::RenderChineseGlyph(uint32_t Codepoint, int SlotX, int SlotY)
+{
+    static HDC sHdc = nullptr;
+    static HBITMAP sBmp = nullptr;
+    static uint32_t* sBmpBits = nullptr;
+    static HFONT sFont = nullptr;
+
+    if (!sHdc)
+    {
+        HDC screenDc = GetDC(nullptr);
+        sHdc = CreateCompatibleDC(screenDc);
+        ReleaseDC(nullptr, screenDc);
+
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = 16;
+        bmi.bmiHeader.biHeight = -16;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        sBmp = CreateDIBSection(sHdc, &bmi, DIB_RGB_COLORS, (void**)&sBmpBits, nullptr, 0);
+        SelectObject(sHdc, sBmp);
+
+        sFont = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                            ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
+        SelectObject(sHdc, sFont);
+        SetBkColor(sHdc, RGB(0, 0, 0));
+        SetTextColor(sHdc, RGB(255, 255, 255));
+    }
+
+    if (!sBmpBits) return;
+
+    std::memset(sBmpBits, 0, 16 * 16 * sizeof(uint32_t));
+    wchar_t wch[2] = { static_cast<wchar_t>(Codepoint), 0 };
+    RECT rect = { 0, 0, 16, 16 };
+    DrawTextW(sHdc, wch, 1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    for (int y = 0; y < 16; ++y)
+    {
+        for (int x = 0; x < 16; ++x)
+        {
+            uint32_t pixel = sBmpBits[y * 16 + x];
+            uint8_t alpha = static_cast<uint8_t>(pixel & 0xFF);
+            int dstIdx = ((SlotY + y) * AtlasW + (SlotX + x)) * 4;
+            mPixels[dstIdx + 0] = 255;
+            mPixels[dstIdx + 1] = 255;
+            mPixels[dstIdx + 2] = 255;
+            mPixels[dstIdx + 3] = alpha;
+        }
+    }
+}
+#else
+void BitmapFont::RenderChineseGlyph(uint32_t, int, int) {}
+#endif
+
+bool BitmapFont::GetGlyphUV(uint32_t Codepoint, float UV[4], bool& OutIsWide)
+{
+    if (Codepoint <= 126)
+    {
+        OutIsWide = false;
+        GetCharUV(static_cast<char>(Codepoint), UV);
+        return true;
+    }
+
+    OutIsWide = true;
+    auto It = mUnicodeSlots.find(Codepoint);
+    if (It == mUnicodeSlots.end())
+    {
+        constexpr int MaxSlots = 32 * 28; // 896
+        if (mNextSlot >= MaxSlots)
+            return false;
+
+        int SlotIndex = mNextSlot++;
+        mUnicodeSlots[Codepoint] = SlotIndex;
+
+        int SlotCol = SlotIndex % 32;
+        int SlotRow = SlotIndex / 32;
+        int SlotX = SlotCol * 16;
+        int SlotY = 64 + SlotRow * 16;
+
+        RenderChineseGlyph(Codepoint, SlotX, SlotY);
+        UpdateGpuTexture();
+        It = mUnicodeSlots.find(Codepoint);
+    }
+
+    int SlotIndex = It->second;
+    int SlotCol = SlotIndex % 32;
+    int SlotRow = SlotIndex / 32;
+    int SlotX = SlotCol * 16;
+    int SlotY = 64 + SlotRow * 16;
+
+    UV[0] = (float)SlotX / (float)AtlasW;
+    UV[1] = (float)SlotY / (float)AtlasH;
+    UV[2] = (float)(SlotX + 16) / (float)AtlasW;
+    UV[3] = (float)(SlotY + 16) / (float)AtlasH;
+    return true;
+}
+
+uint32_t NextUtf8Codepoint(const std::string& S, size_t& Index)
+{
+    if (Index >= S.size()) return 0;
+    uint8_t C0 = static_cast<uint8_t>(S[Index++]);
+    if (C0 < 0x80) return C0;
+    if ((C0 & 0xE0) == 0xC0)
+    {
+        if (Index >= S.size()) return '?';
+        uint8_t C1 = static_cast<uint8_t>(S[Index++]);
+        return ((C0 & 0x1F) << 6) | (C1 & 0x3F);
+    }
+    if ((C0 & 0xF0) == 0xE0)
+    {
+        if (Index + 1 >= S.size()) return '?';
+        uint8_t C1 = static_cast<uint8_t>(S[Index++]);
+        uint8_t C2 = static_cast<uint8_t>(S[Index++]);
+        return ((C0 & 0x0F) << 12) | ((C1 & 0x3F) << 6) | (C2 & 0x3F);
+    }
+    if ((C0 & 0xF8) == 0xF0)
+    {
+        if (Index + 2 >= S.size()) return '?';
+        uint8_t C1 = static_cast<uint8_t>(S[Index++]);
+        uint8_t C2 = static_cast<uint8_t>(S[Index++]);
+        uint8_t C3 = static_cast<uint8_t>(S[Index++]);
+        return ((C0 & 0x07) << 18) | ((C1 & 0x3F) << 12) | ((C2 & 0x3F) << 6) | (C3 & 0x3F);
+    }
+    return '?';
+}
+
 int BitmapFont::MeasureText(const std::string& Text) const
 {
-    return (int)Text.size() * CellW;
+    int Width = 0;
+    size_t Index = 0;
+    while (Index < Text.size())
+    {
+        if (Text[Index] == '\n') { ++Index; continue; }
+        uint32_t Codepoint = NextUtf8Codepoint(Text, Index);
+        if (Codepoint > 126)
+            Width += CellH;
+        else
+            Width += CellW;
+    }
+    return Width;
 }
 
 } // namespace Render

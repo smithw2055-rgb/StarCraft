@@ -202,8 +202,7 @@ namespace
                 (Combat->PendingAttackFrame || Combat->TargetEntityID >= 0);
             const auto Direction = HasCombatAim
                 ? ResolveAttackDirection(EM, *Trans, Combat)
-                : QuantizeDirectionToEightWay(
-                    ResolveMovementDirection(*Trans, Path));
+                : ResolveMovementDirection(*Trans, Path);
             NodeContext.CurrentDirection =
                 DirectionToIScriptDirection(Direction);
             NodeContext.FlDirect = NodeContext.CurrentDirection;
@@ -261,8 +260,8 @@ namespace
                                                const CombatComponent* Combat)
     {
         if (DesiredState == AnimState::Attacking || (Combat && Combat->PendingAttackFrame))
-            return QuantizeDirectionToEightWay(ResolveAttackDirection(EM, Trans, Combat));
-        return QuantizeDirectionToEightWay(ResolveMovementDirection(Trans, Path));
+            return ResolveAttackDirection(EM, Trans, Combat);
+        return ResolveMovementDirection(Trans, Path);
     }
 
     const ResourceComponent* ResolveMiningResource(Core::ECS::EntityManager& EM,
@@ -287,6 +286,7 @@ AnimationSystem::WeaponImageResolver AnimationSystem::sWeaponImageResolver;
 AnimationSystem::SpriteImageResolver AnimationSystem::sSpriteImageResolver;
 AnimationSystem::ImageAttachmentPersistenceResolver
     AnimationSystem::sImageAttachmentPersistenceResolver;
+static std::unordered_map<uint32_t, int> sDamageSlotCountCache;
 
 bool AnimationSystem::InitializeIScriptAssets(const std::string& IScriptPath,
                                               const std::string& ImagesDatPath)
@@ -309,6 +309,7 @@ bool AnimationSystem::InitializeIScriptAssets(const std::string& IScriptPath,
 void AnimationSystem::SetOverlayOffsetResolver(OverlayOffsetResolver Resolver)
 {
     sOverlayOffsetResolver = std::move(Resolver);
+    sDamageSlotCountCache.clear();
 }
 
 void AnimationSystem::SetWeaponImageResolver(WeaponImageResolver Resolver)
@@ -1080,23 +1081,48 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
         int Index = 0;
         Core::Math::Vec2 Offset;
     };
-    std::vector<DamageSlot> Slots;
     constexpr int kDamageOverlaySlots = 22;
+
     int DamageStateSlotCount = 0;
-    for (int Index = 0; Index < kDamageOverlaySlots; ++Index)
+    auto CountIt = sDamageSlotCountCache.find(Render.ImageID);
+    if (CountIt != sDamageSlotCountCache.end())
     {
-        if (sOverlayOffsetResolver(
-                Render.ImageID, 1, 0u, (size_t)Index, Render.Flipped))
+        DamageStateSlotCount = CountIt->second;
+    }
+    else
+    {
+        for (int Index = 0; Index < kDamageOverlaySlots; ++Index)
         {
-            ++DamageStateSlotCount;
+            if (sOverlayOffsetResolver(
+                    Render.ImageID, 1, 0u, (size_t)Index, Render.Flipped))
+            {
+                ++DamageStateSlotCount;
+            }
+            else
+            {
+                break;
+            }
         }
+        sDamageSlotCountCache[Render.ImageID] = DamageStateSlotCount;
+    }
+
+    if (DamageStateSlotCount <= 0)
+    {
+        HideAllDamageOverlays();
+        return;
+    }
+
+    std::array<DamageSlot, kDamageOverlaySlots> Slots;
+    size_t SlotCount = 0;
+    for (int Index = 0; Index < DamageStateSlotCount; ++Index)
+    {
         const auto Offset = sOverlayOffsetResolver(
             Render.ImageID, 1, (size_t)std::max(0, Render.FrameIndex),
             (size_t)Index, Render.Flipped);
         if (Offset)
-            Slots.push_back({Index, *Offset});
+            Slots[SlotCount++] = {Index, *Offset};
     }
-    if (Slots.empty() || DamageStateSlotCount <= 0)
+    if (SlotCount == 0)
     {
         HideAllDamageOverlays();
         return;
@@ -1106,16 +1132,18 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
         Unit->HitPoints, Unit->HitPointSubDamage, Unit->MaxHitPoints,
         DamageStateSlotCount);
     const int LargeCount = std::min(
-        DamageSteps / 2, (int)Slots.size());
+        DamageSteps / 2, (int)SlotCount);
     const bool HasSmallRemainder =
-        (DamageSteps & 1) != 0 && LargeCount < (int)Slots.size();
+        (DamageSteps & 1) != 0 && LargeCount < (int)SlotCount;
 
     constexpr int kSmallDamageImageBase = 450;
     constexpr int kLargeDamageImageBase = 472;
-    std::vector<std::pair<int, int>> DesiredNodes;
+    std::array<std::pair<int, int>, kDamageOverlaySlots> DesiredNodes;
+    size_t DesiredNodeCount = 0;
     auto EnsureDamageNode = [&](const DamageSlot& Slot, int ImageID)
     {
-        DesiredNodes.emplace_back(ImageID, Slot.Index);
+        if (DesiredNodeCount < DesiredNodes.size())
+            DesiredNodes[DesiredNodeCount++] = {ImageID, Slot.Index};
         if (Tree)
         {
             for (auto& Node : Tree->Nodes)
@@ -1161,7 +1189,7 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
     for (int I = 0; I < LargeCount; ++I)
         EnsureDamageNode(Slots[(size_t)I],
                          kLargeDamageImageBase + Slots[(size_t)I].Index);
-    if (HasSmallRemainder && LargeCount < (int)Slots.size())
+    if (HasSmallRemainder && LargeCount < (int)SlotCount)
     {
         const auto& Slot = Slots[(size_t)LargeCount];
         EnsureDamageNode(Slot, kSmallDamageImageBase + Slot.Index);
@@ -1175,10 +1203,10 @@ void AnimationSystem::UpdateDamageOverlays(int EntityID,
             if (!Node.IsDamageOverlay)
                 continue;
             const bool Desired = std::find(
-                DesiredNodes.begin(), DesiredNodes.end(),
+                DesiredNodes.begin(), DesiredNodes.begin() + DesiredNodeCount,
                 std::pair<int, int>{(int)Node.ImageID,
                                     Node.OverlayOffsetIndex}) !=
-                DesiredNodes.end();
+                (DesiredNodes.begin() + DesiredNodeCount);
             if (!Desired)
             {
                 Node.Visible = false;
@@ -2653,7 +2681,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
             const auto* TargetTrans = mSystemMgr.GetEntityManager()
                 .GetComponent<TransformComponent>(WorkTargetID);
             AnimDirection = TargetTrans
-                ? QuantizeDirectionToEightWay(TargetTrans->Position - Trans.Position)
+                ? (TargetTrans->Position - Trans.Position).Normalized()
                 : ResolveAnimationDirection(mSystemMgr.GetEntityManager(), DesiredState,
                                             Trans, Path, IsFrozen ? nullptr : Combat);
         }

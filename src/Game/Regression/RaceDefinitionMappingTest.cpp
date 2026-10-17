@@ -150,6 +150,14 @@ int main()
         "Valkyrie raw CHK id is not treated as a detector");
     Require(Game::Races::IsDetectorChkUnitID(124),
         "Missile Turret raw CHK id provides detector metadata");
+    Require(Game::Races::IsDetectorChkUnitID(144),
+        "Spore Colony raw CHK id provides detector metadata");
+    Require(!Game::Races::IsDetectorChkUnitID(139),
+        "Evolution Chamber is not a detector");
+    Require(Game::Races::IsDetectorChkUnitID(22),
+        "Hero Magellan provides detector metadata");
+    Require(Game::Races::IsDetectorChkUnitID(57),
+        "Hero Yggdrasill provides detector metadata");
     const auto MissileTurret = Game::Races::GetUnitDefByName("MissileTurret");
     Require(MissileTurret.GroundDamage == 0 && MissileTurret.AirDamage > 0,
         "Missile Turret is an active air-only defense");

@@ -3,6 +3,7 @@
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
+#include "Game/Pathfinding/NavigationService.h"
 
 #include <cstdint>
 #include <functional>
@@ -24,6 +25,12 @@ public:
     static void SetMap(const Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetSubunitImageResolver(ImageIDResolver Resolver);
+    static const Game::Pathfinding::NavigationPerformanceStats&
+        GetNavigationStats();
+    static void ResetNavigationStats();
+    static void SyncNavigationState(
+        Core::ECS::EntityManager& EM,
+        const Game::Map::GameMap* Map);
 
     // Original move command (backward compat, now wraps IssueOrder)
     static void IssueMove(Core::ECS::EntityManager& EM,
@@ -93,6 +100,9 @@ public:
     static bool SetSiegeMode(Core::ECS::EntityManager& EM,
                              Core::ECS::EntityID EntityID,
                              bool Siege);
+
+    static bool IsTerranRepairableUnit(const Components::UnitComponent& Unit);
+    static bool IsRepairableTarget(Core::ECS::EntityManager& EM, int TargetEntityID);
 
     // Advance to next queued order (called when current completes)
     static void AdvanceQueue(Core::ECS::EntityManager& EM,

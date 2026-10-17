@@ -90,6 +90,8 @@ namespace
         Unit.ChkUnitID = Def.ChkUnitID;
         Unit.UnitRace = Game::Components::Race::Terran;
         Unit.Speed = Def.Speed;
+        Unit.HitPoints = Def.HitPoints;
+        Unit.MaxHitPoints = Def.HitPoints;
         EM.AddComponent<Game::Components::PlayerComponent>(EntityID).PlayerID = PlayerID;
 
         if (Def.IsBuilding)
@@ -1152,12 +1154,12 @@ int main()
         "Protoss Cybernetics Core exposes Singularity Charge as an upgrade action");
 
     Hud.UpdateContext(EM, {CommandCenter});
-    const auto& RallyButton = RequireButton(Hud, 7, "Rally");
+    const auto& RallyButton = RequireButton(Hud, 5, "Rally");
     Require(RallyButton.Enabled &&
             RallyButton.CommandId == Game::Client::UI::HudCommandId::Rally,
         "Terran production buildings expose an enabled rally command");
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
-                EM, {CommandCenter}, Hud, 7),
+                EM, {CommandCenter}, Hud, 5),
         "Terran rally button enters target mode");
     const Core::Math::Vec2 RallyPoint = Map.TileToWorld(12, 12);
     Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
@@ -1371,7 +1373,7 @@ int main()
         EM, HatcheryDef, 0, Map.TileToWorld(4, 4));
     CreateCompletedRaceBuilding(EM, SpawningPoolDef, 0, Map.TileToWorld(8, 4));
     Hud.UpdateContext(EM, {ZergHatchery});
-    RequireButton(Hud, 7, "Rally");
+    RequireButton(Hud, 5, "Rally");
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
                 EM, {ZergHatchery}, Hud, 8),
         "Zerg Hatchery opens its building command page");
@@ -1408,7 +1410,7 @@ int main()
         EM, NexusDef, 0, Map.TileToWorld(4, 20));
     Hud.UpdateContext(EM, {ProtossNexus});
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
-                EM, {ProtossNexus}, Hud, 7),
+                EM, {ProtossNexus}, Hud, 5),
         "Protoss Nexus exposes the shared rally target command");
 
     const int ShieldBatteryDef = Game::Races::GetUnitDefID("Shield Battery");
@@ -1467,6 +1469,14 @@ int main()
     Require(Ensnared && Ensnared->HasEffect(Game::Components::StatusEffect::Ensnare),
         "Ensnare HUD targeting reaches the gameplay spell system");
 
+    const auto& InfestButton = RequireButton(Hud, 5, "Infest");
+    Require(InfestButton.Enabled &&
+            Game::Client::UI::CommandIconForCommand(
+                Game::Client::UI::HudCommandId::Infest) >= 0 &&
+            Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Queen}, Hud, 5) &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Infest,
+        "Queen exposes an icon-backed Infest command and enters Infest targeting mode");
+
     AbilityUpgrades.Levels[static_cast<size_t>(
         Game::Systems::ResearchId::Protoss_PsionicStorm)] = 1;
     const int TemplarDef = Game::Races::GetUnitDefID("High Templar");
@@ -1505,6 +1515,313 @@ int main()
             Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {Lurker}, Hud, 8) &&
             LurkerBurrow.Phase == Game::Components::BurrowPhase::Burrowing,
         "Lurker's innate Burrow command executes directly from the embedded HUD");
+
+    // Test keyboard shortcut hotkey resolution and dispatch
+    Hud.UpdateContext(EM, {MarineEntity});
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {MarineEntity}, Hud, 'A'),
+        "hotkey 'A' triggers attack command on selected marine");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::AttackMove,
+        "hotkey 'A' activates attack-move targeting mode");
+    Hud.CancelPendingTarget();
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {MarineEntity}, Hud, 'H'),
+        "hotkey 'H' triggers hold command on selected marine");
+    auto* HotkeyMarineCommand = EM.GetComponent<Game::Components::CommandComponent>(MarineEntity);
+    Require(HotkeyMarineCommand && HotkeyMarineCommand->CurrentCommand == Game::Components::CommandType::HoldPosition,
+        "hotkey 'H' sets hold position command");
+
+    // SCV Basic Build hotkey 'B' -> PageTerranScvBuild1 -> Barracks hotkey 'B'
+    const int HotkeyScv = CreateTerranUnit(EM, ScvDef, 0);
+    CreateTerranUnit(EM, Game::Races::GetUnitDefID("SupplyDepot"), 0);
+    Hud.UpdateContext(EM, {HotkeyScv});
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {HotkeyScv}, Hud, 'B'),
+        "hotkey 'B' opens Basic Build submenu on selected SCV");
+    Hud.UpdateContext(EM, {HotkeyScv});
+    Require(Hud.GetState().CommandPanel.PanelPage == Game::Client::UI::PageTerranScvBuild1,
+        "HUD command panel transitions to Basic Build page");
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {HotkeyScv}, Hud, 'B'),
+        "hotkey 'B' in Basic Build submenu selects Barracks");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::BuildPlacement &&
+            Hud.GetPendingBuildDefID() == Game::Races::GetUnitDefID("Barracks"),
+        "hotkey 'B' in Basic Build submenu activates Barracks placement targeting");
+    Hud.CancelPendingTarget();
+
+    // Command Center Train SCV hotkey 'S'
+    Hud.UpdateContext(EM, {CommandCenter});
+    const size_t ScvCountBefore = EM.GetComponent<Game::Components::ProductionComponent>(CommandCenter)->Queue.size();
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {CommandCenter}, Hud, 'S'),
+        "hotkey 'S' triggers Train SCV on Command Center");
+    Require(EM.GetComponent<Game::Components::ProductionComponent>(CommandCenter)->Queue.size() == ScvCountBefore + 1,
+        "hotkey 'S' queues an SCV in Command Center production queue");
+
+    // ==========================================
+    // Science Vessel, Medic & Dark Archon Spell Card Tests
+    // ==========================================
+    const int VesselDef = Game::Races::GetUnitDefID("ScienceVessel");
+    const int VesselEntity = CreateTerranUnit(EM, VesselDef, 0);
+    auto* VesselUnit = EM.GetComponent<Game::Components::UnitComponent>(VesselEntity);
+    VesselUnit->EnergyPoints = 200;
+    VesselUnit->MaxEnergyPoints = 250;
+
+    Hud.UpdateContext(EM, {VesselEntity});
+    const auto& VesselButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(VesselButtons[6].Label == "Matrix" &&
+            VesselButtons[6].CommandId == Game::Client::UI::HudCommandId::DefensiveMatrix &&
+            VesselButtons[6].Enabled,
+        "Science Vessel exposes Defensive Matrix spell button enabled with energy");
+    Require(VesselButtons[7].Label == "EMP" &&
+            VesselButtons[7].CommandId == Game::Client::UI::HudCommandId::EMPShockwave &&
+            VesselButtons[7].Enabled,
+        "Science Vessel exposes EMP Shockwave spell button enabled with energy");
+    Require(VesselButtons[8].Label == "Irradiate" &&
+            VesselButtons[8].CommandId == Game::Client::UI::HudCommandId::Irradiate &&
+            VesselButtons[8].Enabled,
+        "Science Vessel exposes Irradiate spell button enabled with energy");
+
+    Require(Game::Client::GameLoop::ExecuteHudCommandIndex(EM, {VesselEntity}, Hud, 6),
+        "clicking Defensive Matrix button activates targeting");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::DefensiveMatrix,
+        "Defensive Matrix sets pending target mode");
+    Hud.CancelPendingTarget();
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {VesselEntity}, Hud, 'I'),
+        "hotkey 'I' triggers Irradiate targeting on Science Vessel");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Irradiate,
+        "Irradiate hotkey sets pending target mode");
+    Hud.CancelPendingTarget();
+
+    // Medic: Restoration & Optical Flare
+    const int TestMedicEntity = CreateTerranUnit(EM, Game::Races::GetUnitDefID("Medic"), 0);
+    auto* MedicUnit = EM.GetComponent<Game::Components::UnitComponent>(TestMedicEntity);
+    MedicUnit->EnergyPoints = 200;
+    MedicUnit->MaxEnergyPoints = 250;
+
+    Hud.UpdateContext(EM, {TestMedicEntity});
+    const auto& MedicButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(MedicButtons[7].Label == "Restoration" &&
+            MedicButtons[7].CommandId == Game::Client::UI::HudCommandId::Restoration &&
+            MedicButtons[7].Enabled,
+        "Medic exposes Restoration spell button enabled with energy");
+    Require(MedicButtons[8].Label == "Opt Flare" &&
+            MedicButtons[8].CommandId == Game::Client::UI::HudCommandId::OpticalFlare &&
+            MedicButtons[8].Enabled,
+        "Medic exposes Optical Flare spell button enabled with energy");
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {TestMedicEntity}, Hud, 'R'),
+        "hotkey 'R' triggers Restoration targeting on Medic");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Restoration,
+        "Restoration hotkey sets pending target mode");
+    Hud.CancelPendingTarget();
+
+    // Dark Archon: Feedback, Maelstrom, Mind Control
+    const int DarkArchonDef = Game::Races::GetUnitDefID("Dark Archon");
+    const auto DarkArchonData = Game::Races::GetUnitDefByID(DarkArchonDef);
+    const int DarkArchonEntity = EM.CreateEntity();
+    EM.AddComponent<Game::Components::TransformComponent>(DarkArchonEntity).Position = {64.0f, 64.0f};
+    auto& DaUnit = EM.AddComponent<Game::Components::UnitComponent>(DarkArchonEntity);
+    DaUnit.ChkUnitID = DarkArchonData.ChkUnitID;
+    DaUnit.UnitRace = Game::Components::Race::Protoss;
+    DaUnit.HitPoints = 25;
+    DaUnit.MaxHitPoints = 25;
+    DaUnit.ShieldPoints = 200;
+    DaUnit.MaxShieldPoints = 200;
+    DaUnit.EnergyPoints = 200;
+    DaUnit.MaxEnergyPoints = 200;
+    EM.AddComponent<Game::Components::PlayerComponent>(DarkArchonEntity).PlayerID = 0;
+
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Protoss_Maelstrom)] = 1;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Protoss_MindControl)] = 1;
+
+    Hud.UpdateContext(EM, {DarkArchonEntity});
+    const auto& DaButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(DaButtons[6].Label == "Feedback" &&
+            DaButtons[6].CommandId == Game::Client::UI::HudCommandId::Feedback &&
+            DaButtons[6].Enabled,
+        "Dark Archon exposes Feedback spell button enabled");
+    Require(DaButtons[7].Label == "Maelstrom" &&
+            DaButtons[7].CommandId == Game::Client::UI::HudCommandId::Maelstrom &&
+            DaButtons[7].Enabled,
+        "Dark Archon exposes Maelstrom spell button enabled when researched");
+    Require(DaButtons[8].Label == "Mind Control" &&
+            DaButtons[8].CommandId == Game::Client::UI::HudCommandId::MindControl &&
+            DaButtons[8].Enabled,
+        "Dark Archon exposes Mind Control spell button enabled when researched");
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {DarkArchonEntity}, Hud, 'F'),
+        "hotkey 'F' triggers Feedback targeting on Dark Archon");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Feedback,
+        "Feedback hotkey sets pending target mode");
+    Hud.CancelPendingTarget();
+
+    // Test SCV Repair button, hotkey 'R', and targeting dispatch
+    Hud.UpdateContext(EM, {HotkeyScv});
+    const auto& ScvButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(ScvButtons[3].Label == "Repair" &&
+            ScvButtons[3].CommandId == Game::Client::UI::HudCommandId::Repair &&
+            ScvButtons[3].Enabled,
+        "SCV exposes Repair button enabled in slot 3");
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {HotkeyScv}, Hud, 'R'),
+        "hotkey 'R' activates Repair targeting on SCV");
+    Require(Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Repair,
+        "Repair hotkey sets pending target mode to Repair");
+
+    // Create a damaged siege tank to repair
+    const int DamagedTank = CreateTerranUnit(EM, Game::Races::GetUnitDefID("SiegeTank"), 0);
+    auto* TankUnit = EM.GetComponent<Game::Components::UnitComponent>(DamagedTank);
+    TankUnit->HitPoints = 50;
+    TankUnit->MaxHitPoints = 150;
+
+    Game::Client::GameLoop::ClickTargetContext RepairClick;
+    RepairClick.AnyEntityID = DamagedTank;
+    const bool RepairDispatched = Game::Client::GameLoop::ExecutePendingTargetCommand(
+        EM, {HotkeyScv}, Hud.GetPendingTargetMode(), -1, RepairClick,
+        EM.GetComponent<Game::Components::TransformComponent>(DamagedTank)->Position);
+    Require(RepairDispatched, "Repair command successfully dispatched targeting damaged mechanical unit");
+    const auto* ScvCmd = EM.GetComponent<Game::Components::CommandComponent>(HotkeyScv);
+    Require(ScvCmd && ScvCmd->CurrentCommand == Game::Components::CommandType::Repair &&
+            ScvCmd->TargetEntityID == DamagedTank,
+        "SCV command set to Repair target tank");
+    Hud.CancelPendingTarget();
+
+    // Test Wraith Cloak/Decloak dynamic button and hotkey 'C'
+    const int WraithEntity = CreateTerranUnit(EM, Game::Races::GetUnitDefID("Wraith"), 0);
+    auto* WraithUnit = EM.GetComponent<Game::Components::UnitComponent>(WraithEntity);
+    WraithUnit->EnergyPoints = 100;
+    WraithUnit->MaxEnergyPoints = 200;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Terran_CloakingField)] = 1;
+
+    Hud.UpdateContext(EM, {WraithEntity});
+    const auto& WraithButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(WraithButtons[6].Label == "Cloak" && WraithButtons[6].Enabled,
+        "Wraith exposes Cloak button enabled when researched and has energy");
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {WraithEntity}, Hud, 'C'),
+        "hotkey 'C' triggers Cloak tech command on Wraith");
+    auto* WraithCloak = EM.GetComponent<Game::Components::CloakComponent>(WraithEntity);
+    Require(WraithCloak && WraithCloak->IsCloaked && WraithUnit->EnergyPoints == 75,
+        "Wraith activates Cloak and spends 25 upfront energy");
+
+    Hud.UpdateContext(EM, {WraithEntity});
+    const auto& DecloakButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(DecloakButtons[6].Label == "Decloak" && DecloakButtons[6].Enabled,
+        "Wraith command card updates button to Decloak while cloaked");
+
+    Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {WraithEntity}, Hud, 'C'),
+        "hotkey 'C' triggers Decloak on cloaked Wraith");
+    Require(!WraithCloak->IsCloaked, "Wraith decloaks successfully");
+
+    // Test CovertOps exposes Personal Cloaking research button in slot 2
+    const int CovertOpsEntity = CreateTerranUnit(EM, Game::Races::GetUnitDefID("CovertOps"), 0);
+    Hud.UpdateContext(EM, {CovertOpsEntity});
+    const auto& CovertButtons = Hud.GetState().CommandPanel.ButtonDefs;
+    Require(CovertButtons[2].Label == "Cloak" &&
+            CovertButtons[2].ResearchId == Game::Systems::TerranResearchId::PersonalCloaking,
+        "Covert Ops exposes Personal Cloaking research in slot 2");
+
+    // Test Medic Heal command button and hotkey 'A'
+    {
+        const int TestMedic = CreateTerranUnit(EM, Game::Races::GetUnitDefID("Medic"), 0);
+        auto* TestMedicUnit = EM.GetComponent<Game::Components::UnitComponent>(TestMedic);
+        TestMedicUnit->EnergyPoints = 50;
+        TestMedicUnit->MaxEnergyPoints = 200;
+
+        Hud.UpdateContext(EM, {TestMedic});
+        const auto& Buttons = Hud.GetState().CommandPanel.ButtonDefs;
+        Require(Buttons[6].Label == "Heal" && Buttons[6].Enabled,
+            "Medic exposes Heal button enabled when has energy");
+
+        Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {TestMedic}, Hud, 'A'),
+            "hotkey 'A' triggers Heal pending target on Medic");
+        Require(Hud.HasPendingTarget() &&
+                Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Heal,
+            "Medic hotkey 'A' activates PendingTargetMode::Heal");
+
+        const int DamagedMarineTarget = CreateTerranUnit(EM, Game::Races::GetUnitDefID("Marine"), 0);
+        auto* TargetMarineUnit = EM.GetComponent<Game::Components::UnitComponent>(DamagedMarineTarget);
+        TargetMarineUnit->HitPoints = 20;
+        TargetMarineUnit->MaxHitPoints = 40;
+
+        Game::Client::GameLoop::ClickTargetContext HealClick;
+        HealClick.AnyEntityID = DamagedMarineTarget;
+        const bool HealDispatched = Game::Client::GameLoop::ExecutePendingTargetCommand(
+            EM, {TestMedic}, Hud.GetPendingTargetMode(), -1, HealClick,
+            EM.GetComponent<Game::Components::TransformComponent>(DamagedMarineTarget)->Position);
+        Require(HealDispatched, "Heal command successfully dispatched targeting damaged organic unit");
+        const auto* MedicCmd = EM.GetComponent<Game::Components::CommandComponent>(TestMedic);
+        Require(MedicCmd && MedicCmd->CurrentCommand == Game::Components::CommandType::Heal &&
+                MedicCmd->TargetEntityID == DamagedMarineTarget,
+            "Medic command set to Heal target marine");
+        Hud.CancelPendingTarget();
+    }
+
+    // Test High Templar Archon warp button and hotkey 'C'
+    {
+        const int TemplarA = CreateProtossUnit(EM, Game::Races::GetUnitDefID("High Templar"), 0, {100.0f, 100.0f});
+        const int TemplarB = CreateProtossUnit(EM, Game::Races::GetUnitDefID("High Templar"), 0, {120.0f, 100.0f});
+
+        Hud.UpdateContext(EM, {TemplarA, TemplarB});
+        const auto& Buttons = Hud.GetState().CommandPanel.ButtonDefs;
+        Require(Buttons[8].Label == "Archon" && Buttons[8].Enabled,
+            "High Templar exposes Archon warp button enabled in slot 8");
+
+        Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {TemplarA, TemplarB}, Hud, 'C'),
+            "hotkey 'C' triggers Archon warp on selected High Templars");
+
+        // Verify that TemplarA and TemplarB were morphed (consumed)
+        Require(!EM.IsAlive(TemplarA) && !EM.IsAlive(TemplarB),
+            "source Templars are consumed upon morphing into Archon");
+    }
+
+    // Test Hydralisk Lurker morph button and hotkey 'L'
+    {
+        const int Hydra = CreateZergUnit(EM, Game::Races::GetUnitDefID("Hydralisk"), 0, {200.0f, 200.0f});
+        Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+            static_cast<size_t>(Game::Systems::ResearchId::Zerg_LurkerMorph)] = 0;
+
+        Hud.UpdateContext(EM, {Hydra});
+        const auto& ButtonsBefore = Hud.GetState().CommandPanel.ButtonDefs;
+        Require(ButtonsBefore[6].Label == "Lurker" && !ButtonsBefore[6].Enabled,
+            "Hydralisk Lurker button is disabled before Lurker Aspect research");
+
+        Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+            static_cast<size_t>(Game::Systems::ResearchId::Zerg_LurkerMorph)] = 1;
+        auto& Res = Game::Systems::HarvestSystem::GetResources(0);
+        Res.Minerals = 500;
+        Res.VespeneGas = 500;
+
+        Hud.UpdateContext(EM, {Hydra});
+        const auto& ButtonsAfter = Hud.GetState().CommandPanel.ButtonDefs;
+        Require(ButtonsAfter[6].Label == "Lurker" && ButtonsAfter[6].Enabled,
+            "Hydralisk Lurker button is enabled after research and sufficient resources");
+
+        Require(Game::Client::GameLoop::TryDispatchCommandHotkey(EM, {Hydra}, Hud, 'L'),
+            "hotkey 'L' triggers Lurker morph on Hydralisk");
+
+        // Verify Hydra is consumed and Lurker Egg is created
+        Require(!EM.IsAlive(Hydra), "Hydralisk is consumed upon morphing");
+        int FoundEgg = -1;
+        for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent>())
+        {
+            auto* U = EM.GetComponent<Game::Components::UnitComponent>(Eid);
+            if (U && U->ChkUnitID == 97)
+            {
+                FoundEgg = Eid;
+                break;
+            }
+        }
+        Require(FoundEgg > 0, "Lurker Egg entity (ChkUnitID 97) is created");
+    }
 
     std::printf("HudCommandMetadataTest passed\n");
     return 0;

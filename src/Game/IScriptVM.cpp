@@ -72,14 +72,14 @@ namespace
         static const std::array<const char*, kCount> Specs =
         {
             "2", "2", "s1", "s1", "s1s1", "1", "11", "j",
-            "211", "211", "2", "2", "", "211", "211", "2s1s1",
-            "211", "211", "2", "211", "211", "21", "e", "1",
+            "2s1s1", "2s1s1", "2", "2", "", "2s1s1", "2s1s1", "2s1s1",
+            "2s1s1", "2s1s1", "2", "2s1s1", "2s1s1", "21", "e", "1",
             "2", "v", "22", "", "v", "", "1b", "1",
             "1", "", "1", "1", "1", "1", "", "", "1",
             "1", "", "1", "1", "", "", "", "", "1",
             "", "", "1", "b", "", "2", "1", "b",
-            "2b", "22b", "22b", "11", "", "b", "2", "1",
-            "211", "", ""
+            "2b", "22b", "22b", "s1s1", "", "b", "2", "1",
+            "2s1s1", "", ""
         };
         return Specs;
     }
@@ -367,10 +367,9 @@ const IScriptImageInfo* IScriptDatabase::FindImageInfo(int ImageID) const
     return &mImages[(size_t)ImageID];
 }
 
-IScriptVM::IScriptVM()
-{
-    RegisterDefaultOpcodes();
-}
+const std::array<IScriptVM::OpcodeHandlerFn, IScriptOpcodes::kCount> IScriptVM::sOpcodeTable = IScriptVM::InitOpcodeTable();
+
+IScriptVM::IScriptVM() = default;
 
 void IScriptVM::LoadScript(int AnimationID, const std::vector<int>* ProgramData, int EntryPC)
 {
@@ -423,9 +422,12 @@ bool IScriptVM::ExecuteFrame()
 
 bool IScriptVM::DispatchOpcode(int Opcode)
 {
-    auto It = mOpcodeHandlers.find(Opcode);
-    if (It != mOpcodeHandlers.end())
-        return It->second(*this);
+    if (Opcode >= 0 && Opcode < IScriptOpcodes::kCount)
+    {
+        auto Handler = sOpcodeTable[(size_t)Opcode];
+        if (Handler)
+            return Handler(*this);
+    }
     ++mSprite.PC;
     return false;
 }
@@ -493,30 +495,31 @@ void IScriptVM::RefreshDirectionalFrame()
     mSprite.FlipState = Flip;
 }
 
-void IScriptVM::RegisterDefaultOpcodes()
+std::array<IScriptVM::OpcodeHandlerFn, IScriptOpcodes::kCount> IScriptVM::InitOpcodeTable()
 {
     using namespace IScriptOpcodes;
+    std::array<OpcodeHandlerFn, kCount> Table{};
 
-    mOpcodeHandlers[Opc_PlayFram] = [](IScriptVM& VM) {
+    Table[Opc_PlayFram] = [](IScriptVM& VM) {
         VM.mSprite.BaseFrameIndex = VM.PeekArg();
         VM.RefreshDirectionalFrame();
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_PlayFramTile] = mOpcodeHandlers[Opc_PlayFram];
-    mOpcodeHandlers[Opc_SetHorPos] = [](IScriptVM& VM) {
+    Table[Opc_PlayFramTile] = Table[Opc_PlayFram];
+    Table[Opc_SetHorPos] = [](IScriptVM& VM) {
         VM.mSprite.HorPos = (int)(int8_t)VM.PeekArg();
         VM.mSprite.HorPosSet = true;
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SetVertPos] = [](IScriptVM& VM) {
+    Table[Opc_SetVertPos] = [](IScriptVM& VM) {
         VM.mSprite.VertPos = (int)(int8_t)VM.PeekArg();
         VM.mSprite.VertPosSet = true;
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SetPos] = [](IScriptVM& VM) {
+    Table[Opc_SetPos] = [](IScriptVM& VM) {
         VM.mSprite.HorPos = (int)(int8_t)VM.PeekArg(1);
         VM.mSprite.VertPos = (int)(int8_t)VM.PeekArg(2);
         VM.mSprite.HorPosSet = true;
@@ -524,7 +527,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(2);
         return false;
     };
-    mOpcodeHandlers[Opc_Wait] = [](IScriptVM& VM) {
+    Table[Opc_Wait] = [](IScriptVM& VM) {
         const int Frames = VM.PeekArg();
         // Brood War stores wait N as N-1 because the opcode's current frame
         // already counts toward the requested duration.
@@ -532,7 +535,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return true;
     };
-    mOpcodeHandlers[Opc_WaitRand] = [](IScriptVM& VM) {
+    Table[Opc_WaitRand] = [](IScriptVM& VM) {
         int Min = VM.PeekArg(1);
         int Max = VM.PeekArg(2);
         int Range = Max > Min ? Max - Min + 1 : 1;
@@ -542,33 +545,33 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(2);
         return true;
     };
-    mOpcodeHandlers[Opc_Goto] = [](IScriptVM& VM) { VM.mSprite.PC = VM.PeekArg(); return false; };
-    mOpcodeHandlers[Opc_End] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
-    mOpcodeHandlers[Opc_FollowMainGraphic] = [](IScriptVM& VM) {
+    Table[Opc_Goto] = [](IScriptVM& VM) { VM.mSprite.PC = VM.PeekArg(); return false; };
+    Table[Opc_End] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
+    Table[Opc_FollowMainGraphic] = [](IScriptVM& VM) {
         VM.mSprite.FollowMainGraphic = true;
         VM.AdvanceArgs(0);
         return false;
     };
-    mOpcodeHandlers[Opc_Call] = [](IScriptVM& VM) {
+    Table[Opc_Call] = [](IScriptVM& VM) {
         int Target = VM.PeekArg();
         VM.mCallStack.push_back(VM.mSprite.PC + 2);
         VM.mSprite.PC = Target;
         return false;
     };
-    mOpcodeHandlers[Opc_Return] = [](IScriptVM& VM) {
+    Table[Opc_Return] = [](IScriptVM& VM) {
         if (VM.mCallStack.empty()) VM.mSprite.PC = -1;
         else { VM.mSprite.PC = VM.mCallStack.back(); VM.mCallStack.pop_back(); }
         return false;
     };
-    mOpcodeHandlers[Opc_SetFlipState] = [](IScriptVM& VM) { VM.mSprite.FlipState = VM.PeekArg() != 0; VM.AdvanceArgs(1); return false; };
-    mOpcodeHandlers[Opc_SetSpawnFrame] = [](IScriptVM& VM) {
+    Table[Opc_SetFlipState] = [](IScriptVM& VM) { VM.mSprite.FlipState = VM.PeekArg() != 0; VM.AdvanceArgs(1); return false; };
+    Table[Opc_SetSpawnFrame] = [](IScriptVM& VM) {
         VM.mSprite.SpawnFrame = VM.PeekArg();
         VM.mSprite.SpawnFrameSet = true;
         VM.Emit(IScriptEventType::SpawnFrame, VM.mSprite.SpawnFrame);
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SigOrder] = [](IScriptVM& VM) {
+    Table[Opc_SigOrder] = [](IScriptVM& VM) {
         const int Signal = VM.PeekArg();
         VM.mSprite.OrderSignal |= Signal;
         VM.mSprite.OrderDone = false;
@@ -576,7 +579,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_AttkShiftProj] = [](IScriptVM& VM) {
+    Table[Opc_AttkShiftProj] = [](IScriptVM& VM) {
         // Firebat-style attacks author several shifted projectile positions.
         // The aggregate combat model resolves one attack request, so emit the
         // first live request immediately and carry the authored launch offset.
@@ -584,7 +587,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_OrderDone] = [](IScriptVM& VM) {
+    Table[Opc_OrderDone] = [](IScriptVM& VM) {
         const int Signal = VM.PeekArg();
         VM.mSprite.OrderSignal &= ~Signal;
         VM.mSprite.OrderDone = VM.mSprite.OrderSignal == 0;
@@ -592,34 +595,65 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_IgnoreRest] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
+    Table[Opc_IgnoreRest] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
+    Table[Opc_TurnCWise] = [](IScriptVM& VM) {
+        const int Steps = VM.PeekArg(1);
+        VM.mSprite.CurrentDirection = (VM.mSprite.CurrentDirection + Steps * 8) & 0xFF;
+        VM.mSprite.FlDirect = VM.mSprite.CurrentDirection;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    Table[Opc_TurnCCWise] = [](IScriptVM& VM) {
+        const int Steps = VM.PeekArg(1);
+        VM.mSprite.CurrentDirection = (VM.mSprite.CurrentDirection - Steps * 8) & 0xFF;
+        VM.mSprite.FlDirect = VM.mSprite.CurrentDirection;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    Table[Opc_Turn1CWise] = [](IScriptVM& VM) {
+        VM.mSprite.CurrentDirection = (VM.mSprite.CurrentDirection + 8) & 0xFF;
+        VM.mSprite.FlDirect = VM.mSprite.CurrentDirection;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(0);
+        return false;
+    };
+    Table[Opc_TurnRand] = [](IScriptVM& VM) {
+        const int Range = VM.PeekArg(1);
+        const int EffectiveRange = Range > 0 ? Range : 32;
+        const int RandStep = (int)((VM.NextRandom() & 0xffu) % (uint32_t)EffectiveRange) * 8;
+        VM.mSprite.CurrentDirection = (VM.mSprite.CurrentDirection + RandStep) & 0xFF;
+        VM.mSprite.FlDirect = VM.mSprite.CurrentDirection;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(1);
+        return false;
+    };
 
     auto Skip0 = [](IScriptVM& VM) { VM.AdvanceArgs(0); return false; };
     auto Skip1 = [](IScriptVM& VM) { VM.AdvanceArgs(1); return false; };
     auto Skip2 = [](IScriptVM& VM) { VM.AdvanceArgs(2); return false; };
     auto Skip3 = [](IScriptVM& VM) { VM.AdvanceArgs(3); return false; };
-    auto SkipVector = [](IScriptVM& VM) { VM.SkipVectorArgs(); return false; };
-    auto Branch1 = [](IScriptVM& VM) { VM.AdvanceArgs(2); return false; };
 
     for (int Op : {Opc_Unknown0C, Opc_Turn1CWise,
                    Opc_GotoRepeatAttk, Opc_Unknown2D,
                    Opc_NoBrkCodeStart, Opc_NoBrkCodeEnd, Opc_IgnoreRest,
                    Opc_TmpRmGraphicStart, Opc_TmpRmGraphicEnd, Opc_Return,
                    Opc_Unknown3E, Opc_Unknown43})
-        if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip0;
+        if (!Table[Op]) Table[Op] = Skip0;
 
     for (int Op : {Opc_SetHorPos, Opc_SetVertPos, Opc_Wait, Opc_SetFlipState, Opc_TurnCCWise,
                    Opc_TurnCWise, Opc_TurnRand, Opc_SetSpawnFrame, Opc_SigOrder,
                    Opc_Move, Opc_EngFrame, Opc_EngSet,
                    Opc_OrderDone, Opc_UflUnstable})
-        if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip1;
+        if (!Table[Op]) Table[Op] = Skip1;
 
     for (int Op : {Opc_PlayFram, Opc_PlayFramTile, Opc_SetPos, Opc_WaitRand,
                    Opc_SprOlUseLo})
-        if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip2;
+        if (!Table[Op]) Table[Op] = Skip2;
 
     for (int Op : {Opc_SprUlUseLo})
-        if (!mOpcodeHandlers.count(Op)) mOpcodeHandlers[Op] = Skip3;
+        if (!Table[Op]) Table[Op] = Skip3;
 
     auto ImageOverlay3Above = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlay, VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 1);
@@ -641,56 +675,56 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(3);
         return false;
     };
-    mOpcodeHandlers[Opc_ImgOl] = ImageOverlay3Above;
-    mOpcodeHandlers[Opc_ImgUl] = ImageOverlay3Below;
-    mOpcodeHandlers[Opc_ImgOlUseLo] = [](IScriptVM& VM) {
+    Table[Opc_ImgOl] = ImageOverlay3Above;
+    Table[Opc_ImgUl] = ImageOverlay3Below;
+    Table[Opc_ImgOlUseLo] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlayLo,
                 VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 1);
         VM.AdvanceArgs(3);
         return false;
     };
-    mOpcodeHandlers[Opc_ImgUlUseLo] = [](IScriptVM& VM) {
+    Table[Opc_ImgUlUseLo] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlayLo,
                 VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 0);
         VM.AdvanceArgs(3);
         return false;
     };
-    mOpcodeHandlers[Opc_HighSprOl] = SpriteOverlay3Above;
-    mOpcodeHandlers[Opc_LowSprUl] = SpriteOverlay3Below;
+    Table[Opc_HighSprOl] = SpriteOverlay3Above;
+    Table[Opc_LowSprUl] = SpriteOverlay3Below;
     // Despite its historical name, spruluselo carries explicit x/y offsets;
     // only sproluselo resolves a launch-offset table.
-    mOpcodeHandlers[Opc_SprUlUseLo] = SpriteOverlay3Below;
-    mOpcodeHandlers[Opc_SprUl] = SpriteOverlay3Below;
-    mOpcodeHandlers[Opc_SprOlUseLo] = [](IScriptVM& VM) {
+    Table[Opc_SprUlUseLo] = SpriteOverlay3Below;
+    Table[Opc_SprUl] = SpriteOverlay3Below;
+    Table[Opc_SprOlUseLo] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateSpriteOverlayLo,
                 VM.PeekArg(1), VM.PeekArg(2), 0, 1);
         VM.AdvanceArgs(2);
         return false;
     };
-    mOpcodeHandlers[Opc_GrdSprOl] = SpriteOverlay3Above;
-    mOpcodeHandlers[Opc_ImgOlOrig] = [](IScriptVM& VM) {
+    Table[Opc_GrdSprOl] = SpriteOverlay3Above;
+    Table[Opc_ImgOlOrig] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlaySpecialOffset,
                 VM.PeekArg(1), 0, 0, 1);
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SwitchUl] = [](IScriptVM& VM) {
+    Table[Opc_SwitchUl] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlaySpecialOffset,
                 VM.PeekArg(1), 0, 0, 0);
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SprOl] = [](IScriptVM& VM) {
+    Table[Opc_SprOl] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateSpriteOverlay, VM.PeekArg(1), VM.PeekArg(2), VM.PeekArg(3), 1);
         VM.AdvanceArgs(3);
         return false;
     };
-    mOpcodeHandlers[Opc_PlaySnd] = [](IScriptVM& VM) {
+    Table[Opc_PlaySnd] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::PlaySound, VM.PeekArg(1));
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_PlaySndRand] = [](IScriptVM& VM) {
+    Table[Opc_PlaySndRand] = [](IScriptVM& VM) {
         int Count = VM.PeekArg(1);
         int SoundID = Count > 0
             ? VM.PeekArg(2 + (int)(VM.NextRandom() % (uint32_t)Count))
@@ -699,7 +733,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.SkipVectorArgs();
         return false;
     };
-    mOpcodeHandlers[Opc_PlaySndBtwn] = [](IScriptVM& VM) {
+    Table[Opc_PlaySndBtwn] = [](IScriptVM& VM) {
         int MinID = VM.PeekArg(1);
         int MaxID = VM.PeekArg(2);
         int Range = MaxID >= MinID ? MaxID - MinID + 1 : 1;
@@ -708,7 +742,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(2);
         return false;
     };
-    mOpcodeHandlers[Opc_AttackMelee] = [](IScriptVM& VM) {
+    Table[Opc_AttackMelee] = [](IScriptVM& VM) {
         const int Count = VM.PeekArg(1);
         const int SoundID = Count > 0
             ? VM.PeekArg(2 + (int)(VM.NextRandom() % (uint32_t)Count))
@@ -718,30 +752,30 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.SkipVectorArgs();
         return false;
     };
-    mOpcodeHandlers[Opc_Attack] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::Attack); VM.AdvanceArgs(0); return false; };
-    mOpcodeHandlers[Opc_AttackWith] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::Attack, VM.PeekArg(1)); VM.AdvanceArgs(1); return false; };
-    mOpcodeHandlers[Opc_UseWeapon] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::UseWeapon, VM.PeekArg(1)); VM.AdvanceArgs(1); return false; };
-    mOpcodeHandlers[Opc_DoMissileDmg] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::DoMissileDamage); VM.AdvanceArgs(0); return false; };
-    mOpcodeHandlers[Opc_DoGrdDamage] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::DoGroundDamage); VM.AdvanceArgs(0); return false; };
-    mOpcodeHandlers[Opc_CastSpell] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::CastSpell); VM.AdvanceArgs(0); return false; };
-    mOpcodeHandlers[Opc_SetFlDirect] = [](IScriptVM& VM) {
+    Table[Opc_Attack] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::Attack); VM.AdvanceArgs(0); return false; };
+    Table[Opc_AttackWith] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::Attack, VM.PeekArg(1)); VM.AdvanceArgs(1); return false; };
+    Table[Opc_UseWeapon] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::UseWeapon, VM.PeekArg(1)); VM.AdvanceArgs(1); return false; };
+    Table[Opc_DoMissileDmg] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::DoMissileDamage); VM.AdvanceArgs(0); return false; };
+    Table[Opc_DoGrdDamage] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::DoGroundDamage); VM.AdvanceArgs(0); return false; };
+    Table[Opc_CastSpell] = [](IScriptVM& VM) { VM.Emit(IScriptEventType::CastSpell); VM.AdvanceArgs(0); return false; };
+    Table[Opc_SetFlDirect] = [](IScriptVM& VM) {
         VM.mSprite.FlDirect = (VM.PeekArg(1) * 8) & 0xFF;
         VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed, 1);
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_SetFlSpeed] = [](IScriptVM& VM) {
+    Table[Opc_SetFlSpeed] = [](IScriptVM& VM) {
         VM.mSprite.FlSpeed = VM.PeekArg(1);
         VM.Emit(IScriptEventType::FlightState, VM.mSprite.FlDirect, VM.mSprite.FlSpeed, 2);
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_CreateGasOverlays] = [](IScriptVM& VM) {
+    Table[Opc_CreateGasOverlays] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateGasOverlays, VM.PeekArg(1));
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_WarpOverlay] = [](IScriptVM& VM) {
+    Table[Opc_WarpOverlay] = [](IScriptVM& VM) {
         const int PackedModifier = VM.PeekArg(1);
         VM.mSprite.HasWarpOverlay = true;
         VM.mSprite.WarpOverlayFrame = PackedModifier & 0xff;
@@ -751,7 +785,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(1);
         return false;
     };
-    mOpcodeHandlers[Opc_ImgUlNextId] = [](IScriptVM& VM) {
+    Table[Opc_ImgUlNextId] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::CreateImageOverlay,
                 VM.mSprite.ImageID + 1,
                 VM.PeekArg(1),
@@ -760,35 +794,35 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.AdvanceArgs(2);
         return false;
     };
-    mOpcodeHandlers[Opc_TmpRmGraphicStart] = [](IScriptVM& VM) {
+    Table[Opc_TmpRmGraphicStart] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::TemporaryGraphicState, 1);
         VM.AdvanceArgs(0);
         return false;
     };
-    mOpcodeHandlers[Opc_TmpRmGraphicEnd] = [](IScriptVM& VM) {
+    Table[Opc_TmpRmGraphicEnd] = [](IScriptVM& VM) {
         VM.Emit(IScriptEventType::TemporaryGraphicState, 0);
         VM.AdvanceArgs(0);
         return false;
     };
-    mOpcodeHandlers[Opc_RandCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_RandCondJmp] = [](IScriptVM& VM) {
         int Chance = VM.PeekArg(1);
         int Target = VM.PeekArg(2);
         int Roll = (int)(VM.NextRandom() & 0xffu);
         VM.mSprite.PC = Roll <= Chance ? Target : VM.mSprite.PC + 3;
         return false;
     };
-    mOpcodeHandlers[Opc_PwrUpCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_PwrUpCondJmp] = [](IScriptVM& VM) {
         int Target = VM.PeekArg(1);
         VM.mSprite.PC = VM.mSprite.IsPowered ? Target : VM.mSprite.PC + 2;
         return false;
     };
-    mOpcodeHandlers[Opc_TrgtRangeCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_TrgtRangeCondJmp] = [](IScriptVM& VM) {
         int Range = VM.PeekArg(1);
         int Target = VM.PeekArg(2);
         VM.mSprite.PC = VM.mSprite.TargetRangePixels <= Range ? Target : VM.mSprite.PC + 3;
         return false;
     };
-    mOpcodeHandlers[Opc_TrgtArcCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_TrgtArcCondJmp] = [](IScriptVM& VM) {
         int MinArc = VM.PeekArg(1);
         int MaxArc = VM.PeekArg(2);
         int Target = VM.PeekArg(3);
@@ -796,7 +830,7 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.mSprite.PC = (Arc >= MinArc && Arc <= MaxArc) ? Target : VM.mSprite.PC + 4;
         return false;
     };
-    mOpcodeHandlers[Opc_CurDirectCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_CurDirectCondJmp] = [](IScriptVM& VM) {
         int MinDir = VM.PeekArg(1);
         int MaxDir = VM.PeekArg(2);
         int Target = VM.PeekArg(3);
@@ -804,11 +838,13 @@ void IScriptVM::RegisterDefaultOpcodes()
         VM.mSprite.PC = (Dir >= MinDir && Dir <= MaxDir) ? Target : VM.mSprite.PC + 4;
         return false;
     };
-    mOpcodeHandlers[Opc_LiftOffCondJmp] = [](IScriptVM& VM) {
+    Table[Opc_LiftOffCondJmp] = [](IScriptVM& VM) {
         int Target = VM.PeekArg();
         VM.mSprite.PC = VM.mSprite.LiftOffState ? Target : VM.mSprite.PC + 2;
         return false;
     };
+
+    return Table;
 }
 
 } // namespace Game

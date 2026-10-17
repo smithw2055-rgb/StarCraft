@@ -10,14 +10,14 @@ namespace Game::Client::GameLoop
 
 struct GuiRuntime
 {
-#if ENABLE_GUI_UI
-    UI::MainGui MainGui;
-    UI::GlueGuiHost GlueGui;
     bool UseGui = false;
     bool GuiInitialized = false;
     bool GlueGuiInitialized = false;
     int AppliedWidth = 0;
     int AppliedHeight = 0;
+#if ENABLE_GUI_UI
+    UI::MainGui MainGui;
+    UI::GlueGuiHost GlueGui;
 #endif
 };
 

@@ -81,6 +81,23 @@ void GameController::StartGame()
             [this]() { InitGameSystems(); });
 }
 
+void GameController::RestartGame()
+{
+    mRuntime.App.Runtime.State = GameState::MainMenu;
+    mRuntime.Session.Game.ResetMatchOutcome();
+    if (mRuntime.Session.Campaign.IsActive())
+        mRuntime.Session.Campaign.Controller().Reset();
+    StartGame();
+}
+
+void GameController::ReturnToMainMenu()
+{
+    mRuntime.App.Runtime.State = GameState::MainMenu;
+    mRuntime.Session.Game.ResetMatchOutcome();
+    mRuntime.Session.Campaign.Deactivate();
+    mRuntime.App.Menu.CloseAndResume();
+}
+
 void GameController::SetInitialCameraOverride(float WorldX, float WorldY)
 {
     mHasInitialCameraOverride = true;

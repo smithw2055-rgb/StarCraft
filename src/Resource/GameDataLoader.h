@@ -31,6 +31,7 @@ public:
     bool LoadUpgradeData(IArchiveReader& Archive);
     bool LoadTechData(IArchiveReader& Archive);
     bool LoadImageTblData(IArchiveReader& Archive);
+    bool LoadOrderData(IArchiveReader& Archive);
 
     // TBL string tables
     bool LoadStatTxtTbl(IArchiveReader& Archive);
@@ -47,17 +48,26 @@ public:
     bool LoadUpgradeDataRaw(const std::vector<uint8_t>& Data);
     bool LoadTechDataRaw(const std::vector<uint8_t>& Data);
     bool LoadTblDataRaw(const std::vector<uint8_t>& Data);
+    bool LoadOrderDataRaw(const std::vector<uint8_t>& Data);
 
     // Palette loading (returns raw palette)
     RawPalette LoadUnitPalette(IArchiveReader& Archive);
     const RawPalette& GetUnitPalette() const { return mUnitPalette; }
     bool IsLoaded() const { return mIsLoaded; }
 
+    const std::vector<UnitEntry>& GetUnits() const { return mUnits; }
+    const std::vector<WeaponEntry>& GetWeapons() const { return mWeapons; }
+    const std::vector<FlingyEntry>& GetFlingy() const { return mFlingy; }
+    const std::vector<SpriteEntry>& GetSprites() const { return mSprites; }
+    const std::vector<ImageEntry>& GetImages() const { return mImages; }
+    const std::vector<OrderEntry>& GetOrders() const { return mOrders; }
+
     const UnitEntry* FindUnitByID(uint32_t ID) const;
     const WeaponEntry* FindWeaponByID(uint32_t ID) const;
     const FlingyEntry* FindFlingyByID(uint32_t ID) const;
     const SpriteEntry* FindSpriteByID(uint32_t ID) const;
     const ImageEntry* FindImageByID(uint32_t ID) const;
+    const OrderEntry* FindOrderByID(uint32_t ID) const;
     const ImageRelationEntry* FindImageRelationByID(uint32_t ID) const;
     const std::vector<ImageRelationEntry>& GetImageRelations() const { return mImageRelations; }
 
@@ -81,6 +91,8 @@ public:
     void RebuildImageMappingFromTbl();
 
 private:
+    void ApplyUnitNames();
+
     bool mIsLoaded = false;
 
     std::vector<UnitEntry> mUnits;
@@ -88,6 +100,7 @@ private:
     std::vector<FlingyEntry> mFlingy;
     std::vector<SpriteEntry> mSprites;
     std::vector<ImageEntry> mImages;
+    std::vector<OrderEntry> mOrders;
     std::vector<ImageRelationEntry> mImageRelations;
     std::vector<ImageTblEntry> mImageTbl;
     std::vector<UpgradeEntry> mUpgrades;

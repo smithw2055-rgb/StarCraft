@@ -53,6 +53,18 @@ public:
     static bool StartMorphHydraliskIntoLurker(Core::ECS::EntityManager& EM,
                                                int HydraliskID);
 
+    static bool CanMorphMutaliskIntoGuardian(Core::ECS::EntityManager& EM,
+                                             int MutaliskID,
+                                             std::string* OutReason = nullptr);
+    static bool StartMorphMutaliskIntoGuardian(Core::ECS::EntityManager& EM,
+                                               int MutaliskID);
+
+    static bool CanMorphMutaliskIntoDevourer(Core::ECS::EntityManager& EM,
+                                             int MutaliskID,
+                                             std::string* OutReason = nullptr);
+    static bool StartMorphMutaliskIntoDevourer(Core::ECS::EntityManager& EM,
+                                               int MutaliskID);
+
     static bool CanMorphBuilding(Core::ECS::EntityManager& EM,
                                  int BuildingID, int TargetDefID,
                                  std::string* OutReason = nullptr);

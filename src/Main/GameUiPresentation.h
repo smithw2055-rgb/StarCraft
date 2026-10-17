@@ -33,7 +33,7 @@ inline void RenderGameplayUiFrame(
 
     Client.RenderSelectionDragOverlay();
 
-    RenderActiveCampaignOverlay(Campaign, Hud, Client, ViewportWidth, ViewportHeight);
+    RenderActiveCampaignOverlay(Campaign, Hud, Client, Session, ViewportWidth, ViewportHeight);
 
     const int MouseX = (int)Core::Platform::GetMouseX();
     const int MouseY = (int)Core::Platform::GetMouseY();

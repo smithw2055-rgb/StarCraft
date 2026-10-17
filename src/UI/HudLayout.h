@@ -38,6 +38,7 @@ struct HudLayout
     RectI PreviewRect;
     RectI QueueRect;
     std::array<RectI, 9> CommandRects = {};
+    std::array<RectI, 3> MinimapButtonRects = {};
 
     int HudTop = 0;
     int HudHeight = 0;

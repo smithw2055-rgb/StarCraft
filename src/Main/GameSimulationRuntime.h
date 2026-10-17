@@ -8,6 +8,8 @@
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
 
+#include "Main/GameMatchOutcomeRuntime.h"
+
 namespace Game::Client::GameLoop
 {
 
@@ -26,6 +28,8 @@ inline void UpdateGameplaySimulationRuntime(
     });
 
     Session.UpdateSystems(Dt);
+    if (Session.IsMapLoaded())
+        Session.SyncCreepPresentation();
     Audio.UpdateForClientView(Client, Dt);
 
     if (Session.IsReplayRecording())
@@ -55,6 +59,18 @@ inline void UpdateCampaignAndSimulationRuntime(
     {
         Campaign.Controller().Update(Session.Entities(), Dt);
         Campaign.RecordVictoryProgressIfNeeded();
+
+        const auto State = Campaign.Controller().GetState();
+        if (State == Game::Campaign::CampaignState::Victory)
+            Session.SetMatchOutcome(MatchOutcome::Victory);
+        else if (State == Game::Campaign::CampaignState::Defeat)
+            Session.SetMatchOutcome(MatchOutcome::Defeat);
+        else if (State == Game::Campaign::CampaignState::Draw)
+            Session.SetMatchOutcome(MatchOutcome::Draw);
+    }
+    else
+    {
+        UpdateMeleeMatchOutcome(Session, Dt);
     }
 
     // Scenario-triggered pauses freeze the simulation but keep

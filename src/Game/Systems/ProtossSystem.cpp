@@ -46,6 +46,7 @@ void ProtossSystem::Update(float DeltaTime)
     UpdatePowerGrid(EM);
     RechargeShields(EM, DeltaTime);
     CheckPowerStatus(EM);
+    UpdateArchonWarps(EM, DeltaTime);
 }
 
 void ProtossSystem::CheckPowerStatus(Core::ECS::EntityManager& EM)
@@ -130,6 +131,12 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
 {
     // Shield Battery: consume energy to recharge nearby units
     auto Batteries = EM.GetEntitiesWith<TransformComponent, UnitComponent, BuildingComponent>();
+    if (Batteries.empty())
+        return;
+
+    std::vector<int> AllUnits;
+    bool QueriedUnits = false;
+
     for (int Bid : Batteries)
     {
         auto* BU = EM.GetComponent<UnitComponent>(Bid);
@@ -148,7 +155,12 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
         int BatteryOwner = PlayerComp ? PlayerComp->PlayerID : -1;
         if (BatteryOwner < 0) continue;
 
-        auto AllUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+        if (!QueriedUnits)
+        {
+            AllUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            QueriedUnits = true;
+        }
+
         for (int Uid : AllUnits)
         {
             if (Uid == Bid) continue;
@@ -213,7 +225,8 @@ bool ProtossSystem::RechargeShieldsTarget(Core::ECS::EntityManager& EM,
 
 bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
                                   int TemplarAID, int TemplarBID,
-                                  bool IsDarkArchon)
+                                  bool IsDarkArchon,
+                                  bool InitialShieldCharge)
 {
     if (TemplarAID == TemplarBID)
         return false;
@@ -252,6 +265,20 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     if (ArchonID < 0)
         return false;
 
+    if (InitialShieldCharge)
+    {
+        if (auto* ArchonUnit = EM.GetComponent<UnitComponent>(ArchonID))
+        {
+            // In Brood War, newly morphed Archons start with low shields (10) and charge up
+            ArchonUnit->ShieldPoints = 10;
+            ArchonUnit->ShieldSubDamage = 0;
+            ArchonUnit->ShieldRegenAccumulator = 0.0f;
+        }
+    }
+
+    EM.RemoveComponent<ArchonWarpComponent>(TemplarAID);
+    EM.RemoveComponent<ArchonWarpComponent>(TemplarBID);
+
     // Consume the source units only after the replacement entity is complete.
     EM.DestroyEntity(TemplarAID);
     EM.DestroyEntity(TemplarBID);
@@ -260,6 +287,103 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
         std::string(IsDarkArchon ? "Dark " : "") + "Archon spawned at (" +
         std::to_string((int)CenterPos.X) + "," + std::to_string((int)CenterPos.Y) + ")");
     return true;
+}
+
+bool ProtossSystem::StartArchonWarp(Core::ECS::EntityManager& EM,
+                                    int TemplarAID, int TemplarBID,
+                                    bool IsDarkArchon,
+                                    float Duration,
+                                    bool InitialShieldCharge)
+{
+    if (TemplarAID == TemplarBID)
+        return false;
+
+    auto* UA = EM.GetComponent<UnitComponent>(TemplarAID);
+    auto* UB = EM.GetComponent<UnitComponent>(TemplarBID);
+    auto* PA = EM.GetComponent<PlayerComponent>(TemplarAID);
+    auto* PB = EM.GetComponent<PlayerComponent>(TemplarBID);
+    auto* TA = EM.GetComponent<TransformComponent>(TemplarAID);
+    auto* TB = EM.GetComponent<TransformComponent>(TemplarBID);
+    if (!UA || !UB || !PA || !PB || !TA || !TB) return false;
+    if (UA->HitPoints <= 0 || UB->HitPoints <= 0) return false;
+    if (PA->PlayerID != PB->PlayerID) return false;
+
+    const int RequiredTemplarDefID =
+        Game::Races::GetUnitDefID(IsDarkArchon ? "Dark Templar" : "High Templar");
+    const auto RequiredTemplarDef = Game::Races::GetUnitDefByID(RequiredTemplarDefID);
+    if (RequiredTemplarDef.Name == "Unknown" ||
+        UA->ChkUnitID != RequiredTemplarDef.ChkUnitID ||
+        UB->ChkUnitID != RequiredTemplarDef.ChkUnitID)
+    {
+        return false;
+    }
+
+    if (auto* CmdA = EM.GetComponent<CommandComponent>(TemplarAID))
+    {
+        CmdA->CancelAll();
+        CmdA->CurrentCommand = CommandType::Stop;
+    }
+    if (auto* CmdB = EM.GetComponent<CommandComponent>(TemplarBID))
+    {
+        CmdB->CancelAll();
+        CmdB->CurrentCommand = CommandType::Stop;
+    }
+
+    auto& WarpA = EM.AddComponent<ArchonWarpComponent>(TemplarAID);
+    WarpA.PartnerEntityID = TemplarBID;
+    WarpA.IsDarkArchon = IsDarkArchon;
+    WarpA.WarpTimer = Duration;
+    WarpA.WarpDuration = Duration;
+    WarpA.IsWarping = true;
+    WarpA.InitialShieldCharge = InitialShieldCharge;
+
+    auto& WarpB = EM.AddComponent<ArchonWarpComponent>(TemplarBID);
+    WarpB.PartnerEntityID = TemplarAID;
+    WarpB.IsDarkArchon = IsDarkArchon;
+    WarpB.WarpTimer = Duration;
+    WarpB.WarpDuration = Duration;
+    WarpB.IsWarping = true;
+    WarpB.InitialShieldCharge = InitialShieldCharge;
+
+    Core::Utils::Logger::Info("ProtossSystem",
+        std::string(IsDarkArchon ? "Dark " : "") + "Archon warp channeling started between " +
+        std::to_string(TemplarAID) + " and " + std::to_string(TemplarBID));
+    return true;
+}
+
+void ProtossSystem::UpdateArchonWarps(Core::ECS::EntityManager& EM, float DeltaTime)
+{
+    auto WarpingEntities = EM.GetEntitiesWith<ArchonWarpComponent>();
+    std::vector<int> Handled;
+    for (int Eid : WarpingEntities)
+    {
+        if (std::find(Handled.begin(), Handled.end(), Eid) != Handled.end())
+            continue;
+        auto* Warp = EM.GetComponent<ArchonWarpComponent>(Eid);
+        if (!Warp || !Warp->IsWarping)
+            continue;
+
+        const int PartnerID = Warp->PartnerEntityID;
+        Handled.push_back(Eid);
+        Handled.push_back(PartnerID);
+
+        if (!EM.IsAlive(PartnerID))
+        {
+            EM.RemoveComponent<ArchonWarpComponent>(Eid);
+            continue;
+        }
+
+        Warp->WarpTimer -= DeltaTime;
+        if (auto* PartnerWarp = EM.GetComponent<ArchonWarpComponent>(PartnerID))
+            PartnerWarp->WarpTimer = Warp->WarpTimer;
+
+        if (Warp->WarpTimer <= 0.0f)
+        {
+            const bool IsDarkArchon = Warp->IsDarkArchon;
+            const bool InitialShieldCharge = Warp->InitialShieldCharge;
+            MorphArchon(EM, Eid, PartnerID, IsDarkArchon, InitialShieldCharge);
+        }
+    }
 }
 
 } // namespace Game::Systems

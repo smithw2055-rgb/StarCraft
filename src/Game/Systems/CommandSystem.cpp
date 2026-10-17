@@ -1,6 +1,7 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Components.h"
 #include "Game/Pathfinding/AStar.h"
+#include "Game/Pathfinding/NavigationService.h"
 #include "Game/Pathfinding/RegionPathfinder.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -14,9 +15,9 @@
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <functional>
 #include <limits>
 #include <vector>
 
@@ -28,6 +29,7 @@ using namespace Game::Components;
 const Game::Map::GameMap* gCmdMap = nullptr;
 static Game::Pathfinding::RegionPathfinder sRegionPathfinder;
 static const Game::Map::GameMap* sRegionPathfinderMap = nullptr;
+static Game::Pathfinding::NavigationService sNavigationService;
 static CommandSystem::ImageIDResolver sCommandImageResolver;
 static CommandSystem::ImageIDResolver sCommandSubunitImageResolver;
 
@@ -63,8 +65,13 @@ void CommandSystem::SetMap(const Game::Map::GameMap* Map)
 {
     gCmdMap = Map;
     RebuildRegionPathfinder(Map);
+    if (Map)
+        sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
     MovementSystem::SetPathRequestCallback(&CommandSystem::RequestMovementPath);
+    MovementSystem::SetNavigationSyncCallback(
+        &CommandSystem::SyncNavigationState);
 }
+
 
 void CommandSystem::SetImageResolver(ImageIDResolver Resolver)
 {
@@ -74,6 +81,17 @@ void CommandSystem::SetImageResolver(ImageIDResolver Resolver)
 void CommandSystem::SetSubunitImageResolver(ImageIDResolver Resolver)
 {
     sCommandSubunitImageResolver = std::move(Resolver);
+}
+
+const Game::Pathfinding::NavigationPerformanceStats&
+CommandSystem::GetNavigationStats()
+{
+    return sNavigationService.GetStats();
+}
+
+void CommandSystem::ResetNavigationStats()
+{
+    sNavigationService.ResetStats();
 }
 
 static bool ShouldAutoAttackOnGuard(const Components::CombatComponent& Combat)
@@ -171,6 +189,41 @@ static bool TryApplyUseTechOrder(Core::ECS::EntityManager& EM,
                                  const Order& InOrder)
 {
     const auto ResearchID = static_cast<ResearchId>(InOrder.AbilityID);
+    if (ResearchID == ResearchId::Terran_CloakingField ||
+        ResearchID == ResearchId::Terran_PersonalCloaking)
+    {
+        auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+        const int PlayerID = Player ? Player->PlayerID : 0;
+        if (!UpgradeSystem::HasResearch(PlayerID, ResearchID))
+            return false;
+
+        auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        if (!Unit || Unit->HitPoints <= 0)
+            return false;
+
+        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
+        if (!Cloak)
+            Cloak = &EM.AddComponent<CloakComponent>(EntityID);
+
+        if (Cloak->IsCloaked)
+        {
+            Cloak->IsCloaked = false;
+            Cloak->CloakEnergyCost = 0.0f;
+            return true;
+        }
+        else
+        {
+            if (Unit->EnergyPoints < 25)
+                return false;
+            Unit->EnergyPoints -= 25;
+            Cloak->IsCloaked = true;
+            Cloak->IsPassiveCloak = false;
+            Cloak->CloakEnergyCost = 1.25f;
+            Unit->CloakEnergyAccumulator = 0.0f;
+            return true;
+        }
+    }
+
     if (ResearchID != ResearchId::Terran_StimPacks)
         return false;
 
@@ -203,6 +256,7 @@ static void ClearMovementPath(Core::ECS::EntityManager& EM, Core::ECS::EntityID 
         Path->CurrentSpeed = 0.0f;
         Path->CurrentVelocity = {0.0f, 0.0f};
         Path->StallTimer = 0.0f;
+        Path->StallTicks = 0;
         Path->HasLastWaypointDistance = false;
         Path->BlockedByEntityID = -1;
     }
@@ -217,11 +271,6 @@ static int CollisionRadiusForUnit(const UnitComponent* Unit)
     if (Unit->SizeType == UnitSize::Small)
         return 12;
     return 16;
-}
-
-static int TerrainClearanceForPath(const PathfindingComponent& Path)
-{
-    return Path.CollisionRadius > 16 ? Path.CollisionRadius : 0;
 }
 
 static int CollisionRadiusFromBounds(const PathfindingComponent& Path)
@@ -332,6 +381,48 @@ static StaticBlockerRect StaticBlockerRectForEntity(Core::ECS::EntityManager& EM
     return Rect;
 }
 
+static std::vector<Game::Pathfinding::NavigationObstacle>
+BuildNavigationObstacles(Core::ECS::EntityManager& EM,
+                         Core::ECS::EntityID MovingID,
+                         Core::ECS::EntityID AdditionalDynamicBlockerID = -1)
+{
+    std::vector<Game::Pathfinding::NavigationObstacle> Obstacles;
+    for (const auto EntityID :
+         EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    {
+        if (EntityID == MovingID)
+            continue;
+        if (!IsStaticGroundBlocker(EM, EntityID) &&
+            EntityID != AdditionalDynamicBlockerID)
+        {
+            continue;
+        }
+
+        const StaticBlockerRect Rect =
+            StaticBlockerRectForEntity(EM, EntityID);
+        Game::Pathfinding::NavigationObstacle Obstacle;
+        Obstacle.OwnerEntityID = EntityID;
+        Obstacle.Position = Rect.Position;
+        Obstacle.Left = std::max(0, (int)std::ceil(Rect.Left));
+        Obstacle.Up = std::max(0, (int)std::ceil(Rect.Top));
+        Obstacle.Right = std::max(0, (int)std::ceil(Rect.Right));
+        Obstacle.Down = std::max(0, (int)std::ceil(Rect.Bottom));
+        Obstacles.push_back(Obstacle);
+    }
+    return Obstacles;
+}
+
+void CommandSystem::SyncNavigationState(
+    Core::ECS::EntityManager& EM,
+    const Game::Map::GameMap* Map)
+{
+    if (!Map)
+        return;
+    sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
+    sNavigationService.SyncStaticObstacles(
+        BuildNavigationObstacles(EM, -1));
+}
+
 static StaticBlockerRect ExpandedStaticBlockerRectForMover(
     Core::ECS::EntityManager& EM,
     Core::ECS::EntityID BlockerID,
@@ -429,13 +520,25 @@ static Core::ECS::EntityID FindExactStaticBlockerOnPath(
     Core::Math::Vec2 SegmentStart = Start;
     for (const auto& Waypoint : Waypoints)
     {
+        const float SegMinX = std::min(SegmentStart.X, Waypoint.X) - 128.0f;
+        const float SegMaxX = std::max(SegmentStart.X, Waypoint.X) + 128.0f;
+        const float SegMinY = std::min(SegmentStart.Y, Waypoint.Y) - 128.0f;
+        const float SegMaxY = std::max(SegmentStart.Y, Waypoint.Y) + 128.0f;
+
         for (auto BlockerID : Entities)
         {
-            if (BlockerID == MovingID || BlockerID == IgnoreEntityID ||
-                !IsStaticGroundBlocker(EM, BlockerID))
+            if (BlockerID == MovingID || BlockerID == IgnoreEntityID)
+                continue;
+
+            auto* Trans = EM.GetComponent<TransformComponent>(BlockerID);
+            if (!Trans || Trans->Position.X < SegMinX || Trans->Position.X > SegMaxX ||
+                Trans->Position.Y < SegMinY || Trans->Position.Y > SegMaxY)
             {
                 continue;
             }
+
+            if (!IsStaticGroundBlocker(EM, BlockerID))
+                continue;
 
             const auto Rect = ExpandedStaticBlockerRectForMover(
                 EM, BlockerID, MovingPath);
@@ -456,118 +559,6 @@ static Core::ECS::EntityID FindExactStaticBlockerOnPath(
     return -1;
 }
 
-static std::function<bool(int, int)> BuildStaticBlockerTilePredicate(
-    Core::ECS::EntityManager& EM,
-    Core::ECS::EntityID MovingID,
-    const Game::Map::GameMap& Map,
-    int StartTileX,
-    int StartTileY,
-    const PathfindingComponent& MovingPath,
-    int IgnoreEntityID = -1,
-    int AvoidDynamicEntityID = -1)
-{
-    const auto* MovingPlayer = EM.GetComponent<PlayerComponent>(MovingID);
-    const bool RequestedAvoidIsStatic =
-        AvoidDynamicEntityID >= 0 &&
-        IsStaticGroundBlocker(EM, AvoidDynamicEntityID);
-    std::vector<StaticBlockerRect> Blockers;
-    for (auto EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
-    {
-        // The interaction target is normally omitted so A* can approach its
-        // footprint.  Movement can pass that same entity back as the explicit
-        // avoid target after exact pixel collision rejected the planned
-        // segment.  In that recovery request the physical blocker must win;
-        // keeping the planning ignore would reproduce the identical route.
-        if (EntityID == IgnoreEntityID && EntityID != AvoidDynamicEntityID)
-            continue;
-        if (EntityID == MovingID)
-            continue;
-        const bool IsStaticBlocker = IsStaticGroundBlocker(EM, EntityID);
-        const bool IsRequestedDynamicAvoid = EntityID == AvoidDynamicEntityID;
-        const auto* BlockerPlayer = EM.GetComponent<PlayerComponent>(EntityID);
-        const auto* BlockerPath = EM.GetComponent<PathfindingComponent>(EntityID);
-        const bool IsStoppedFriendlyDynamicAvoid =
-            AvoidDynamicEntityID >= 0 &&
-            !RequestedAvoidIsStatic &&
-            !IsStaticBlocker &&
-            MovingPlayer && BlockerPlayer &&
-            MovingPlayer->PlayerID == BlockerPlayer->PlayerID &&
-            BlockerPath && BlockerPath->CurrentVelocity.LengthSq() <= 0.01f;
-        if (!IsStaticBlocker &&
-            !IsRequestedDynamicAvoid &&
-            !IsStoppedFriendlyDynamicAvoid)
-        {
-            continue;
-        }
-        auto Rect = ExpandedStaticBlockerRectForMover(
-            EM, EntityID, MovingPath);
-
-        if (IsStaticBlocker && EntityID == AvoidDynamicEntityID)
-        {
-            // A* samples 32-pixel build-tile centers.  An exact DAT rectangle
-            // can cross a tile near its edge while every sampled center stays
-            // clear (for example y=2772 versus a row center at y=2768).  Add
-            // half a tile only for the blocker proven by runtime collision so
-            // the replacement route cannot smooth back through that sliver.
-            constexpr float kExactCollisionRasterPadding = 16.0f;
-            Rect.Left += kExactCollisionRasterPadding;
-            Rect.Top += kExactCollisionRasterPadding;
-            Rect.Right += kExactCollisionRasterPadding;
-            Rect.Bottom += kExactCollisionRasterPadding;
-        }
-        Blockers.push_back(Rect);
-    }
-
-    const Game::Map::GameMap* MapPtr = &Map;
-    return [Blockers = std::move(Blockers), MapPtr, StartTileX, StartTileY](int TileX, int TileY)
-    {
-        if (TileX == StartTileX && TileY == StartTileY)
-            return false;
-
-        if (!MapPtr)
-            return false;
-
-        const Core::Math::Vec2 Center = MapPtr->TileToWorld(TileX, TileY);
-        for (const auto& Rect : Blockers)
-        {
-            if (Center.X >= Rect.Position.X - Rect.Left &&
-                Center.X <= Rect.Position.X + Rect.Right &&
-                Center.Y >= Rect.Position.Y - Rect.Top &&
-                Center.Y <= Rect.Position.Y + Rect.Bottom)
-            {
-                return true;
-            }
-        }
-        return false;
-    };
-}
-
-static Core::Math::Vec2 LimitPathStageToLocalSearch(
-    const Game::Map::GameMap& Map,
-    int StartTileX,
-    int StartTileY,
-    const Core::Math::Vec2& Candidate)
-{
-    constexpr int kMaxStageTileSpan = 20;
-    int CandidateTileX = 0;
-    int CandidateTileY = 0;
-    Map.WorldToTile(Candidate, CandidateTileX, CandidateTileY);
-    const int DeltaX = CandidateTileX - StartTileX;
-    const int DeltaY = CandidateTileY - StartTileY;
-    const int Span = std::max(std::abs(DeltaX), std::abs(DeltaY));
-    if (Span <= kMaxStageTileSpan)
-        return Candidate;
-
-    const float Scale = (float)kMaxStageTileSpan / (float)Span;
-    const int StageTileX = std::clamp(
-        (int)std::lround((float)StartTileX + (float)DeltaX * Scale),
-        0, Map.GetWidth() - 1);
-    const int StageTileY = std::clamp(
-        (int)std::lround((float)StartTileY + (float)DeltaY * Scale),
-        0, Map.GetHeight() - 1);
-    return Map.TileToWorld(StageTileX, StageTileY);
-}
-
 bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
                                         Core::ECS::EntityID EntityID,
                                         const Game::Map::GameMap* Map,
@@ -583,6 +574,7 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
     const bool DestinationChanged =
         Path->RequestedDestination.DistanceTo(Target) > 1.0f ||
         Path->RequestedIgnoreEntityID != PathingIgnoreEntityID;
+
     Path->RequestedDestination = Target;
     Path->RequestedIgnoreEntityID = PathingIgnoreEntityID;
     Path->Path.clear();
@@ -591,174 +583,198 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
     if (DestinationChanged)
     {
         Path->DestinationStallTimer = 0.0f;
+        Path->DestinationStallTicks = 0;
         Path->HasLastDestinationDistance = false;
         if (!Path->HasRecentMoveFailure ||
             Path->RecentFailedMoveTarget.DistanceTo(Target) > 16.0f)
         {
             Path->HasRecentMoveFailure = false;
             Path->RecentMoveFailureCooldown = 0.0f;
+            Path->RecentMoveFailureTicks = 0;
         }
     }
 
     if (Path->IsAir || !Map)
     {
         Path->Path.push_back(Target);
+        Path->LastPathStatus = Game::Pathfinding::PathStatus::Exact;
+        Path->LastPathEndReason = Game::Pathfinding::PathEndReason::None;
+        Path->ResolvedPathDestination = Target;
+        Path->NavigationVersion =
+            Map ? Map->GetNavigationGrid().GetVersion() : 0;
+        Path->LastPathExpandedCells = 0;
         return true;
     }
 
-    if (sRegionPathfinderMap != Map)
-        RebuildRegionPathfinder(Map);
+    sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
+    auto Obstacles = BuildNavigationObstacles(
+        EM, EntityID, AvoidDynamicEntityID);
 
-    int StartTileX = 0;
-    int StartTileY = 0;
-    int EndTileX = 0;
-    int EndTileY = 0;
-    Map->WorldToTile(Trans->Position, StartTileX, StartTileY);
-    Map->WorldToTile(Target, EndTileX, EndTileY);
-    const auto ExtraBlockedTile = BuildStaticBlockerTilePredicate(
-        EM,
-        EntityID,
-        *Map,
-        StartTileX,
-        StartTileY,
-        *Path,
-        PathingIgnoreEntityID,
-        AvoidDynamicEntityID);
-
-    Core::Math::Vec2 StageTarget = Target;
-    const auto RegionPath = sRegionPathfinder.FindRegionPath(
-        StartTileX, StartTileY, EndTileX, EndTileY);
-    if (RegionPath.Found && RegionPath.RegionSequence.size() > 1)
+    Game::Pathfinding::NavigationPathQuery Query;
+    Query.Start = Trans->Position;
+    Query.Target = Target;
+    Query.IgnoredOwnerEntityID = PathingIgnoreEntityID;
+    Path->RequestedAdditionalIgnoreEntityID = -1;
+    for (const auto& Obs : Obstacles)
     {
-        const int NextRegionID = RegionPath.RegionSequence[1];
-        if (const auto* NextRegion = sRegionPathfinder.GetRegion(NextRegionID))
+        if (Obs.OwnerEntityID == PathingIgnoreEntityID)
+            continue;
+        const auto BlockerRect = ExpandedStaticBlockerRectForMover(
+            EM, Obs.OwnerEntityID, *Path);
+        if (PointInsideStaticBlockerRect(Trans->Position, BlockerRect))
         {
-            StageTarget = Map->TileToWorld(
-                NextRegion->CenterX, NextRegion->CenterY);
+            Query.AdditionalIgnoredOwnerEntityID = Obs.OwnerEntityID;
+            Path->RequestedAdditionalIgnoreEntityID = Obs.OwnerEntityID;
+            break;
         }
     }
 
-    // A region center can still be farther away than one bounded tile search,
-    // and simple connected maps may collapse to a single large region. In both
-    // cases keep the local A* leg short and request the next leg on arrival.
-    StageTarget = LimitPathStageToLocalSearch(
-        *Map, StartTileX, StartTileY, StageTarget);
-
-    const auto FindRoute = [&](const std::function<bool(int, int)>& BlockedTile,
-                               bool& OutUsedExpandedFallback)
+    Game::Pathfinding::NavigationService* Service = &sNavigationService;
+    Game::Pathfinding::NavigationService TemporaryService;
+    if (AvoidDynamicEntityID >= 0 &&
+        !IsStaticGroundBlocker(EM, AvoidDynamicEntityID))
     {
-        OutUsedExpandedFallback = false;
-        auto Candidate = Game::Pathfinding::AStar::FindPath(
-            *Map,
-            Trans->Position,
-            StageTarget,
-            1000,
-            TerrainClearanceForPath(*Path),
-            BlockedTile);
-        if (!Candidate.Found || Candidate.Waypoints.empty())
+        // Dynamic blockers are query-local. They must never invalidate the
+        // shared static navigation version or poison another unit's corridor.
+        TemporaryService.SetBaseGrid(Map->GetNavigationGrid());
+        TemporaryService.SyncStaticObstacles(std::move(Obstacles));
+        Service = &TemporaryService;
+    }
+    else
+    {
+        sNavigationService.SyncStaticObstacles(std::move(Obstacles));
+    }
+
+    Query.MaximumExpandedCells =
+        Map ? (Map->GetWidth() * Map->GetHeight() * 16) : 16384;
+    if (Path->HasCollisionBounds)
+    {
+        Query.Footprint.Left = Path->CollisionLeft;
+        Query.Footprint.Up = Path->CollisionUp;
+        Query.Footprint.Right = Path->CollisionRight;
+        Query.Footprint.Down = Path->CollisionDown;
+    }
+    else
+    {
+        Query.Footprint.Left = Path->CollisionRadius;
+        Query.Footprint.Up = Path->CollisionRadius;
+        Query.Footprint.Right = Path->CollisionRadius;
+        Query.Footprint.Down = Path->CollisionRadius;
+    }
+
+    auto Result = Service->QueryPath(Query);
+    Path->LastPathStatus = Result.Status;
+    Path->LastPathEndReason = Result.EndReason;
+    Path->ResolvedPathDestination = Result.ResolvedDestination;
+    Path->NavigationVersion = Result.NavigationVersion;
+    Path->LastPathExpandedCells = Result.ExpandedCells;
+    bool HasUsablePath = Result.HasUsablePath();
+    if (HasUsablePath &&
+        Result.Status == Game::Pathfinding::PathStatus::Partial &&
+        PathingIgnoreEntityID >= 0)
+    {
+        const auto* InteractionTransform =
+            EM.GetComponent<TransformComponent>(PathingIgnoreEntityID);
+        const auto InteractionRect = ExpandedStaticBlockerRectForMover(
+            EM, PathingIgnoreEntityID, *Path);
+        const float MinimumX =
+            InteractionRect.Position.X - InteractionRect.Left;
+        const float MaximumX =
+            InteractionRect.Position.X + InteractionRect.Right;
+        const float MinimumY =
+            InteractionRect.Position.Y - InteractionRect.Top;
+        const float MaximumY =
+            InteractionRect.Position.Y + InteractionRect.Bottom;
+        const float GapX = std::max(
+            0.0f,
+            std::max(MinimumX - Result.ResolvedDestination.X,
+                     Result.ResolvedDestination.X - MaximumX));
+        const float GapY = std::max(
+            0.0f,
+            std::max(MinimumY - Result.ResolvedDestination.Y,
+                     Result.ResolvedDestination.Y - MaximumY));
+        float InteractionTolerance = 2.0f;
+        if (const auto* Res = EM.GetComponent<ResourceComponent>(PathingIgnoreEntityID);
+            Res && Res->Type == ResourceType::VespeneGas)
         {
-            // A local stage can sit beyond a large wall or choke whose detour
-            // alone exceeds the short-search budget. Resolve that exceptional
-            // route once with a map-sized budget, then keep only a reachable
-            // local prefix when possible. This avoids repeating the identical
-            // 1000-node failure.
-            const int ExpandedNodeBudget = std::max(
-                1000, Map->GetWidth() * Map->GetHeight());
-            auto Expanded = Game::Pathfinding::AStar::FindPath(
-                *Map,
-                Trans->Position,
-                Target,
-                ExpandedNodeBudget,
-                TerrainClearanceForPath(*Path),
-                BlockedTile);
-            if (Expanded.Found && !Expanded.Waypoints.empty())
-            {
-                Core::Math::Vec2 PrefixTarget = LimitPathStageToLocalSearch(
-                    *Map, StartTileX, StartTileY, Expanded.Waypoints.front());
-                auto Prefix = Game::Pathfinding::AStar::FindPath(
-                    *Map,
-                    Trans->Position,
-                    PrefixTarget,
-                    1000,
-                    TerrainClearanceForPath(*Path),
-                    BlockedTile);
-                if (Prefix.Found && !Prefix.Waypoints.empty())
-                {
-                    StageTarget = PrefixTarget;
-                    Candidate = std::move(Prefix);
-                }
-                else
-                {
-                    // The expanded route itself is known reachable, so retain
-                    // it rather than blacklist a valid final destination.
-                    Candidate = std::move(Expanded);
-                }
-                OutUsedExpandedFallback = true;
-            }
+            InteractionTolerance = 48.0f;
         }
-        return Candidate;
-    };
-
-    bool UsedExpandedFallback = false;
-    auto Result = FindRoute(ExtraBlockedTile, UsedExpandedFallback);
-    Core::ECS::EntityID ExactPreflightBlockerID = -1;
-    if (AvoidDynamicEntityID < 0 && Result.Found && !Result.Waypoints.empty())
+        else if (EM.GetComponent<BuildingComponent>(PathingIgnoreEntityID))
+        {
+            InteractionTolerance = 32.0f;
+        }
+        HasUsablePath = InteractionTransform &&
+            GapX * GapX + GapY * GapY <=
+                InteractionTolerance * InteractionTolerance;
+        if (!HasUsablePath)
+        {
+            const std::vector<Core::Math::Vec2> DirectSegment{Target};
+            Path->BlockedByEntityID = FindExactStaticBlockerOnPath(
+                EM, EntityID, Trans->Position, DirectSegment, *Path,
+                PathingIgnoreEntityID);
+            Path->HasRecentMoveFailure = true;
+            Path->RecentFailedMoveTarget = Target;
+            Path->RecentMoveFailureTicks = 24;
+            Path->RecentMoveFailureCooldown = 1.0f;
+            Path->CurrentSpeed = 0.0f;
+            Path->TargetSpeed = 0.0f;
+            Path->CurrentVelocity = {};
+        }
+    }
+    if (!HasUsablePath && !Path->HasRecentMoveFailure)
     {
-        ExactPreflightBlockerID = FindExactStaticBlockerOnPath(
-            EM,
-            EntityID,
-            Trans->Position,
-            Result.Waypoints,
-            *Path,
+        const std::vector<Core::Math::Vec2> DirectSegment{Target};
+        Path->BlockedByEntityID = FindExactStaticBlockerOnPath(
+            EM, EntityID, Trans->Position, DirectSegment, *Path,
             PathingIgnoreEntityID);
-        if (ExactPreflightBlockerID >= 0)
-        {
-            // Tile-center rasterization can miss a thin DAT collision sliver.
-            // Before motion begins, rebuild only around the exact static entity
-            // proven by segment preflight. The command's interaction ignore is
-            // still passed separately and remains unchanged.
-            const auto StrictBlockedTile = BuildStaticBlockerTilePredicate(
-                EM,
-                EntityID,
-                *Map,
-                StartTileX,
-                StartTileY,
-                *Path,
-                PathingIgnoreEntityID,
-                ExactPreflightBlockerID);
-            bool StrictUsedExpandedFallback = false;
-            auto StrictResult = FindRoute(
-                StrictBlockedTile, StrictUsedExpandedFallback);
-            if (StrictResult.Found && !StrictResult.Waypoints.empty())
-            {
-                Result = std::move(StrictResult);
-                UsedExpandedFallback = StrictUsedExpandedFallback;
-            }
-            else
-            {
-                // Do not commit the known-colliding route when the strict
-                // raster has no exit from the current tile. Preserve the exact
-                // blocker so HarvestSystem can adopt a live blocking mineral
-                // (or another order can report a genuine path failure) instead
-                // of immediately issuing the identical straight route again.
-                Result = std::move(StrictResult);
-                Path->BlockedByEntityID = ExactPreflightBlockerID;
-                Path->HasRecentMoveFailure = true;
-                Path->RecentFailedMoveTarget = Target;
-                Path->RecentMoveFailureCooldown = 1.0f;
-                Path->CurrentSpeed = 0.0f;
-                Path->TargetSpeed = 0.0f;
-                Path->CurrentVelocity = {0.0f, 0.0f};
-                UsedExpandedFallback = StrictUsedExpandedFallback;
-            }
-        }
+        Path->HasRecentMoveFailure = true;
+        Path->RecentFailedMoveTarget = Target;
+        Path->RecentMoveFailureTicks = 24;
+        Path->RecentMoveFailureCooldown = 1.0f;
+        Path->CurrentSpeed = 0.0f;
+        Path->TargetSpeed = 0.0f;
+        Path->CurrentVelocity = {};
     }
-    if (Result.Found && !Result.Waypoints.empty())
+    if (HasUsablePath)
+    {
         Path->Path = std::move(Result.Waypoints);
+        Path->ConsecutiveMoveFailures = 0;
+        Path->RecentMoveFailureNavigationVersion = Result.NavigationVersion;
+    }
+    else
+    {
+        const bool SameFailedRequest =
+            !DestinationChanged &&
+            Path->RecentMoveFailureNavigationVersion == Result.NavigationVersion;
+        Path->ConsecutiveMoveFailures = SameFailedRequest
+            ? std::min(Path->ConsecutiveMoveFailures + 1, 8)
+            : 1;
+        Path->RecentMoveFailureNavigationVersion = Result.NavigationVersion;
+        const bool HarvestOwnsRetry =
+            EM.GetComponent<HarvestComponent>(EntityID) != nullptr;
+        const int BackoffTicks = HarvestOwnsRetry
+            ? 24
+            : std::min(
+                240, 24 << std::min(Path->ConsecutiveMoveFailures - 1, 3));
+        Path->RecentMoveFailureTicks = BackoffTicks;
+        Path->RecentMoveFailureCooldown = (float)BackoffTicks / 24.0f;
+    }
 
     if (PathingDebugEnabled())
     {
         const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        const auto* Command = EM.GetComponent<CommandComponent>(EntityID);
+        const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+        const auto StatusName =
+            Result.Status == Game::Pathfinding::PathStatus::Exact ? "Exact" :
+            Result.Status == Game::Pathfinding::PathStatus::Partial ? "Partial" :
+            "Unreachable";
+        const auto EndReasonName =
+            Result.EndReason == Game::Pathfinding::PathEndReason::None ? "None" :
+            Result.EndReason == Game::Pathfinding::PathEndReason::GoalBlocked ?
+                "GoalBlocked" :
+            Result.EndReason == Game::Pathfinding::PathEndReason::NodeBudget ?
+                "NodeBudget" : "Disconnected";
         Core::Utils::Logger::Info("Pathing",
             "request entity=" + std::to_string(EntityID) +
             " unit=" + std::to_string(Unit ? Unit->ChkUnitID : -1) +
@@ -766,15 +782,22 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
                 std::to_string((int)Trans->Position.Y) +
             " target=" + std::to_string((int)Target.X) + "," +
                 std::to_string((int)Target.Y) +
-            " stage=" + std::to_string((int)StageTarget.X) + "," +
-                std::to_string((int)StageTarget.Y) +
-            " clearance=" + std::to_string(TerrainClearanceForPath(*Path)) +
-            " preflight_blocker=" + std::to_string(ExactPreflightBlockerID) +
-            " expanded=" + std::to_string(UsedExpandedFallback ? 1 : 0) +
-            " found=" + std::to_string(Result.Found ? 1 : 0) +
-            " nodes=" + std::to_string(Path->Path.size()));
+            " resolved=" +
+                std::to_string((int)Result.ResolvedDestination.X) + "," +
+                std::to_string((int)Result.ResolvedDestination.Y) +
+            " status=" + StatusName +
+            " reason=" + EndReasonName +
+            " nav_version=" + std::to_string(Result.NavigationVersion) +
+            " expanded=" + std::to_string(Result.ExpandedCells) +
+            " waypoints=" + std::to_string(Path->Path.size()) +
+            " command=" +
+                std::to_string(Command ? (int)Command->CurrentCommand : -1) +
+            " harvest_state=" +
+                std::to_string(Harvest ? (int)Harvest->State : -1) +
+            " ignore_entity=" + std::to_string(PathingIgnoreEntityID) +
+            " avoid_entity=" + std::to_string(AvoidDynamicEntityID));
     }
-    return !Path->Path.empty();
+    return HasUsablePath && !Path->Path.empty();
 }
 
 static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
@@ -784,14 +807,17 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     if (!IsMovementOrder(InOrder.Type))
         return;
 
+
     auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
     if (!Path)
         Path = &EM.AddComponent<PathfindingComponent>(EntityID);
     Path->Path.clear();
     Path->PathIndex = 0;
     Path->StallTimer = 0.0f;
+    Path->StallTicks = 0;
     Path->HasLastWaypointDistance = false;
     Path->DestinationStallTimer = 0.0f;
+    Path->DestinationStallTicks = 0;
     Path->HasLastDestinationDistance = false;
     Path->RequestedDestination = InOrder.TargetPosition;
     Path->RequestedTargetEntityID = InOrder.TargetEntityID;
@@ -804,6 +830,7 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     {
         Path->HasRecentMoveFailure = false;
         Path->RecentMoveFailureCooldown = 0.0f;
+        Path->RecentMoveFailureTicks = 0;
     }
     Path->NodeTolerance = 8.0f;
     RefreshCollisionRadius(EM, EntityID, *Path);
@@ -865,7 +892,7 @@ static float DistanceToRepairFootprint(Core::ECS::EntityManager& EM,
     return WorkerPosition.DistanceTo(Nearest);
 }
 
-static bool IsTerranRepairableMechanicalUnit(const UnitComponent& Unit)
+bool CommandSystem::IsTerranRepairableUnit(const UnitComponent& Unit)
 {
     if (Unit.UnitRace != Race::Terran)
         return false;
@@ -894,9 +921,77 @@ static bool IsTerranRepairableMechanicalUnit(const UnitComponent& Unit)
            Def.Name == "NoradII";
 }
 
+bool CommandSystem::IsRepairableTarget(Core::ECS::EntityManager& EM, int TargetEntityID)
+{
+    auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetEntityID);
+    if (!TargetUnit || TargetUnit->UnitRace != Race::Terran || TargetUnit->HitPoints <= 0)
+    {
+        return false;
+    }
+    if (TargetUnit->HitPoints >= TargetUnit->MaxHitPoints &&
+        TargetUnit->HitPointSubDamage == 0)
+    {
+        return false;
+    }
+    auto* TargetBuilding = EM.GetComponent<BuildingComponent>(TargetEntityID);
+    if (TargetBuilding)
+    {
+        return !TargetBuilding->UnderConstruction;
+    }
+    return IsTerranRepairableUnit(*TargetUnit);
+}
+
 void CommandSystem::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f || !gCmdMap) return;
+
+    const char* ProfileSystems = std::getenv("STARCRAFT_PROFILE_SYSTEMS");
+    if (ProfileSystems && ProfileSystems[0] != '\0' &&
+        ProfileSystems[0] != '0')
+    {
+        static auto LastNavigationReport =
+            std::chrono::steady_clock::now();
+        static Game::Pathfinding::NavigationPerformanceStats LastStats;
+        const auto Now = std::chrono::steady_clock::now();
+        if (Now - LastNavigationReport >= std::chrono::seconds(1))
+        {
+            const auto& Current = sNavigationService.GetStats();
+            const auto Delta = [](uint64_t CurrentValue,
+                                  uint64_t PreviousValue)
+            {
+                return CurrentValue >= PreviousValue
+                    ? CurrentValue - PreviousValue
+                    : CurrentValue;
+            };
+            const uint64_t Queries =
+                Delta(Current.QueryCount, LastStats.QueryCount);
+            const uint64_t QueryMicroseconds =
+                Delta(Current.QueryMicroseconds,
+                      LastStats.QueryMicroseconds);
+            const uint64_t Expanded =
+                Delta(Current.ExpandedCells, LastStats.ExpandedCells);
+            Core::Utils::Logger::Info(
+                "Profile",
+                "navigation queries=" + std::to_string(Queries) +
+                " query_us=" + std::to_string(QueryMicroseconds) +
+                " average_us=" +
+                    std::to_string(Queries > 0
+                        ? QueryMicroseconds / Queries : 0) +
+                " expanded=" + std::to_string(Expanded) +
+                " cache_hits=" +
+                    std::to_string(Delta(
+                        Current.CorridorCacheHits,
+                        LastStats.CorridorCacheHits)) +
+                " partial=" +
+                    std::to_string(Delta(
+                        Current.PartialPaths, LastStats.PartialPaths)) +
+                " failed=" +
+                    std::to_string(Delta(
+                        Current.FailedPaths, LastStats.FailedPaths)));
+            LastStats = Current;
+            LastNavigationReport = Now;
+        }
+    }
 
     auto& EM = mSystemMgr->GetEntityManager();
     auto Units = EM.GetEntitiesWith<CommandComponent, TransformComponent>();
@@ -904,7 +999,14 @@ void CommandSystem::Update(float DeltaTime)
     for (int ID : Units)
     {
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
-        if (!Cmd || !Cmd->HasPendingOrders()) continue;
+        if (!Cmd) continue;
+
+        if (Cmd->RallyDisplayTimer > 0.0f)
+        {
+            Cmd->RallyDisplayTimer = std::max(0.0f, Cmd->RallyDisplayTimer - DeltaTime);
+        }
+
+        if (!Cmd->HasPendingOrders()) continue;
 
         const Order* Order = Cmd->GetCurrentOrder();
         if (!Order) continue;
@@ -978,6 +1080,137 @@ void CommandSystem::Update(float DeltaTime)
                 if (Path) { Path->Path.clear(); Path->PathIndex = 0; }
                 Cmd->CurrentCommand = CommandType::Stop;
                 Cmd->TargetEntityID = -1;
+
+                if (auto* MyUnit = EM.GetComponent<UnitComponent>(ID);
+                    MyUnit && MyUnit->ChkUnitID == 34 && MyUnit->EnergyPoints > 0)
+                {
+                    auto* MyPlayer = EM.GetComponent<PlayerComponent>(ID);
+                    auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
+                    if (MyPlayer && MyTrans)
+                    {
+                        int BestTarget = -1;
+                        float BestDist = 160.0f;
+                        for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+                        {
+                            if (Eid == ID) continue;
+                            auto* EUnit = EM.GetComponent<UnitComponent>(Eid);
+                            auto* EPlayer = EM.GetComponent<PlayerComponent>(Eid);
+                            auto* ETrans = EM.GetComponent<TransformComponent>(Eid);
+                            if (!EUnit || !EPlayer || !ETrans) continue;
+                            if (EPlayer->PlayerID != MyPlayer->PlayerID) continue;
+                            if (EUnit->HitPoints <= 0 || EUnit->HitPoints >= EUnit->MaxHitPoints) continue;
+                            if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
+
+                            float D = MyTrans->Position.DistanceTo(ETrans->Position);
+                            if (D < BestDist)
+                            {
+                                BestDist = D;
+                                BestTarget = Eid;
+                            }
+                        }
+                        if (BestTarget >= 0)
+                        {
+                            Components::Order HealOrder;
+                            HealOrder.Type = OrderType::Heal;
+                            HealOrder.TargetEntityID = BestTarget;
+                            HealOrder.TargetPosition = EM.GetComponent<TransformComponent>(BestTarget)->Position;
+                            IssueOrder(EM, ID, HealOrder, false);
+                        }
+                    }
+                }
+                break;
+            }
+
+            case OrderType::Follow:
+            {
+                // In addition to following its escort target, a Medic should immediately react and heal nearby wounded organics
+                if (auto* MyUnit = EM.GetComponent<UnitComponent>(ID);
+                    MyUnit && MyUnit->ChkUnitID == 34 && MyUnit->EnergyPoints > 0)
+                {
+                    auto* MyPlayer = EM.GetComponent<PlayerComponent>(ID);
+                    auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
+                    if (MyPlayer && MyTrans)
+                    {
+                        int BestTarget = -1;
+                        float BestDist = 160.0f;
+                        for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+                        {
+                            if (Eid == ID) continue;
+                            auto* EUnit = EM.GetComponent<UnitComponent>(Eid);
+                            auto* EPlayer = EM.GetComponent<PlayerComponent>(Eid);
+                            auto* ETrans = EM.GetComponent<TransformComponent>(Eid);
+                            if (!EUnit || !EPlayer || !ETrans) continue;
+                            if (EPlayer->PlayerID != MyPlayer->PlayerID) continue;
+                            if (EUnit->HitPoints <= 0 || EUnit->HitPoints >= EUnit->MaxHitPoints) continue;
+                            if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
+
+                            float D = MyTrans->Position.DistanceTo(ETrans->Position);
+                            if (D < BestDist)
+                            {
+                                BestDist = D;
+                                BestTarget = Eid;
+                            }
+                        }
+                        if (BestTarget >= 0)
+                        {
+                            Components::Order HealOrder;
+                            HealOrder.Type = OrderType::Heal;
+                            HealOrder.TargetEntityID = BestTarget;
+                            HealOrder.TargetPosition = EM.GetComponent<TransformComponent>(BestTarget)->Position;
+                            IssueOrder(EM, ID, HealOrder, false);
+                            break;
+                        }
+                    }
+                }
+
+                // Escort target tracking for all following units
+                if (Order->TargetEntityID >= 0)
+                {
+                    auto* TargetUnit = EM.GetComponent<UnitComponent>(Order->TargetEntityID);
+                    auto* TargetTrans = EM.GetComponent<TransformComponent>(Order->TargetEntityID);
+                    auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
+                    if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans || !MyTrans)
+                    {
+                        AdvanceQueue(EM, ID);
+                        break;
+                    }
+
+                    const float Distance = MyTrans->Position.DistanceTo(TargetTrans->Position);
+                    constexpr float FollowMinDist = 48.0f;
+                    constexpr float FollowMaxDist = 72.0f;
+
+                    if (Distance <= FollowMinDist)
+                    {
+                        if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                        {
+                            Path->Path.clear();
+                            Path->PathIndex = 0;
+                            Path->CurrentSpeed = 0.0f;
+                            Path->TargetSpeed = 0.0f;
+                            Path->CurrentVelocity = {0.0f, 0.0f};
+                        }
+                    }
+                    else if (Distance > FollowMaxDist)
+                    {
+                        if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                        {
+                            const bool TargetMoved =
+                                Path->RequestedDestination.DistanceTo(TargetTrans->Position) > 24.0f;
+                            const bool PathEnded =
+                                Path->Path.empty() || Path->PathIndex >= (int)Path->Path.size();
+
+                            Cmd->TargetPosition = TargetTrans->Position;
+                            Path->RequestedTargetEntityID = Order->TargetEntityID;
+
+                            if (TargetMoved || (PathEnded && Path->LastRepathTime >= 0.25f))
+                            {
+                                RequestMovementPath(EM, ID, gCmdMap, TargetTrans->Position);
+                                Path->RequestedTargetEntityID = Order->TargetEntityID;
+                                Path->LastRepathTime = 0.0f;
+                            }
+                        }
+                    }
+                }
                 break;
             }
 
@@ -998,7 +1231,7 @@ void CommandSystem::Update(float DeltaTime)
                     const bool RepairableTarget = TargetUnit &&
                         ((TargetBuilding && !TargetBuilding->UnderConstruction) ||
                          (!TargetBuilding &&
-                          IsTerranRepairableMechanicalUnit(*TargetUnit)));
+                          IsTerranRepairableUnit(*TargetUnit)));
                     if (RepairableTarget && TargetPlayer && MyPlayer &&
                         MyUnit && MyUnit->ChkUnitID == 7 && MyTrans && TargetTrans &&
                         TargetPlayer->PlayerID == MyPlayer->PlayerID &&
@@ -1173,6 +1406,100 @@ void CommandSystem::Update(float DeltaTime)
                 break;
             }
 
+            case OrderType::Heal:
+            {
+                bool ContinueHeal = false;
+                if (Order->TargetEntityID >= 0)
+                {
+                    auto* TargetUnit = EM.GetComponent<UnitComponent>(Order->TargetEntityID);
+                    auto* TargetPlayer = EM.GetComponent<PlayerComponent>(Order->TargetEntityID);
+                    auto* MyPlayer = EM.GetComponent<PlayerComponent>(ID);
+                    auto* MyUnit = EM.GetComponent<UnitComponent>(ID);
+                    auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
+                    auto* TargetTrans = EM.GetComponent<TransformComponent>(Order->TargetEntityID);
+
+                    if (TargetUnit && TargetPlayer && MyPlayer && MyUnit && MyTrans && TargetTrans &&
+                        MyUnit->ChkUnitID == 34 && MyUnit->EnergyPoints > 0 &&
+                        TargetPlayer->PlayerID == MyPlayer->PlayerID &&
+                        TargetUnit->HitPoints > 0 && TargetUnit->HitPoints < TargetUnit->MaxHitPoints &&
+                        Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID))
+                    {
+                        ContinueHeal = true;
+                        if (MyUnit->HealTargetEntityID != Order->TargetEntityID)
+                        {
+                            MyUnit->HealTargetEntityID = Order->TargetEntityID;
+                            MyUnit->HealHitPointAccumulator = 0.0f;
+                        }
+
+                        const float Distance = MyTrans->Position.DistanceTo(TargetTrans->Position);
+                        constexpr float HealRange = 64.0f;
+                        if (Distance <= HealRange)
+                        {
+                            if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                            {
+                                Path->Path.clear();
+                                Path->PathIndex = 0;
+                                Path->CurrentSpeed = 0.0f;
+                                Path->TargetSpeed = 0.0f;
+                                Path->CurrentVelocity = {0.0f, 0.0f};
+                            }
+
+                            constexpr float HealRate = 15.0f;
+                            MyUnit->HealHitPointAccumulator += HealRate * DeltaTime;
+                            int HealPoints = static_cast<int>(MyUnit->HealHitPointAccumulator);
+                            if (HealPoints > 0)
+                            {
+                                MyUnit->HealHitPointAccumulator -= static_cast<float>(HealPoints);
+                                int MissingHP = TargetUnit->MaxHitPoints - TargetUnit->HitPoints;
+                                int ActualHeal = std::min(MissingHP, HealPoints);
+                                int EnergyNeeded = (ActualHeal + 1) / 2;
+                                if (EnergyNeeded > MyUnit->EnergyPoints)
+                                {
+                                    EnergyNeeded = MyUnit->EnergyPoints;
+                                    ActualHeal = EnergyNeeded * 2;
+                                }
+
+                                TargetUnit->HitPoints = std::min(TargetUnit->MaxHitPoints, TargetUnit->HitPoints + ActualHeal);
+                                MyUnit->EnergyPoints = std::max(0, MyUnit->EnergyPoints - EnergyNeeded);
+
+                                if (TargetUnit->HitPoints >= TargetUnit->MaxHitPoints || MyUnit->EnergyPoints <= 0)
+                                {
+                                    ContinueHeal = false;
+                                }
+                            }
+                        }
+                        else if (auto* Path = EM.GetComponent<PathfindingComponent>(ID))
+                        {
+                            const bool TargetMoved =
+                                Path->RequestedDestination.DistanceTo(TargetTrans->Position) > 16.0f;
+                            const bool PathEnded =
+                                Path->Path.empty() || Path->PathIndex >= (int)Path->Path.size();
+
+                            Cmd->TargetPosition = TargetTrans->Position;
+                            Path->RequestedTargetEntityID = Order->TargetEntityID;
+
+                            if (TargetMoved || (PathEnded && Path->LastRepathTime >= 0.25f))
+                            {
+                                RequestMovementPath(EM, ID, gCmdMap, TargetTrans->Position);
+                                Path->RequestedTargetEntityID = Order->TargetEntityID;
+                                Path->LastRepathTime = 0.0f;
+                            }
+                        }
+                    }
+                }
+
+                if (!ContinueHeal)
+                {
+                    if (auto* Medic = EM.GetComponent<UnitComponent>(ID))
+                    {
+                        Medic->HealTargetEntityID = -1;
+                        Medic->HealHitPointAccumulator = 0.0f;
+                    }
+                    AdvanceQueue(EM, ID);
+                }
+                break;
+            }
+
             default: break;
         }
     }
@@ -1238,6 +1565,12 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                                 const Order& InOrder,
                                 bool Queued)
 {
+    std::vector<Core::ECS::EntityID> OrderedEntities = Entities;
+    std::sort(OrderedEntities.begin(), OrderedEntities.end());
+    OrderedEntities.erase(
+        std::unique(OrderedEntities.begin(), OrderedEntities.end()),
+        OrderedEntities.end());
+
     struct GroupMove
     {
         struct MemberFootprint
@@ -1266,13 +1599,13 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     } Group;
 
     const bool AdjustGroupPositions =
-        Entities.size() >= 2 &&
+        OrderedEntities.size() >= 2 &&
         InOrder.TargetEntityID < 0 &&
         IsGroupPositionOrder(InOrder.Type);
 
     if (AdjustGroupPositions)
     {
-        for (Core::ECS::EntityID ID : Entities)
+        for (Core::ECS::EntityID ID : OrderedEntities)
         {
             if (!CanReceiveMovementOrder(EM, ID))
                 continue;
@@ -1370,7 +1703,7 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
     }
 
     int FormationSlot = 0;
-    for (Core::ECS::EntityID ID : Entities)
+    for (Core::ECS::EntityID ID : OrderedEntities)
     {
         Order EntityOrder = InOrder;
         if (AdjustGroupPositions && Group.Count >= 2 && CanReceiveMovementOrder(EM, ID))
@@ -1583,6 +1916,7 @@ void CommandSystem::SetRallyPoint(Core::ECS::EntityManager& EM,
         Cmd = &EM.AddComponent<CommandComponent>(EntityID);
     Cmd->RallyPoint = Point;
     Cmd->HasRallyPoint = true;
+    Cmd->RallyDisplayTimer = 2.5f;
 }
 
 bool CommandSystem::CanSetSiegeMode(Core::ECS::EntityManager& EM,

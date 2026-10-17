@@ -82,6 +82,8 @@ bool GlueGuiHost::Initialize(const std::string& AssetRoot, int Width, int Height
     if (mMenuControl)
     {
         mMenuControl->SetActionCallback(mActionCallback);
+        if (mAudioCallback)
+            mMenuControl->SetAudioCallback(mAudioCallback);
         mMenuControl->Initialize();
         std::cout << "[GlueGui] GlueMenuController initialized" << std::endl;
     }
@@ -129,6 +131,13 @@ void GlueGuiHost::SetActionCallback(ActionCallback Cb)
     mActionCallback = std::move(Cb);
     if (mMenuControl)
         mMenuControl->SetActionCallback(mActionCallback);
+}
+
+void GlueGuiHost::SetAudioCallback(AudioCallback Cb)
+{
+    mAudioCallback = std::move(Cb);
+    if (mMenuControl)
+        mMenuControl->SetAudioCallback(mAudioCallback);
 }
 
 void GlueGuiHost::Shutdown()

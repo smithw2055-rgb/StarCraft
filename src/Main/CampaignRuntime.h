@@ -73,14 +73,16 @@ struct CampaignRuntime
               typename ResolveCollisionBoundsT,
               typename CenterViewT,
               typename MinimapPingT,
-              typename SetGamePausedT>
+              typename SetGamePausedT,
+              typename ResolveSubunitImageIdT = std::function<uint32_t(int)>>
     void ConfigureTriggerRuntime(SetAllianceT&& SetAlliance,
                                  ResolveImageIdT&& ResolveImageID,
                                  CanBurrowT&& CanBurrow,
                                  ResolveCollisionBoundsT&& ResolveCollisionBounds,
                                  CenterViewT&& CenterView,
                                  MinimapPingT&& MinimapPing,
-                                 SetGamePausedT&& SetGamePaused)
+                                 SetGamePausedT&& SetGamePaused,
+                                 ResolveSubunitImageIdT&& ResolveSubunitImageID = {})
     {
         auto* TriggerVM = Campaign.GetTriggerVM();
         if (!TriggerVM)
@@ -94,6 +96,7 @@ struct CampaignRuntime
         TriggerConfig.CenterView = std::forward<CenterViewT>(CenterView);
         TriggerConfig.MinimapPing = std::forward<MinimapPingT>(MinimapPing);
         TriggerConfig.SetGamePaused = std::forward<SetGamePausedT>(SetGamePaused);
+        TriggerConfig.ResolveSubunitImageID = std::forward<ResolveSubunitImageIdT>(ResolveSubunitImageID);
         TriggerVM->SetRuntimeConfig(std::move(TriggerConfig));
     }
 

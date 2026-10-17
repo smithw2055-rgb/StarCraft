@@ -466,10 +466,17 @@ inline AnimState AnimationSystem::GetAnimStateFromComponents(
     if (Bldg && Bldg->IsLifted) return AnimState::Flying;
     if (Path)
     {
-        if (!Path->Path.empty() && Path->PathIndex < (int)Path->Path.size())
-            return AnimState::Walking;
-        if (Path->CurrentSpeed > 0.1f || Path->CurrentVelocity.Length() > 0.1f)
-            return AnimState::Walking;
+        const bool IsExplicitlyStopped = Cmd &&
+            (Cmd->CurrentCommand == Components::CommandType::Stop ||
+             Cmd->CurrentCommand == Components::CommandType::HoldPosition);
+        if (!IsExplicitlyStopped)
+        {
+            const bool IsActuallyMoving = Path->CurrentSpeed > 0.05f || Path->CurrentVelocity.Length() > 0.05f;
+            const bool HasUnfinishedPath = !Path->Path.empty() && Path->PathIndex < (int)Path->Path.size();
+            const bool IsStalledOrFailed = Path->HasRecentMoveFailure || Path->DestinationStallTicks > 0;
+            if (IsActuallyMoving || (HasUnfinishedPath && !IsStalledOrFailed))
+                return AnimState::Walking;
+        }
     }
     // CombatSystem clears TargetEntityID as soon as the target becomes
     // invalid.  While a valid target or an authored pending shot remains, an

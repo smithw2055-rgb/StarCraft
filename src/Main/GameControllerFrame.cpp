@@ -20,7 +20,9 @@ void GameController::Update(float Dt, int Width, int Height)
         [this]() { UpdateGuiPresentationLayer(mRuntime.App.Gui, mRuntime.Client.Hud, mRuntime.Session.Game, mRuntime.Client.Runtime); },
         [this](uint8_t PlayerID, uint8_t ActionType, uint16_t P1, uint16_t P2) {
             RecordGameAction(PlayerID, ActionType, P1, P2);
-        });
+        },
+        [this]() { RestartGame(); },
+        [this]() { ReturnToMainMenu(); });
 }
 
 void GameController::Render(int Width, int Height)

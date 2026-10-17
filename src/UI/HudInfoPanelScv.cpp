@@ -45,34 +45,25 @@ void Hud::DrawScvInfoPanel(const HudLayout& Layout,
         HeaderW,
         std::max(56, PreviewRect.H - 4)
     };
-    const int FooterH = 28;
+    const int FooterH = 24;
     const int FooterGap = 8;
-    const int FooterY = InfoInnerRect.Y + InfoInnerRect.H - FooterH - 8;
-    const int StatTop = std::max(PreviewRect.Y + PreviewRect.H + 10, HeaderRect.Y + 60);
-    const int StatBottom = std::max(StatTop + 24, FooterY - 8);
-    const RectI StatBodyRect =
-    {
-        InfoInnerRect.X + 12,
-        StatTop,
-        std::max(120, InfoInnerRect.W - 24),
-        std::max(24, StatBottom - StatTop)
-    };
+    const int FooterY = InfoInnerRect.Y + InfoInnerRect.H - FooterH - 6;
     const RectI FooterCardA =
     {
-        StatBodyRect.X,
+        HeaderX,
         FooterY,
-        std::max(56, (StatBodyRect.W - FooterGap) / 2),
+        std::max(56, (HeaderW - FooterGap) / 2),
         FooterH
     };
     const RectI FooterCardB =
     {
         FooterCardA.X + FooterCardA.W + FooterGap,
         FooterY,
-        std::max(56, StatBodyRect.W - FooterCardA.W - FooterGap),
+        std::max(56, HeaderW - FooterCardA.W - FooterGap),
         FooterH
     };
-    const size_t NameChars = std::max<size_t>(10, (size_t)std::floor((float)HeaderRect.W / 8.5f));
-    const size_t DetailChars = std::max<size_t>(12, (size_t)std::floor((float)HeaderRect.W / 7.2f));
+    const size_t NameChars = std::max<size_t>(10, (size_t)std::floor((float)HeaderRect.W / 9.0f));
+    const size_t DetailChars = std::max<size_t>(12, (size_t)std::floor((float)HeaderRect.W / 7.5f));
     const auto* MineralHdIcon = GetLegacyIcon(0);
     const auto* GasHdIcon = GetLegacyIcon(2);
     const auto* ArmorIcon = GetLegacyIcon(IconArmor);
@@ -81,36 +72,30 @@ void Hud::DrawScvInfoPanel(const HudLayout& Layout,
     char Buf[64];
 
     D.DrawText(Ellipsize(mState.InfoPanel.Name, NameChars),
-               (float)HeaderRect.X, (float)HeaderRect.Y + 4.0f, 1.5f,
+               (float)HeaderRect.X, (float)HeaderRect.Y + 2.0f, 1.25f,
                Render::Color(230, 230, 235, 255));
     D.DrawText(Ellipsize(mState.InfoPanel.RoleLine.empty() ? "Private" : mState.InfoPanel.RoleLine, DetailChars),
-               (float)HeaderRect.X, (float)HeaderRect.Y + 22.0f, 1.1f,
+               (float)HeaderRect.X, (float)HeaderRect.Y + 18.0f, 0.95f,
                Render::Color(210, 210, 220, 255));
     std::snprintf(Buf, sizeof(Buf), "Kills: %d", mState.InfoPanel.KillCount);
-    D.DrawText(Buf, (float)HeaderRect.X, (float)HeaderRect.Y + 38.0f, 1.0f,
+    D.DrawText(Buf, (float)HeaderRect.X, (float)HeaderRect.Y + 32.0f, 0.95f,
                Render::Color(220, 220, 225, 255));
     if (!mState.InfoPanel.StatusLine.empty())
     {
         D.DrawText(Ellipsize(mState.InfoPanel.StatusLine, DetailChars),
-                   (float)HeaderRect.X + 150.0f, (float)HeaderRect.Y + 38.0f, 1.0f,
+                   (float)HeaderRect.X + 80.0f, (float)HeaderRect.Y + 32.0f, 0.95f,
                    Render::Color(235, 220, 150, 255));
-    }
-    if (!mState.InfoPanel.DetailLine.empty())
-    {
-        D.DrawText(Ellipsize(mState.InfoPanel.DetailLine, DetailChars),
-                   (float)HeaderRect.X, (float)HeaderRect.Y + 54.0f, 1.0f,
-                   Render::Color(180, 210, 180, 255));
     }
 
     if (mState.InfoPanel.CarryingAmount > 0)
     {
         const bool CarryingGas = mState.InfoPanel.CargoLine.find("Gas") != std::string::npos;
         const auto* CargoHdIcon = CarryingGas ? GasHdIcon : MineralHdIcon;
-        const RectI CargoIconRect = { HeaderRect.X + HeaderRect.W - 26, HeaderRect.Y + 4, 18, 18 };
+        const RectI CargoIconRect = { HeaderRect.X + HeaderRect.W - 24, HeaderRect.Y + 2, 16, 16 };
         if (CargoHdIcon && CargoHdIcon->Valid())
             DrawContainedImage(*CargoHdIcon, CargoIconRect, Render::Colors::White());
         std::snprintf(Buf, sizeof(Buf), "%d", mState.InfoPanel.CarryingAmount);
-        D.DrawText(Buf, (float)CargoIconRect.X - 26.0f, (float)CargoIconRect.Y + 3.0f, 1.0f,
+        D.DrawText(Buf, (float)CargoIconRect.X - 24.0f, (float)CargoIconRect.Y + 2.0f, 0.95f,
                    CarryingGas ? Render::Color(84, 208, 168, 255) : Render::Color(96, 180, 255, 255));
     }
 
@@ -119,18 +104,29 @@ void Hud::DrawScvInfoPanel(const HudLayout& Layout,
     StatX = DrawInfoMiniStat(StatX, HeaderRect, nullptr, HarvestMask, std::to_string(mState.InfoPanel.CarryingAmount), Render::Color(228, 214, 96, 255));
     DrawInfoMiniStat(StatX, HeaderRect, nullptr, MoveMask, std::to_string(mState.InfoPanel.SpeedValue), Render::Color(214, 224, 238, 255));
 
-    int BarY = StatBodyRect.Y;
+    int BarY = HeaderRect.Y + 48;
+    const RectI ScvStatBodyRect =
+    {
+        HeaderX,
+        BarY,
+        HeaderW,
+        std::max(20, InfoInnerRect.Y + InfoInnerRect.H - BarY)
+    };
+    const int MaxBottomY = InfoInnerRect.Y + InfoInnerRect.H;
     DrawInfoValueBar(BarY, "HP", mState.InfoPanel.CurrentValue, mState.InfoPanel.MaxValue,
-                     StatBodyRect, FooterY, HpEmptyStrip, HpStrip, Render::Color(80, 200, 95, 255));
+                     ScvStatBodyRect, MaxBottomY, HpEmptyStrip, HpStrip, Render::Color(80, 200, 95, 255));
 
-    const bool CarryingGas = mState.InfoPanel.CargoLine.find("Gas") != std::string::npos;
-    const AtlasRect* CargoIcon = mState.InfoPanel.CargoLine.empty() ? nullptr : (CarryingGas ? &AggIconGas : &AggIconMinerals);
-    DrawInfoFooterCard(FooterCardA,
-                       mState.InfoPanel.CargoLine.empty() ? mState.InfoPanel.StatusLine : mState.InfoPanel.CargoLine,
-                       Render::Color(170, 220, 210, 255),
-                       AggIcons,
-                       CargoIcon,
-                       mState.InfoPanel.CargoLine.empty() ? MoveMask : nullptr);
+    if (!mState.InfoPanel.CargoLine.empty())
+    {
+        const bool CarryingGas = mState.InfoPanel.CargoLine.find("Gas") != std::string::npos;
+        const AtlasRect* CargoIcon = CarryingGas ? &AggIconGas : &AggIconMinerals;
+        DrawInfoFooterCard(FooterCardA,
+                           mState.InfoPanel.CargoLine,
+                           Render::Color(170, 220, 210, 255),
+                           AggIcons,
+                           CargoIcon,
+                           nullptr);
+    }
     if (!mState.InfoPanel.DetailLine.empty() && mState.InfoPanel.DetailLine != mState.InfoPanel.StatusLine)
     {
         DrawInfoFooterCard(FooterCardB, mState.InfoPanel.DetailLine, Render::Color(200, 200, 185, 255),

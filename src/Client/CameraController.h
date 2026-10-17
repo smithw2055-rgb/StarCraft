@@ -20,9 +20,9 @@ private:
     int mMapWidth = 0;
     int mMapHeight = 0;
 
-    float mEdgePanMarginPx = 8.0f;
-    float mKeyboardPanSpeed = 800.0f;
-    float mMousePanSpeed = 900.0f;
+    float mEdgePanMarginPx = 16.0f;
+    float mKeyboardPanSpeed = 750.0f;
+    float mMousePanSpeed = 750.0f;
     float mTopBlockedPx = 0.0f;
     float mBottomBlockedPx = 0.0f;
 };

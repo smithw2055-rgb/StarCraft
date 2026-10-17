@@ -63,7 +63,7 @@ public:
 private:
     void RevealAround(int CenterX, int CenterY, int SightRange, uint8_t* Grid, uint8_t* DetectorGrid);
     void ResetVisibility();
-    void UpdateLastSeen(Core::ECS::EntityManager& EM);
+    void UpdateLastSeen(Core::ECS::EntityManager& EM, const std::vector<int>& Units);
 
     Core::ECS::SystemManager& mSystemMgr;
     const Game::Map::GameMap* mMap = nullptr;

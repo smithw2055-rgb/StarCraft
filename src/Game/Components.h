@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -9,6 +10,7 @@
 #include "Core/Math/FixedPoint.h"
 #include "Game/DataEnums.h"
 #include "Game/IScriptVM.h"
+#include "Game/Pathfinding/NavigationGrid.h"
 
 namespace Game::Components
 {
@@ -93,6 +95,7 @@ enum class StatusEffect : uint8_t
     Storm           = 14,  // psionic storm DoT (special, not on unit but area)
     Hallucination   = 15,  // blue-white visual duplicate
     Stim            = 16,  // terran infantry combat stimulant
+    DefensiveMatrix = 17,  // terran science vessel 250 HP barrier
 };
 
 enum class Elevation : uint8_t
@@ -116,7 +119,8 @@ enum class CommandType : uint8_t
     Train,
     Upgrade,
     UseAbility,
-    Follow
+    Follow,
+    Heal
 };
 
 enum class OrderType : uint8_t
@@ -151,7 +155,8 @@ enum class OrderType : uint8_t
     ReturnCargo,
     Gather,
     Follow,
-    BuildAddon
+    BuildAddon,
+    Heal
 };
 
 struct Order
@@ -200,8 +205,24 @@ enum class TerrainType : uint8_t
 struct TransformComponent
 {
     Core::Math::Vec2 Position;
+    Core::Math::Vec2 PrevPosition;
+    bool HasPrevPosition = false;
     Core::Math::Vec2 Scale = {1.0f, 1.0f};
     float Rotation = 0.0f;
+
+    Core::Math::Vec2 GetInterpolatedPosition(float Alpha) const
+    {
+        if (!HasPrevPosition)
+            return Position;
+        const float Dx = Position.X - PrevPosition.X;
+        const float Dy = Position.Y - PrevPosition.Y;
+        if (Dx * Dx + Dy * Dy > 64.0f * 64.0f)
+            return Position;
+        return {
+            PrevPosition.X + Dx * Alpha,
+            PrevPosition.Y + Dy * Alpha
+        };
+    }
 };
 
 struct RenderComponent
@@ -350,6 +371,10 @@ struct UnitComponent
     int RepairTargetEntityID = -1;
     float PlagueDamageAccumulator = 0.0f;
     float IrradiateDamageAccumulator = 0.0f;
+    float CloakEnergyAccumulator = 0.0f;
+    float HealHitPointAccumulator = 0.0f;
+    int HealTargetEntityID = -1;
+    int DefensiveMatrixPoints = 0;
     int AcidSporeCount = 0;
     std::array<float, 9> AcidSporeTimers{};
     int EnergyPoints = 0;
@@ -365,6 +390,7 @@ struct UnitComponent
     bool HangarBuildInProgress = false;
     bool IsInvincible = false;
     bool IsDetector = false;
+    int LoadedInTransportID = -1;
 };
 
 // Zergling and Scourge hatch in pairs while reserving one shared supply unit.
@@ -408,6 +434,7 @@ struct CommandComponent
     int CurrentOrderIndex = -1;
     Core::Math::Vec2 RallyPoint;
     bool HasRallyPoint = false;
+    float RallyDisplayTimer = 0.0f;
 
     void QueueOrder(const Order& InOrder)
     {
@@ -435,6 +462,9 @@ struct CommandComponent
         else
         {
             CurrentOrderIndex = (int)Orders.size();
+            CurrentCommand = CommandType::Stop;
+            TargetPosition = {};
+            TargetEntityID = -1;
         }
     }
 
@@ -453,8 +483,11 @@ struct CommandComponent
     void CancelAll()
     {
         Orders.clear();
+        CommandQueue.clear();
         CurrentOrderIndex = -1;
         CurrentCommand = CommandType::Stop;
+        TargetPosition = {};
+        TargetEntityID = -1;
     }
 
     bool HasPendingOrders() const
@@ -491,6 +524,7 @@ private:
             case OrderType::Research: case OrderType::Upgrade:
                                          CurrentCommand = CommandType::Upgrade;     break;
             case OrderType::UseTech:     CurrentCommand = CommandType::UseAbility;  break;
+            case OrderType::Heal:        CurrentCommand = CommandType::Heal;        break;
             case OrderType::Follow:      CurrentCommand = CommandType::Follow;      break;
             default:                     CurrentCommand = CommandType::Stop;        break;
         }
@@ -612,6 +646,7 @@ struct BuildingComponent
     int ResearchingID = -1;          // ResearchId being researched (-1 = none)
     bool IsResearching = false;      // true if currently researching
     int ResearchPlayer = -1;         // player conducting the research
+    float BurnDamageAccumulator = 0.0f; // Terran building burn-down accumulator
 
     bool HasBuilderUnit(int EntityID) const
     {
@@ -644,6 +679,12 @@ struct HarvestComponent
     int DesiredResourceID = -1;
     int ReturnBuildingID = -1;
     bool QueuedAtResource = false;
+    int PathRetryTicks = 0;
+    int ConsecutivePathFailures = 0;
+    Core::Math::Vec2 LastReturnProgressPosition;
+    bool HasLastReturnProgressPosition = false;
+    int ReturnNoProgressTicks = 0;
+    int ReturnRecoveryAttempts = 0;
     // OpenBW hides a worker while HarvestGas is active, then restores it at a
     // refinery edge facing the nearest depot. Keep the exit point so an
     // interrupted order can also release the worker safely.
@@ -659,12 +700,23 @@ struct PathfindingComponent
     Core::Math::Vec2 RequestedDestination;
     int RequestedTargetEntityID = -1;
     int RequestedIgnoreEntityID = -1;
+    int RequestedAdditionalIgnoreEntityID = -1;
     int RepathFailCount = 0;
     float LastRepathTime = 0.0f;
     int BlockedByEntityID = -1;
+    Game::Pathfinding::PathStatus LastPathStatus =
+        Game::Pathfinding::PathStatus::Unreachable;
+    Game::Pathfinding::PathEndReason LastPathEndReason =
+        Game::Pathfinding::PathEndReason::Disconnected;
+    Core::Math::Vec2 ResolvedPathDestination;
+    uint32_t NavigationVersion = 0;
+    int LastPathExpandedCells = 0;
 
     // Movement state (OpenBW alignment)
     Core::Math::Vec2 CurrentVelocity;
+    Core::Math::FixedVec2 FixedPosition;
+    Core::Math::FixedVec2 FixedVelocity;
+    bool HasFixedPosition = false;
     float CurrentSpeed = 0.0f;      // actual current speed (pixels/sec)
     float TargetSpeed = 0.0f;       // desired top speed (from unit def)
     float Acceleration = 200.0f;    // pixels/sec^2
@@ -695,6 +747,11 @@ struct PathfindingComponent
     float DestinationStallTimer = 0.0f;
     float LastDestinationDistance = 0.0f;
     bool HasLastDestinationDistance = false;
+    int StallTicks = 0;
+    int DestinationStallTicks = 0;
+    int RecentMoveFailureTicks = 0;
+    int ConsecutiveMoveFailures = 0;
+    uint32_t RecentMoveFailureNavigationVersion = 0;
 };
 
 // Gas buildings reuse the neutral geyser entity. Preserve its original ECS
@@ -746,8 +803,8 @@ struct ProductionComponent
 
 struct VisionComponent
 {
-    bool VisibleToPlayer[8] = {};
-    bool HasBeenSeen[8] = {};
+    bool VisibleToPlayer[12] = {};
+    bool HasBeenSeen[12] = {};
 };
 
 struct RevealAreaComponent
@@ -833,7 +890,7 @@ struct BulletComponent
 
 struct StatusEffectComponent
 {
-    static constexpr int kMaxEffects = 4;
+    static constexpr int kMaxEffects = 8;
     StatusEffect ActiveEffects[kMaxEffects] = {};
     float EffectTimers[kMaxEffects] = {};
     float TotalDurations[kMaxEffects] = {};
@@ -970,6 +1027,16 @@ struct MorphComponent
     float MorphDuration = 0.0f;   // total morph duration
     bool IsMorphing = false;
     int SourceUnitID = -1;        // original entity (for egg->unit tracking)
+};
+
+struct ArchonWarpComponent
+{
+    int PartnerEntityID = -1;
+    bool IsDarkArchon = false;
+    float WarpTimer = 0.0f;
+    float WarpDuration = 4.0f;
+    bool IsWarping = false;
+    bool InitialShieldCharge = true;
 };
 
 struct SpellCooldown

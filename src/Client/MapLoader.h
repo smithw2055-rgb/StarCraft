@@ -21,6 +21,7 @@ public:
         GameMap Map;
         std::vector<StartLocation> ChkStartLocations;
         std::vector<Game::Map::PlacedUnit> ChkUnits;
+        std::vector<Game::Map::PlacedDoodad> ChkDoodads;
         std::vector<uint8_t> RawChkData;
         std::string ChkPath;
         bool Loaded = false;

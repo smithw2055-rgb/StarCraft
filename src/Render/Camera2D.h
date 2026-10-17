@@ -192,8 +192,8 @@ private:
     float mTargetZoom = 1.0f;
     float mMinZoom = 0.25f;
     float mMaxZoom = 4.0f;
-    float mPanSpeed = 800.0f;
-    float mSmoothSpeed = 12.0f;
+    float mPanSpeed = 1200.0f;
+    float mSmoothSpeed = 24.0f;
 
     bool mHasBounds = false;
     float mMapMinX = 0.0f;

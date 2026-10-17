@@ -114,6 +114,7 @@ struct SCRTriggerData
     std::array<SCRForceInfo, 4> Forces{};
     std::vector<SCRLocation> Locations;
     std::vector<SCRTrigger> Triggers;
+    std::vector<SCRTrigger> BriefingTriggers;
     std::vector<std::string> Strings;
     std::vector<uint32_t> WavStringIDs;
     std::array<SCRUnitProperties, 64> UnitProperties{};
@@ -159,6 +160,7 @@ public:
         ParseUnitProperties(ChkData, OutData);
         ParseSwitchNames(ChkData, OutData);
         ParseTriggers(ChkData, OutData);
+        ParseBriefingTriggers(ChkData, OutData);
 
         OutData.NumPlayers = 8;
         return true;
@@ -192,6 +194,24 @@ public:
             case 21: return "Score";
             case 22: return "Always";
             case 23: return "Never";
+            default: return "Unknown";
+        }
+    }
+
+    static const char* GetBriefingActionName(uint8_t ActionType)
+    {
+        switch (ActionType)
+        {
+            case 0: return "No briefing action";
+            case 1: return "Wait";
+            case 2: return "Play WAV";
+            case 3: return "Text message";
+            case 4: return "Mission objectives";
+            case 5: return "Show portrait";
+            case 6: return "Hide portrait";
+            case 7: return "Display speaking portrait";
+            case 8: return "Transmission";
+            case 9: return "Skip tutorial";
             default: return "Unknown";
         }
     }
@@ -480,6 +500,60 @@ private:
 
             if (Trigger.EnabledForAnyPlayer())
                 OutData.Triggers.push_back(Trigger);
+        }
+    }
+
+    static void ParseBriefingTriggers(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)
+    {
+        Section Mbrf = FindSection(Data, "MBRF");
+        if (!Mbrf.Data || Mbrf.Size < SCRTrigger::kTriggerSize)
+            return;
+
+        const size_t TriggerCount = Mbrf.Size / SCRTrigger::kTriggerSize;
+        OutData.BriefingTriggers.reserve(TriggerCount);
+        for (size_t I = 0; I < TriggerCount; ++I)
+        {
+            SCRTrigger Trigger;
+            size_t Pos = Mbrf.Offset + I * SCRTrigger::kTriggerSize;
+
+            for (auto& Cond : Trigger.Conditions)
+            {
+                Cond.LocationID = ReadU32(Data, Pos + 0);
+                Cond.PlayerID = ReadU32(Data, Pos + 4);
+                Cond.Amount = ReadU32(Data, Pos + 8);
+                Cond.UnitID = ReadU16(Data, Pos + 12);
+                Cond.ComparisonType = ReadU8(Data, Pos + 14);
+                Cond.ConditionType = ReadU8(Data, Pos + 15);
+                Cond.Extra = ReadU8(Data, Pos + 16);
+                Cond.Flags = ReadU8(Data, Pos + 17);
+                Cond.Internal = ReadU16(Data, Pos + 18);
+                Pos += SCRTrigger::kConditionSize;
+            }
+
+            for (auto& Action : Trigger.Actions)
+            {
+                Action.LocationID = ReadU32(Data, Pos + 0);
+                Action.StringID = ReadU32(Data, Pos + 4);
+                Action.WavID = ReadU32(Data, Pos + 8);
+                Action.Time = ReadU32(Data, Pos + 12);
+                Action.PlayerID = ReadU32(Data, Pos + 16);
+                Action.Secondary = ReadU32(Data, Pos + 20);
+                Action.UnitID = ReadU16(Data, Pos + 24);
+                Action.ActionType = ReadU8(Data, Pos + 26);
+                Action.Amount = ReadU8(Data, Pos + 27);
+                Action.Flags = ReadU8(Data, Pos + 28);
+                Action.Internal[0] = ReadU8(Data, Pos + 29);
+                Action.Internal[1] = ReadU8(Data, Pos + 30);
+                Action.Internal[2] = ReadU8(Data, Pos + 31);
+                Pos += SCRTrigger::kActionSize;
+            }
+
+            Trigger.ExecutionFlags = ReadU32(Data, Pos);
+            Pos += 4;
+            for (auto& Owner : Trigger.Owners)
+                Owner = ReadU8(Data, Pos++);
+
+            OutData.BriefingTriggers.push_back(Trigger);
         }
     }
 

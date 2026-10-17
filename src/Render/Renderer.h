@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace Render
 {
 
@@ -13,5 +15,7 @@ void EndFrame();
 void ResetStateCache();
 bool IsActive();
 void SetClearColor(float R, float G, float B, float A = 1.0f);
+bool CaptureScreenshot(const std::string& OutputPath);
 
 } // namespace Render
+

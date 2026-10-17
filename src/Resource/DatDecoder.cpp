@@ -90,7 +90,7 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
     const size_t AirWeaponOffset = Offset; Offset += Count;
     const size_t MaxAirHitsOffset = Offset; Offset += Count;
     Offset += Count; // AI internal
-    Offset += Count * 4; // flags
+    const size_t FlagsOffset = Offset; Offset += Count * 4; // flags
     Offset += Count; // target acquisition range
     const size_t SightRangeOffset = Offset; Offset += Count;
     const size_t ArmorUpgradeOffset = Offset; Offset += Count;
@@ -142,6 +142,8 @@ std::vector<UnitEntry> DatDecoder::DecodeUnits(const std::vector<uint8_t>& Data)
         E.SpriteID = E.FlingyID;
         E.Subunit1ID = ReadU16Column(Data, Subunit1Offset, I);
         E.Subunit2ID = ReadU16Column(Data, Subunit2Offset, I);
+        E.Flags = ReadU32Column(Data, FlagsOffset, I);
+        E.IsBuilding = ((E.Flags & UnitFlags::Building) != 0) ? 1 : 0;
         E.ConstructionImageID = ReadU32Column(Data, ConstructionImageOffset, I);
         E.ShieldAmount = ReadU8Column(Data, HasShieldOffset, I) != 0
             ? ReadU16Column(Data, ShieldPointsOffset, I)
@@ -546,6 +548,63 @@ std::vector<TechEntry> DatDecoder::DecodeTech(const std::vector<uint8_t>& Data)
         Entries.push_back(E);
     }
 
+    return Entries;
+}
+
+std::vector<OrderEntry> DatDecoder::DecodeOrders(const std::vector<uint8_t>& Data)
+{
+    std::vector<OrderEntry> Entries;
+    constexpr size_t Count = 189;
+    if (Data.empty())
+        return Entries;
+
+    size_t Offset = 0;
+    const size_t LabelOffset = Offset; Offset += Count * 2;
+    const size_t TargetsEnemiesOffset = Offset; Offset += Count;
+    const size_t BackgroundOffset = Offset; Offset += Count;
+    Offset += Count; // unused3
+    const size_t ValidForTurretOffset = Offset; Offset += Count;
+    Offset += Count; // unused5
+    const size_t CanBeInterruptedOffset = Offset; Offset += Count;
+    Offset += Count; // unk7
+    const size_t CanBeQueuedOffset = Offset; Offset += Count;
+    Offset += Count; // unk9
+    const size_t CanBeObstructedOffset = Offset; Offset += Count;
+    Offset += Count; // unk11
+    Offset += Count; // unused12
+    const size_t WeaponOffset = Offset; Offset += Count;
+    const size_t TechTypeOffset = Offset; Offset += Count;
+    const size_t AnimationOffset = Offset; Offset += Count;
+    const size_t HighlightOffset = Offset; Offset += Count * 2;
+    const size_t DepIndexOffset = Offset; Offset += Count * 2;
+    const size_t TargetOrderOffset = Offset; Offset += Count;
+
+    if (Offset > Data.size())
+        return Entries;
+
+    Entries.reserve(Count);
+    for (size_t I = 0; I < Count; ++I)
+    {
+        OrderEntry E;
+        E.Id = (uint32_t)I;
+        E.Label = ReadU16Column(Data, LabelOffset, I);
+        E.TargetsEnemies = ReadU8Column(Data, TargetsEnemiesOffset, I);
+        E.Background = ReadU8Column(Data, BackgroundOffset, I);
+        E.ValidForTurret = ReadU8Column(Data, ValidForTurretOffset, I);
+        E.CanBeInterrupted = ReadU8Column(Data, CanBeInterruptedOffset, I);
+        E.CanBeQueued = ReadU8Column(Data, CanBeQueuedOffset, I);
+        E.CanBeObstructed = ReadU8Column(Data, CanBeObstructedOffset, I);
+        E.Weapon = ReadU8Column(Data, WeaponOffset, I);
+        E.TechType = ReadU8Column(Data, TechTypeOffset, I);
+        E.Animation = ReadU8Column(Data, AnimationOffset, I);
+        E.Highlight = ReadI16(Data.data(), HighlightOffset + I * 2);
+        E.DepIndex = ReadU16Column(Data, DepIndexOffset, I);
+        E.TargetOrder = ReadU8Column(Data, TargetOrderOffset, I);
+        Entries.push_back(E);
+    }
+
+    Core::Utils::Logger::Info("DatDecoder",
+        "Decoded " + std::to_string(Entries.size()) + " order entries");
     return Entries;
 }
 

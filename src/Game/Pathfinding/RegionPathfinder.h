@@ -140,41 +140,47 @@ public:
         if (!IsWalkableTile(EndX, EndY))
             return result;
 
-        std::vector<TileNode> nodes;
-        nodes.reserve(kMaxShortPath);
-        nodes.push_back({StartX, StartY, 0, Manhattan(StartX, StartY, EndX, EndY), -1});
+        std::vector<TileNode> allNodes;
+        allNodes.reserve(kMaxShortPath);
+        allNodes.push_back({StartX, StartY, 0, Manhattan(StartX, StartY, EndX, EndY), -1});
+
+        std::vector<int> openList;
+        openList.reserve(kMaxShortPath);
+        openList.push_back(0);
 
         std::vector<bool> closed(mMap.MapWidth * mMap.MapHeight, false);
         int closedIdx = StartY * mMap.MapWidth + StartX;
-        if (closedIdx < (int)closed.size()) closed[closedIdx] = true;
+        if (closedIdx >= 0 && closedIdx < (int)closed.size()) closed[closedIdx] = true;
 
-        while (!nodes.empty() && (int)nodes.size() < kMaxShortPath)
+        while (!openList.empty() && (int)allNodes.size() < kMaxShortPath)
         {
-            int best = 0;
-            for (int i = 1; i < (int)nodes.size(); ++i)
-                if (nodes[i].F() < nodes[best].F()) best = i;
+            int bestOpenIdx = 0;
+            for (int i = 1; i < (int)openList.size(); ++i)
+            {
+                if (allNodes[openList[i]].F() < allNodes[openList[bestOpenIdx]].F())
+                    bestOpenIdx = i;
+            }
 
-            TileNode current = nodes[best];
+            int curIdx = openList[bestOpenIdx];
+            openList.erase(openList.begin() + bestOpenIdx);
+
+            const TileNode& current = allNodes[curIdx];
 
             if (current.X == EndX && current.Y == EndY)
             {
                 result.Found = true;
                 std::vector<Core::Math::Vec2> rev;
-                const TileNode* node = &nodes[best];
-                while (node)
+                int trackIdx = curIdx;
+                while (trackIdx >= 0 && trackIdx < (int)allNodes.size())
                 {
-                    rev.push_back({(float)node->X * 32.0f + 16.0f, (float)node->Y * 32.0f + 16.0f});
-                    if (node->ParentIdx < 0 || node->ParentIdx >= (int)nodes.size()) break;
-                    node = &nodes[(size_t)node->ParentIdx];
+                    const TileNode& node = allNodes[trackIdx];
+                    rev.push_back({(float)node.X * 32.0f + 16.0f, (float)node.Y * 32.0f + 16.0f});
+                    trackIdx = node.ParentIdx;
                 }
                 std::reverse(rev.begin(), rev.end());
                 result.Waypoints = rev;
                 return result;
             }
-
-            // Move current node to end (logically remove)
-            size_t curIdx = (size_t)best;
-            nodes.erase(nodes.begin() + best);
 
             const int dx[] = {0, 1, 0, -1, 1, 1, -1, -1};
             const int dy[] = {-1, 0, 1, 0, -1, 1, 1, -1};
@@ -193,7 +199,10 @@ public:
 
                 int g = current.G + ((d >= 4) ? 14 : 10);
                 if (cidx >= 0 && cidx < (int)closed.size()) closed[cidx] = true;
-                nodes.push_back({nx, ny, g, Manhattan(nx, ny, EndX, EndY), (int)curIdx});
+                int newNodeIdx = (int)allNodes.size();
+                allNodes.push_back({nx, ny, g, Manhattan(nx, ny, EndX, EndY), curIdx});
+                openList.push_back(newNodeIdx);
+                if ((int)allNodes.size() >= kMaxShortPath) break;
             }
         }
 
@@ -275,8 +284,9 @@ private:
         OutRegion.MinY = OutRegion.MaxY = StartY;
 
         int mapW = mMap.MapWidth;
+        constexpr int kMaxTilesPerRegion = 400;
 
-        while (!stack.empty())
+        while (!stack.empty() && OutRegion.TileCount < kMaxTilesPerRegion)
         {
             auto [x, y] = stack.back();
             stack.pop_back();
@@ -300,8 +310,11 @@ private:
             stack.push_back({x, y - 1});
         }
 
-        OutRegion.CenterX = (OutRegion.MinX + OutRegion.MaxX) / 2;
-        OutRegion.CenterY = (OutRegion.MinY + OutRegion.MaxY) / 2;
+        if (OutRegion.TileCount > 0)
+        {
+            OutRegion.CenterX = (OutRegion.MinX + OutRegion.MaxX) / 2;
+            OutRegion.CenterY = (OutRegion.MinY + OutRegion.MaxY) / 2;
+        }
     }
 
     void FloodConnectivity(int RegionID, int GroupID, std::vector<bool>& Visited)
@@ -317,10 +330,20 @@ private:
     LongPathResult AStarRegionSearch(int StartRegion, int EndRegion)
     {
         LongPathResult result;
+
+        if (StartRegion == EndRegion)
+        {
+            result.Found = true;
+            result.RegionSequence.push_back(StartRegion);
+            return result;
+        }
+
         std::vector<RegionNode> openList;
-        std::unordered_map<int, int> closed;
+        std::unordered_map<int, int> parentMap;
+        std::unordered_map<int, bool> closed;
 
         openList.push_back({StartRegion, -1, 0, RegionHeuristic(StartRegion, EndRegion)});
+        parentMap[StartRegion] = -1;
 
         while (!openList.empty())
         {
@@ -334,21 +357,16 @@ private:
             if (current.RegionID == EndRegion)
             {
                 result.Found = true;
-                result.RegionSequence.push_back(current.RegionID);
-                int parent = current.ParentRegionID;
-                for (int i = (int)openList.size() - 1; i >= 0; --i)
+                for (int curr = EndRegion; curr != -1; curr = parentMap[curr])
                 {
-                    if (openList[i].RegionID == parent)
-                    {
-                        result.RegionSequence.insert(result.RegionSequence.begin(), openList[i].RegionID);
-                        parent = openList[i].ParentRegionID;
-                    }
+                    result.RegionSequence.push_back(curr);
                 }
+                std::reverse(result.RegionSequence.begin(), result.RegionSequence.end());
                 return result;
             }
 
             if (closed[current.RegionID]) continue;
-            closed[current.RegionID] = 1;
+            closed[current.RegionID] = true;
 
             const Region* region = GetRegion(current.RegionID);
             if (!region) continue;
@@ -357,7 +375,11 @@ private:
             {
                 if (closed[neighbor]) continue;
                 int g = current.G + 1;
-                openList.push_back({neighbor, current.RegionID, g, RegionHeuristic(neighbor, EndRegion)});
+                if (parentMap.find(neighbor) == parentMap.end())
+                {
+                    parentMap[neighbor] = current.RegionID;
+                    openList.push_back({neighbor, current.RegionID, g, RegionHeuristic(neighbor, EndRegion)});
+                }
             }
         }
 

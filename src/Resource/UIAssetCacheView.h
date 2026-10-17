@@ -28,6 +28,7 @@ public:
     const std::vector<std::string>* GetCommandIconUris() const;
     const std::vector<GpuImage>* GetCommandButtonSkins(CommandButtonSkinSet SkinSet) const;
     const std::vector<GpuImage>* GetWireframeFrames() const;
+    bool EnsureWireframeFrame(int FrameIndex) const;
     const std::vector<GpuImage>* GetCursorFrames(const std::string& CursorName) const;
     const ImageOpaqueBounds* GetWireframeOpaqueBounds(int FrameIndex) const;
     const PortraitClip* GetPortraitClip(const std::string& PortraitKey) const;

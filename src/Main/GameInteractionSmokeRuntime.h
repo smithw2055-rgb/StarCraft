@@ -98,6 +98,12 @@ namespace InteractionSmoke
         return Value && Value[0] != '\0' && Value[0] != '0';
     }
 
+    inline bool IsDemoMultiSelect()
+    {
+        const char* Value = std::getenv("STARCRAFT_DEMO_MULTISELECT");
+        return Value && Value[0] != '\0' && Value[0] != '0';
+    }
+
     inline void Fail(std::string& Error, const std::string& Message)
     {
         if (Error.empty())
@@ -2904,9 +2910,40 @@ namespace InteractionSmoke
                 return false;
             if (!FullRoster.EntityIDs.empty())
             {
-                const int FocusID = FullRoster.EntityIDs.front();
-                Client.SetSelectedIdsForDemo({FocusID});
-                Hud.UpdateContext(EM, {FocusID});
+                std::vector<int> SelectionList;
+                if (IsDemoMultiSelect())
+                {
+                    int SlotIdx = 0;
+                    for (int EntId : FullRoster.EntityIDs)
+                    {
+                        if (EM.GetComponent<Game::Components::UnitComponent>(EntId) &&
+                            !EM.GetComponent<Game::Components::BuildingComponent>(EntId))
+                        {
+                            if (auto* Pl = EM.GetComponent<Game::Components::PlayerComponent>(EntId))
+                            {
+                                Pl->PlayerID = LocalPlayerID;
+                            }
+                            if (auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntId))
+                            {
+                                // Provide distinct HP tiers to showcase green/yellow/red health levels
+                                if (SlotIdx % 3 == 1)
+                                    Unit->HitPoints = std::max(1, (int)(Unit->MaxHitPoints * 0.55f)); // Yellow
+                                else if (SlotIdx % 3 == 2)
+                                    Unit->HitPoints = std::max(1, (int)(Unit->MaxHitPoints * 0.22f)); // Red
+                            }
+                            SelectionList.push_back(EntId);
+                            ++SlotIdx;
+                            if (SelectionList.size() >= 12)
+                                break;
+                        }
+                    }
+                }
+                if (SelectionList.empty())
+                    SelectionList = { FullRoster.EntityIDs.front() };
+
+                const int FocusID = SelectionList.front();
+                Client.SetSelectedIdsForDemo(SelectionList);
+                Hud.UpdateContext(EM, SelectionList);
                 if (const auto* Transform =
                         EM.GetComponent<Game::Components::TransformComponent>(FocusID))
                 {

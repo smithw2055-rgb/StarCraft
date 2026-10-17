@@ -44,7 +44,7 @@ GameCursorKind CursorManager::ResolveScrollCursorKind(int MouseX, int MouseY,
                                                        int ViewportWidth, int ViewportHeight,
                                                        const Game::Client::UI::Hud& Hud)
 {
-    constexpr int EdgeMargin = 8;
+    constexpr int EdgeMargin = 16;
     const int TopBlocked = Hud.GetResourceBarHeight();
     const int BottomBlocked = Hud.GetHudHeight(ViewportWidth, ViewportHeight);
     const int ActiveBottom = ViewportHeight - BottomBlocked;
@@ -58,15 +58,15 @@ GameCursorKind CursorManager::ResolveScrollCursorKind(int MouseX, int MouseY,
         !Core::Platform::IsMouseInGameContentArea() ||
         AnyMouseButtonDown ||
         MouseX < 0 || MouseX >= ViewportWidth ||
-        MouseY < TopBlocked || MouseY >= ActiveBottom)
+        MouseY < 0 || MouseY >= ViewportHeight)
     {
         return GameCursorKind::Arrow;
     }
 
     const bool Left = MouseX < EdgeMargin;
     const bool Right = MouseX >= ViewportWidth - EdgeMargin;
-    const bool Up = MouseY < TopBlocked + EdgeMargin;
-    const bool Down = MouseY >= ActiveBottom - EdgeMargin;
+    const bool Up = (MouseY >= TopBlocked && MouseY < TopBlocked + EdgeMargin) || (MouseY <= 4);
+    const bool Down = (MouseY > ActiveBottom - EdgeMargin && MouseY <= ActiveBottom + 8) || (MouseY >= ViewportHeight - 8);
 
     if (Up && Left) return GameCursorKind::ScrollUpLeft;
     if (Up && Right) return GameCursorKind::ScrollUpRight;

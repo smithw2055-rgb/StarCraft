@@ -104,6 +104,31 @@ int main()
     Require(!MinimapWorldToScreenPoint(Frame, 0, 128, Ping.Position.X, Ping.Position.Y, SharedPingX, SharedPingY),
         "shared ping geometry rejects invalid map dimensions");
 
+    // Verify HudMinimapDot dimensions
+    Game::Client::UI::HudMinimapDot DefaultDot;
+    Require(DefaultDot.Width == 2 && DefaultDot.Height == 2,
+        "default minimap dot is 2x2 pixels");
+    Game::Client::UI::HudMinimapDot BuildingDot;
+    BuildingDot.Width = 4;
+    BuildingDot.Height = 4;
+    Require(BuildingDot.Width == 4 && BuildingDot.Height == 4,
+        "building minimap dot supports custom footprint");
+
+    // Verify Camera Viewport Rect mapping to Minimap screen space
+    Game::Client::UI::HudMinimapState MinimapState;
+    MinimapState.CamVisibleX = 192.0f * 32.0f * 0.25f;
+    MinimapState.CamVisibleY = 128.0f * 32.0f * 0.25f;
+    MinimapState.CamVisibleW = 640.0f;
+    MinimapState.CamVisibleH = 480.0f;
+    const int BoxX0 = MinimapWorldToScreenX(WideContent, MinimapState.CamVisibleX, 192.0f * 32.0f);
+    const int BoxY0 = MinimapWorldToScreenY(WideContent, MinimapState.CamVisibleY, 128.0f * 32.0f);
+    const int BoxX1 = MinimapWorldToScreenX(WideContent, MinimapState.CamVisibleX + MinimapState.CamVisibleW, 192.0f * 32.0f);
+    const int BoxY1 = MinimapWorldToScreenY(WideContent, MinimapState.CamVisibleY + MinimapState.CamVisibleH, 128.0f * 32.0f);
+    Require(BoxX1 > BoxX0, "camera viewport box has positive width on minimap");
+    Require(BoxY1 > BoxY0, "camera viewport box has positive height on minimap");
+    Require(BoxX0 >= WideContent.X && BoxX1 <= WideContent.X + WideContent.W,
+        "camera viewport box stays within minimap content horizontal bounds");
+
     std::printf("HudMinimapGeometryTest passed\n");
     return 0;
 }

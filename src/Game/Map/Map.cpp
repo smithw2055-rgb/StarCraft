@@ -21,6 +21,7 @@ bool ShouldLogMapTileSamples()
 GameMap::GameMap()
 {
     mTiles.resize(DefaultMapWidth * DefaultMapHeight);
+    mNavigationGrid.Initialize(DefaultMapWidth, DefaultMapHeight);
 }
 
 void GameMap::Generate(int Width, int Height)
@@ -28,6 +29,7 @@ void GameMap::Generate(int Width, int Height)
     mWidth = Width;
     mHeight = Height;
     mTiles.resize(Width * Height);
+    mNavigationGrid.Initialize(Width, Height);
 
     for (int Y = 0; Y < Height; ++Y)
     {
@@ -67,7 +69,6 @@ void GameMap::Generate(int Width, int Height)
                 Tile& T = mTiles[MY * Width + MX];
                 T.Resource = ResourceType::Minerals;
                 T.ResourceAmount = 1500;
-                T.Walkable = false;
                 T.Buildable = false;
             }
         }
@@ -80,16 +81,44 @@ void GameMap::Generate(int Width, int Height)
             Tile& T = mTiles[GY * Width + GX];
             T.Resource = ResourceType::VespeneGas;
             T.ResourceAmount = 5000;
-            T.Walkable = false;
             T.Buildable = false;
         }
     }
+
+    for (int Y = 0; Y < Height; ++Y)
+    {
+        for (int X = 0; X < Width; ++X)
+            UpdateNavigationBuildTile(X, Y);
+    }
+    mNavigationGrid.CommitBaseChanges();
 }
 
 void GameMap::SetTile(int X, int Y, const Tile& NewTile)
 {
     assert(IsInBounds(X, Y));
     mTiles[Y * mWidth + X] = NewTile;
+    UpdateNavigationBuildTile(X, Y);
+    mNavigationGrid.CommitBaseChanges();
+}
+
+void GameMap::UpdateNavigationBuildTile(int X, int Y)
+{
+    if (!IsInBounds(X, Y))
+        return;
+
+    const Tile& T = mTiles[Y * mWidth + X];
+    for (int SubY = 0; SubY < 4; ++SubY)
+    {
+        for (int SubX = 0; SubX < 4; ++SubX)
+        {
+            const size_t SubtileIndex =
+                (size_t)SubY * 4 + (size_t)SubX;
+            mNavigationGrid.SetBaseCell(
+                X * Game::Pathfinding::NavigationCellsPerBuildTile + SubX,
+                Y * Game::Pathfinding::NavigationCellsPerBuildTile + SubY,
+                T.Walkable, T.SubtileGroundHeights[SubtileIndex]);
+        }
+    }
 }
 
 const Tile& GameMap::GetTile(int X, int Y) const
@@ -131,15 +160,20 @@ bool GameMap::CanTraverseGround(int FromX, int FromY, int ToX, int ToY) const
 {
     if (!IsInBounds(FromX, FromY) || !IsInBounds(ToX, ToY))
         return false;
-    return std::abs(GetGroundHeight(FromX, FromY) -
-                    GetGroundHeight(ToX, ToY)) <= 1;
+    // Step heights with difference <= 1 are universally valid (including unwalkable start escape).
+    if (std::abs(GetGroundHeight(FromX, FromY) - GetGroundHeight(ToX, ToY)) <= 1)
+        return true;
+    // In StarCraft 1 terrain data, walkable tiles connecting ground heights 0 and 2 represent ramps.
+    return IsWalkable(FromX, FromY) && IsWalkable(ToX, ToY);
 }
 
 bool GameMap::CanTraverseGround(const Core::Math::Vec2& From,
                                 const Core::Math::Vec2& To) const
 {
-    return std::abs(GetGroundHeightAtWorld(From) -
-                    GetGroundHeightAtWorld(To)) <= 1;
+    int FX = 0, FY = 0, TX = 0, TY = 0;
+    WorldToTile(From, FX, FY);
+    WorldToTile(To, TX, TY);
+    return CanTraverseGround(FX, FY, TX, TY);
 }
 
 bool GameMap::IsBuildable(int X, int Y) const
@@ -219,6 +253,7 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             if (Cv5Off >= Cv5Data->size())
             {
                 T.Walkable = T.Buildable = false;
+                UpdateNavigationBuildTile(X, Y);
                 UnwalkableTiles++;
                 continue;
             }
@@ -227,6 +262,7 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             if (MegaIdx >= Vf4EntryCount)
             {
                 T.Walkable = T.Buildable = false;
+                UpdateNavigationBuildTile(X, Y);
                 UnwalkableTiles++;
                 continue;
             }
@@ -250,10 +286,17 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
                 T.SubtileGroundHeights[(size_t)MI] =
                     (Flags & 0x0004) != 0 ? 2 :
                     (Flags & 0x0002) != 0 ? 1 : 0;
+                mNavigationGrid.SetBaseCell(
+                    X * Game::Pathfinding::NavigationCellsPerBuildTile +
+                        (MI % 4),
+                    Y * Game::Pathfinding::NavigationCellsPerBuildTile +
+                        (MI / 4),
+                    (Flags & 0x0001) != 0,
+                    T.SubtileGroundHeights[(size_t)MI]);
             }
 
-            T.Walkable = (WalkableCount > 12);
-            T.Buildable = T.Walkable;
+            T.Walkable = (WalkableCount >= 8);
+            T.Buildable = (WalkableCount > 12);
             // Match the reference megatile aggregation: ramps/middle ground
             // remain level 1 while true high ground remains level 2.
             T.GroundHeight = HighCount >= 12 ? 2 :
@@ -264,6 +307,7 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             else UnwalkableTiles++;
         }
     }
+    mNavigationGrid.CommitBaseChanges();
     Core::Utils::Logger::Info("GameMap",
         "ApplyTilesetData: " + std::to_string(WalkableTiles) +
         " walkable, " + std::to_string(UnwalkableTiles) +
@@ -294,6 +338,7 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
     mWidth = Parser.GetMapWidth();
     mHeight = Parser.GetMapHeight();
     mTiles.resize(mWidth * mHeight);
+    mNavigationGrid.Initialize(mWidth, mHeight);
     mStartLocations.clear();
 
     // ── Terrain from MTXM ──────────────────────────────────
@@ -344,7 +389,6 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
                 auto& T = mTiles[TileY * mWidth + TileX];
                 T.Resource = ResourceType::Minerals;
                 T.ResourceAmount = U.ResourceAmount > 0 ? (int)U.ResourceAmount : 1500;
-                T.Walkable = false;
                 T.Buildable = false;
             }
         }
@@ -355,11 +399,17 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
                 auto& T = mTiles[TileY * mWidth + TileX];
                 T.Resource = ResourceType::VespeneGas;
                 T.ResourceAmount = U.ResourceAmount > 0 ? (int)U.ResourceAmount : 5000;
-                T.Walkable = false;
                 T.Buildable = false;
             }
         }
     }
+
+    for (int Y = 0; Y < mHeight; ++Y)
+    {
+        for (int X = 0; X < mWidth; ++X)
+            UpdateNavigationBuildTile(X, Y);
+    }
+    mNavigationGrid.CommitBaseChanges();
 }
 
 } // namespace Game::Map

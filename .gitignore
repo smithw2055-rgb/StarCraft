@@ -28,6 +28,7 @@ tests/
 tmp_*
 
 # Build/runtime binary artifacts
+*.exe
 StormLib.dll
 bz2.dll
 zlib1.dll

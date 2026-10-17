@@ -242,6 +242,8 @@ static void InitDefs()
     Z[ZUltraliskID].ProducedBy = -1;             // Larva -> Egg -> Ultralisk
     Z[ZDefilerID].ProducedBy = -1;               // Larva -> Egg -> Defiler
     Z[ZLurkerID].ProducedBy = ZHydraliskID;     // Hydralisk -> Lurker Egg -> Lurker
+    Z[ZGuardianID].ProducedBy = ZMutaliskID;   // Mutalisk -> Cocoon -> Guardian
+    Z[ZDevourerID].ProducedBy = ZMutaliskID;   // Mutalisk -> Cocoon -> Devourer
 
     Z[ZDroneID].RequiredBuildings = {ZHatcheryID};
     Z[ZOverlordID].RequiredBuildings = {ZHatcheryID};
@@ -253,6 +255,8 @@ static void InitDefs()
     Z[ZUltraliskID].RequiredBuildings = {ZUltraliskCavernID};
     Z[ZDefilerID].RequiredBuildings = {ZDefilerMoundID};
     Z[ZLurkerID].RequiredBuildings = {ZHydraliskDenID, ZLairID};
+    Z[ZGuardianID].RequiredBuildings = {ZGreaterSpireID};
+    Z[ZDevourerID].RequiredBuildings = {ZGreaterSpireID};
 
     // Zerg building requirements
     Z[ZLairID].RequiredBuildings = {ZHatcheryID, ZSpawningPoolID};
@@ -594,8 +598,10 @@ static void InitDefs()
     // Zerg weapons.dat values.
     SetGroundWeapon(Z[(size_t)ZDroneID], 5, 0, 1, 22, Components::DamageType::Normal);
     Z[(size_t)ZDroneID].AttackRange = 1.0f;
+    Z[(size_t)ZDroneID].WeaponBeh = Components::WeaponBehavior::Melee;
     SetGroundWeapon(Z[(size_t)ZZerglingID], 5, 1, 1, 8, Components::DamageType::Normal);
     Z[(size_t)ZZerglingID].AttackRange = 15.0f / 32.0f;
+    Z[(size_t)ZZerglingID].WeaponBeh = Components::WeaponBehavior::Melee;
     SetGroundWeapon(Z[(size_t)ZHydraliskID], 10, 1, 1, 15, Components::DamageType::Explosive);
     SetAirWeapon(Z[(size_t)ZHydraliskID], 10, 1, 1, 15, Components::DamageType::Explosive);
     Z[(size_t)ZHydraliskID].AttackRange = 4.0f;
@@ -668,6 +674,10 @@ static void InitDefs()
     SetAirWeapon(P[(size_t)PPhotonCannonID], 20, 0, 1, 22,
                  Components::DamageType::Normal);
     P[(size_t)PPhotonCannonID].AttackRange = 7.0f;
+
+    ApplyDefaultWeaponMetadata(T);
+    ApplyDefaultWeaponMetadata(Z);
+    ApplyDefaultWeaponMetadata(P);
 }
 
 const std::vector<UnitDef>& GetTerranDefs()  { InitDefs(); return TerranDefs; }
@@ -800,11 +810,85 @@ bool IsDetectorChkUnitID(int ChkUnitID)
     {
         case 33:  // Spell Scanner Sweep
         case 9:   // Terran Science Vessel
+        case 22:  // Hero Magellan (Science Vessel)
         case 124: // Terran Missile Turret
         case 42:  // Zerg Overlord
-        case 139: // Zerg Spore Colony
+        case 57:  // Hero Yggdrasill (Overlord)
+        case 144: // Zerg Spore Colony
         case 84:  // Protoss Observer
         case 162: // Protoss Photon Cannon
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsOrganicChkUnitID(int ChkUnitID)
+{
+    if (ChkUnitID >= 35 && ChkUnitID <= 57)
+        return true;
+    if (ChkUnitID >= 93 && ChkUnitID <= 97)
+        return true;
+    switch (ChkUnitID)
+    {
+        case 0: case 1: case 7: case 10: case 15: case 16:
+        case 20: case 32: case 34: case 59: case 61: case 62:
+        case 65: case 67: case 74: case 75: case 77: case 79:
+        case 87: case 89: case 90: case 99: case 100:
+        case 103: case 104:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsMechanicalChkUnitID(int ChkUnitID)
+{
+    switch (ChkUnitID)
+    {
+        // Terran Mechanical Units
+        case 2:   // Vulture
+        case 3:   // Goliath
+        case 4:   // Goliath Turret
+        case 5:   // Siege Tank (Tank Mode)
+        case 6:   // Siege Tank Turret
+        case 7:   // SCV
+        case 8:   // Wraith
+        case 9:   // Science Vessel
+        case 11:  // Dropship
+        case 12:  // Battlecruiser
+        case 13:  // Spider Mine
+        case 14:  // Nuclear Missile
+        case 30:  // Siege Tank (Siege Mode)
+        case 58:  // Valkyrie
+        // Terran Mechanical Heroes
+        case 17:  // Alan Schezar (Goliath)
+        case 18:  // Alan Schezar Turret
+        case 19:  // Jim Raynor (Vulture)
+        case 21:  // Edmund Duke (Tank Mode)
+        case 22:  // Edmund Duke (Siege Mode)
+        case 23:  // Edmund Duke Turret
+        case 24:  // Edmund Duke Turret (Siege Mode)
+        case 25:  // Tom Kazansky (Wraith)
+        case 27:  // Norad II (Battlecruiser)
+        case 28:  // Hyperion (Battlecruiser)
+        // Protoss Mechanical Units
+        case 64:  // Probe
+        case 66:  // Dragoon
+        case 69:  // Shuttle
+        case 70:  // Scout
+        case 71:  // Arbiter
+        case 72:  // Carrier
+        case 73:  // Interceptor
+        case 83:  // Reaver
+        case 84:  // Observer
+        case 85:  // Scarab
+        // Protoss Mechanical Heroes
+        case 78:  // Mojo (Scout)
+        case 80:  // Artanis (Scout)
+        case 81:  // Danimoth (Arbiter)
+        case 82:  // Gantrithor (Carrier)
+        case 86:  // Warbringer (Reaver)
             return true;
         default:
             return false;

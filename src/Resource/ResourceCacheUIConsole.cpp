@@ -20,13 +20,21 @@ namespace
     constexpr int kConsoleCompositeRightWidth = 216;
 }
 
+bool ResourceCache::LoadNamedConsoleDdsForRace(const std::string& RaceName,
+                                              const std::string& FileName,
+                                              GpuImage& Out,
+                                              bool TransparentBlack)
+{
+    if (!mSources.UseExtractedAssets)
+        return false;
+    return LoadWicUIImage(std::string("game/consoles/") + RaceName + "/" + FileName, Out, TransparentBlack);
+}
+
 bool ResourceCache::LoadNamedConsoleDds(const std::string& FileName,
                                         GpuImage& Out,
                                         bool TransparentBlack)
 {
-    if (!mSources.UseExtractedAssets)
-        return false;
-    return LoadWicUIImage(std::string("game/consoles/terran/") + FileName, Out, TransparentBlack);
+    return LoadNamedConsoleDdsForRace("terran", FileName, Out, TransparentBlack);
 }
 
 bool ResourceCache::BuildConsoleCompositeFromDds(GpuImage& Out)
@@ -89,6 +97,21 @@ bool ResourceCache::LoadHdConsoleGraphics()
             "Built terran HUD console composite from extracted DDS slices");
         return true;
     }
+    return mUI.ConsoleLeft.Valid() || mUI.ConsoleCenter.Valid() || mUI.ConsoleRight.Valid();
+}
+
+bool ResourceCache::LoadHdConsoleGraphicsForRace(const std::string& RaceName)
+{
+    if (!mSources.UseExtractedAssets)
+        return false;
+
+    LoadNamedConsoleDdsForRace(RaceName, "console_left.DDS", mUI.ConsoleLeft);
+    LoadNamedConsoleDdsForRace(RaceName, "console_center.DDS", mUI.ConsoleCenter);
+    LoadNamedConsoleDdsForRace(RaceName, "console_right.DDS", mUI.ConsoleRight);
+    LoadNamedConsoleDdsForRace(RaceName, "conover.DDS", mUI.ConsolePortraitFrame);
+    LoadNamedConsoleDdsForRace(RaceName, "console_APM.DDS", mUI.ConsoleApm);
+    LoadNamedConsoleDdsForRace(RaceName, "console_TIME.DDS", mUI.ConsoleTime);
+
     return mUI.ConsoleLeft.Valid() || mUI.ConsoleCenter.Valid() || mUI.ConsoleRight.Valid();
 }
 

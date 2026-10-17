@@ -14,6 +14,8 @@ namespace Game::Map { class GameMap; }
 namespace Game::Systems
 {
 
+class FogOfWarSystem;
+
 enum class BuildTargetType : uint8_t
 {
     None,
@@ -63,6 +65,7 @@ struct BuildOrder
     float BestFootprintDistance = 0.0f;
     bool HasBestFootprintDistance = false;
     float PlacementBlockedSeconds = 0.0f;
+    std::vector<int> AssistantBuilderIDs;
 };
 
 class BuildingSystem : public Core::ECS::ISystem
@@ -72,11 +75,35 @@ public:
     using CollisionBoundsResolver = std::function<Game::Components::UnitCollisionBounds(int)>;
     using AddonOffsetResolver = std::function<Core::Math::Vec2(int, int)>;
 
+    using FogExploredChecker = std::function<bool(int TileX, int TileY, int PlayerID)>;
+
     BuildingSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "BuildingSystem"; }
 
     static void SetMap(const Game::Map::GameMap* Map);
+    static void SetFogExploredChecker(FogExploredChecker Checker);
+
+    template <typename TFow = FogOfWarSystem>
+    static void SetFogOfWarSystem(const TFow* FOW)
+    {
+        if (FOW)
+        {
+            SetFogExploredChecker([FOW](int TileX, int TileY, int PlayerID) {
+                return FOW->IsExplored(TileX, TileY, PlayerID);
+            });
+        }
+        else
+        {
+            SetFogExploredChecker(nullptr);
+        }
+    }
+
+    static void SetFogOfWarSystem(std::nullptr_t)
+    {
+        SetFogExploredChecker(nullptr);
+    }
+
     static void ResetPendingBuildOrders();
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetSubunitImageResolver(ImageIDResolver Resolver);
@@ -106,11 +133,15 @@ public:
     static bool StartBuild(Core::ECS::EntityManager& EM,
                            int BuilderID,
                            int BuildingDefID,
-                           const BuildTarget& Target);
+                           const BuildTarget& Target,
+                           const std::vector<int>& AssistantBuilderIDs = {});
     static int CountPendingBuilds(int PlayerID, int BuildingDefID);
     static bool IsBuilderCommitted(Core::ECS::EntityManager& EM, int BuilderID);
     static bool WasRecentlyUnreachable(int PlayerID, int BuildingDefID,
                                        const Core::Math::Vec2& Position);
+    static bool HasPylonPowerAtPosition(const Core::ECS::EntityManager& EM,
+                                        Core::Math::Vec2 Position,
+                                        int PlayerID);
 
     static bool AssistConstruction(Core::ECS::EntityManager& EM,
                                    const std::vector<int>& BuilderIDs,
@@ -119,10 +150,12 @@ public:
     static bool StartBuild(Core::ECS::EntityManager& EM,
                            int BuilderID,
                            int BuildingDefID,
-                           Core::Math::Vec2 Position)
+                           Core::Math::Vec2 Position,
+                           const std::vector<int>& AssistantBuilderIDs = {})
     {
         return StartBuild(EM, BuilderID, BuildingDefID,
-                          BuildTarget::FromPosition(Position));
+                          BuildTarget::FromPosition(Position),
+                          AssistantBuilderIDs);
     }
 
     static int DebugSpawnCompletedBuilding(Core::ECS::EntityManager& EM,
@@ -147,6 +180,7 @@ public:
     static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID);
     static bool LandBuilding(Core::ECS::EntityManager& EM, int BuildingID,
                              Core::Math::Vec2 Position);
+    static bool CancelConstruction(Core::ECS::EntityManager& EM, int BuildingID);
     static void RestoreSpawnedAddonLinks(Core::ECS::EntityManager& EM);
     static void ProcessFlightTransition(Core::ECS::EntityManager& EM, int EntityID);
     static void AdvanceFlightHeightTransition(Core::ECS::EntityManager& EM,

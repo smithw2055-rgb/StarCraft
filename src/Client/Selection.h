@@ -53,6 +53,9 @@ public:
     void AppendControlGroup(int GroupIndex, Core::ECS::EntityManager& Entities);
     bool IsControlGroupEmpty(int GroupIndex) const;
 
+    using UnitClickSoundCallback = std::function<void(int EntityID, bool IsPissed)>;
+    static void SetUnitClickSoundCallback(UnitClickSoundCallback Callback);
+
 private:
     Phase mPhase = Phase::Idle;
     int mStartX = 0, mStartY = 0;

@@ -33,6 +33,12 @@ std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxCha
             size_t Space = Clean.rfind(' ', End);
             if (Space != std::string::npos && Space > Pos + MaxChars / 2)
                 End = Space;
+            else
+            {
+                // Prevent slicing in the middle of a multi-byte UTF-8 sequence
+                while (End > Pos && (static_cast<uint8_t>(Clean[End]) & 0xC0) == 0x80)
+                    --End;
+            }
         }
 
         std::string Line = Clean.substr(Pos, End - Pos);
@@ -51,7 +57,12 @@ std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxCha
     {
         std::string& Last = Lines.back();
         if (Last.size() + 3 > MaxChars && Last.size() > 3)
-            Last.resize(MaxChars - 3);
+        {
+            size_t Cut = MaxChars - 3;
+            while (Cut > 0 && (static_cast<uint8_t>(Last[Cut]) & 0xC0) == 0x80)
+                --Cut;
+            Last.resize(Cut);
+        }
         Last += "...";
     }
     return Lines;

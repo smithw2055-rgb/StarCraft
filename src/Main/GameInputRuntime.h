@@ -6,6 +6,15 @@
 #include <utility>
 
 #include "Client/ClientRuntime.h"
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
 #include "Main/GameClientViewRuntime.h"
@@ -73,7 +82,15 @@ inline bool UpdateClientInputGates(
         }
         else
         {
-            Menu.ToggleOpenAndPauseWhenOpened();
+            const auto& Defs = Hud.GetButtonDefs();
+            if (Defs[8].Kind == UI::ActionKind::Back && Defs[8].Enabled)
+            {
+                Hud.OnButtonInvoked(8);
+            }
+            else
+            {
+                Menu.ToggleOpenAndPauseWhenOpened();
+            }
         }
     }
 
@@ -102,6 +119,22 @@ inline void UpdateClientSelectionFromUiState(
     bool BlockSelection = false;
     if (!Core::Platform::IsMouseInGameContentArea())
         BlockSelection = true;
+    if (Core::Platform::IsMouseButtonDown(0))
+    {
+        float DummyWX, DummyWY;
+        if (Hud.CheckMinimapClick(
+                MouseX,
+                MouseY,
+                ViewportWidth,
+                ViewportHeight,
+                Session.GetMapData().Width,
+                Session.GetMapData().Height,
+                DummyWX,
+                DummyWY))
+        {
+            BlockSelection = true;
+        }
+    }
     if (Core::Platform::IsMouseButtonPressed(0))
     {
         if (InGui)
@@ -287,6 +320,30 @@ inline void HandleClientWorldClickCommands(
 {
     const bool RightReleased = Core::Platform::IsMouseButtonReleased(1);
     const bool InGameContent = Core::Platform::IsMouseInGameContentArea();
+    static bool sIsDraggingMinimap = false;
+
+    if (!Core::Platform::IsMouseButtonDown(0))
+    {
+        sIsDraggingMinimap = false;
+    }
+    else if (sIsDraggingMinimap && !InGui && InGameContent)
+    {
+        float DragWX = 0.0f, DragWY = 0.0f;
+        if (Hud.CheckMinimapClick(
+                MouseX,
+                MouseY,
+                ViewportWidth,
+                ViewportHeight,
+                Session.GetMapData().Width,
+                Session.GetMapData().Height,
+                DragWX,
+                DragWY))
+        {
+            Client.CenterCamera(DragWX, DragWY);
+            Client.CancelPointerGesture();
+        }
+    }
+
     if (Core::Platform::IsMouseButtonPressed(0) && !InGui && InGameContent)
     {
         bool ConsumedLeftClick = false;
@@ -309,12 +366,14 @@ inline void HandleClientWorldClickCommands(
                        << " world=" << WX << "," << WY;
                 Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
             }
+            sIsDraggingMinimap = true;
             Client.CenterCamera(WX, WY);
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
         }
 
         const int CmdIdx = Hud.CheckCommandPanelClick(MouseX, MouseY, ViewportWidth, ViewportHeight);
+        const int QueueSlotIdx = Hud.CheckQueueSlotClick(MouseX, MouseY);
         if (CmdIdx >= 0 && Session.IsEcsInitialized())
         {
             if (Core::Utils::InputDebugEnabled())
@@ -327,6 +386,68 @@ inline void HandleClientWorldClickCommands(
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
             ExecuteHudCommandIndex(EM, EcsIds, Hud, CmdIdx);
+            Client.CancelPointerGesture();
+            ConsumedLeftClick = true;
+        }
+        else if (QueueSlotIdx >= 0 && Session.IsEcsInitialized())
+        {
+            if (Core::Utils::InputDebugEnabled())
+            {
+                std::ostringstream Stream;
+                Stream << "button=left branch=queue_slot mouse=" << MouseX << "," << MouseY
+                       << " slot=" << QueueSlotIdx;
+                Core::Utils::InputDebugLog("InputGameplayClick", Stream.str());
+            }
+            auto& EM = Session.Entities();
+            auto EcsIds = Client.CollectSelectedAliveIds(EM);
+            if (!EcsIds.empty())
+            {
+                if (Game::Systems::ProductionSystem::CancelTrain(EM, EcsIds[0], QueueSlotIdx))
+                {
+                    Hud.UpdateContext(EM, EcsIds);
+                }
+            }
+            Client.CancelPointerGesture();
+            ConsumedLeftClick = true;
+        }
+        else if (const int MinimapBtnIdx = Hud.CheckMinimapButtonClick(MouseX, MouseY, ViewportWidth, ViewportHeight); MinimapBtnIdx >= 0)
+        {
+            if (MinimapBtnIdx == 0)
+                const_cast<UI::Hud&>(Hud).ToggleMinimapTerrain();
+            else if (MinimapBtnIdx == 1)
+                const_cast<UI::Hud&>(Hud).ToggleMinimapAllianceColors();
+            else if (MinimapBtnIdx == 2)
+                const_cast<UI::Hud&>(Hud).ToggleMinimapBeacons();
+
+            Client.CancelPointerGesture();
+            ConsumedLeftClick = true;
+        }
+        else if (int HitEntityId = -1; (Hud.CheckMultiSelectSlotClick(MouseX, MouseY, HitEntityId) >= 0) && Session.IsEcsInitialized() && HitEntityId >= 0)
+        {
+#if defined(_WIN32)
+            const bool ShiftHeld = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+#else
+            const bool ShiftHeld = false;
+#endif
+            if (ShiftHeld)
+            {
+                auto Current = Client.GetSelectedIds();
+                std::vector<int> Filtered;
+                for (int Id : Current)
+                {
+                    if (Id != HitEntityId)
+                        Filtered.push_back(Id);
+                }
+                Client.SetSelectedIdsForDemo(Filtered);
+            }
+            else
+            {
+                Client.SetSelectedIdsForDemo({ HitEntityId });
+            }
+
+            auto& EM = Session.Entities();
+            auto EcsIds = Client.CollectSelectedAliveIds(EM);
+            const_cast<UI::Hud&>(Hud).UpdateContext(EM, EcsIds);
             Client.CancelPointerGesture();
             ConsumedLeftClick = true;
         }
@@ -421,6 +542,19 @@ inline void HandleClientWorldClickCommands(
         }
         else if (InHudBand)
         {
+            const int QueueSlotIdx = Hud.CheckQueueSlotClick(MouseX, MouseY);
+            if (QueueSlotIdx >= 0 && Session.IsEcsInitialized())
+            {
+                auto& EM = Session.Entities();
+                auto EcsIds = Client.CollectSelectedAliveIds(EM);
+                if (!EcsIds.empty())
+                {
+                    if (Game::Systems::ProductionSystem::CancelTrain(EM, EcsIds[0], QueueSlotIdx))
+                    {
+                        Hud.UpdateContext(EM, EcsIds);
+                    }
+                }
+            }
             Client.CancelPointerGesture();
         }
         else
@@ -444,7 +578,8 @@ inline void HandleClientWorldClickCommands(
 
 inline void HandleClientKeyboardCommands(
     ClientRuntime& Client,
-    GameSession& Session)
+    GameSession& Session,
+    UI::Hud& Hud)
 {
     if (!Session.IsEcsInitialized())
         return;
@@ -455,27 +590,93 @@ inline void HandleClientKeyboardCommands(
     auto EcsIds = Client.CollectSelectedAliveIds(EM);
     if (!EcsIds.empty())
     {
-        KeyboardCommandShortcut Shortcut = KeyboardCommandShortcut::None;
-        if (Core::Platform::IsKeyPressed(83))
-            Shortcut = KeyboardCommandShortcut::Stop;
-        else if (Core::Platform::IsKeyPressed(72))
-            Shortcut = KeyboardCommandShortcut::Hold;
-        else if (Core::Platform::IsKeyPressed(80))
-            Shortcut = KeyboardCommandShortcut::Patrol;
-        else if (Core::Platform::IsKeyPressed(70))
-            Shortcut = KeyboardCommandShortcut::Follow;
+        bool HotkeyDispatched = false;
+        for (int Key = 'A'; Key <= 'Z'; ++Key)
+        {
+            if (Core::Platform::IsKeyPressed(Key))
+            {
+                if (TryDispatchCommandHotkey(EM, EcsIds, Hud, Key))
+                {
+                    HotkeyDispatched = true;
+                    break;
+                }
+            }
+        }
 
-        ExecuteKeyboardCommandShortcut(EM, EcsIds, Shortcut);
+        if (!HotkeyDispatched)
+        {
+            KeyboardCommandShortcut Shortcut = KeyboardCommandShortcut::None;
+            if (Core::Platform::IsKeyPressed(83))
+                Shortcut = KeyboardCommandShortcut::Stop;
+            else if (Core::Platform::IsKeyPressed(72))
+                Shortcut = KeyboardCommandShortcut::Hold;
+            else if (Core::Platform::IsKeyPressed(80))
+                Shortcut = KeyboardCommandShortcut::Patrol;
+            else if (Core::Platform::IsKeyPressed(70))
+                Shortcut = KeyboardCommandShortcut::Follow;
+
+            ExecuteKeyboardCommandShortcut(EM, EcsIds, Shortcut);
+        }
     }
 
     if (Core::Platform::IsKeyPressed(Core::Platform::KeyCode::F6))
         GameEntitySpawnRuntime::SpawnTerranAuditFormationOnce(Session, Client.GetCameraPosition());
 }
 
+template <typename RestartGameT, typename ReturnToMainMenuT>
+inline bool HandleMatchGameOverInputGate(
+    GameSession& Session,
+    int ViewportWidth,
+    int ViewportHeight,
+    int MouseX,
+    int MouseY,
+    RestartGameT&& RestartGame,
+    ReturnToMainMenuT&& ReturnToMainMenu)
+{
+    if (!Session.IsMatchOver())
+        return false;
+
+    const float PanelW = 440.0f;
+    const float PanelH = 220.0f;
+    const float PanelX = ((float)ViewportWidth - PanelW) * 0.5f;
+    const float PanelY = ((float)ViewportHeight - PanelH) * 0.5f;
+    const float ButtonW = 180.0f;
+    const float ButtonH = 34.0f;
+    const float ButtonY = PanelY + PanelH - 52.0f;
+    const float RestartX = PanelX + 24.0f;
+    const float MenuX = PanelX + PanelW - ButtonW - 24.0f;
+
+    const bool LeftPressed = Core::Platform::IsMouseButtonPressed(0);
+    const float FX = (float)MouseX;
+    const float FY = (float)MouseY;
+    const bool RestartClicked = LeftPressed &&
+        FX >= RestartX && FX < RestartX + ButtonW &&
+        FY >= ButtonY && FY < ButtonY + ButtonH;
+    const bool MenuClicked = LeftPressed &&
+        FX >= MenuX && FX < MenuX + ButtonW &&
+        FY >= ButtonY && FY < ButtonY + ButtonH;
+
+    if (Core::Platform::IsKeyPressed(Core::Platform::KeyCode::R) || RestartClicked)
+    {
+        RestartGame();
+        return true;
+    }
+    if (Core::Platform::IsKeyPressed(Core::Platform::KeyCode::Escape) ||
+        Core::Platform::IsKeyPressed(Core::Platform::KeyCode::Q) ||
+        MenuClicked)
+    {
+        ReturnToMainMenu();
+        return true;
+    }
+    return true;
+}
+
 template <typename SaveGameT,
           typename LoadGameT,
           typename UpdateUiT,
-          typename RecordGameActionT>
+          typename RecordGameActionT,
+          typename RestartGameT,
+          typename ReturnToMainMenuT>
 inline bool UpdateActiveGameplayInputRuntime(
     ClientRuntime& Client,
     GameSession& Session,
@@ -487,7 +688,9 @@ inline bool UpdateActiveGameplayInputRuntime(
     SaveGameT&& SaveGame,
     LoadGameT&& LoadGame,
     UpdateUiT&& UpdateUi,
-    RecordGameActionT&& RecordGameAction)
+    RecordGameActionT&& RecordGameAction,
+    RestartGameT&& RestartGame,
+    ReturnToMainMenuT&& ReturnToMainMenu)
 {
     const int ViewportWidth = Core::Platform::GetWindowWidth();
     const int ViewportHeight = Core::Platform::GetWindowHeight();
@@ -495,6 +698,18 @@ inline bool UpdateActiveGameplayInputRuntime(
     const int MouseY = (int)Core::Platform::GetMouseY();
     const bool LeftPressed = Core::Platform::IsMouseButtonPressed(0);
     const bool RightReleased = Core::Platform::IsMouseButtonReleased(1);
+
+    if (HandleMatchGameOverInputGate(
+            Session,
+            ViewportWidth,
+            ViewportHeight,
+            MouseX,
+            MouseY,
+            std::forward<RestartGameT>(RestartGame),
+            std::forward<ReturnToMainMenuT>(ReturnToMainMenu)))
+    {
+        return true;
+    }
 
     const bool InGui = UpdateClientInputGates(
         Gui,
@@ -549,7 +764,7 @@ inline bool UpdateActiveGameplayInputRuntime(
         MouseY,
         InGui,
         std::forward<RecordGameActionT>(RecordGameAction));
-    HandleClientKeyboardCommands(Client, Session);
+    HandleClientKeyboardCommands(Client, Session, Hud);
 
     return false;
 }

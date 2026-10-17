@@ -7,6 +7,7 @@
 #include "Game/Systems/GeyserState.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
@@ -25,6 +26,8 @@ static bool CanAttackTarget(const CombatComponent& Combat,
 
 namespace
 {
+    CombatSystem::DetectorChecker gDetectorChecker;
+    static const Game::Pathfinding::NavigationSpatialHash* sActiveCombatSpatialHash = nullptr;
     constexpr float kAutoTargetLockSeconds = 2.5f;
     constexpr float kInvalidDirectAttackAutoAcquireDelay = 0.35f;
     constexpr int kSubPointsPerPoint = 256;
@@ -259,21 +262,7 @@ namespace
 
     bool IsClassicOrganicUnitType(int ChkUnitID)
     {
-        if (ChkUnitID >= 35 && ChkUnitID <= 57)
-            return true;
-        if (ChkUnitID >= 93 && ChkUnitID <= 97)
-            return true;
-        switch (ChkUnitID)
-        {
-            case 0: case 1: case 7: case 10: case 15: case 16:
-            case 20: case 32: case 34: case 59: case 61: case 62:
-            case 65: case 67: case 74: case 75: case 77: case 79:
-            case 87: case 89: case 90: case 99: case 100:
-            case 103: case 104:
-                return true;
-            default:
-                return false;
-        }
+        return Game::Races::IsOrganicChkUnitID(ChkUnitID);
     }
 
     bool CanTakeIrradiateDamage(const UnitComponent& Unit)
@@ -300,12 +289,11 @@ namespace
 
     int ContainingTransport(Core::ECS::EntityManager& EM, int PassengerID)
     {
-        for (int TransportID : EM.GetEntitiesWith<LoadedUnitsComponent>())
+        if (const auto* Unit = EM.GetComponent<UnitComponent>(PassengerID))
         {
-            auto* Loaded = EM.GetComponent<LoadedUnitsComponent>(TransportID);
-            if (Loaded && std::find(Loaded->PassengerIDs.begin(),
-                                    Loaded->PassengerIDs.end(),
-                                    PassengerID) != Loaded->PassengerIDs.end())
+            const int TransportID = Unit->LoadedInTransportID;
+            if (TransportID >= 0 && EM.IsAlive(TransportID) &&
+                EM.GetComponent<LoadedUnitsComponent>(TransportID))
             {
                 return TransportID;
             }
@@ -342,17 +330,78 @@ namespace
                Cmd->CurrentCommand != CommandType::HoldPosition;
     }
 
+    bool IsTargetDetectedForPlayer(Core::ECS::EntityManager& EM,
+                                  int TargetID,
+                                  int ObserverPlayerID)
+    {
+        const auto* Cloak = EM.GetComponent<CloakComponent>(TargetID);
+        if (!Cloak || (!Cloak->IsCloaked && !Cloak->IsBurrowed))
+            return true;
+
+        const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
+        if (!TargetTrans)
+            return false;
+
+        if (gDetectorChecker && ObserverPlayerID >= 0)
+        {
+            const int TX = (int)(TargetTrans->Position.X / 32.0f);
+            const int TY = (int)(TargetTrans->Position.Y / 32.0f);
+            return gDetectorChecker(TX, TY, ObserverPlayerID);
+        }
+
+        for (int EntityID : EM.GetEntitiesWith<UnitComponent, TransformComponent, PlayerComponent>())
+        {
+            const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+            const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+            const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+            if (!Unit || !Trans || !Player || Unit->HitPoints <= 0)
+                continue;
+            if (Player->PlayerID != ObserverPlayerID)
+                continue;
+            if (!Unit->IsDetector)
+                continue;
+
+            if (const auto* Bldg = EM.GetComponent<BuildingComponent>(EntityID))
+            {
+                if (Bldg->UnderConstruction || (Bldg->RequiresPylon && !Bldg->HasPylonPower))
+                    continue;
+            }
+
+            const float DetectRangePixels = (float)Unit->SightRange * 32.0f;
+            if ((Trans->Position - TargetTrans->Position).LengthSq() <= DetectRangePixels * DetectRangePixels)
+                return true;
+        }
+
+        return false;
+    }
+
     bool IsActiveTargetValid(Core::ECS::EntityManager& EM,
                              const CombatComponent& Combat,
-                             int TargetID)
+                             int TargetID,
+                             int AttackerID = -1)
     {
         auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
         auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
-        return TargetID >= 0 &&
-               TargetUnit &&
-               TargetUnit->HitPoints > 0 &&
-               TargetTrans &&
-               CanAttackTarget(Combat, EM, TargetID);
+        if (!TargetUnit || TargetUnit->HitPoints <= 0 || !TargetTrans ||
+            !CanAttackTarget(Combat, EM, TargetID))
+        {
+            return false;
+        }
+
+        auto* Cloak = EM.GetComponent<CloakComponent>(TargetID);
+        if (Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed) && AttackerID >= 0)
+        {
+            auto* AttackerUnit = EM.GetComponent<UnitComponent>(AttackerID);
+            if (!AttackerUnit || !AttackerUnit->IsDetector)
+            {
+                auto* AttackerPlayer = EM.GetComponent<PlayerComponent>(AttackerID);
+                const int PlayerID = AttackerPlayer ? AttackerPlayer->PlayerID : 0;
+                if (!IsTargetDetectedForPlayer(EM, TargetID, PlayerID))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     void SetAutoTarget(CombatComponent& Combat, int TargetID, float LockSeconds)
@@ -517,6 +566,7 @@ static int EngagementTargetFor(Core::ECS::EntityManager& EM, int EntityID)
             return Combat->TargetEntityID;
         return Combat->AutoTargetEntityID;
     }
+
     return -1;
 }
 
@@ -548,9 +598,24 @@ static Core::Math::Vec2 ComputeCombatFormationTarget(
     std::vector<int> RoleEngagers;
     Core::Math::Vec2 GroupCenter;
 
-    for (int CandidateID :
-         EM.GetEntitiesWith<TransformComponent, UnitComponent,
-                            CombatComponent, PlayerComponent>())
+    std::vector<int> NearbyUnits;
+    if (sActiveCombatSpatialHash && !sActiveCombatSpatialHash->Empty())
+    {
+        const float SearchRadius = 512.0f;
+        sActiveCombatSpatialHash->QueryInto(
+            TargetTrans->Position.X - SearchRadius,
+            TargetTrans->Position.Y - SearchRadius,
+            TargetTrans->Position.X + SearchRadius,
+            TargetTrans->Position.Y + SearchRadius,
+            NearbyUnits);
+    }
+    else
+    {
+        NearbyUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent,
+                                          CombatComponent, PlayerComponent>();
+    }
+
+    for (int CandidateID : NearbyUnits)
     {
         const auto* CandidateUnit = EM.GetComponent<UnitComponent>(CandidateID);
         const auto* CandidatePlayer = EM.GetComponent<PlayerComponent>(CandidateID);
@@ -611,10 +676,15 @@ static Core::Math::Vec2 ComputeCombatFormationTarget(
     const float SelfRadius = CombatCollisionRadius(EM, EntityID);
     const float TargetRadius = CombatCollisionRadius(EM, TargetID);
     const float RoleDepth = SelfRanged
-        ? std::max(32.0f, RangePixels * 0.72f)
+        ? std::max(24.0f, RangePixels * 0.72f)
         : 6.0f;
-    const float StandOff = TargetRadius + SelfRadius + RoleDepth +
-                           (float)Row * SlotSpacing;
+    float StandOff = TargetRadius + SelfRadius + RoleDepth +
+                     (float)Row * SlotSpacing;
+    if (SelfRanged && RangePixels > TargetRadius + SelfRadius + 8.0f)
+    {
+        StandOff = std::min(StandOff, RangePixels - 6.0f);
+    }
+
     return TargetTrans->Position - Forward * StandOff +
            Lateral * LateralOffset;
 }
@@ -628,6 +698,10 @@ static void IssueCombatApproachPreservingCommand(
     const Core::Math::Vec2& CommandTarget,
     int PreserveTargetEntity)
 {
+    const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
+    if (!TargetTrans)
+        return;
+
     const Core::Math::Vec2 ApproachTarget = ComputeCombatFormationTarget(
         EM, EntityID, TargetID, RangePixels);
     if (const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
@@ -636,7 +710,7 @@ static void IssueCombatApproachPreservingCommand(
         Core::Math::Vec2 ExistingTarget = Path->RequestedDestination;
         if (ExistingTarget.LengthSq() <= 0.001f && !Path->Path.empty())
             ExistingTarget = Path->Path.back();
-        if (ExistingTarget.DistanceTo(ApproachTarget) <= 8.0f)
+        if (ExistingTarget.DistanceTo(ApproachTarget) <= 24.0f)
             return;
     }
 
@@ -656,6 +730,9 @@ static bool IsProtectedByDarkSwarm(Core::ECS::EntityManager& EM, int TargetID)
     if (Status && Status->HasEffect(StatusEffect::DarkSwarm))
         return true;
 
+    if (!EM.HasAnyComponent<SpellAreaComponent>())
+        return false;
+
     const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
     if (!TargetTrans)
         return false;
@@ -666,6 +743,36 @@ static bool IsProtectedByDarkSwarm(Core::ECS::EntityManager& EM, int TargetID)
         if (AreaTrans && Area && Area->Effect == StatusEffect::DarkSwarm &&
             Area->DurationRemaining > 0.0f &&
             TargetTrans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsUnderDisruptionWeb(Core::ECS::EntityManager& EM, int EntityID)
+{
+    if (IsAirTarget(EM, EntityID))
+        return false;
+
+    auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
+    if (Status && Status->HasEffect(StatusEffect::DisruptionWeb))
+        return true;
+
+    if (!EM.HasAnyComponent<SpellAreaComponent>())
+        return false;
+
+    const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+    if (!Trans)
+        return false;
+
+    for (int AreaID : EM.GetEntitiesWith<TransformComponent, SpellAreaComponent>())
+    {
+        const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
+        const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
+        if (AreaTrans && Area && Area->Effect == StatusEffect::DisruptionWeb &&
+            Area->DurationRemaining > 0.0f &&
+            Trans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
         {
             return true;
         }
@@ -752,6 +859,8 @@ static bool CanAttackTarget(const CombatComponent& Combat,
         return false;
     if (IsProtectedResourceEntity(EM, TargetID))
         return false;
+    if (ContainingTransport(EM, TargetID) >= 0)
+        return false;
     const bool TargetAir = IsAirTarget(EM, TargetID);
     return TargetAir ? (Combat.CanTargetAir && Combat.AirDamage > 0)
                      : (Combat.CanTargetGround && Combat.GroundDamage > 0);
@@ -762,6 +871,15 @@ static float EffectiveAttackRangePixels(const Core::ECS::EntityManager& EM,
                                         const CombatComponent& Combat,
                                         int TargetID = -1)
 {
+    float BunkerBonusPixels = 0.0f;
+    const int TransportID = ContainingTransport(const_cast<Core::ECS::EntityManager&>(EM), EntityID);
+    if (TransportID >= 0)
+    {
+        const auto* TU = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<UnitComponent>(TransportID);
+        if (TU && TU->ChkUnitID == 125)
+            BunkerBonusPixels = 32.0f;
+    }
+
     if (TargetID < 0)
     {
         const float GroundRange = Combat.GroundAttackRange > 0.0f
@@ -773,12 +891,12 @@ static float EffectiveAttackRangePixels(const Core::ECS::EntityManager& EM,
         const float GroundPixels = Combat.CanTargetGround
             ? GroundRange * 32.0f +
                 (float)UpgradeSystem::GetRangeBonusPixelsForTarget(
-                    EM, EntityID, false)
+                    EM, EntityID, false) + BunkerBonusPixels
             : 0.0f;
         const float AirPixels = Combat.CanTargetAir
             ? AirRange * 32.0f +
                 (float)UpgradeSystem::GetRangeBonusPixelsForTarget(
-                    EM, EntityID, true)
+                    EM, EntityID, true) + BunkerBonusPixels
             : 0.0f;
         return std::max(GroundPixels, AirPixels);
     }
@@ -792,7 +910,8 @@ static float EffectiveAttackRangePixels(const Core::ECS::EntityManager& EM,
         ? ChannelRange
         : Combat.AttackRange;
     return BaseRange * 32.0f +
-           (float)UpgradeSystem::GetRangeBonusPixelsForTarget(EM, EntityID, TargetIsAir);
+           (float)UpgradeSystem::GetRangeBonusPixelsForTarget(EM, EntityID, TargetIsAir) +
+           BunkerBonusPixels;
 }
 
 static void ClearCombatTargetForInvalidTarget(Core::ECS::EntityManager& EM,
@@ -916,6 +1035,11 @@ static void ClearDirectAttackOrderForInvalidTarget(Core::ECS::EntityManager& EM,
     }
 }
 
+void CombatSystem::SetDetectorChecker(DetectorChecker Checker)
+{
+    gDetectorChecker = std::move(Checker);
+}
+
 void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
                                 const std::vector<int>& Attackers,
                                 int TargetEntityID)
@@ -981,23 +1105,104 @@ bool CombatSystem::AreEnemies(int A, int B, Core::ECS::EntityManager& EM)
            !PA->IsRescuePassive && !PB->IsRescuePassive;
 }
 
+static int EvaluateTargetAttackPriority(Core::ECS::EntityManager& EM, int AttackerID, int TargetID)
+{
+    const auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
+    if (!TargetUnit)
+        return 5;
+
+    // Eggs and Larvae have the lowest priority
+    if (TargetUnit->ChkUnitID == 35 || TargetUnit->ChkUnitID == 36 || TargetUnit->ChkUnitID == 97)
+        return 5;
+
+    const auto* AttackerCombat = EM.GetComponent<CombatComponent>(AttackerID);
+    const auto* TargetCombat = EM.GetComponent<CombatComponent>(TargetID);
+    const auto* TargetBuilding = EM.GetComponent<BuildingComponent>(TargetID);
+
+    // Retaliation: if this enemy was the last one that damaged us, give it highest priority
+    if (AttackerCombat && AttackerCombat->LastDamagerEntityID == TargetID)
+        return 0;
+
+    const bool AttackerIsAir = MovesInAir(EM, AttackerID);
+
+    // Defensive buildings (Photon Cannon, Sunken Colony, Spore Colony, Missile Turret, Bunker)
+    if (TargetBuilding)
+    {
+        const bool IsBunker = (TargetUnit->ChkUnitID == 125);
+        const bool ArmedBuilding = TargetCombat && (TargetCombat->CanTargetGround || TargetCombat->CanTargetAir);
+        if (IsBunker || ArmedBuilding)
+        {
+            bool ThreatensAttacker = false;
+            if (IsBunker)
+            {
+                ThreatensAttacker = true;
+            }
+            else if (TargetCombat)
+            {
+                ThreatensAttacker = AttackerIsAir ? TargetCombat->CanTargetAir : TargetCombat->CanTargetGround;
+            }
+            return ThreatensAttacker ? 1 : 2;
+        }
+        // Non-combat building (Pylon, Supply Depot, Barracks, Hatchery, etc.)
+        return 4;
+    }
+
+    // Workers (SCV, Probe, Drone)
+    if (IsWorkerUnit(TargetUnit))
+        return 3;
+
+    // Combat units
+    if (TargetCombat && (TargetCombat->CanTargetGround || TargetCombat->CanTargetAir))
+    {
+        const bool CanThreatenAttacker = AttackerIsAir ? TargetCombat->CanTargetAir : TargetCombat->CanTargetGround;
+        if (CanThreatenAttacker)
+            return 0; // Armed enemy unit that can attack me
+        else
+            return 2; // Armed enemy unit that cannot attack me
+    }
+
+    // Unarmed mobile military/special units (e.g. High Templar, Defiler, Medic, Observer, Overlord, Dropship)
+    return 3;
+}
+
 int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange)
 {
     auto* MyTrans = EM.GetComponent<TransformComponent>(EntityID);
     if (!MyTrans) return -1;
 
     int BestID = -1;
+    int BestPriority = 999;
     float BestDist = MaxRange;
+    const float BoxLimit = MaxRange + 64.0f;
 
-    auto Entities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    static thread_local std::vector<int> Entities;
+    if (sActiveCombatSpatialHash && !sActiveCombatSpatialHash->Empty())
+    {
+        sActiveCombatSpatialHash->QueryInto(
+            MyTrans->Position.X - BoxLimit, MyTrans->Position.Y - BoxLimit,
+            MyTrans->Position.X + BoxLimit, MyTrans->Position.Y + BoxLimit,
+            Entities);
+    }
+    else
+    {
+        Entities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    }
     for (int ID : Entities)
     {
         if (ID == EntityID) continue;
-        if (!AreEnemies(EntityID, ID, EM)) continue;
 
         auto* TargetTrans = EM.GetComponent<TransformComponent>(ID);
+        if (!TargetTrans) continue;
+
+        const float DX = std::abs(TargetTrans->Position.X - MyTrans->Position.X);
+        const float DY = std::abs(TargetTrans->Position.Y - MyTrans->Position.Y);
+        if (DX > BoxLimit || DY > BoxLimit)
+            continue;
+
+        if (!AreEnemies(EntityID, ID, EM)) continue;
+
         auto* TargetUnit = EM.GetComponent<UnitComponent>(ID);
-        if (!TargetTrans || !TargetUnit) continue;
+        if (!TargetUnit) continue;
         if (TargetUnit->HitPoints <= 0) continue;
         if (IsProtectedResourceEntity(EM, ID)) continue;
         auto* MyCombat = EM.GetComponent<CombatComponent>(EntityID);
@@ -1009,17 +1214,28 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
         {
             auto* MyUnit = EM.GetComponent<UnitComponent>(EntityID);
             bool IsDetector = MyUnit && MyUnit->IsDetector;
-            if (!IsDetector) continue;
+            if (!IsDetector)
+            {
+                auto* MyPlayer = EM.GetComponent<PlayerComponent>(EntityID);
+                const int PlayerID = MyPlayer ? MyPlayer->PlayerID : 0;
+                if (!IsTargetDetectedForPlayer(EM, ID, PlayerID))
+                    continue;
+            }
         }
 
         float Dist = CombatEdgeDistance(EM, EntityID, ID);
+        if (Dist > MaxRange)
+            continue;
         if (MyCombat && MyCombat->MinimumAttackRange > 0.0f &&
             Dist < MyCombat->MinimumAttackRange * 32.0f)
         {
             continue;
         }
-        if (Dist < BestDist)
+
+        const int Priority = EvaluateTargetAttackPriority(EM, EntityID, ID);
+        if (Priority < BestPriority || (Priority == BestPriority && Dist < BestDist))
         {
+            BestPriority = Priority;
             BestDist = Dist;
             BestID = ID;
         }
@@ -1141,25 +1357,17 @@ void CombatSystem::ApplyDamageRaw(Core::ECS::EntityManager& EM, int TargetID,
 
     auto* TargetUnit = EM.GetComponent<UnitComponent>(TargetID);
     if (!EM.IsAlive(TargetID) || !TargetUnit || TargetUnit->HitPoints <= 0) return;
-    if (BaseDamageRaw <= 0)
-        return;
-    if (IsProtectedResourceEntity(EM, TargetID))
-        return;
-    if (IsInvulnerableByStatus(EM, TargetID))
-        return;
+    if (BaseDamageRaw <= 0) return;
+    if (IsProtectedResourceEntity(EM, TargetID)) return;
+    if (IsInvulnerableByStatus(EM, TargetID)) return;
     if (RespectDarkSwarm && IsRangedAttack(Attacker) &&
-        IsProtectedByDarkSwarm(EM, TargetID))
-        return;
+        IsProtectedByDarkSwarm(EM, TargetID)) return;
 
     BaseDamageRaw += TargetUnit->AcidSporeCount * 256;
 
-    // Hallucinated attacks do not change vitality, but OpenBW still creates
-    // the directional shield-hit image when the target has at least one full
-    // shield point.
     if (IsHallucinatedAttacker)
     {
-        if (ExactVitalRaw(TargetUnit->ShieldPoints,
-                          TargetUnit->ShieldSubDamage) >= kSubPointsPerPoint)
+        if (ExactVitalRaw(TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage) > 0)
         {
             QueueShieldImpact(EM, TargetID, AttackerID);
         }
@@ -1193,6 +1401,41 @@ void CombatSystem::ApplyDamageRaw(Core::ECS::EntityManager& EM, int TargetID,
     {
         int RemainingDamageRaw = BaseDamageRaw;
         bool AbsorbedShieldDamage = false;
+
+        if (auto* TargetStatus = EM.GetComponent<StatusEffectComponent>(TargetID);
+            TargetStatus && TargetStatus->HasEffect(StatusEffect::DefensiveMatrix) &&
+            TargetUnit->DefensiveMatrixPoints > 0)
+        {
+            const int MatrixRaw = TargetUnit->DefensiveMatrixPoints * kSubPointsPerPoint;
+            if (MatrixRaw >= RemainingDamageRaw)
+            {
+                const int NewMatrixRaw = MatrixRaw - RemainingDamageRaw;
+                TargetUnit->DefensiveMatrixPoints =
+                    (NewMatrixRaw + kSubPointsPerPoint - 1) / kSubPointsPerPoint;
+
+                // Fixed 1 point (256 raw subpoints) scratch damage
+                int ShieldRaw = ExactVitalRaw(TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage);
+                if (TargetUnit->MaxShieldPoints > 0 && ShieldRaw >= kSubPointsPerPoint)
+                {
+                    ShieldRaw -= kSubPointsPerPoint;
+                    StoreVitalRaw(ShieldRaw, TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage);
+                    HadShieldDamage = true;
+                }
+                else
+                {
+                    int HitPointsRaw = ExactVitalRaw(TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
+                    HitPointsRaw = std::max(0, HitPointsRaw - kSubPointsPerPoint);
+                    StoreVitalRaw(HitPointsRaw, TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
+                }
+                RemainingDamageRaw = 0;
+            }
+            else
+            {
+                RemainingDamageRaw -= MatrixRaw;
+                TargetUnit->DefensiveMatrixPoints = 0;
+                TargetStatus->RemoveEffect(StatusEffect::DefensiveMatrix);
+            }
+        }
 
         int ShieldRaw = ExactVitalRaw(
             TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage);
@@ -1302,6 +1545,17 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
         ClearCombatStateForInactiveAttacker(EM, AttackerID);
         return false;
     }
+    if (IsUnderDisruptionWeb(EM, AttackerID))
+    {
+        Combat->PendingAttackFrame = false;
+        Combat->PendingAttackTargetEntityID = -1;
+        Combat->PendingAttackDamage = 0;
+        Combat->PendingAttackUpgradeBonus = 0;
+        Combat->PendingAttackHitCount = 1;
+        Combat->PendingAttackElapsed = 0.0f;
+        Combat->PendingAttackMissedAtLaunch = false;
+        return false;
+    }
 
     const int TargetID = Combat->PendingAttackTargetEntityID;
     Core::Math::Vec2 TargetPos = Combat->PendingAttackTargetPos;
@@ -1332,7 +1586,10 @@ bool CombatSystem::ResolvePendingAttackFrame(Core::ECS::EntityManager& EM,
     }
 
     const bool DirectMelee =
-        Combat->WeaponBeh == WeaponBehavior::Melee &&
+        (Combat->WeaponBeh == WeaponBehavior::Melee ||
+         (Combat->AttackRange <= 1.0f && Combat->WeaponBeh != WeaponBehavior::Bounce &&
+          Combat->WeaponBeh != WeaponBehavior::AppearOnTarget &&
+          Combat->WeaponBeh != WeaponBehavior::Lob)) &&
         Combat->Splash == SplashType::None;
     const bool DestroySourceDirectly =
         DirectMelee && Combat->SelfDestructOnAttack;
@@ -1588,6 +1845,8 @@ void CombatSystem::UpdateStatusEffects(Core::ECS::EntityManager& EM, float Delta
             Unit->ShieldPoints = 0;
             Unit->ShieldSubDamage = 0;
             Unit->EnergyPoints = 0;
+            Unit->DefensiveMatrixPoints = 0;
+            Status->RemoveEffect(StatusEffect::DefensiveMatrix);
             if (auto* Cloak = EM.GetComponent<CloakComponent>(ID);
                 Cloak && Cloak->IsCloaked && !Cloak->IsPassiveCloak && !Cloak->IsBurrowed)
             {
@@ -1599,6 +1858,10 @@ void CombatSystem::UpdateStatusEffects(Core::ECS::EntityManager& EM, float Delta
         const bool WasHallucination =
             Status->HasEffect(StatusEffect::Hallucination);
         Status->Tick(DeltaTime);
+        if (!Status->HasEffect(StatusEffect::DefensiveMatrix))
+        {
+            Unit->DefensiveMatrixPoints = 0;
+        }
         if (WasHallucination &&
             !Status->HasEffect(StatusEffect::Hallucination))
         {
@@ -1661,7 +1924,79 @@ void CombatSystem::Update(float DeltaTime)
     // Status effect tick
     UpdateStatusEffects(EM, DeltaTime);
 
-    // Combat processing
+    // Active cloaked units drain energy over time and decloak upon depletion
+    for (int ID : EM.GetEntitiesWith<UnitComponent, CloakComponent>())
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        auto* Cloak = EM.GetComponent<CloakComponent>(ID);
+        if (!Unit || !Cloak || Unit->HitPoints <= 0)
+            continue;
+
+        if (Cloak->IsCloaked && !Cloak->IsPassiveCloak && !Cloak->IsBurrowed)
+        {
+            const float DrainRate = Cloak->CloakEnergyCost > 0.0f ? Cloak->CloakEnergyCost : 1.25f;
+            Unit->CloakEnergyAccumulator += DrainRate * DeltaTime;
+            const int DrainPoints = static_cast<int>(Unit->CloakEnergyAccumulator);
+            if (DrainPoints > 0)
+            {
+                Unit->CloakEnergyAccumulator -= static_cast<float>(DrainPoints);
+                Unit->EnergyPoints -= DrainPoints;
+                if (Unit->EnergyPoints <= 0)
+                {
+                    Unit->EnergyPoints = 0;
+                    Cloak->IsCloaked = false;
+                    Cloak->CloakEnergyCost = 0.0f;
+                }
+            }
+        }
+    }
+
+    // Terran buildings burn down when below 33% HP
+    for (int ID : EM.GetEntitiesWith<UnitComponent, BuildingComponent>())
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        auto* Building = EM.GetComponent<BuildingComponent>(ID);
+        if (!Unit || !Building || Building->UnderConstruction || Unit->HitPoints <= 0)
+            continue;
+
+        if (Unit->UnitRace == Race::Terran && Unit->HitPoints < (Unit->MaxHitPoints * 33) / 100)
+        {
+            constexpr float BurnRate = 2.0f;
+            Building->BurnDamageAccumulator += BurnRate * DeltaTime;
+            const int BurnPoints = static_cast<int>(Building->BurnDamageAccumulator);
+            if (BurnPoints > 0)
+            {
+                Building->BurnDamageAccumulator -= static_cast<float>(BurnPoints);
+                Unit->HitPoints -= BurnPoints;
+                if (Unit->HitPoints <= 0)
+                {
+                    Unit->HitPoints = 0;
+                    RecordUnitDeath(EM, ID, -1, false);
+                    EM.DestroyEntity(ID);
+                }
+            }
+        }
+        else
+        {
+            Building->BurnDamageAccumulator = 0.0f;
+        }
+    }
+
+    // Combat processing with Spatial Hash acceleration
+    static thread_local Game::Pathfinding::NavigationSpatialHash CombatSpatialHash;
+    CombatSpatialHash.Clear();
+    auto UnitEntities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    for (int UID : UnitEntities)
+    {
+        if (auto* T = EM.GetComponent<TransformComponent>(UID))
+            CombatSpatialHash.Insert(UID, T->Position);
+    }
+    sActiveCombatSpatialHash = &CombatSpatialHash;
+    struct CombatSpatialScope
+    {
+        ~CombatSpatialScope() { sActiveCombatSpatialHash = nullptr; }
+    } Scope;
+
     auto Entities = EM.GetEntitiesWith<TransformComponent, CombatComponent>();
     for (auto ID : Entities)
         ProcessCombat(EM, ID, DeltaTime);
@@ -1681,8 +2016,32 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         return;
     }
 
+    const int TransportID = ContainingTransport(EM, EntityID);
+    const bool InTransport = (TransportID >= 0);
+    const auto* TransportUnit = InTransport ? EM.GetComponent<UnitComponent>(TransportID) : nullptr;
+    const bool InBunker = InTransport && TransportUnit && (TransportUnit->ChkUnitID == 125);
+
+    if (InTransport && !InBunker)
+    {
+        ClearCombatStateForInactiveAttacker(EM, EntityID);
+        return;
+    }
+
     // Check if unit is frozen by stasis/lockdown/maelstrom
     if (IsFrozenByStatus(EM, EntityID))
+        return;
+
+    if (const auto* Bldg = EM.GetComponent<BuildingComponent>(EntityID))
+    {
+        if (Bldg->UnderConstruction || (Bldg->RequiresPylon && !Bldg->HasPylonPower))
+        {
+            ClearCombatStateForInactiveAttacker(EM, EntityID);
+            return;
+        }
+    }
+
+    // Disruption Web prevents ground units and ground defense buildings from attacking
+    if (IsUnderDisruptionWeb(EM, EntityID) || (InTransport && IsUnderDisruptionWeb(EM, TransportID)))
         return;
 
     if (auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID))
@@ -1722,7 +2081,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     // Validate target
     if (TargetID >= 0)
     {
-        if (!IsActiveTargetValid(EM, *Combat, TargetID))
+        if (!IsActiveTargetValid(EM, *Combat, TargetID, EntityID))
         {
             ClearCombatTargetForInvalidTarget(EM, EntityID, TargetID);
             TargetID = -1;
@@ -1730,7 +2089,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     }
 
     if (Combat->AutoTargetEntityID >= 0 &&
-        !IsActiveTargetValid(EM, *Combat, Combat->AutoTargetEntityID))
+        !IsActiveTargetValid(EM, *Combat, Combat->AutoTargetEntityID, EntityID))
     {
         Combat->AutoTargetEntityID = -1;
         Combat->AutoTargetLockSeconds = 0.0f;
@@ -1744,7 +2103,8 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
     // Find new target for attack-move
     if (TargetID < 0 && Cmd && Cmd->CurrentCommand == CommandType::AttackMove)
     {
-        const float SearchRangePixels = BaseRangePixels * 2.0f;
+        // Ground units in StarCraft acquire targets up to their sight radius (typically ~7-8 tiles = 224-256 px).
+        const float SearchRangePixels = std::max(BaseRangePixels * 2.0f, 224.0f);
         TargetID = FindNearestEnemy(EM, EntityID, SearchRangePixels);
         if (TargetID >= 0)
         {
@@ -1785,10 +2145,22 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
         {
             auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
             const bool HasActivePath = Path && Path->PathIndex < (int)Path->Path.size();
-            if (!HasActivePath && Trans->Position.DistanceTo(Cmd->TargetPosition) > 8.0f)
+            const bool HasRecentFailure = Path && Path->HasRecentMoveFailure && Path->RecentMoveFailureTicks > 0;
+            const bool ReachedPartialLimit = Path &&
+                Path->LastPathStatus == Game::Pathfinding::PathStatus::Partial &&
+                Trans->Position.DistanceTo(Path->ResolvedPathDestination) <= 24.0f;
+            const bool IsStalled = Path && (Path->StallTicks > 0 || Path->DestinationStallTicks > 0);
+
+            if (!HasActivePath && !HasRecentFailure && !ReachedPartialLimit && !IsStalled &&
+                Trans->Position.DistanceTo(Cmd->TargetPosition) > 8.0f)
             {
                 IssueMovePreservingCommand(EM, EntityID, Cmd->TargetPosition,
                                            CommandType::AttackMove, Cmd->TargetPosition, -1);
+                if (Path)
+                {
+                    Path->RecentMoveFailureTicks = 12;
+                    Path->RecentMoveFailureCooldown = 0.5f;
+                }
             }
         }
         return;
@@ -1804,7 +2176,7 @@ void CombatSystem::ProcessCombat(Core::ECS::EntityManager& EM, int EntityID, flo
 
     if (Dist > RangePixels)
     {
-        if (HoldPosition || !CanChaseTargetTemporarily(Cmd, EM.GetComponent<BuildingComponent>(EntityID)))
+        if (HoldPosition || InBunker || !CanChaseTargetTemporarily(Cmd, EM.GetComponent<BuildingComponent>(EntityID)))
             return;
 
         const CommandType PreserveCommand = Cmd ? Cmd->CurrentCommand : CommandType::Attack;

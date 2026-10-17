@@ -6,6 +6,7 @@
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
+#include "Game/Systems/DeathEvents.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1001,6 +1002,253 @@ int main()
     Require(LandedRender &&
             LandedRender->Layer == Game::Components::RenderLayer::Buildings,
         "completed landing renders on the building layer again");
+
+    // Addon Placement, Construction, Cancellation Refund, and Footprint Validation
+    {
+        const int TestFactoryDefID = Game::Races::GetUnitDefID("Factory");
+        const int TestMachineShopDefID = Game::Races::GetUnitDefID("MachineShop");
+        const auto TestMachineShopDef = Game::Races::GetUnitDefByID(TestMachineShopDefID);
+
+        const int FactoryID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, TestFactoryDefID, Map.TileToWorld(20, 20), 0);
+        Require(FactoryID > 0, "Factory spawned");
+
+        Resources.Minerals = 500;
+        Resources.VespeneGas = 500;
+
+        std::string FailReason;
+        Require(Game::Systems::BuildingSystem::CanBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}, &FailReason),
+            "CanBuild Machine Shop on unobstructed Factory should succeed");
+
+        // Obstruct addon footprint at (20 + 4, 20 + 2) = (24, 22)
+        const int ObstructingDepot = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, SupplyDepotDefID, Map.TileToWorld(24, 22), 0);
+        Require(!Game::Systems::BuildingSystem::CanBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}, &FailReason),
+            "CanBuild Machine Shop on obstructed tile footprint must fail");
+        Require(FailReason == "invalid placement", "Obstructed addon placement gives invalid placement");
+
+        // Remove obstruction and verify CanBuild succeeds again
+        EM.DestroyEntity(ObstructingDepot);
+        Require(Game::Systems::BuildingSystem::CanBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}, &FailReason),
+            "CanBuild succeeds again once obstruction is removed");
+
+        // Lift Factory -> CanBuild must fail with "add-on parent is lifted"
+        auto* FactoryBuilding = EM.GetComponent<Game::Components::BuildingComponent>(FactoryID);
+        FactoryBuilding->IsLifted = true;
+        Require(!Game::Systems::BuildingSystem::CanBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}, &FailReason),
+            "CanBuild addon on lifted building must fail");
+        Require(FailReason == "add-on parent is lifted", "Fail reason must be add-on parent is lifted");
+        FactoryBuilding->IsLifted = false;
+
+        // Start construction of Machine Shop
+        const int MineralsBefore = Resources.Minerals;
+        const int GasBefore = Resources.VespeneGas;
+        Require(Game::Systems::BuildingSystem::StartBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}),
+            "StartBuild Machine Shop succeeded");
+        const int MachineShopID = FactoryBuilding->AddonID;
+        Require(MachineShopID > 0, "Factory AddonID populated");
+        Require(Resources.Minerals == MineralsBefore - TestMachineShopDef.MineralCost,
+            "Minerals deducted for addon build");
+        Require(Resources.VespeneGas == GasBefore - TestMachineShopDef.GasCost,
+            "Gas deducted for addon build");
+
+        // Cannot build another addon while one is building/attached
+        Require(!Game::Systems::BuildingSystem::CanBuild(
+            EM, FactoryID, TestMachineShopDefID, Game::Systems::BuildTarget{}, &FailReason),
+            "CanBuild addon when already attached must fail");
+        Require(FailReason == "parent already has an add-on", "Fail reason must be parent already has an add-on");
+
+        // Cancel construction: 75% refund and unbind
+        const int MineralsAtCancel = Resources.Minerals;
+        const int GasAtCancel = Resources.VespeneGas;
+        Require(Game::Systems::BuildingSystem::CancelConstruction(EM, MachineShopID),
+            "CancelConstruction on Machine Shop succeeded");
+        Require(!EM.IsAlive(MachineShopID), "Cancelled Machine Shop entity destroyed");
+        Require(FactoryBuilding->AddonID == -1, "Factory AddonID cleared on cancellation");
+        Require(Resources.Minerals == MineralsAtCancel + (TestMachineShopDef.MineralCost * 3 / 4),
+            "75% minerals refunded on cancellation");
+        Require(Resources.VespeneGas == GasAtCancel + (TestMachineShopDef.GasCost * 3 / 4),
+            "75% gas refunded on cancellation");
+    }
+
+    // Geyser Construction Cancellation and Restoration
+    {
+        const int RefineryDefID = Game::Races::GetUnitDefID("Refinery");
+        const auto RefineryDef = Game::Races::GetUnitDefByID(RefineryDefID);
+        const int GeyserID = CreateVespeneGeyser(EM, Map.TileToWorld(28, 28));
+
+        // Simulate claiming geyser for refinery construction
+        auto& Claimed = EM.AddComponent<Game::Components::ClaimedGeyserComponent>(GeyserID);
+        Claimed.IsClaimed = true;
+        Claimed.OriginalUnit = *EM.GetComponent<Game::Components::UnitComponent>(GeyserID);
+        Claimed.OriginalBuilding = *EM.GetComponent<Game::Components::BuildingComponent>(GeyserID);
+        Claimed.OriginalPlayer = *EM.GetComponent<Game::Components::PlayerComponent>(GeyserID);
+        Claimed.OriginalRender = *EM.GetComponent<Game::Components::RenderComponent>(GeyserID);
+
+        auto* RefineryBuilding = EM.GetComponent<Game::Components::BuildingComponent>(GeyserID);
+        RefineryBuilding->UnderConstruction = true;
+        RefineryBuilding->BuildingDefID = RefineryDefID;
+
+        auto* RefineryPlayer = EM.GetComponent<Game::Components::PlayerComponent>(GeyserID);
+        RefineryPlayer->PlayerID = 0;
+
+        Resources.Minerals = 200;
+        const int MineralsAtCancel = Resources.Minerals;
+        Require(Game::Systems::BuildingSystem::CancelConstruction(EM, GeyserID),
+            "CancelConstruction on Refinery succeeded");
+        Require(Resources.Minerals == MineralsAtCancel + (RefineryDef.MineralCost * 3 / 4),
+            "75% minerals refunded on Refinery cancellation");
+        Require(EM.IsAlive(GeyserID), "Geyser entity remains alive after cancellation");
+        auto* RestoredResource = EM.GetComponent<Game::Components::ResourceComponent>(GeyserID);
+        Require(RestoredResource && RestoredResource->Type == Game::Components::ResourceType::VespeneGas,
+            "Entity restored as VespeneGas resource");
+        Require(EM.GetComponent<Game::Components::ClaimedGeyserComponent>(GeyserID) == nullptr,
+            "ClaimedGeyserComponent removed from restored geyser");
+    }
+
+    // Addon and Parent Death Decoupling
+    {
+        const int TestFactoryDefID2 = Game::Races::GetUnitDefID("Factory");
+        const int TestMachineShopDefID2 = Game::Races::GetUnitDefID("MachineShop");
+
+        const int FactoryID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, TestFactoryDefID2, Map.TileToWorld(40, 40), 0);
+        const int AddonID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, TestMachineShopDefID2, Map.TileToWorld(44, 42), 0);
+
+        auto* FB = EM.GetComponent<Game::Components::BuildingComponent>(FactoryID);
+        auto* AB = EM.GetComponent<Game::Components::BuildingComponent>(AddonID);
+        FB->AddonID = AddonID;
+        AB->IsAddon = true;
+        AB->BuilderUnitID = FactoryID;
+
+        // Parent death unlinks addon
+        Game::Systems::RecordUnitDeath(EM, FactoryID);
+        Require(AB->BuilderUnitID == -1, "Parent death clears addon BuilderUnitID");
+        Require(FB->AddonID == -1, "Parent death clears Factory AddonID");
+
+        // Reconnect and test addon death unlinks parent
+        const int Factory2ID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, TestFactoryDefID2, Map.TileToWorld(50, 50), 0);
+        const int Addon2ID = Game::Systems::BuildingSystem::DebugSpawnCompletedBuilding(
+            EM, TestMachineShopDefID2, Map.TileToWorld(54, 52), 0);
+        auto* FB2 = EM.GetComponent<Game::Components::BuildingComponent>(Factory2ID);
+        auto* AB2 = EM.GetComponent<Game::Components::BuildingComponent>(Addon2ID);
+        FB2->AddonID = Addon2ID;
+        AB2->IsAddon = true;
+        AB2->BuilderUnitID = Factory2ID;
+
+        Game::Systems::RecordUnitDeath(EM, Addon2ID);
+        Require(FB2->AddonID == -1, "Addon death clears Factory AddonID");
+    }
+
+    // Multi-SCV collaborative construction regression
+    {
+        const Core::Math::Vec2 DepotBuildPos = Map.TileToWorld(20, 24);
+        auto& PlayerZeroRes = Game::Systems::HarvestSystem::GetResources(0);
+        PlayerZeroRes.Minerals = 500;
+        PlayerZeroRes.VespeneGas = 0;
+
+        const int PrimaryScv = CreateTerranUnit(EM, "SCV", 0, DepotBuildPos);
+        const int AssistantA = CreateTerranUnit(EM, "SCV", 0, DepotBuildPos + Core::Math::Vec2{-100.0f, 0.0f});
+        const int AssistantB = CreateTerranUnit(EM, "SCV", 0, DepotBuildPos + Core::Math::Vec2{100.0f, 0.0f});
+
+        Require(Game::Systems::BuildingSystem::StartBuild(
+                    EM, PrimaryScv, SupplyDepotDefID, DepotBuildPos, {AssistantA, AssistantB}),
+                "StartBuild with multiple assistant SCVs succeeds");
+
+        BuildingSystem.Update(0.001f);
+
+        int DepotUnderConstruction = -1;
+        for (int EntityID : EM.GetEntitiesWith<Game::Components::BuildingComponent>())
+        {
+            const auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(EntityID);
+            if (Building && Building->BuildingDefID == SupplyDepotDefID &&
+                Building->UnderConstruction && Building->BuilderUnitID == PrimaryScv)
+            {
+                DepotUnderConstruction = EntityID;
+                break;
+            }
+        }
+        Require(DepotUnderConstruction > 0, "Supply Depot under construction created");
+        auto* DepotComp = EM.GetComponent<Game::Components::BuildingComponent>(DepotUnderConstruction);
+        Require(DepotComp != nullptr, "Depot has building component");
+        Require(DepotComp->AssistantBuilderUnitIDs.size() == 2,
+                "both assistant SCVs registered to collaborative construction");
+
+        // Simulate assistant SCVs having arrived at building footprint perimeter
+        auto* TransA = EM.GetComponent<Game::Components::TransformComponent>(AssistantA);
+        auto* TransB = EM.GetComponent<Game::Components::TransformComponent>(AssistantB);
+        if (TransA) TransA->Position = DepotBuildPos + Core::Math::Vec2{-48.0f - 16.0f, 0.0f};
+        if (TransB) TransB->Position = DepotBuildPos + Core::Math::Vec2{48.0f + 16.0f, 0.0f};
+
+        const float ProgressBefore = DepotComp->BuildProgress;
+        BuildingSystem.Update(1.0f);
+        // With 3 SCVs nearby, progress advances by ~3x
+        Require(DepotComp->BuildProgress - ProgressBefore >= 2.9f,
+                "three SCVs accelerate construction at 3x rate");
+
+        // Finish construction and verify all 3 SCVs are released and safely unstuck
+        DepotComp->BuildProgress = DepotComp->TotalBuildTime - 1.0f;
+        BuildingSystem.Update(1.0f);
+        Require(!DepotComp->UnderConstruction, "construction finishes cleanly");
+        Require(DepotComp->AssistantBuilderUnitIDs.empty(), "assistant builders cleared on finish");
+
+        for (int BuilderID : {PrimaryScv, AssistantA, AssistantB})
+        {
+            const auto* Cmd = EM.GetComponent<Game::Components::CommandComponent>(BuilderID);
+            Require(Cmd && Cmd->CurrentCommand == Game::Components::CommandType::Stop,
+                    "all builders returned to Stop after completion");
+        }
+    }
+
+    {
+        // Verify defensive structure detection and combat component activation lifecycle
+        const int TurretDefID = Game::Races::GetUnitDefID("MissileTurret");
+        const auto TurretDef = Game::Races::GetUnitDefByID(TurretDefID);
+        const int Turret = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(Turret).Position = {600.0f, 600.0f};
+        EM.AddComponent<Game::Components::PlayerComponent>(Turret).PlayerID = 0;
+        auto& TurretUnit = EM.AddComponent<Game::Components::UnitComponent>(Turret);
+        TurretUnit.ChkUnitID = TurretDef.ChkUnitID;
+        TurretUnit.HitPoints = TurretDef.HitPoints / 10;
+        TurretUnit.MaxHitPoints = TurretDef.HitPoints;
+        TurretUnit.UnitRace = TurretDef.RaceType;
+        TurretUnit.SightRange = TurretDef.SightRange;
+        TurretUnit.IsDetector = false; // under construction
+        auto& TurretComp = EM.AddComponent<Game::Components::BuildingComponent>(Turret);
+        TurretComp.IsBuilding = true;
+        TurretComp.UnderConstruction = true;
+        TurretComp.BuildingDefID = TurretDefID;
+        TurretComp.TotalBuildTime = (float)TurretDef.BuildTime;
+        TurretComp.BuildProgress = TurretComp.TotalBuildTime - 0.5f;
+
+        const int BuilderScv = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(BuilderScv).Position = {600.0f - 32.0f, 600.0f};
+        EM.AddComponent<Game::Components::PlayerComponent>(BuilderScv).PlayerID = 0;
+        auto& BuilderScvUnit = EM.AddComponent<Game::Components::UnitComponent>(BuilderScv);
+        BuilderScvUnit.ChkUnitID = 7;
+        BuilderScvUnit.HitPoints = 60;
+        TurretComp.BuilderUnitID = BuilderScv;
+
+        Require(!TurretUnit.IsDetector,
+                "Turret under construction does not act as detector");
+        Require(!EM.GetComponent<Game::Components::CombatComponent>(Turret),
+                "Turret under construction has no active combat component");
+
+        // Complete construction
+        BuildingSystem.Update(1.0f);
+        Require(!TurretComp.UnderConstruction, "Turret finishes construction");
+        Require(TurretUnit.IsDetector,
+                "Completed Turret gains active detector status");
+        Require(EM.GetComponent<Game::Components::CombatComponent>(Turret) != nullptr,
+                "Completed Turret receives CombatComponent for defense");
+    }
 
     std::printf("BuildingPlacementTest passed\n");
     return 0;

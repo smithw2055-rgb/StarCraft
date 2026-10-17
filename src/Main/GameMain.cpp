@@ -1,5 +1,6 @@
 #include "Core/Platform/Platform.h"
 #include "GameController.h"
+#include "Render/Renderer.h"
 
 // Keep this translation unit tied to the complete GameController runtime layout.
 
@@ -17,6 +18,8 @@ namespace
 {
     Game::Client::GameLoop::GameController gController;
     std::string gMapPathOverride;
+    std::string gScreenshotPath;
+    int gScreenshotFrame = 30;
     bool gDirectTestMap = false;
     bool gHasCameraOverride = false;
     float gCameraX = 0.0f;
@@ -51,9 +54,21 @@ static void FrameCb()
     gController.Update(Dt, W, H);
     gController.Render(W, H);
 
+    ++gFrameCount;
+    if (!gScreenshotPath.empty() && gFrameCount == gScreenshotFrame)
+    {
+        if (Render::CaptureScreenshot(gScreenshotPath))
+        {
+            std::cout << "StarCraft: screenshot saved to " << gScreenshotPath << std::endl;
+        }
+        else
+        {
+            std::cerr << "StarCraft: failed to capture screenshot to " << gScreenshotPath << std::endl;
+        }
+    }
+
     if (gExitAfterFrame > 0)
     {
-        ++gFrameCount;
         if (gFrameCount >= gExitAfterFrame)
             Core::Platform::RequestQuit();
     }
@@ -98,6 +113,14 @@ sapp_desc sokol_main(int argc, char* argv[])
         {
             gExitAfterFrame = std::atoi(argv[++I]);
         }
+        else if (std::strcmp(argv[I], "--screenshot") == 0 && I + 1 < argc)
+        {
+            gScreenshotPath = argv[++I];
+        }
+        else if (std::strcmp(argv[I], "--screenshot-frame") == 0 && I + 1 < argc)
+        {
+            gScreenshotFrame = std::atoi(argv[++I]);
+        }
         else if (std::strcmp(argv[I], "--interaction-demo") == 0)
         {
             gInteractionDemo = true;
@@ -122,6 +145,11 @@ sapp_desc sokol_main(int argc, char* argv[])
     {
         if (const char* EnvExitFrame = std::getenv("STARCRAFT_EXIT_AFTER_FRAME"))
             gExitAfterFrame = std::atoi(EnvExitFrame);
+    }
+    if (gScreenshotPath.empty())
+    {
+        if (const char* EnvScreenshot = std::getenv("STARCRAFT_SCREENSHOT_PATH"))
+            gScreenshotPath = EnvScreenshot;
     }
 
     if (!gMapPathOverride.empty())

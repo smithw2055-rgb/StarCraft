@@ -50,6 +50,7 @@ void InitializeGuiRuntime(
     int Width,
     int Height,
     std::function<void(const std::string& Action)> GlueActionCallback,
+    std::function<void(const std::string& AudioPath)> GlueAudioCallback,
     bool EnableGlueMenu)
 {
     Gui.UseGui = false;
@@ -92,6 +93,8 @@ void InitializeGuiRuntime(
         if (Gui.GlueGuiInitialized)
         {
             Gui.GlueGui.SetActionCallback(std::move(GlueActionCallback));
+            if (GlueAudioCallback)
+                Gui.GlueGui.SetAudioCallback(std::move(GlueAudioCallback));
         }
     }
     else
@@ -103,6 +106,7 @@ void InitializeGuiRuntime(
     (void)Width;
     (void)Height;
     (void)GlueActionCallback;
+    (void)GlueAudioCallback;
     (void)EnableGlueMenu;
 #endif
 }

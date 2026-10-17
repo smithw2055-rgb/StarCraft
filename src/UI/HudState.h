@@ -15,6 +15,7 @@ struct HudState
     HudSelectionState Selection;
     HudMinimapState Minimap;
     int ActiveCommand = -1;
+    float MatchElapsedSeconds = 0.0f;
     HudCommandPanelState CommandPanel;
     HudInfoPanelState InfoPanel;
 };

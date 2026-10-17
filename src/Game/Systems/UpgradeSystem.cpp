@@ -63,6 +63,7 @@ namespace
         {ResearchId::Terran_YamatoGun,       "Yamato Gun",       "PhysicsLab",     100, 100, 0,  0,  1, 1800, 0},
         {ResearchId::Terran_ColossusReactor, "Colossus Reactor", "PhysicsLab",     150, 150, 0,  0,  1, 2500, 0},
         {ResearchId::Terran_CharonBoosters,  "Charon Boosters",  "MachineShop",    100, 100, 0,  0,  1, 2000, 0},
+        {ResearchId::Terran_PersonalCloaking,"Personal Cloaking","CovertOps",      100, 100, 0,  0,  1, 1200, 0},
 
         // Zerg
         {ResearchId::Zerg_MeleeAttacks,      "Melee Attacks",      "Evolution Chamber", 100, 100, 50, 50, 3, 4000, 480},
@@ -409,7 +410,8 @@ void UpgradeSystem::Update(float DeltaTime)
         auto* Bldg = EM.GetComponent<BuildingComponent>(ID);
         if (!Bldg || !Bldg->IsResearching) continue;
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
-        if (Bldg->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+        if (Bldg->UnderConstruction || !Unit || Unit->HitPoints <= 0 ||
+            (Bldg->RequiresPylon && !Bldg->HasPylonPower))
             continue;
 
         Bldg->BuildTimeRemaining -= DeltaTime;
@@ -478,6 +480,11 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
     if (Building->UnderConstruction)
     {
         SetReason(OutReason, "building is still under construction");
+        return false;
+    }
+    if (Building->RequiresPylon && !Building->HasPylonPower)
+    {
+        SetReason(OutReason, "building requires pylon power");
         return false;
     }
     if (Building->IsResearching)

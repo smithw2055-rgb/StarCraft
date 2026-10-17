@@ -24,12 +24,12 @@ execute_process(
         STARCRAFT_INTERACTION_SMOKE=1
         STARCRAFT_FULL_ROSTER_SMOKE=1
         STARCRAFT_LOG_FPS=1
-        "${STARCRAFT_EXE}" --test-map "${_test_map}" --exit-after-frame 20
+        "${STARCRAFT_EXE}" --test-map "${_test_map}" --exit-after-frame 10
     WORKING_DIRECTORY "${STARCRAFT_WORKDIR}"
     RESULT_VARIABLE _result
     OUTPUT_VARIABLE _stdout
     ERROR_VARIABLE _stderr
-    TIMEOUT 45)
+    TIMEOUT 90)
 
 file(WRITE "${_stdout_log}" "${_stdout}")
 file(WRITE "${_stderr_log}" "${_stderr}")

@@ -47,6 +47,7 @@ const ImageOpaqueBounds* ResourceCache::GetWireframeOpaqueBounds(int FrameIndex)
 {
     if (FrameIndex < 0 || FrameIndex >= (int)mUI.WireframeOpaqueBounds.size())
         return nullptr;
+    const_cast<ResourceCache*>(this)->EnsureWireframeFrame(FrameIndex);
     return &mUI.WireframeOpaqueBounds[(size_t)FrameIndex];
 }
 

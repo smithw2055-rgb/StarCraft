@@ -12,10 +12,47 @@ namespace Resource
 // Forwad decls
 class GameDataLoader;
 
+namespace UnitFlags
+{
+    constexpr uint32_t Building = 0x00000001;
+    constexpr uint32_t Addon = 0x00000002;
+    constexpr uint32_t Flyer = 0x00000004;
+    constexpr uint32_t Worker = 0x00000008;
+    constexpr uint32_t Subunit = 0x00000010;
+    constexpr uint32_t FlyingBuilding = 0x00000020;
+    constexpr uint32_t Hero = 0x00000040;
+    constexpr uint32_t RegensHP = 0x00000080;
+    constexpr uint32_t AnimatedResource = 0x00000100;
+    constexpr uint32_t Cloaking = 0x00000200;
+    constexpr uint32_t TwoUnitsInOneEgg = 0x00000400;
+    constexpr uint32_t SingleEntity = 0x00000800;
+    constexpr uint32_t ResourceDepot = 0x00001000;
+    constexpr uint32_t ResourceContainer = 0x00002000;
+    constexpr uint32_t RoboticUnit = 0x00004000;
+    constexpr uint32_t Detector = 0x00008000;
+    constexpr uint32_t Organic = 0x00010000;
+    constexpr uint32_t CreepBuilding = 0x00020000;
+    constexpr uint32_t Unused = 0x00040000;
+    constexpr uint32_t RequiresPsi = 0x00080000;
+    constexpr uint32_t Burrowable = 0x00100000;
+    constexpr uint32_t Spellcaster = 0x00200000;
+    constexpr uint32_t PermanentCloak = 0x00400000;
+    constexpr uint32_t PickupItem = 0x00800000;
+    constexpr uint32_t IgnoreOverlay = 0x01000000;
+    constexpr uint32_t MediumOverlay = 0x02000000;
+    constexpr uint32_t LargeOverlay = 0x04000000;
+    constexpr uint32_t AutoAttackAndMove = 0x08000000;
+    constexpr uint32_t CanAttack = 0x10000000;
+    constexpr uint32_t Invincible = 0x20000000;
+    constexpr uint32_t Mechanical = 0x40000000;
+    constexpr uint32_t ProducesUnits = 0x80000000;
+}
+
 struct UnitEntry
 {
     uint32_t Id = 0;
     std::string Name;
+    uint32_t Flags = 0;
     uint16_t SpriteID = 0;
     uint16_t PortraitID = 0;
     uint32_t HitPoints = 100;
@@ -52,8 +89,44 @@ struct UnitEntry
     uint8_t Hallucinable = 1;
     uint8_t IsBuilding = 0;
 
+    bool HasBuildingFlag() const { return (Flags & UnitFlags::Building) != 0 || IsBuilding != 0; }
+    bool IsAddon() const { return (Flags & UnitFlags::Addon) != 0; }
+    bool IsFlyer() const { return (Flags & UnitFlags::Flyer) != 0; }
+    bool IsWorker() const { return (Flags & UnitFlags::Worker) != 0; }
+    bool IsSubunit() const { return (Flags & UnitFlags::Subunit) != 0; }
+    bool IsFlyingBuilding() const { return (Flags & UnitFlags::FlyingBuilding) != 0; }
+    bool IsHero() const { return (Flags & UnitFlags::Hero) != 0; }
+    bool IsRegenerating() const { return (Flags & UnitFlags::RegensHP) != 0; }
+    bool IsResourceDepot() const { return (Flags & UnitFlags::ResourceDepot) != 0; }
+    bool IsRobotic() const { return (Flags & UnitFlags::RoboticUnit) != 0; }
+    bool IsDetector() const { return (Flags & UnitFlags::Detector) != 0; }
+    bool IsOrganic() const { return (Flags & UnitFlags::Organic) != 0; }
+    bool IsRequiresCreep() const { return (Flags & UnitFlags::CreepBuilding) != 0; }
+    bool IsRequiresPsi() const { return (Flags & UnitFlags::RequiresPsi) != 0; }
+    bool CanBurrow() const { return (Flags & UnitFlags::Burrowable) != 0; }
+    bool IsSpellcaster() const { return (Flags & UnitFlags::Spellcaster) != 0; }
+    bool IsMechanical() const { return (Flags & UnitFlags::Mechanical) != 0; }
+
     int DimensionWidth() const { return (int)DimensionLeft + (int)DimensionRight + 1; }
     int DimensionHeight() const { return (int)DimensionUp + (int)DimensionDown + 1; }
+};
+
+struct OrderEntry
+{
+    uint32_t Id = 0;
+    uint16_t Label = 0;
+    uint8_t TargetsEnemies = 0;
+    uint8_t Background = 0;
+    uint8_t ValidForTurret = 0;
+    uint8_t CanBeInterrupted = 0;
+    uint8_t CanBeQueued = 0;
+    uint8_t CanBeObstructed = 0;
+    uint8_t Weapon = 0;
+    uint8_t TechType = 0;
+    uint8_t Animation = 0;
+    int16_t Highlight = 0;
+    uint16_t DepIndex = 0;
+    uint8_t TargetOrder = 0;
 };
 
 struct WeaponEntry
@@ -206,6 +279,7 @@ public:
     static std::vector<ImageTblEntry> DecodeImageTbl(const std::vector<uint8_t>& Data);
     static std::vector<UpgradeEntry> DecodeUpgrades(const std::vector<uint8_t>& Data);
     static std::vector<TechEntry> DecodeTech(const std::vector<uint8_t>& Data);
+    static std::vector<OrderEntry> DecodeOrders(const std::vector<uint8_t>& Data);
 };
 
 } // namespace Resource

@@ -155,20 +155,27 @@ void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material)
 void Draw2D::SetHealthBarParams(float Fraction, Color Fill)
 {
     Fraction = std::clamp(Fraction, 0.0f, 1.0f);
-    Flush();
     auto ToFloat = [](uint8_t V) { return (float)V / 255.0f; };
-    mHealthBarParams.SolidColor[0] = ToFloat(Fill.R);
-    mHealthBarParams.SolidColor[1] = ToFloat(Fill.G);
-    mHealthBarParams.SolidColor[2] = ToFloat(Fill.B);
-    mHealthBarParams.SolidColor[3] = ToFloat(Fill.A);
-    mHealthBarParams.MultiplyColor[0] = Fraction;
-    mHealthBarParams.MultiplyColor[1] = Fraction;
-    mHealthBarParams.MultiplyColor[2] = 0.0f;
-    mHealthBarParams.MultiplyColor[3] = 1.0f;
-    mHealthBarParams.TeamColor[0] = ToFloat(Fill.R);
-    mHealthBarParams.TeamColor[1] = ToFloat(Fill.G);
-    mHealthBarParams.TeamColor[2] = ToFloat(Fill.B);
-    mHealthBarParams.TeamColor[3] = ToFloat(Fill.A);
+    HealthBarShaderParams NewParams = {};
+    NewParams.SolidColor[0] = ToFloat(Fill.R);
+    NewParams.SolidColor[1] = ToFloat(Fill.G);
+    NewParams.SolidColor[2] = ToFloat(Fill.B);
+    NewParams.SolidColor[3] = ToFloat(Fill.A);
+    NewParams.MultiplyColor[0] = Fraction;
+    NewParams.MultiplyColor[1] = Fraction;
+    NewParams.MultiplyColor[2] = 0.0f;
+    NewParams.MultiplyColor[3] = 1.0f;
+    NewParams.TeamColor[0] = ToFloat(Fill.R);
+    NewParams.TeamColor[1] = ToFloat(Fill.G);
+    NewParams.TeamColor[2] = ToFloat(Fill.B);
+    NewParams.TeamColor[3] = ToFloat(Fill.A);
+
+    if (mCurrentMaterial != BatchMaterial::HealthBar ||
+        std::memcmp(&mHealthBarParams, &NewParams, sizeof(NewParams)) != 0)
+    {
+        Flush();
+        mHealthBarParams = NewParams;
+    }
 }
 
 void Draw2D::SetSpriteEffectParams(float Hallucination,
@@ -181,24 +188,31 @@ void Draw2D::SetSpriteEffectParams(float Hallucination,
                                    Color TeamColor,
                                    bool UseTeamColor)
 {
-    Flush();
     auto ToFloat = [](uint8_t V) { return (float)V / 255.0f; };
-    mSpriteEffectParams.MultiplyColor[0] = 1.0f;
-    mSpriteEffectParams.MultiplyColor[1] = 1.0f;
-    mSpriteEffectParams.MultiplyColor[2] = 1.0f;
-    mSpriteEffectParams.MultiplyColor[3] = 1.0f;
-    mSpriteEffectParams.TeamColor[0] = ToFloat(TeamColor.R);
-    mSpriteEffectParams.TeamColor[1] = ToFloat(TeamColor.G);
-    mSpriteEffectParams.TeamColor[2] = ToFloat(TeamColor.B);
-    mSpriteEffectParams.TeamColor[3] = ToFloat(TeamColor.A);
-    mSpriteEffectParams.EffectData[0] = std::clamp(Hallucination, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectData[1] = std::clamp(Cloaked, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectData[2] = std::clamp(Brighten, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectData[3] = UseTeamColor ? 1.0f : 0.0f;
-    mSpriteEffectParams.EffectMode[0] = std::clamp(Shadow, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectMode[1] = std::clamp(WarpTexture, 0.0f, 1.0f);
-    mSpriteEffectParams.EffectMode[2] = std::max(0.0f, WarpScaleX);
-    mSpriteEffectParams.EffectMode[3] = std::max(0.0f, WarpScaleY);
+    SpriteEffectShaderParams NewParams = {};
+    NewParams.MultiplyColor[0] = 1.0f;
+    NewParams.MultiplyColor[1] = 1.0f;
+    NewParams.MultiplyColor[2] = 1.0f;
+    NewParams.MultiplyColor[3] = 1.0f;
+    NewParams.TeamColor[0] = ToFloat(TeamColor.R);
+    NewParams.TeamColor[1] = ToFloat(TeamColor.G);
+    NewParams.TeamColor[2] = ToFloat(TeamColor.B);
+    NewParams.TeamColor[3] = ToFloat(TeamColor.A);
+    NewParams.EffectData[0] = std::clamp(Hallucination, 0.0f, 1.0f);
+    NewParams.EffectData[1] = std::clamp(Cloaked, 0.0f, 1.0f);
+    NewParams.EffectData[2] = std::clamp(Brighten, 0.0f, 1.0f);
+    NewParams.EffectData[3] = UseTeamColor ? 1.0f : 0.0f;
+    NewParams.EffectMode[0] = std::clamp(Shadow, 0.0f, 1.0f);
+    NewParams.EffectMode[1] = std::clamp(WarpTexture, 0.0f, 1.0f);
+    NewParams.EffectMode[2] = std::max(0.0f, WarpScaleX);
+    NewParams.EffectMode[3] = std::max(0.0f, WarpScaleY);
+
+    if (mCurrentMaterial != BatchMaterial::SpriteEffect ||
+        std::memcmp(&mSpriteEffectParams, &NewParams, sizeof(NewParams)) != 0)
+    {
+        Flush();
+        mSpriteEffectParams = NewParams;
+    }
 }
 
 void Draw2D::EnsureCapacity(int V, int I)
@@ -214,6 +228,8 @@ void Draw2D::BeginFrame(const Camera2D& Camera)
     mCurrentTexture = mWhiteTexture;
     mCurrentTeamColorMask = {};
     mCurrentMaterial = BatchMaterial::Textured;
+    mHealthBarParams = {};
+    mSpriteEffectParams = {};
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
     mFrameWidth = Camera.GetViewportWidth();
@@ -232,6 +248,8 @@ void Draw2D::BeginFrameScreen()
     mCurrentTexture = mWhiteTexture;
     mCurrentTeamColorMask = {};
     mCurrentMaterial = BatchMaterial::Textured;
+    mHealthBarParams = {};
+    mSpriteEffectParams = {};
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
     mFrameWidth = Core::Platform::GetWindowWidth();
@@ -452,7 +470,6 @@ void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
                           TeamColor, UseTeamColor);
     SetPipeline(true, BatchMaterial::SpriteEffect);
     AddQuad(X, Y, W, H, U0, V0, U1, V1, Tint, FlipX);
-    Flush();
 }
 
 void Draw2D::DrawSpriteFromImage(const GpuTextureHandle& Texture,
@@ -491,29 +508,62 @@ void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Th
 
 void Draw2D::DrawText(const std::string& Text, float X, float Y, float Size, Color C)
 {
-    if (!mFontTexture.Valid()) return;
-    if (mCurrentTexture.Image.id != mFontTexture.Image.id ||
-        mCurrentTexture.View.id != mFontTexture.View.id ||
-        mCurrentMaterial != BatchMaterial::Textured)
+    if (Text.empty()) return;
+
+    // Adapt font scale: values <= 4.0f (e.g. 1.0f, 1.15f, 1.9f) are treated as multipliers of base size 12px.
+    float EffectiveSize = Size;
+    if (EffectiveSize <= 4.0f)
     {
-        Flush();
-        mCurrentTexture = mFontTexture;
+        EffectiveSize *= 12.0f;
     }
-    SetPipeline(true, BatchMaterial::Textured);
-    float Cur = X;
-    for (char Ch : Text)
+
+    float CurX = X;
+    float CurY = Y;
+    size_t Index = 0;
+
+    while (Index < Text.size())
     {
-        if (Ch == '\n')
+        if (Text[Index] == '\r')
         {
-            Y += Size;
-            Cur = X;
+            ++Index;
             continue;
         }
-        float UV[4];
-        g_Font.GetCharUV(Ch, UV);
-        float CW = Size * (float)mFontCharWidth / (float)mFontCharHeight;
-        AddQuad(Cur, Y, CW, Size, UV[0], UV[1], UV[2], UV[3], C, false);
-        Cur += CW;
+        if (Text[Index] == '\n')
+        {
+            CurY += EffectiveSize;
+            CurX = X;
+            ++Index;
+            continue;
+        }
+
+        uint32_t Codepoint = NextUtf8Codepoint(Text, Index);
+        if (Codepoint == 0) break;
+
+        float UV[4] = {0};
+        bool IsWide = false;
+        if (!g_Font.GetGlyphUV(Codepoint, UV, IsWide))
+        {
+            if (!g_Font.GetGlyphUV('?', UV, IsWide))
+                continue;
+        }
+
+        // Texture handle may change if a new Unicode glyph dynamically expanded the atlas.
+        mFontTexture = g_Font.GetTexture();
+        if (!mFontTexture.Valid()) return;
+
+        if (mCurrentTexture.Image.id != mFontTexture.Image.id ||
+            mCurrentTexture.View.id != mFontTexture.View.id ||
+            mCurrentMaterial != BatchMaterial::Textured)
+        {
+            Flush();
+            mCurrentTexture = mFontTexture;
+        }
+        SetPipeline(true, BatchMaterial::Textured);
+
+        float CW = IsWide ? EffectiveSize : (EffectiveSize * (float)BitmapFont::CellW / (float)BitmapFont::CellH);
+        AddQuad(CurX, CurY, CW, EffectiveSize, UV[0], UV[1], UV[2], UV[3], C, false);
+        CurX += CW;
+
         if (mVerticesInBatch + 4 > kMaxBatchVerts) { Flush(); }
     }
 }

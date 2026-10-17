@@ -19,6 +19,8 @@ public:
     void OnEvent(const void* Event);
     void Shutdown();
     void StartGame();
+    void RestartGame();
+    void ReturnToMainMenu();
     void SetMapPathOverride(std::string MapPath);
     void SetCampaignRuntimeEnabled(bool Enabled);
     void SetDirectStartEnabled(bool Enabled);

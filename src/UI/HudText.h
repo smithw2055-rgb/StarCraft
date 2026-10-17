@@ -105,6 +105,32 @@ inline int CommandIconForCommand(HudCommandId CommandId)
             return IconForDef(Game::Races::GetUnitDefID("Defiler"));
         case HudCommandId::Parasite:
             return IconForDef(Game::Races::GetUnitDefID("Queen"));
+        case HudCommandId::DefensiveMatrix:
+        case HudCommandId::Irradiate:
+            return IconForDef(Game::Races::GetUnitDefID("ScienceVessel"));
+        case HudCommandId::Restoration:
+        case HudCommandId::OpticalFlare:
+            return IconForDef(Game::Races::GetUnitDefID("Medic"));
+        case HudCommandId::Feedback:
+        case HudCommandId::Maelstrom:
+        case HudCommandId::MindControl:
+            return IconForDef(Game::Races::GetUnitDefID("Dark Archon"));
+        case HudCommandId::Repair:
+            return IconForDef(Game::Races::GetUnitDefID("SCV"));
+        case HudCommandId::Heal:
+            return IconForDef(Game::Races::GetUnitDefID("Medic"));
+        case HudCommandId::ArchonWarp:
+            return IconForDef(Game::Races::GetUnitDefID("Archon"));
+        case HudCommandId::DarkArchonWarp:
+            return IconForDef(Game::Races::GetUnitDefID("Dark Archon"));
+        case HudCommandId::MorphLurker:
+            return IconForDef(Game::Races::GetUnitDefID("Lurker"));
+        case HudCommandId::MorphGuardian:
+            return IconForDef(Game::Races::GetUnitDefID("Guardian"));
+        case HudCommandId::MorphDevourer:
+            return IconForDef(Game::Races::GetUnitDefID("Devourer"));
+        case HudCommandId::Infest:
+            return IconForDef(Game::Races::GetUnitDefID("Queen"));
         default: return -1;
     }
 }
@@ -132,6 +158,7 @@ inline int CommandIconForResearch(Game::Systems::TerranResearchId ResearchId)
             return IconForDef(Game::Races::GetUnitDefID("Wraith"));
         case TerranResearchId::Lockdown:
         case TerranResearchId::MoebiusReactor:
+        case TerranResearchId::PersonalCloaking:
             return IconForDef(Game::Races::GetUnitDefID("Ghost"));
         case TerranResearchId::YamatoGun:
         case TerranResearchId::ColossusReactor:
