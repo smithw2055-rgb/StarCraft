@@ -1608,7 +1608,8 @@ if(BUILD_GAME_CLIENT)
     )
 
     if(MSVC)
-        target_compile_options(StarCraft PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_options(StarCraft PRIVATE /W4 /utf-8 /permissive- /Zi)
+        target_link_options(StarCraft PRIVATE /DEBUG /INCREMENTAL:NO)
         target_compile_definitions(StarCraft PRIVATE
             _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
     else()
@@ -1617,6 +1618,7 @@ if(BUILD_GAME_CLIENT)
 
     if(WIN32)
         target_link_libraries(StarCraft PRIVATE
+            dbghelp
             d3d11 dxgi d3dcompiler user32 gdi32 shell32 mfplat mfreadwrite mfuuid
             ${StormLib_TARGET}
             ${CascLib_TARGET}

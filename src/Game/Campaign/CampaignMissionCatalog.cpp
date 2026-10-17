@@ -79,8 +79,8 @@ CampaignMissionRef ResolveCampaignMission(bool Expansion, int Race, int Mission)
     Ref.Expansion = Expansion;
     Ref.Race = Race;
     Ref.Mission = Mission;
-    Ref.Path = std::string("assets\\locales\\zhCN\\Assets\\campaign\\") + Folder + "\\" +
-        MissionFolder + "\\staredit\\scenario.chk";
+    Ref.Path = std::string("assets/locales/zhCN/Assets/campaign/") + Folder + "/" +
+        MissionFolder + "/staredit/scenario.chk";
     return Ref;
 }
 

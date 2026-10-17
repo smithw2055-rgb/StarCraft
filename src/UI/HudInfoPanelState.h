@@ -95,6 +95,58 @@ struct HudInfoPanelState
     int SupplyProvided = 0;
     int SupplyTotal = 0;
     int SupplyMax = 0;
+
+    void Reset()
+    {
+        HasSelection = false;
+        IsBuilding = false;
+        IsResource = false;
+        UnderConstruction = false;
+        SelectedCount = 0;
+        IconIndex = -1;
+        PreviewDefID = -1;
+        PreviewChkUnitId = -1;
+        PlayerID = -1;
+        CurrentValue = 0;
+        MaxValue = 0;
+        ShieldValue = 0;
+        ShieldMax = 0;
+        EnergyValue = 0;
+        EnergyMax = 0;
+        Armor = 0;
+        SightValue = 0;
+        SpeedValue = 0;
+        GroundDamage = 0;
+        AirDamage = 0;
+        RangeValue = 0;
+        ResourceAmount = 0;
+        CarryingAmount = 0;
+        KillCount = 0;
+        Progress = -1.0f;
+        Name.clear();
+        RoleLine.clear();
+        TypeLine.clear();
+        StatusLine.clear();
+        StatLine.clear();
+        CombatLine.clear();
+        DetailLine.clear();
+        CargoLine.clear();
+        QueueLabel.clear();
+        QueueEntries.clear();
+        QueueUnitDefIDs.clear();
+        QueueSlotHits.clear();
+        MultiSelectSlots.clear();
+        MultiSelectSlotHits.clear();
+        IsTownCenter = false;
+        IsProductionBuilding = false;
+        IsTechBuilding = false;
+        ActiveResearchID = -1;
+        TechUpgrades.clear();
+        SupplyUsed = 0;
+        SupplyProvided = 0;
+        SupplyTotal = 0;
+        SupplyMax = 0;
+    }
 };
 
 } // namespace Game::Client::UI

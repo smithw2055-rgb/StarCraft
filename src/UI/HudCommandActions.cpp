@@ -90,11 +90,8 @@ void Hud::OnButtonInvoked(int ButtonIndex)
                 mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
             case HudCommandId::Land:
-                // Landing is immediate at the building's current position.
-                // It is not a world-target command.
-                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::None;
-                mState.CommandPanel.PendingCommandId = HudCommandId::None;
-                mState.ActiveCommand = -1;
+                mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Land;
+                mState.CommandPanel.PendingCommandId = Button.CommandId;
                 break;
             case HudCommandId::Rally:
                 mState.CommandPanel.PendingTargetModeValue = PendingTargetMode::Rally;

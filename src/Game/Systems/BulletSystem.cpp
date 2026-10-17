@@ -334,35 +334,36 @@ namespace
         constexpr float Radius = 64.0f;
         constexpr float SporeDurationSeconds = 50.0f;
 
-        for (int EntityID :
-             EM.GetEntitiesWith<TransformComponent, UnitComponent,
-                                PlayerComponent>())
-        {
-            auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
-            auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-            const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
-            if (!Transform || !Unit || !Player || Unit->HitPoints <= 0 ||
-                Player->PlayerID == SourcePlayerID ||
-                Player->IsRescuePassive ||
-                EM.GetComponent<BuildingComponent>(EntityID) ||
-                !IsAirTarget(EM, EntityID) ||
-                IsInvulnerableByStatus(EM, EntityID) ||
-                Transform->Position.DistanceTo(Position) > Radius ||
-                Unit->AcidSporeCount >= 9)
+        ForNearbyUnits(
+            EM, Position.X - Radius, Position.Y - Radius,
+            Position.X + Radius, Position.Y + Radius,
+            [&](int EntityID)
             {
-                continue;
-            }
-
-            for (float& Timer : Unit->AcidSporeTimers)
-            {
-                if (Timer <= 0.0f)
+                auto* Transform = EM.GetComponent<TransformComponent>(EntityID);
+                auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+                const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+                if (!Transform || !Unit || !Player || Unit->HitPoints <= 0 ||
+                    Player->PlayerID == SourcePlayerID ||
+                    Player->IsRescuePassive ||
+                    EM.GetComponent<BuildingComponent>(EntityID) ||
+                    !IsAirTarget(EM, EntityID) ||
+                    IsInvulnerableByStatus(EM, EntityID) ||
+                    Transform->Position.DistanceTo(Position) > Radius ||
+                    Unit->AcidSporeCount >= 9)
                 {
-                    Timer = SporeDurationSeconds;
-                    ++Unit->AcidSporeCount;
-                    break;
+                    return;
                 }
-            }
-        }
+
+                for (float& Timer : Unit->AcidSporeTimers)
+                {
+                    if (Timer <= 0.0f)
+                    {
+                        Timer = SporeDurationSeconds;
+                        ++Unit->AcidSporeCount;
+                        break;
+                    }
+                }
+            });
     }
 
     static CombatComponent BulletDamageCombat(DamageType DamageKind, bool IsRangedAttack)
@@ -822,6 +823,28 @@ void BulletSystem::Update(float DeltaTime)
             ++sActiveHaloRockets;
         UpdateBullet(EM, ID, DeltaTime);
     }
+
+    for (auto It = mNextHeadingOffsetClockwise.begin(); It != mNextHeadingOffsetClockwise.end(); )
+    {
+        if (!EM.IsAlive(It->first))
+            It = mNextHeadingOffsetClockwise.erase(It);
+        else
+            ++It;
+    }
+    for (auto It = mNextNearTargetPositionIndex.begin(); It != mNextNearTargetPositionIndex.end(); )
+    {
+        if (!EM.IsAlive(It->first))
+            It = mNextNearTargetPositionIndex.erase(It);
+        else
+            ++It;
+    }
+    for (auto It = mNextFlightProxyOffsetIndex.begin(); It != mNextFlightProxyOffsetIndex.end(); )
+    {
+        if (!EM.IsAlive(It->first))
+            It = mNextFlightProxyOffsetIndex.erase(It);
+        else
+            ++It;
+    }
 }
 
 bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
@@ -967,7 +990,8 @@ void BulletSystem::UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, floa
                                   Bullet->SourceEntityID, Bullet->Splash,
                                   Bullet->CanTargetGround, Bullet->CanTargetAir,
                                   Bullet->IsRangedAttack, Bullet->HitCount, -1,
-                                  Bullet->SplashLineStart, Bullet->SplashLineEnd);
+                                  Bullet->SplashLineStart, Bullet->SplashLineEnd,
+                                  true);
             }
             if (Bullet->LifetimeRemaining <= 0.0f)
             {
@@ -1235,6 +1259,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                 Bullet->TargetPos = NextTrans->Position;
                 Bullet->BounceDamageDivisor *= 3;
                 Bullet->HasHit = false;
+                Bullet->LifetimeRemaining = 4.0f;
                 Bullet->VisualAnimationOverride =
                     Game::IScriptAnims::Anim_SpecialState1;
                 Trans->Position = ImpactPos;
@@ -1372,7 +1397,8 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
                                        int HitCount,
                                        int DirectHitID,
                                        const Core::Math::Vec2& LineStart,
-                                       const Core::Math::Vec2& LineEnd)
+                                       const Core::Math::Vec2& LineEnd,
+                                       bool CanDamageSelf)
 {
     if (OuterRadius <= 0.0f)
         return;
@@ -1400,8 +1426,8 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         auto* UU = EM.GetComponent<UnitComponent>(UID);
         if (!UP || !UT || !UU || UU->HitPoints <= 0) return;
         if (IsProtectedResourceNode(EM, UID)) return;
-        if (UID == SourceEntityID) return;
-        if (EnemyOnly &&
+        if (UID == SourceEntityID && !CanDamageSelf) return;
+        if (UID != DirectHitID && EnemyOnly &&
             (UP->PlayerID == SourcePlayerID || UP->IsRescuePassive)) return;
         if (IsInvulnerableByStatus(EM, UID)) return;
 

@@ -120,6 +120,9 @@ static bool HasLineOfSight(const Map::GameMap& Map,
         if (E2 < DX) { Err += DX; CY += SY; }
 
         if (!Map.CanTraverseGround(PreviousX, PreviousY, CX, CY) ||
+            (CX != PreviousX && CY != PreviousY &&
+             !CanStepDiagonal(Map, PreviousX, PreviousY, CX - PreviousX, CY - PreviousY,
+                              ClearanceRadiusPixels, ExtraBlockedTile)) ||
             ((CX != X1 || CY != Y1) &&
              !IsWalkableWithClearance(
                  Map, CX, CY, ClearanceRadiusPixels, ExtraBlockedTile)))
@@ -313,8 +316,6 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
                                const std::function<bool(int, int)>& ExtraBlockedTile)
 {
     PathResult Result;
-    (void)MaxNodes;
-
     if (!Map.IsInBounds(StartX, StartY))
         return Result;
 
@@ -341,7 +342,7 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
     }
 
     const int MapNodeCount = Width * Height;
-    const int NodeBudget = MapNodeCount;
+    const int NodeBudget = MaxNodes > 0 ? std::min(MaxNodes, MapNodeCount) : MapNodeCount;
 
     thread_local std::vector<PathNode> sNodes;
     thread_local std::vector<std::pair<int, int>> sOpen;

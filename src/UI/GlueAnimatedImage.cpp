@@ -183,12 +183,23 @@ std::filesystem::path ResolveWebmPath(const std::string& RelativePath)
 
 void PremultiplyRgba(std::vector<uint8_t>& Rgba)
 {
-    for (size_t I = 0; I + 3 < Rgba.size(); I += 4)
+    const size_t Size = Rgba.size();
+    uint8_t* Pixels = Rgba.data();
+    for (size_t I = 0; I + 3 < Size; I += 4)
     {
-        const uint8_t A = Rgba[I + 3];
-        Rgba[I + 0] = (uint8_t)(((uint32_t)Rgba[I + 0] * (uint32_t)A) / 255u);
-        Rgba[I + 1] = (uint8_t)(((uint32_t)Rgba[I + 1] * (uint32_t)A) / 255u);
-        Rgba[I + 2] = (uint8_t)(((uint32_t)Rgba[I + 2] * (uint32_t)A) / 255u);
+        const uint32_t A = Pixels[I + 3];
+        if (A == 255)
+            continue;
+        if (A == 0)
+        {
+            Pixels[I + 0] = 0;
+            Pixels[I + 1] = 0;
+            Pixels[I + 2] = 0;
+            continue;
+        }
+        Pixels[I + 0] = (uint8_t)(((uint32_t)Pixels[I + 0] * A) / 255u);
+        Pixels[I + 1] = (uint8_t)(((uint32_t)Pixels[I + 1] * A) / 255u);
+        Pixels[I + 2] = (uint8_t)(((uint32_t)Pixels[I + 2] * A) / 255u);
     }
 }
 }
@@ -310,17 +321,26 @@ void GlueAnimatedImage::ApplyPendingWebmLoad()
     mWebmDecoder = std::move(Result.Decoder);
     {
         std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
-        mCurrentWebmFrame = std::move(Result.FirstFrame);
+        mCurrentWebmFrame = Result.FirstFrame;
         mCurrentWebmFrameIndex = Result.FrameIndex;
         mHasCurrentWebmFrame = true;
         mTextureDirty = true;
     }
     mLastFrame = Result.FrameIndex;
 
+    if (Result.FrameIndex >= 0 && (size_t)Result.FrameIndex < mCachedWebmFrames.size())
+    {
+        mCachedWebmFrames[(size_t)Result.FrameIndex] = Result.FirstFrame;
+    }
+
     if (!Result.InitialLoad)
         return;
 
     mFrameCount = Result.FrameCount;
+    mCachedWebmFrames.resize(static_cast<size_t>(std::max(1, mFrameCount)));
+    if (!mCachedWebmFrames.empty())
+        mCachedWebmFrames[0] = mCurrentWebmFrame;
+
     mFps = Result.Fps;
     mMode = Mode::Webm;
     mPlaybackStartTime = 0.0;
@@ -387,6 +407,7 @@ void GlueAnimatedImage::ClearVideoSource()
     mHasCurrentWebmFrame = false;
     mTextureDirty = false;
     mFrames.clear();
+    mCachedWebmFrames.clear();
 }
 
 void GlueAnimatedImage::SetPlaybackActive(bool Active, bool Restart)
@@ -480,6 +501,20 @@ void GlueAnimatedImage::SetPngFrame(int FrameIndex)
 
 void GlueAnimatedImage::SetWebmFrame(int FrameIndex)
 {
+    if (FrameIndex >= 0 && (size_t)FrameIndex < mCachedWebmFrames.size() &&
+        !mCachedWebmFrames[(size_t)FrameIndex].Image.Rgba.empty())
+    {
+        {
+            std::lock_guard<std::mutex> Lock(mDynamicTextureMutex);
+            mCurrentWebmFrame = mCachedWebmFrames[(size_t)FrameIndex];
+            mCurrentWebmFrameIndex = FrameIndex;
+            mHasCurrentWebmFrame = true;
+            mTextureDirty = true;
+        }
+        mLastFrame = FrameIndex;
+        return;
+    }
+
     if (!DecodeWebmFrame(FrameIndex))
         return;
     mLastFrame = FrameIndex;

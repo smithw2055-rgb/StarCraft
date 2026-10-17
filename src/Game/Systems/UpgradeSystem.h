@@ -37,6 +37,10 @@ enum class ResearchId : uint8_t
     Terran_ColossusReactor,
     Terran_CharonBoosters,
     Terran_PersonalCloaking,
+    Terran_EMPShockwave,
+    Terran_Irradiate,
+    Terran_Restoration,
+    Terran_OpticalFlare,
 
     // Zerg
     Zerg_MeleeAttacks,

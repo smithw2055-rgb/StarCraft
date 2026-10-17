@@ -62,6 +62,10 @@ public:
         mRegions.clear();
         mRegions.reserve(kMaxRegions);
 
+        for (int y = 0; y < mMap.MapHeight; ++y)
+            for (int x = 0; x < mMap.MapWidth; ++x)
+                mMap.TileRegion[x][y] = -1;
+
         std::vector<int> visited(mMap.MapWidth * mMap.MapHeight, 0);
         int regionID = 0;
 
@@ -149,8 +153,6 @@ public:
         openList.push_back(0);
 
         std::vector<bool> closed(mMap.MapWidth * mMap.MapHeight, false);
-        int closedIdx = StartY * mMap.MapWidth + StartX;
-        if (closedIdx >= 0 && closedIdx < (int)closed.size()) closed[closedIdx] = true;
 
         while (!openList.empty() && (int)allNodes.size() < kMaxShortPath)
         {
@@ -165,6 +167,13 @@ public:
             openList.erase(openList.begin() + bestOpenIdx);
 
             const TileNode& current = allNodes[curIdx];
+            int curClosedIdx = current.Y * mMap.MapWidth + current.X;
+            if (curClosedIdx >= 0 && curClosedIdx < (int)closed.size())
+            {
+                if (closed[curClosedIdx])
+                    continue;
+                closed[curClosedIdx] = true;
+            }
 
             if (current.X == EndX && current.Y == EndY)
             {
@@ -198,7 +207,6 @@ public:
                 }
 
                 int g = current.G + ((d >= 4) ? 14 : 10);
-                if (cidx >= 0 && cidx < (int)closed.size()) closed[cidx] = true;
                 int newNodeIdx = (int)allNodes.size();
                 allNodes.push_back({nx, ny, g, Manhattan(nx, ny, EndX, EndY), curIdx});
                 openList.push_back(newNodeIdx);
@@ -212,6 +220,8 @@ public:
     int GetRegionAt(int TileX, int TileY) const
     {
         if (TileX < 0 || TileX >= mMap.MapWidth || TileY < 0 || TileY >= mMap.MapHeight)
+            return -1;
+        if (!mMap.Walkable[TileX][TileY])
             return -1;
         return mMap.TileRegion[TileX][TileY];
     }

@@ -483,30 +483,20 @@ void AnimationSystem::UpdateShieldImpactOverlays()
                 continue;
 
             constexpr int kShieldOverlayImageID = 424;
-            AddImageTreeNode(EntityID, -1, kShieldOverlayImageID, *Offset,
-                             true, false, -1.0f);
+            const int NodeIndex = AddImageTreeNode(EntityID, -1, kShieldOverlayImageID, *Offset,
+                                                   true, false, -1.0f);
             auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
-            if (!Tree)
+            if (!Tree || NodeIndex < 0 || NodeIndex >= (int)Tree->Nodes.size())
                 continue;
-            for (auto& Node : Tree->Nodes)
-            {
-                if (!Node.Visible || Node.ImageID != kShieldOverlayImageID ||
-                    Node.ParentIndex != -1 ||
-                    Node.CreationOffset.X != Offset->X ||
-                    Node.CreationOffset.Y != Offset->Y)
-                {
-                    continue;
-                }
-                Node.OverlayOffsetType = 5;
-                Node.OverlayOffsetIndex = (int)Index;
-                auto& Context = Node.VM.GetContext();
-                Context.CurrentDirection = (int)Index * 8;
-                Context.FlDirect = Context.CurrentDirection;
-                Node.VM.RefreshDirectionalFrame();
-                Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
-                Node.Flipped = Context.FlipState;
-                break;
-            }
+            auto& Node = Tree->Nodes[(size_t)NodeIndex];
+            Node.OverlayOffsetType = 5;
+            Node.OverlayOffsetIndex = (int)Index;
+            auto& Context = Node.VM.GetContext();
+            Context.CurrentDirection = (int)Index * 8;
+            Context.FlDirect = Context.CurrentDirection;
+            Node.VM.RefreshDirectionalFrame();
+            Node.FrameIndex = std::max(0, Node.VM.GetCurrentFrame());
+            Node.Flipped = Context.FlipState;
         }
         Pending->Impacts.clear();
     }
@@ -1255,7 +1245,7 @@ void AnimationSystem::MarkImageSubtreeHidden(ImageTreeComponent& Tree, int Paren
     }
 }
 
-void AnimationSystem::AddImageTreeNode(int EntityID,
+int AnimationSystem::AddImageTreeNode(int EntityID,
                                        int ImageID,
                                        int OffsetX,
                                        int OffsetY,
@@ -1266,12 +1256,12 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        bool PersistentSpriteAttachment,
                                        bool UseSpecialOffset)
 {
-    AddImageTreeNode(EntityID, -1, ImageID, Core::Math::Vec2{(float)OffsetX, (float)OffsetY},
-                     DrawAbove, Flipped, Lifetime, UseSpriteID,
-                     PersistentSpriteAttachment, UseSpecialOffset);
+    return AddImageTreeNode(EntityID, -1, ImageID, Core::Math::Vec2{(float)OffsetX, (float)OffsetY},
+                            DrawAbove, Flipped, Lifetime, UseSpriteID,
+                            PersistentSpriteAttachment, UseSpecialOffset);
 }
 
-void AnimationSystem::AddImageTreeNode(int EntityID,
+int AnimationSystem::AddImageTreeNode(int EntityID,
                                        int ParentIndex,
                                        int ImageID,
                                        Core::Math::Vec2 Offset,
@@ -1283,7 +1273,7 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                                        bool UseSpecialOffset)
 {
     if (ImageID < 0)
-        return;
+        return -1;
 
     auto& EM = mSystemMgr.GetEntityManager();
     auto* Tree = EM.GetComponent<ImageTreeComponent>(EntityID);
@@ -1338,11 +1328,14 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
             Node.PersistentSpriteAttachment =
                 Node.PersistentSpriteAttachment || PersistentSpriteAttachment;
             Node.UseSpecialOffset = Node.UseSpecialOffset || UseSpecialOffset;
-            if (!Node.UseSpriteID && !Node.VM.IsRunning())
+            if (!Node.UseSpriteID &&
+                (!Node.PersistentSpriteAttachment || !Node.VM.IsRunning()))
+            {
                 StartImageNodeScript(Node);
+            }
             InitializeInheritedDirection(Node);
             ApplyBurrowVisibility(Node, RestoreAfterUnburrow);
-            return;
+            return (int)(&Node - Tree->Nodes.data());
         }
     }
 
@@ -1366,12 +1359,12 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
                 StartImageNodeScript(Node);
             InitializeInheritedDirection(Node);
             ApplyBurrowVisibility(Node, false);
-            return;
+            return (int)(&Node - Tree->Nodes.data());
         }
     }
 
     if (Tree->Nodes.size() >= 64)
-        return;
+        return -1;
 
     ImageSubnode Node;
     Node.ImageID = (uint32_t)ImageID;
@@ -1392,6 +1385,7 @@ void AnimationSystem::AddImageTreeNode(int EntityID,
     InitializeInheritedDirection(Node);
     ApplyBurrowVisibility(Node, false);
     Tree->Nodes.push_back(Node);
+    return (int)Tree->Nodes.size() - 1;
 }
 
 void AnimationSystem::StartImageNodeScript(ImageSubnode& Node)
@@ -2160,35 +2154,8 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
                 }
                 if ((Event.A & 4) != 0)
                 {
-                    auto& EM = mSystemMgr.GetEntityManager();
-                    if (auto* Burrow = EM.GetComponent<BurrowComponent>(EntityID))
-                    {
-                        auto* Cloak = EM.GetComponent<CloakComponent>(EntityID);
-                        if (Burrow->Phase == BurrowPhase::Burrowing)
-                        {
-                            Burrow->Phase = BurrowPhase::Burrowed;
-                            Burrow->IsBurrowed = true;
-                            Burrow->BurrowTransitionTime = 0.0f;
-                            if (!Cloak)
-                                Cloak = &EM.AddComponent<CloakComponent>(EntityID);
-                            Cloak->IsBurrowed = true;
-                            Cloak->IsCloaked = true;
-                            BurrowState::SetVisualBurrowed(EM, EntityID, true);
-                        }
-                        else if (Burrow->Phase == BurrowPhase::Unburrowing)
-                        {
-                            Burrow->Phase = BurrowPhase::Surface;
-                            Burrow->IsBurrowed = false;
-                            Burrow->BurrowTransitionTime = 0.0f;
-                            if (Cloak)
-                            {
-                                Cloak->IsBurrowed = false;
-                                if (!Cloak->IsPassiveCloak)
-                                    Cloak->IsCloaked = false;
-                            }
-                            BurrowState::SetVisualBurrowed(EM, EntityID, false);
-                        }
-                    }
+                    BurrowState::CompleteTransition(
+                        mSystemMgr.GetEntityManager(), EntityID);
                 }
                 if ((Event.A & 0x10) != 0)
                 {
@@ -2375,7 +2342,8 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         State.WasWorking,
         State.WasWalking,
         RootOwnsPendingAttack,
-        HasAnim);
+        HasAnim,
+        AttackTargetsAir);
     const bool ImageOrScriptChanged =
         State.ImageID != (int)Render.ImageID ||
         State.ScriptID != ActiveScriptID;
@@ -2596,7 +2564,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
         (State.WasUnderConstruction && TargetAnim == Game::IScriptAnims::Anim_Built) ||
         TargetAnim == Game::IScriptAnims::Anim_WalkingToIdle;
     if (State.ImageID == (int)Render.ImageID &&
-        State.ScriptID == ImageInfo->IScriptID &&
+        State.ScriptID == ActiveScriptID &&
         State.AnimID == TargetAnim &&
         !State.VM.IsRunning() &&
         !IsTransientAnim)
@@ -2606,7 +2574,7 @@ bool AnimationSystem::UpdateIScriptAnimation(int EntityID,
 
     const bool NeedStart =
         State.ImageID != (int)Render.ImageID ||
-        State.ScriptID != ImageInfo->IScriptID ||
+        State.ScriptID != ActiveScriptID ||
         State.AnimID != TargetAnim ||
         !State.VM.IsRunning();
     if (NeedStart)
@@ -3091,8 +3059,7 @@ void AnimationSystem::Update(float DeltaTime)
         {
             for (auto& Node : Tree->Nodes)
             {
-                if (Node.TotalFrames >= 4)
-                    Node.FrameIndex = DepletionFrame;
+                Node.FrameIndex = DepletionFrame;
             }
         }
     }

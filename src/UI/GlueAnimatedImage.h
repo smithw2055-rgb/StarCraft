@@ -74,6 +74,7 @@ private:
     bool mHasCurrentWebmFrame = false;
     bool mTextureDirty = false;
     std::vector<Aero::Ptr<Aero::BitmapImage>> mFrames;
+    std::vector<Resource::Graphics::DecodedVideoFrame> mCachedWebmFrames;
     Resource::Graphics::WebmVideoDecoder mWebmDecoder;
     Resource::Graphics::DecodedVideoFrame mCurrentWebmFrame;
     Aero::Ptr<Aero::DynamicTextureSource> mDynamicSource;

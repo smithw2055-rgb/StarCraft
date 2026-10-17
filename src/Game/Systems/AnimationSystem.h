@@ -89,7 +89,8 @@ public:
                                               bool WasWorking,
                                               bool WasWalking,
                                               bool IsPendingAttack,
-                                              const std::function<bool(int)>& HasAnim);
+                                              const std::function<bool(int)>& HasAnim,
+                                              bool AttackTargetsAir = false);
     static bool ShouldClearImageTreeForAnimRestart(bool IsBuilding,
                                                    bool ImageOrScriptChanged,
                                                    int PreviousAnim,
@@ -171,26 +172,26 @@ private:
         float DeltaTime);
     void ClearImageTree(int EntityID, bool PreservePersistentAttachments = false);
     void MarkImageSubtreeHidden(Components::ImageTreeComponent& Tree, int ParentIndex);
-    void AddImageTreeNode(int EntityID,
-                          int ImageID,
-                          int OffsetX,
-                          int OffsetY,
-                          bool DrawAbove,
-                          bool Flipped,
-                          float Lifetime,
-                          bool UseSpriteID = false,
-                          bool PersistentSpriteAttachment = false,
-                          bool UseSpecialOffset = false);
-    void AddImageTreeNode(int EntityID,
-                          int ParentIndex,
-                          int ImageID,
-                          Core::Math::Vec2 Offset,
-                          bool DrawAbove,
-                          bool Flipped,
-                          float Lifetime,
-                          bool UseSpriteID = false,
-                          bool PersistentSpriteAttachment = false,
-                          bool UseSpecialOffset = false);
+    int AddImageTreeNode(int EntityID,
+                         int ImageID,
+                         int OffsetX,
+                         int OffsetY,
+                         bool DrawAbove,
+                         bool Flipped,
+                         float Lifetime,
+                         bool UseSpriteID = false,
+                         bool PersistentSpriteAttachment = false,
+                         bool UseSpecialOffset = false);
+    int AddImageTreeNode(int EntityID,
+                         int ParentIndex,
+                         int ImageID,
+                         Core::Math::Vec2 Offset,
+                         bool DrawAbove,
+                         bool Flipped,
+                         float Lifetime,
+                         bool UseSpriteID = false,
+                         bool PersistentSpriteAttachment = false,
+                         bool UseSpecialOffset = false);
     void StartImageNodeScript(Components::ImageSubnode& Node);
     void RunImageTreeAnimation(int EntityID, int AnimID);
     void RunUnitSubunitAnimation(int EntityID, int AnimID);
@@ -304,15 +305,25 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
     bool WasWorking,
     bool WasWalking,
     bool IsPendingAttack,
-    const std::function<bool(int)>& HasAnim)
+    const std::function<bool(int)>& HasAnim,
+    bool AttackTargetsAir)
 {
     if (DesiredState == AnimState::Dying && HasAnim(Game::IScriptAnims::Anim_Death))
         return Game::IScriptAnims::Anim_Death;
 
-    if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_GndAttkInit))
-        return Game::IScriptAnims::Anim_GndAttkInit;
-    if (IsPendingAttack && HasAnim(Game::IScriptAnims::Anim_AirAttkInit))
-        return Game::IScriptAnims::Anim_AirAttkInit;
+    if (IsPendingAttack)
+    {
+        const int Primary = AttackTargetsAir
+            ? Game::IScriptAnims::Anim_AirAttkInit
+            : Game::IScriptAnims::Anim_GndAttkInit;
+        const int Secondary = AttackTargetsAir
+            ? Game::IScriptAnims::Anim_GndAttkInit
+            : Game::IScriptAnims::Anim_AirAttkInit;
+        if (HasAnim(Primary))
+            return Primary;
+        if (HasAnim(Secondary))
+            return Secondary;
+    }
 
     if (IsBuilding && DesiredState == AnimState::LiftingOff &&
         HasAnim(Game::IScriptAnims::Anim_LiftOff))

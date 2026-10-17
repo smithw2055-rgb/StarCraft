@@ -168,6 +168,8 @@ void GlueGuiHost::Update(double Time)
     if (!mInitialized || !mView) return;
     UI::Glue::GlueAnimatedImage::UpdateAll(Time);
     mView->Update(Time);
+    if (mMenuControl)
+        mMenuControl->Update(Time);
 }
 
 void GlueGuiHost::Render()

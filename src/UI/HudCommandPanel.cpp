@@ -395,37 +395,37 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                   GasCost);
     };
 
-    const int CommandCenter = Game::Races::GetUnitDefID("CommandCenter");
-    const int ComsatStation = Game::Races::GetUnitDefID("ComsatStation");
-    const int NuclearSilo = Game::Races::GetUnitDefID("NuclearSilo");
-    const int SupplyDepot = Game::Races::GetUnitDefID("SupplyDepot");
-    const int Refinery = Game::Races::GetUnitDefID("Refinery");
-    const int Barracks = Game::Races::GetUnitDefID("Barracks");
-    const int EngineeringBay = Game::Races::GetUnitDefID("EngineeringBay");
-    const int Bunker = Game::Races::GetUnitDefID("Bunker");
-    const int Academy = Game::Races::GetUnitDefID("Academy");
-    const int Factory = Game::Races::GetUnitDefID("Factory");
-    const int Starport = Game::Races::GetUnitDefID("Starport");
-    const int ScienceFacility = Game::Races::GetUnitDefID("ScienceFacility");
-    const int Armory = Game::Races::GetUnitDefID("Armory");
-    const int MissileTurret = Game::Races::GetUnitDefID("MissileTurret");
-    const int Marine = Game::Races::GetUnitDefID("Marine");
-    const int Firebat = Game::Races::GetUnitDefID("Firebat");
-    const int Medic = Game::Races::GetUnitDefID("Medic");
-    const int Ghost = Game::Races::GetUnitDefID("Ghost");
-    const int Vulture = Game::Races::GetUnitDefID("Vulture");
-    const int SiegeTank = Game::Races::GetUnitDefID("SiegeTank");
-    const int Goliath = Game::Races::GetUnitDefID("Goliath");
-    const int MachineShop = Game::Races::GetUnitDefID("MachineShop");
-    const int Wraith = Game::Races::GetUnitDefID("Wraith");
-    const int Dropship = Game::Races::GetUnitDefID("Dropship");
-    const int ScienceVessel = Game::Races::GetUnitDefID("ScienceVessel");
-    const int Battlecruiser = Game::Races::GetUnitDefID("Battlecruiser");
-    const int Valkyrie = Game::Races::GetUnitDefID("Valkyrie");
-    const int ControlTower = Game::Races::GetUnitDefID("ControlTower");
-    const int SCV = Game::Races::GetUnitDefID("SCV");
-    const int CovertOps = Game::Races::GetUnitDefID("CovertOps");
-    const int PhysicsLab = Game::Races::GetUnitDefID("PhysicsLab");
+    static const int CommandCenter = Game::Races::GetUnitDefID("CommandCenter");
+    static const int ComsatStation = Game::Races::GetUnitDefID("ComsatStation");
+    static const int NuclearSilo = Game::Races::GetUnitDefID("NuclearSilo");
+    static const int SupplyDepot = Game::Races::GetUnitDefID("SupplyDepot");
+    static const int Refinery = Game::Races::GetUnitDefID("Refinery");
+    static const int Barracks = Game::Races::GetUnitDefID("Barracks");
+    static const int EngineeringBay = Game::Races::GetUnitDefID("EngineeringBay");
+    static const int Bunker = Game::Races::GetUnitDefID("Bunker");
+    static const int Academy = Game::Races::GetUnitDefID("Academy");
+    static const int Factory = Game::Races::GetUnitDefID("Factory");
+    static const int Starport = Game::Races::GetUnitDefID("Starport");
+    static const int ScienceFacility = Game::Races::GetUnitDefID("ScienceFacility");
+    static const int Armory = Game::Races::GetUnitDefID("Armory");
+    static const int MissileTurret = Game::Races::GetUnitDefID("MissileTurret");
+    static const int Marine = Game::Races::GetUnitDefID("Marine");
+    static const int Firebat = Game::Races::GetUnitDefID("Firebat");
+    static const int Medic = Game::Races::GetUnitDefID("Medic");
+    static const int Ghost = Game::Races::GetUnitDefID("Ghost");
+    static const int Vulture = Game::Races::GetUnitDefID("Vulture");
+    static const int SiegeTank = Game::Races::GetUnitDefID("SiegeTank");
+    static const int Goliath = Game::Races::GetUnitDefID("Goliath");
+    static const int MachineShop = Game::Races::GetUnitDefID("MachineShop");
+    static const int Wraith = Game::Races::GetUnitDefID("Wraith");
+    static const int Dropship = Game::Races::GetUnitDefID("Dropship");
+    static const int ScienceVessel = Game::Races::GetUnitDefID("ScienceVessel");
+    static const int Battlecruiser = Game::Races::GetUnitDefID("Battlecruiser");
+    static const int Valkyrie = Game::Races::GetUnitDefID("Valkyrie");
+    static const int ControlTower = Game::Races::GetUnitDefID("ControlTower");
+    static const int SCV = Game::Races::GetUnitDefID("SCV");
+    static const int CovertOps = Game::Races::GetUnitDefID("CovertOps");
+    static const int PhysicsLab = Game::Races::GetUnitDefID("PhysicsLab");
 
     int EffectivePage = mState.CommandPanel.PanelPage;
     if (EffectivePage == PageNone)
@@ -522,10 +522,10 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             SetCommandButton(6, "Heal", HudCommandId::Heal, true);
             SpellButton(7, "Restoration", HudCommandId::Restoration,
                         Game::Systems::SpellType::Restoration,
-                        TerranResearchId::None, false);
+                        TerranResearchId::Restoration, true);
             SpellButton(8, "Opt Flare", HudCommandId::OpticalFlare,
                         Game::Systems::SpellType::OpticalFlare,
-                        TerranResearchId::None, false);
+                        TerranResearchId::OpticalFlare, true);
             break;
 
         case PageTerranGhost:
@@ -669,10 +669,10 @@ void Hud::BuildTerranPage(int SelectedEntityId,
                         TerranResearchId::None, false);
             SpellButton(7, "EMP", HudCommandId::EMPShockwave,
                         Game::Systems::SpellType::EMPShockwave,
-                        TerranResearchId::None, false);
+                        TerranResearchId::EMPShockwave, true);
             SpellButton(8, "Irradiate", HudCommandId::Irradiate,
                         Game::Systems::SpellType::Irradiate,
-                        TerranResearchId::None, false);
+                        TerranResearchId::Irradiate, true);
             break;
 
         case PageTerranBattlecruiser:
@@ -773,24 +773,33 @@ void Hud::BuildTerranPage(int SelectedEntityId,
         case PageTerranAcademy:
             ResearchButton(0, TerranResearchId::StimPacks, "Stim Pack", IconWeapons);
             ResearchButton(1, TerranResearchId::U238Shells, "U-238", IconWeapons);
+            ResearchButton(2, TerranResearchId::Restoration, "Restoration", IconWeapons);
+            ResearchButton(3, TerranResearchId::OpticalFlare, "Opt Flare", IconWeapons);
+            ResearchButton(4, TerranResearchId::CaduceusReactor, "Caduceus", IconWeapons);
             CancelButtonIfBusy();
             break;
 
         case PageTerranScienceFacility:
             BuildButtonForDef(0, CovertOps);
             BuildButtonForDef(1, PhysicsLab);
+            ResearchButton(2, TerranResearchId::EMPShockwave, "EMP", IconWeapons);
+            ResearchButton(3, TerranResearchId::Irradiate, "Irradiate", IconWeapons);
+            ResearchButton(4, TerranResearchId::TitanReactor, "Titan", IconWeapons);
             SetCommandButton(8, "Lift Off", HudCommandId::LiftOff, CanLiftOffSelected());
+            CancelButtonIfBusy();
             break;
 
         case PageTerranMachineShop:
             ResearchButton(0, TerranResearchId::SiegeMode, "Siege Mode", IconWeapons);
             ResearchButton(1, TerranResearchId::SpiderMines, "Mines", IconWeapons);
+            ResearchButton(2, TerranResearchId::IonThrusters, "Boosters", IconWeapons);
+            ResearchButton(3, TerranResearchId::CharonBoosters, "Charon", IconWeapons);
             CancelButtonIfBusy();
             break;
 
         case PageTerranControlTower:
             ResearchButton(0, TerranResearchId::CloakingField, "Cloak", IconWeapons);
-            ResearchButton(1, TerranResearchId::IonThrusters, "Boosters", IconWeapons);
+            ResearchButton(1, TerranResearchId::ApolloReactor, "Apollo", IconWeapons);
             CancelButtonIfBusy();
             break;
 
@@ -798,6 +807,7 @@ void Hud::BuildTerranPage(int SelectedEntityId,
             ResearchButton(0, TerranResearchId::Lockdown, "Lockdown", IconWeapons);
             ResearchButton(1, TerranResearchId::MoebiusReactor, "Moebius", IconWeapons);
             ResearchButton(2, TerranResearchId::PersonalCloaking, "Cloak", IconWeapons);
+            ResearchButton(3, TerranResearchId::OcularImplants, "Ocular", IconWeapons);
             CancelButtonIfBusy();
             break;
 
@@ -927,33 +937,33 @@ void Hud::BuildZergPage(int SelectedEntityId,
                   GasCost);
     };
 
-    const int Hatchery = Game::Races::GetUnitDefID("Hatchery");
-    const int SpawningPool = Game::Races::GetUnitDefID("Spawning Pool");
-    const int EvolutionChamber = Game::Races::GetUnitDefID("Evolution Chamber");
-    const int HydraliskDen = Game::Races::GetUnitDefID("Hydralisk Den");
-    const int Spire = Game::Races::GetUnitDefID("Spire");
-    const int NydusCanal = Game::Races::GetUnitDefID("Nydus Canal");
-    const int QueensNest = Game::Races::GetUnitDefID("Queen's Nest");
-    const int GreaterSpire = Game::Races::GetUnitDefID("Greater Spire");
-    const int UltraliskCavern = Game::Races::GetUnitDefID("Ultralisk Cavern");
-    const int DefilerMound = Game::Races::GetUnitDefID("Defiler Mound");
-    const int Extractor = Game::Races::GetUnitDefID("Extractor");
-    const int Drone = Game::Races::GetUnitDefID("Drone");
-    const int Zergling = Game::Races::GetUnitDefID("Zergling");
-    const int Hydralisk = Game::Races::GetUnitDefID("Hydralisk");
-    const int Overlord = Game::Races::GetUnitDefID("Overlord");
-    const int Mutalisk = Game::Races::GetUnitDefID("Mutalisk");
-    const int Scourge = Game::Races::GetUnitDefID("Scourge");
-    const int Queen = Game::Races::GetUnitDefID("Queen");
-    const int Ultralisk = Game::Races::GetUnitDefID("Ultralisk");
-    const int Defiler = Game::Races::GetUnitDefID("Defiler");
-    const int Lurker = Game::Races::GetUnitDefID("Lurker");
-    const int InfestedTerran = Game::Races::GetUnitDefID("Infested Terran");
-    const int Lair = Game::Races::GetUnitDefID("Lair");
-    const int Hive = Game::Races::GetUnitDefID("Hive");
-    const int CreepColony = Game::Races::GetUnitDefID("Creep Colony");
-    const int SporeColony = Game::Races::GetUnitDefID("Spore Colony");
-    const int SunkenColony = Game::Races::GetUnitDefID("Sunken Colony");
+    static const int Hatchery = Game::Races::GetUnitDefID("Hatchery");
+    static const int SpawningPool = Game::Races::GetUnitDefID("Spawning Pool");
+    static const int EvolutionChamber = Game::Races::GetUnitDefID("Evolution Chamber");
+    static const int HydraliskDen = Game::Races::GetUnitDefID("Hydralisk Den");
+    static const int Spire = Game::Races::GetUnitDefID("Spire");
+    static const int NydusCanal = Game::Races::GetUnitDefID("Nydus Canal");
+    static const int QueensNest = Game::Races::GetUnitDefID("Queen's Nest");
+    static const int GreaterSpire = Game::Races::GetUnitDefID("Greater Spire");
+    static const int UltraliskCavern = Game::Races::GetUnitDefID("Ultralisk Cavern");
+    static const int DefilerMound = Game::Races::GetUnitDefID("Defiler Mound");
+    static const int Extractor = Game::Races::GetUnitDefID("Extractor");
+    static const int Drone = Game::Races::GetUnitDefID("Drone");
+    static const int Zergling = Game::Races::GetUnitDefID("Zergling");
+    static const int Hydralisk = Game::Races::GetUnitDefID("Hydralisk");
+    static const int Overlord = Game::Races::GetUnitDefID("Overlord");
+    static const int Mutalisk = Game::Races::GetUnitDefID("Mutalisk");
+    static const int Scourge = Game::Races::GetUnitDefID("Scourge");
+    static const int Queen = Game::Races::GetUnitDefID("Queen");
+    static const int Ultralisk = Game::Races::GetUnitDefID("Ultralisk");
+    static const int Defiler = Game::Races::GetUnitDefID("Defiler");
+    static const int Lurker = Game::Races::GetUnitDefID("Lurker");
+    static const int InfestedTerran = Game::Races::GetUnitDefID("Infested Terran");
+    static const int Lair = Game::Races::GetUnitDefID("Lair");
+    static const int Hive = Game::Races::GetUnitDefID("Hive");
+    static const int CreepColony = Game::Races::GetUnitDefID("Creep Colony");
+    static const int SporeColony = Game::Races::GetUnitDefID("Spore Colony");
+    static const int SunkenColony = Game::Races::GetUnitDefID("Sunken Colony");
 
     int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
     if (EcsEntities && SelectedEntityId > 0)
@@ -1075,25 +1085,22 @@ void Hud::BuildZergPage(int SelectedEntityId,
             }
             if (SelectedDefId == Mutalisk)
             {
-                const int GreaterSpireDefID = Game::Races::GetUnitDefID("Greater Spire");
                 bool HasGreaterSpire = false;
                 if (EcsEntities)
                 {
                     const int PlayerID = PlayerIdForSelection();
-                    for (int BID : EcsEntities->GetEntitiesWith<Game::Components::BuildingComponent, Game::Components::PlayerComponent>())
-                    {
-                        const auto* B = EcsEntities->GetComponent<Game::Components::BuildingComponent>(BID);
-                        const auto* BP = EcsEntities->GetComponent<Game::Components::PlayerComponent>(BID);
-                        if (B && BP && BP->PlayerID == PlayerID && !B->UnderConstruction)
+                    HasGreaterSpire = EcsEntities->AnyEntityWith<Game::Components::BuildingComponent, Game::Components::PlayerComponent>(
+                        [&](int BID)
                         {
-                            const auto* U = EcsEntities->GetComponent<Game::Components::UnitComponent>(BID);
-                            if (B->BuildingDefID == GreaterSpireDefID || (U && U->ChkUnitID == 137))
+                            const auto* B = EcsEntities->GetComponent<Game::Components::BuildingComponent>(BID);
+                            const auto* BP = EcsEntities->GetComponent<Game::Components::PlayerComponent>(BID);
+                            if (B && BP && BP->PlayerID == PlayerID && !B->UnderConstruction)
                             {
-                                HasGreaterSpire = true;
-                                break;
+                                const auto* U = EcsEntities->GetComponent<Game::Components::UnitComponent>(BID);
+                                return (B->BuildingDefID == GreaterSpire || (U && U->ChkUnitID == 137));
                             }
-                        }
-                    }
+                            return false;
+                        });
                 }
                 SetCommandButton(6, "Guardian", HudCommandId::MorphGuardian, HasGreaterSpire);
                 SetCommandButton(7, "Devourer", HudCommandId::MorphDevourer, HasGreaterSpire);
@@ -1172,7 +1179,9 @@ void Hud::BuildZergPage(int SelectedEntityId,
                 ResearchButton(5, TerranResearchId::ZergAntennae, "Antennae", Overlord);
                 ResearchButton(6, TerranResearchId::ZergPneumatizedCarapace, "Carapace", Overlord);
             }
-            SetCommandButton(5, "Rally", HudCommandId::Rally, CanRallySelected());
+            SetButton(7, "Back", ActionKind::Back, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, PageZergHatchery,
+                      HudVisualId::Back);
             SetButton(8, "Back", ActionKind::Back, -1, HudCommandId::None,
                       TerranResearchId::None, IconBack, true, PageZergHatchery,
                       HudVisualId::Back);
@@ -1343,35 +1352,35 @@ void Hud::BuildProtossPage(int SelectedEntityId,
                   GasCost);
     };
 
-    const int Probe = Game::Races::GetUnitDefID("Probe");
-    const int Nexus = Game::Races::GetUnitDefID("Nexus");
-    const int Pylon = Game::Races::GetUnitDefID("Pylon");
-    const int Assimilator = Game::Races::GetUnitDefID("Assimilator");
-    const int Gateway = Game::Races::GetUnitDefID("Gateway");
-    const int Forge = Game::Races::GetUnitDefID("Forge");
-    const int PhotonCannon = Game::Races::GetUnitDefID("Photon Cannon");
-    const int CyberneticsCore = Game::Races::GetUnitDefID("Cybernetics Core");
-    const int ShieldBattery = Game::Races::GetUnitDefID("Shield Battery");
-    const int RoboticsFacility = Game::Races::GetUnitDefID("Robotics Facility");
-    const int Stargate = Game::Races::GetUnitDefID("Stargate");
-    const int CitadelOfAdun = Game::Races::GetUnitDefID("Citadel of Adun");
-    const int TemplarArchives = Game::Races::GetUnitDefID("Templar Archives");
-    const int RoboticsSupportBay = Game::Races::GetUnitDefID("Robotics Support Bay");
-    const int FleetBeacon = Game::Races::GetUnitDefID("Fleet Beacon");
-    const int ArbiterTribunal = Game::Races::GetUnitDefID("Arbiter Tribunal");
-    const int Observatory = Game::Races::GetUnitDefID("Observatory");
-    const int Zealot = Game::Races::GetUnitDefID("Zealot");
-    const int Dragoon = Game::Races::GetUnitDefID("Dragoon");
-    const int HighTemplar = Game::Races::GetUnitDefID("High Templar");
-    const int DarkTemplar = Game::Races::GetUnitDefID("Dark Templar");
-    const int Shuttle = Game::Races::GetUnitDefID("Shuttle");
-    const int Reaver = Game::Races::GetUnitDefID("Reaver");
-    const int Observer = Game::Races::GetUnitDefID("Observer");
-    const int Scout = Game::Races::GetUnitDefID("Scout");
-    const int Corsair = Game::Races::GetUnitDefID("Corsair");
-    const int Carrier = Game::Races::GetUnitDefID("Carrier");
-    const int Arbiter = Game::Races::GetUnitDefID("Arbiter");
-    const int DarkArchon = Game::Races::GetUnitDefID("Dark Archon");
+    static const int Probe = Game::Races::GetUnitDefID("Probe");
+    static const int Nexus = Game::Races::GetUnitDefID("Nexus");
+    static const int Pylon = Game::Races::GetUnitDefID("Pylon");
+    static const int Assimilator = Game::Races::GetUnitDefID("Assimilator");
+    static const int Gateway = Game::Races::GetUnitDefID("Gateway");
+    static const int Forge = Game::Races::GetUnitDefID("Forge");
+    static const int PhotonCannon = Game::Races::GetUnitDefID("Photon Cannon");
+    static const int CyberneticsCore = Game::Races::GetUnitDefID("Cybernetics Core");
+    static const int ShieldBattery = Game::Races::GetUnitDefID("Shield Battery");
+    static const int RoboticsFacility = Game::Races::GetUnitDefID("Robotics Facility");
+    static const int Stargate = Game::Races::GetUnitDefID("Stargate");
+    static const int CitadelOfAdun = Game::Races::GetUnitDefID("Citadel of Adun");
+    static const int TemplarArchives = Game::Races::GetUnitDefID("Templar Archives");
+    static const int RoboticsSupportBay = Game::Races::GetUnitDefID("Robotics Support Bay");
+    static const int FleetBeacon = Game::Races::GetUnitDefID("Fleet Beacon");
+    static const int ArbiterTribunal = Game::Races::GetUnitDefID("Arbiter Tribunal");
+    static const int Observatory = Game::Races::GetUnitDefID("Observatory");
+    static const int Zealot = Game::Races::GetUnitDefID("Zealot");
+    static const int Dragoon = Game::Races::GetUnitDefID("Dragoon");
+    static const int HighTemplar = Game::Races::GetUnitDefID("High Templar");
+    static const int DarkTemplar = Game::Races::GetUnitDefID("Dark Templar");
+    static const int Shuttle = Game::Races::GetUnitDefID("Shuttle");
+    static const int Reaver = Game::Races::GetUnitDefID("Reaver");
+    static const int Observer = Game::Races::GetUnitDefID("Observer");
+    static const int Scout = Game::Races::GetUnitDefID("Scout");
+    static const int Corsair = Game::Races::GetUnitDefID("Corsair");
+    static const int Carrier = Game::Races::GetUnitDefID("Carrier");
+    static const int Arbiter = Game::Races::GetUnitDefID("Arbiter");
+    static const int DarkArchon = Game::Races::GetUnitDefID("Dark Archon");
 
     int SelectedDefId = Game::Races::GetUnitDefIDByChkUnitID(SelectedChkUnitId);
     if (EcsEntities && SelectedEntityId > 0)
@@ -1393,6 +1402,22 @@ void Hud::BuildProtossPage(int SelectedEntityId,
         const int DefId = Building->BuildingDefID;
         return DefId == Nexus || DefId == Gateway ||
                DefId == RoboticsFacility || DefId == Stargate;
+    };
+
+    auto CancelButtonIfBusy = [&]()
+    {
+        if (!EcsEntities || SelectedEntityId <= 0)
+            return;
+        const auto* Production =
+            EcsEntities->GetComponent<Game::Components::ProductionComponent>(SelectedEntityId);
+        const auto* Building =
+            EcsEntities->GetComponent<Game::Components::BuildingComponent>(SelectedEntityId);
+        if ((Production && !Production->Queue.empty()) ||
+            (Building && (Building->IsResearching || Building->UnderConstruction)))
+        {
+            SetButton(8, "Cancel", ActionKind::Cancel, -1, HudCommandId::None,
+                      TerranResearchId::None, IconBack, true, 0, HudVisualId::Cancel);
+        }
     };
 
     int EffectivePage = mState.CommandPanel.PanelPage;
@@ -1522,6 +1547,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
         case PageProtossNexus:
             TrainButtonForDef(0, Probe);
             SetCommandButton(5, "Rally", HudCommandId::Rally, CanRallySelected());
+            CancelButtonIfBusy();
             break;
 
         case PageProtossGateway:
@@ -1530,18 +1556,21 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(2, HighTemplar);
             TrainButtonForDef(3, DarkTemplar);
             SetCommandButton(5, "Rally", HudCommandId::Rally, CanRallySelected());
+            CancelButtonIfBusy();
             break;
 
         case PageProtossForge:
             ResearchButton(0, TerranResearchId::ProtossGroundWeapons, "Ground Wpn", Zealot);
             ResearchButton(1, TerranResearchId::ProtossGroundArmor, "Ground Arm", Zealot);
             ResearchButton(2, TerranResearchId::ProtossPlasmaShields, "Shields", Zealot);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossCyberneticsCore:
             ResearchButton(0, TerranResearchId::ProtossAirWeapons, "Air Wpn", Scout);
             ResearchButton(1, TerranResearchId::ProtossAirArmor, "Air Arm", Scout);
             ResearchButton(2, TerranResearchId::ProtossSingularityCharge, "Singularity", Dragoon);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossRoboticsFacility:
@@ -1549,6 +1578,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(1, Reaver);
             TrainButtonForDef(2, Observer);
             SetCommandButton(5, "Rally", HudCommandId::Rally, CanRallySelected());
+            CancelButtonIfBusy();
             break;
 
         case PageProtossStargate:
@@ -1557,10 +1587,12 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             TrainButtonForDef(2, Carrier);
             TrainButtonForDef(3, Arbiter);
             SetCommandButton(5, "Rally", HudCommandId::Rally, CanRallySelected());
+            CancelButtonIfBusy();
             break;
 
         case PageProtossCitadelOfAdun:
             ResearchButton(0, TerranResearchId::ProtossZealotSpeed, "Legs", Zealot);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossTemplarArchives:
@@ -1570,12 +1602,14 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             ResearchButton(3, TerranResearchId::ProtossMindControl, "Mind Control", DarkTemplar);
             ResearchButton(4, TerranResearchId::ProtossMaelstrom, "Maelstrom", DarkTemplar);
             ResearchButton(5, TerranResearchId::ProtossArgusTalisman, "Talisman", DarkTemplar);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossRoboticsSupportBay:
             ResearchButton(0, TerranResearchId::ProtossGraviticDrive, "Gravitic", Shuttle);
             ResearchButton(1, TerranResearchId::ProtossScarabDamage, "Scarab Dmg", Reaver);
             ResearchButton(2, TerranResearchId::ProtossReaverCapacity, "Capacity", Reaver);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossFleetBeacon:
@@ -1583,17 +1617,20 @@ void Hud::BuildProtossPage(int SelectedEntityId,
             ResearchButton(1, TerranResearchId::ProtossArgusJewel, "Argus", Corsair);
             ResearchButton(2, TerranResearchId::ProtossCarrierCapacity, "Capacity", Carrier);
             ResearchButton(3, TerranResearchId::ProtossGraviticThrusters, "Thrusters", Scout);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossArbiterTribunal:
             ResearchButton(0, TerranResearchId::ProtossRecall, "Recall", Arbiter);
             ResearchButton(1, TerranResearchId::ProtossStasisField, "Stasis", Arbiter);
             ResearchButton(2, TerranResearchId::ProtossKhaydarinCore, "Core", Arbiter);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossObservatory:
             ResearchButton(0, TerranResearchId::ProtossSensorArray, "Sensor", Observer);
             ResearchButton(1, TerranResearchId::ProtossGraviticBoosters, "Boosters", Observer);
+            CancelButtonIfBusy();
             break;
 
         case PageProtossShieldBattery:
@@ -1603,6 +1640,7 @@ void Hud::BuildProtossPage(int SelectedEntityId,
                 : nullptr;
             SetCommandButton(0, "Recharge", HudCommandId::RechargeShields,
                              Unit && Unit->EnergyPoints > 0);
+            CancelButtonIfBusy();
             break;
         }
 

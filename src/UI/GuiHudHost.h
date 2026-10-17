@@ -128,14 +128,12 @@ public:
 private:
     static constexpr int kHudHeight = 280;
     static constexpr int kMinimapSize = 236;
-    static constexpr int kMaxMinimapDotVisuals = 128;
     static constexpr int kMaxCampaignPingVisuals = 4;
 
     void CacheElements();
     void LogMissingElements() const;
     void CacheRects();
     void ApplyState();
-    void ApplyMinimapDots();
     void ApplyCampaignPings();
     void UpdateLayoutMetrics();
 
@@ -193,7 +191,6 @@ private:
 
     Aero::Border* Miniviewport_ = nullptr;
     Aero::FrameworkElement* MinimapContentViewport_ = nullptr;
-    std::array<Aero::Border*, kMaxMinimapDotVisuals> MinimapDots_{};
     std::array<Aero::Border*, kMaxCampaignPingVisuals> MinimapPings_{};
     Aero::FrameworkElement* MiniMapTerrainButton_ = nullptr;
     Aero::FrameworkElement* MiniMapAllyButton_ = nullptr;
@@ -213,10 +210,10 @@ private:
     Aero::TextBlock* TooltipSupplyCostText_ = nullptr;
 
     Aero::FrameworkElement* SelectionPanel_ = nullptr;
-    std::array<Aero::Border*, 6> SelectSlots_{};
-    std::array<Aero::Image*, 6> SelectImages_{};
-    std::array<Aero::Border*, 6> SelectColors_{};
-    std::array<Aero::Border*, 6> SelectHps_{};
+    std::array<Aero::Border*, 12> SelectSlots_{};
+    std::array<Aero::Image*, 12> SelectImages_{};
+    std::array<Aero::Border*, 12> SelectColors_{};
+    std::array<Aero::Border*, 12> SelectHps_{};
 
     int Width_ = 0;
     int Height_ = 0;
@@ -284,14 +281,13 @@ private:
     int HoveredCommandIndex_ = -1;
     int PressedCommandIndex_ = -1;
 
-    std::array<ScSelectionInfo, 6> MultiSelectStates_{};
-    std::array<std::string, 6> MultiSelectAppliedImageUris_{};
-    std::array<bool, 6> MultiSelectVisible_{};
-    std::array<ScreenRect, 6> MultiSelectRects_{};
+    std::array<ScSelectionInfo, 12> MultiSelectStates_{};
+    std::array<std::string, 12> MultiSelectAppliedImageUris_{};
+    std::array<bool, 12> MultiSelectVisible_{};
+    std::array<ScreenRect, 12> MultiSelectRects_{};
     int MultiSelectPrimaryHandle_ = -1;
 
     std::vector<HudMinimapPing> CampaignPings_;
-    std::vector<HudMinimapDot> MinimapDotsState_;
     int CampaignMapWidth_ = 0;
     int CampaignMapHeight_ = 0;
 

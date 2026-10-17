@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <unordered_map>
 
 #include <NsGui/IView.h>
 #include <NsGui/IRenderer.h>
@@ -92,8 +93,18 @@ T* FindAs(Aero::FrameworkElement* Root, const char* Name)
 
 Aero::Ptr<Aero::SolidColorBrush> MakeColorBrush(uint8_t R, uint8_t G, uint8_t B, uint8_t A = 255)
 {
-    return Aero::MakePtr<Aero::SolidColorBrush>(
-        Aero::Color{R, G, B, A});
+    static std::unordered_map<uint32_t, Aero::Ptr<Aero::SolidColorBrush>> sBrushCache;
+    const uint32_t Key = (static_cast<uint32_t>(A) << 24) |
+                         (static_cast<uint32_t>(R) << 16) |
+                         (static_cast<uint32_t>(G) << 8)  |
+                         static_cast<uint32_t>(B);
+    auto It = sBrushCache.find(Key);
+    if (It != sBrushCache.end())
+        return It->second;
+
+    auto Brush = Aero::MakePtr<Aero::SolidColorBrush>(Aero::Color{R, G, B, A});
+    sBrushCache[Key] = Brush;
+    return Brush;
 }
 
 uint32_t HealthBarTint(float Ratio)
@@ -461,7 +472,7 @@ void GuiHudHost::SetMultiSelection(const std::vector<ScSelectionInfo>& Units,
                                        int PrimaryHandle)
 {
     MultiSelectPrimaryHandle_ = PrimaryHandle;
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         if (i < static_cast<int>(Units.size()))
         {
@@ -477,7 +488,7 @@ void GuiHudHost::SetMultiSelection(const std::vector<ScSelectionInfo>& Units,
 
 void GuiHudHost::SetMinimapDots(const std::vector<HudMinimapDot>& Dots)
 {
-    MinimapDotsState_ = Dots;
+    (void)Dots;
 }
 
 void GuiHudHost::SetCampaignPings(const std::vector<HudMinimapPing>& Pings,
@@ -511,7 +522,7 @@ int GuiHudHost::HitMinimapButton(float X, float Y) const
 
 int GuiHudHost::HitMultiSelection(float X, float Y) const
 {
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         if (MultiSelectVisible_[i] && MultiSelectRects_[i].IsValid() &&
             MultiSelectRects_[i].Contains(X, Y))
@@ -596,12 +607,6 @@ void GuiHudHost::CacheElements()
 
     Miniviewport_ = FindAs<Aero::Border>(RootElement, "MinimapViewport");
     MinimapContentViewport_ = FindAs<Aero::FrameworkElement>(RootElement, "MinimapContentViewport");
-    for (int i = 0; i < kMaxMinimapDotVisuals; ++i)
-    {
-        char Name[64];
-        std::snprintf(Name, sizeof(Name), "MinimapDot%d", i);
-        MinimapDots_[i] = FindAs<Aero::Border>(RootElement, Name);
-    }
     for (int i = 0; i < kMaxCampaignPingVisuals; ++i)
     {
         char Name[64];
@@ -627,7 +632,7 @@ void GuiHudHost::CacheElements()
 
     SelectionPanel_ = FindAs<Aero::FrameworkElement>(RootElement, "SelectionPanel");
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 12; ++i)
     {
         char Name[64];
         std::snprintf(Name, sizeof(Name), "SelectSlot%d", i);
@@ -699,8 +704,8 @@ void GuiHudHost::CacheRects()
     MinimapButtonRects_[1] = GetElementRect(MiniMapAllyButton_);
     MinimapButtonRects_[2] = GetElementRect(MiniMapFogButton_);
 
-    for (int i = 0; i < 6; ++i)
-        MultiSelectRects_[i] = GetElementRect(SelectSlots_[i]);
+    for (int i = 0; i < 12; ++i)
+        MultiSelectRects_[i] = SelectSlots_[i] ? GetElementRect(SelectSlots_[i]) : ScreenRect{};
 }
 
 void GuiHudHost::ApplyState()
@@ -929,8 +934,10 @@ void GuiHudHost::ApplyState()
     if (SelectionPanel_)
         SelectionPanel_->SetVisibility(Aero::Visibility_Visible);
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 12; ++i)
     {
+        if (!SelectSlots_[i])
+            continue;
         SetElementVisibility(SelectSlots_[i], MultiSelectVisible_[i]);
         if (SelectImages_[i])
         {
@@ -974,7 +981,6 @@ void GuiHudHost::ApplyState()
         }
     }
 
-    ApplyMinimapDots();
     ApplyCampaignPings();
 
     // --- Tooltip ---
@@ -1019,57 +1025,6 @@ void GuiHudHost::ApplyState()
         float Ty = std::clamp(TooltipY_ - 20.0f, 12.0f, static_cast<float>(Height_) - 150.0f);
         Aero::Canvas::SetLeft(TooltipPanel_, Tx);
         Aero::Canvas::SetTop(TooltipPanel_, Ty);
-    }
-}
-
-void GuiHudHost::ApplyMinimapDots()
-{
-    for (auto* DotVisual : MinimapDots_)
-        SetElementVisibility(DotVisual, false);
-
-    if (!MinimapContentViewport_ || CampaignMapWidth_ <= 0 || CampaignMapHeight_ <= 0)
-        return;
-
-    const float ActualW = MinimapContentViewport_->GetActualWidth();
-    const float ActualH = MinimapContentViewport_->GetActualHeight();
-    const RectI FrameRect{
-        0,
-        0,
-        std::max(1, static_cast<int>(std::lround(ActualW))),
-        std::max(1, static_cast<int>(std::lround(ActualH)))
-    };
-
-    const int Count = std::min<int>(
-        static_cast<int>(MinimapDotsState_.size()),
-        kMaxMinimapDotVisuals);
-    for (int i = 0; i < Count; ++i)
-    {
-        auto* DotVisual = MinimapDots_[i];
-        if (!DotVisual)
-            continue;
-
-        int PX = 0;
-        int PY = 0;
-        const auto& Dot = MinimapDotsState_[i];
-        if (!MinimapWorldToScreenPoint(FrameRect,
-                                       CampaignMapWidth_,
-                                       CampaignMapHeight_,
-                                       Dot.Position.X,
-                                       Dot.Position.Y,
-                                       PX,
-                                       PY))
-            continue;
-
-        DotVisual->SetWidth(3.0f);
-        DotVisual->SetHeight(3.0f);
-        DotVisual->SetBackground(MakeColorBrush(
-            static_cast<uint8_t>((Dot.Color >> 16) & 0xFF),
-            static_cast<uint8_t>((Dot.Color >> 8) & 0xFF),
-            static_cast<uint8_t>(Dot.Color & 0xFF),
-            static_cast<uint8_t>((Dot.Color >> 24) & 0xFF)).GetPtr());
-        Aero::Canvas::SetLeft(DotVisual, static_cast<float>(PX) - 1.0f);
-        Aero::Canvas::SetTop(DotVisual, static_cast<float>(PY) - 1.0f);
-        SetElementVisibility(DotVisual, true);
     }
 }
 

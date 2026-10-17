@@ -80,7 +80,7 @@ public:
 private:
     void SyncStateFromTriggerVM();
     void SyncObjectivesFromTriggerVM();
-    void SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& EM);
+    void SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& EM, float DeltaTime);
     void SyncMessagesFromTriggerVM(float DeltaTime);
     void RefreshLeaderboardValue(Core::ECS::EntityManager& EM);
 
@@ -92,6 +92,7 @@ private:
     std::vector<CampaignMessage> mMessages;
     CampaignLeaderboard mLeaderboard;
     float mStateTimer = 0.0f;
+    float mLeaderboardRefreshTimer = 0.0f;
     uint32_t mActivePortraitUnitID = kNoPortraitUnitID;
     size_t mSyncedObjectiveSourceCount = 0;
     SoundCallback mSoundCallback;

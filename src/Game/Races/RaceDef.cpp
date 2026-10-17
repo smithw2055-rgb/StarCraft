@@ -796,11 +796,12 @@ int GetSupplyProvidedByDefID(int ID)
     if (Def.Name == "Overlord" || Def.Name == "SupplyDepot" ||
         Def.Name == "Pylon")
         return 8;
-    if (Def.Name == "CommandCenter" || Def.Name == "Nexus" ||
-        Def.Name == "Hatchery" || Def.Name == "Lair" || Def.Name == "Hive")
-    {
+    if (Def.Name == "CommandCenter")
         return 10;
-    }
+    if (Def.Name == "Nexus")
+        return 9;
+    if (Def.Name == "Hatchery" || Def.Name == "Lair" || Def.Name == "Hive")
+        return 1;
     return 0;
 }
 

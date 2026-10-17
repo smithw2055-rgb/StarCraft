@@ -155,11 +155,21 @@ inline int CommandIconForResearch(Game::Systems::TerranResearchId ResearchId)
         case TerranResearchId::ShipWeapons:
         case TerranResearchId::ShipArmor:
         case TerranResearchId::CloakingField:
+        case TerranResearchId::ApolloReactor:
             return IconForDef(Game::Races::GetUnitDefID("Wraith"));
         case TerranResearchId::Lockdown:
         case TerranResearchId::MoebiusReactor:
         case TerranResearchId::PersonalCloaking:
+        case TerranResearchId::OcularImplants:
             return IconForDef(Game::Races::GetUnitDefID("Ghost"));
+        case TerranResearchId::TitanReactor:
+        case TerranResearchId::EMPShockwave:
+        case TerranResearchId::Irradiate:
+            return IconForDef(Game::Races::GetUnitDefID("ScienceVessel"));
+        case TerranResearchId::CaduceusReactor:
+        case TerranResearchId::Restoration:
+        case TerranResearchId::OpticalFlare:
+            return IconForDef(Game::Races::GetUnitDefID("Medic"));
         case TerranResearchId::YamatoGun:
         case TerranResearchId::ColossusReactor:
             return IconForDef(Game::Races::GetUnitDefID("Battlecruiser"));

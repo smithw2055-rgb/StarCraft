@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstddef>
+#include <filesystem>
 #include <string>
 
 namespace Game::Campaign
@@ -46,6 +47,9 @@ void SaveCampaignProgressCount(int Set, int Race, int Count)
 
     auto Counts = LoadCampaignProgressCounts();
     Counts[(size_t)Set][(size_t)Race] = std::max(Counts[(size_t)Set][(size_t)Race], std::clamp(Count, 1, 10));
+
+    std::error_code EC;
+    std::filesystem::create_directories("artifacts", EC);
 
     FILE* File = std::fopen(kCampaignProgressPath, "wb");
     if (!File)

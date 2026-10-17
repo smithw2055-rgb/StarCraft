@@ -5,6 +5,7 @@
 #include "Core/Math/Vec2.h"
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 namespace Game::Map { class GameMap; }
 
@@ -114,6 +115,8 @@ private:
     int CountBuildings(Core::ECS::EntityManager& EM, int PlayerID, bool ExcludeAddons = true);
     int CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID,
                      bool IncludeUnderConstruction = false);
+    void BuildEntityCountCache(Core::ECS::EntityManager& EM);
+    void InvalidateEntityCountCache() { mEntityCountCacheValid = false; }
     int CountQueuedByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID) const;
     int CountOwnedResourceDepots(Core::ECS::EntityManager& EM,
                                  bool IncludeUnderConstruction = true) const;
@@ -128,6 +131,9 @@ private:
     Core::ECS::SystemManager& mSystemMgr;
     int mAIPlayerID;
     int mTargetPlayerID;
+    bool mEntityCountCacheValid = false;
+    std::unordered_map<int, int> mCachedCompletedCount;
+    std::unordered_map<int, int> mCachedTotalCount;
     float mDecisionTimer = 0.0f;
     float mElapsedSeconds = 0.0f;
     float mDecisionInterval = 2.0f;

@@ -185,9 +185,6 @@ inline void ExecuteHudCommandSlot(
         else if (CommandDef.CommandId == UI::HudCommandId::LiftOff)
             for (int EntityID : EntityIDs)
                 Game::Systems::BuildingSystem::LiftOffBuilding(EntityManager, EntityID);
-        else if (CommandDef.CommandId == UI::HudCommandId::Land)
-            for (int EntityID : EntityIDs)
-                Game::Systems::BuildingSystem::LandBuilding(EntityManager, EntityID);
         else if (CommandDef.CommandId == UI::HudCommandId::UnloadAll)
             for (int EntityID : EntityIDs)
                 Game::Systems::TransportSystem::UnloadAll(EntityManager, EntityID);

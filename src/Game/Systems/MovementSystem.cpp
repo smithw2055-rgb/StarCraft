@@ -2111,15 +2111,13 @@ void MovementSystem::Update(float DeltaTime)
             Snapshot.Generation = 0;
         ++SnapshotGeneration;
     }
-    if (!UnitEntities.empty())
-    {
-        const size_t RequiredSize =
-            (size_t)UnitEntities.back() + 1;
-        if (Snapshots.size() < RequiredSize)
-            Snapshots.resize(RequiredSize);
-    }
+    const size_t RequiredSize = EM.GetEntityCapacity();
+    if (Snapshots.size() < RequiredSize)
+        Snapshots.resize(RequiredSize);
     for (const auto ID : UnitEntities)
     {
+        if (ID <= 0 || (size_t)ID >= Snapshots.size())
+            continue;
         auto& Snapshot = Snapshots[(size_t)ID];
         Snapshot = {};
         Snapshot.Generation = SnapshotGeneration;

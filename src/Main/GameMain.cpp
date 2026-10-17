@@ -11,8 +11,14 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <dbghelp.h>
+#endif
 
 namespace
 {
@@ -38,6 +44,146 @@ namespace
         setenv(Name, "1", 1);
 #endif
     }
+
+#if defined(_WIN32)
+    LONG WINAPI CustomUnhandledExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo)
+    {
+        CreateDirectoryA("artifacts", nullptr);
+        HANDLE hLogFile = CreateFileA("artifacts\\crash_log.txt", GENERIC_WRITE, 0, nullptr,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+        auto LogBoth = [&](const char* Text) {
+            if (!Text) return;
+            DWORD Len = (DWORD)strlen(Text);
+            DWORD Written = 0;
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), Text, Len, &Written, nullptr);
+            if (hLogFile != INVALID_HANDLE_VALUE)
+                WriteFile(hLogFile, Text, Len, &Written, nullptr);
+        };
+
+        LogBoth("\n=======================================================\n");
+        LogBoth("[CRASH DETECTED] Unhandled exception occurred!\n");
+
+        DWORD Code = ExceptionInfo && ExceptionInfo->ExceptionRecord ? ExceptionInfo->ExceptionRecord->ExceptionCode : 0;
+        void* Addr = ExceptionInfo && ExceptionInfo->ExceptionRecord ? ExceptionInfo->ExceptionRecord->ExceptionAddress : nullptr;
+
+        char HeaderBuf[256];
+        snprintf(HeaderBuf, sizeof(HeaderBuf), "Exception Code: 0x%08lX\nException Address: 0x%p\n", Code, Addr);
+        LogBoth(HeaderBuf);
+
+        if (ExceptionInfo && ExceptionInfo->ExceptionRecord &&
+            ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+            ExceptionInfo->ExceptionRecord->NumberParameters >= 2)
+        {
+            ULONG_PTR AccessType = ExceptionInfo->ExceptionRecord->ExceptionInformation[0];
+            ULONG_PTR FaultAddr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+            char AvBuf[256];
+            snprintf(AvBuf, sizeof(AvBuf), "Access Violation: Attempted to %s address 0x%p\n",
+                     (AccessType == 0 ? "read from" : (AccessType == 1 ? "write to" : "execute")),
+                     (void*)FaultAddr);
+            LogBoth(AvBuf);
+        }
+
+        // Minidump
+        HANDLE hDumpFile = CreateFileA("artifacts\\crash.dmp", GENERIC_WRITE, 0, nullptr,
+                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hDumpFile != INVALID_HANDLE_VALUE)
+        {
+            MINIDUMP_EXCEPTION_INFORMATION Mei{};
+            Mei.ThreadId = GetCurrentThreadId();
+            Mei.ExceptionPointers = ExceptionInfo;
+            Mei.ClientPointers = FALSE;
+
+            BOOL Success = MiniDumpWriteDump(
+                GetCurrentProcess(),
+                GetCurrentProcessId(),
+                hDumpFile,
+                MiniDumpNormal,
+                &Mei,
+                nullptr,
+                nullptr);
+            CloseHandle(hDumpFile);
+            if (Success)
+                LogBoth("Minidump successfully written to artifacts\\crash.dmp\n");
+            else
+            {
+                char ErrBuf[128];
+                snprintf(ErrBuf, sizeof(ErrBuf), "MiniDumpWriteDump failed with error: %lu\n", GetLastError());
+                LogBoth(ErrBuf);
+            }
+        }
+
+        // Stack trace
+        LogBoth("\n--- STACK TRACE ---\n");
+        HANDLE Process = GetCurrentProcess();
+        SymInitialize(Process, nullptr, TRUE);
+
+        CONTEXT ContextRecord{};
+        if (ExceptionInfo && ExceptionInfo->ContextRecord)
+            ContextRecord = *ExceptionInfo->ContextRecord;
+        else
+            RtlCaptureContext(&ContextRecord);
+
+        STACKFRAME64 StackFrame{};
+        StackFrame.AddrPC.Offset = ContextRecord.Rip;
+        StackFrame.AddrPC.Mode = AddrModeFlat;
+        StackFrame.AddrFrame.Offset = ContextRecord.Rbp;
+        StackFrame.AddrFrame.Mode = AddrModeFlat;
+        StackFrame.AddrStack.Offset = ContextRecord.Rsp;
+        StackFrame.AddrStack.Mode = AddrModeFlat;
+
+        for (int Frame = 0; Frame < 64; ++Frame)
+        {
+            if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, Process, GetCurrentThread(),
+                             &StackFrame, &ContextRecord, nullptr,
+                             SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
+            {
+                break;
+            }
+
+            if (StackFrame.AddrPC.Offset == 0)
+                break;
+
+            DWORD64 Address = StackFrame.AddrPC.Offset;
+            char SymbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)]{};
+            PSYMBOL_INFO Symbol = (PSYMBOL_INFO)SymbolBuffer;
+            Symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+            Symbol->MaxNameLen = MAX_SYM_NAME;
+
+            DWORD64 Displacement = 0;
+            char FrameBuf[512];
+            if (SymFromAddr(Process, Address, &Displacement, Symbol))
+            {
+                IMAGEHLP_LINE64 Line{};
+                Line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+                DWORD LineDisplacement = 0;
+                if (SymGetLineFromAddr64(Process, Address, &LineDisplacement, &Line))
+                {
+                    snprintf(FrameBuf, sizeof(FrameBuf), "  [%02d] 0x%016llX %s (%s:%lu)\n",
+                             Frame, Address, Symbol->Name, Line.FileName, Line.LineNumber);
+                }
+                else
+                {
+                    snprintf(FrameBuf, sizeof(FrameBuf), "  [%02d] 0x%016llX %s + 0x%llX\n",
+                             Frame, Address, Symbol->Name, Displacement);
+                }
+            }
+            else
+            {
+                snprintf(FrameBuf, sizeof(FrameBuf), "  [%02d] 0x%016llX (Unknown Symbol)\n",
+                         Frame, Address);
+            }
+            LogBoth(FrameBuf);
+        }
+
+        LogBoth("=======================================================\n");
+        if (hLogFile != INVALID_HANDLE_VALUE)
+            CloseHandle(hLogFile);
+
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+#endif
+
 }
 
 static void InitCb()
@@ -86,6 +232,10 @@ static void CleanupCb()
 
 sapp_desc sokol_main(int argc, char* argv[])
 {
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(CustomUnhandledExceptionFilter);
+#endif
+
     for (int I = 1; I < argc; ++I)
     {
         if (std::strcmp(argv[I], "--map") == 0 && I + 1 < argc)

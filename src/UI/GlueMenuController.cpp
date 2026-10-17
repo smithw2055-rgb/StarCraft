@@ -269,8 +269,13 @@ void GlueMenuController::CacheAnimatedElements()
     SetCampaignAnimationsEnabled(false, false);
 }
 
-void GlueMenuController::Update(double)
+void GlueMenuController::Update(double TimeSeconds)
 {
+    double Dt = (mLastUpdateTime > 0.0) ? (TimeSeconds - mLastUpdateTime) : 0.033;
+    if (!std::isfinite(Dt) || Dt <= 0.0 || Dt > 0.25)
+        Dt = 0.033;
+    mLastUpdateTime = TimeSeconds;
+
     for (int Set = 0; Set < 2; ++Set)
     {
         for (int Race = 0; Race < 3; ++Race)
@@ -292,7 +297,7 @@ void GlueMenuController::Update(double)
     {
         if (mBriefingLineIndex < (int)mBriefingInfo.Lines.size())
         {
-            mBriefingLineTimer -= 0.033f;
+            mBriefingLineTimer -= static_cast<float>(Dt);
             if (mBriefingLineTimer <= 0.0f)
             {
                 ++mBriefingLineIndex;
@@ -1104,7 +1109,7 @@ void GlueMenuController::SwitchToPage(Page NewPage)
     else if (mCurrentPage == Page::Campaign)
     {
         StopMainMenuAnimations();
-        SetCampaignAnimationsEnabled(false, false);
+        SetCampaignAnimationsEnabled(true, true);
     }
     else
     {

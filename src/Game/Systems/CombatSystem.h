@@ -22,6 +22,7 @@ class CombatSystem : public Core::ECS::ISystem
 {
 public:
     using DetectorChecker = std::function<bool(int TileX, int TileY, int PlayerID)>;
+    using AllianceChecker = std::function<bool(int PlayerA, int PlayerB)>;
 
     CombatSystem(Core::ECS::SystemManager& SysMgr, BulletSystem& BulletSys,
                  Game::Map::GameMap* Map = nullptr)
@@ -30,6 +31,7 @@ public:
     std::string_view GetName() const override { return "CombatSystem"; }
 
     static void SetDetectorChecker(DetectorChecker Checker);
+    static void SetAllianceChecker(AllianceChecker Checker);
 
     template <typename TFow = FogOfWarSystem>
     static void SetFogOfWarSystem(const TFow* FOW)
@@ -39,16 +41,21 @@ public:
             SetDetectorChecker([FOW](int TileX, int TileY, int PlayerID) {
                 return FOW->IsGameplayDetected(TileX, TileY, PlayerID);
             });
+            SetAllianceChecker([FOW](int PlayerA, int PlayerB) {
+                return FOW->AreAllied(PlayerA, PlayerB);
+            });
         }
         else
         {
             SetDetectorChecker(nullptr);
+            SetAllianceChecker(nullptr);
         }
     }
 
     static void SetFogOfWarSystem(std::nullptr_t)
     {
         SetDetectorChecker(nullptr);
+        SetAllianceChecker(nullptr);
     }
 
     static void IssueAttack(Core::ECS::EntityManager& EM,

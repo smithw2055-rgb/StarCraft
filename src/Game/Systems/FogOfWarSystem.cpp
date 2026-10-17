@@ -46,6 +46,7 @@ void FogOfWarSystem::SetAlliance(int PlayerA, int PlayerB, bool Allied)
     if (PlayerB < 0 || PlayerB >= mMaxPlayers) return;
     mAlliance[(size_t)PlayerA * mMaxPlayers + PlayerB] = Allied;
     mAlliance[(size_t)PlayerB * mMaxPlayers + PlayerA] = Allied;
+    ++mRevision;
 }
 
 bool FogOfWarSystem::AreAllied(int PlayerA, int PlayerB) const
@@ -227,6 +228,7 @@ void FogOfWarSystem::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f) return;
 
+    ++mRevision;
     ResetVisibility();
 
     auto& EM = mSystemMgr.GetEntityManager();

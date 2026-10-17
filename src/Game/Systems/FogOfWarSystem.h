@@ -55,7 +55,8 @@ public:
     void SetAlliance(int PlayerA, int PlayerB, bool Allied);
     bool AreAllied(int PlayerA, int PlayerB) const;
     void SetLocalPlayerID(int PlayerID) { mLocalPlayerID = PlayerID; }
-    void SetObserverRevealAll(bool Enabled) { mObserverRevealAll = Enabled; }
+    void SetObserverRevealAll(bool Enabled) { mObserverRevealAll = Enabled; ++mRevision; }
+    uint32_t GetRevision() const { return mRevision; }
 
     int GetWidth() const { return mMapWidth; }
     int GetHeight() const { return mMapHeight; }
@@ -85,6 +86,7 @@ private:
     int mMaxPlayers = 8;
     int mLocalPlayerID = 0;
     bool mObserverRevealAll = false;
+    uint32_t mRevision = 1;
 };
 
 } // namespace Game::Systems

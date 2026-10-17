@@ -184,6 +184,9 @@ private:
     int mMinimapTexWidth = 0;
     int mMinimapTexHeight = 0;
     std::string mMinimapTilesetName;
+    uint32_t mLastFogRevision = 0;
+    int mLastLocalPlayerID = -1;
+    double mLastMinimapTerrainTime = -1.0;
 
     static constexpr int kHudHeight = 320;
     static constexpr int kMinimapSize = 244;

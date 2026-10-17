@@ -14,7 +14,7 @@ namespace Game::Client::UI
 
 void Hud::ResetInfoPanel()
 {
-    mState.InfoPanel = {};
+    mState.InfoPanel.Reset();
 }
 
 void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
@@ -191,7 +191,7 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
         {
             mState.InfoPanel.IsTownCenter = true;
             mState.InfoPanel.SupplyUsed = mState.Resources.SupplyUsed;
-            mState.InfoPanel.SupplyProvided = 10;
+            mState.InfoPanel.SupplyProvided = Game::Races::GetSupplyProvidedByDefID(ResolvedDefId);
             mState.InfoPanel.SupplyTotal = mState.Resources.SupplyMax;
             mState.InfoPanel.SupplyMax = 200;
         }
@@ -257,7 +257,9 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
                 return true;
             }
             if (Name == "Academy") {
-                Out = { ResearchId::Terran_StimPacks, ResearchId::Terran_U238Shells, ResearchId::Terran_CaduceusReactor };
+                Out = { ResearchId::Terran_StimPacks, ResearchId::Terran_U238Shells,
+                        ResearchId::Terran_Restoration, ResearchId::Terran_OpticalFlare,
+                        ResearchId::Terran_CaduceusReactor };
                 return true;
             }
             if (Name == "Machine Shop" || Name == "MachineShop") {
@@ -279,7 +281,8 @@ void Hud::UpdateInfoPanel(Core::ECS::EntityManager& Entities,
                 return true;
             }
             if (Name == "Science Facility" || Name == "ScienceFacility") {
-                Out = { ResearchId::Terran_TitanReactor };
+                Out = { ResearchId::Terran_EMPShockwave, ResearchId::Terran_Irradiate,
+                        ResearchId::Terran_TitanReactor };
                 return true;
             }
             if (Name == "Evolution Chamber" || Name == "EvolutionChamber") {

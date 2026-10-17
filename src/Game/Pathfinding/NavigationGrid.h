@@ -80,7 +80,6 @@ public:
         mWalkable.assign(CellCount, 1);
         mHeightLevel.assign(CellCount, 0);
         mStaticOwner.assign(CellCount, -1);
-        UpdateClearance();
         ++mVersion;
     }
 
@@ -104,7 +103,6 @@ public:
 
     void CommitBaseChanges()
     {
-        UpdateClearance();
         ++mVersion;
     }
 
@@ -328,62 +326,12 @@ private:
         return (size_t)Y * (size_t)mWidth + (size_t)X;
     }
 
-    void UpdateClearance()
-    {
-        const size_t CellCount = (size_t)mWidth * (size_t)mHeight;
-        mClearance.assign(CellCount, 0);
-        if (mWidth <= 0 || mHeight <= 0)
-            return;
-
-        std::vector<int> Dist(CellCount, 0);
-        for (int Y = 0; Y < mHeight; ++Y)
-        {
-            for (int X = 0; X < mWidth; ++X)
-            {
-                size_t Idx = CellIndex(X, Y);
-                if (mWalkable[Idx] == 0 || mStaticOwner[Idx] != -1)
-                {
-                    Dist[Idx] = 0;
-                }
-                else
-                {
-                    int DistBorder = 1 + std::min({X, Y, mWidth - 1 - X, mHeight - 1 - Y});
-                    int d = DistBorder;
-                    if (X > 0) d = std::min(d, Dist[CellIndex(X - 1, Y)] + 1);
-                    if (Y > 0) d = std::min(d, Dist[CellIndex(X, Y - 1)] + 1);
-                    if (X > 0 && Y > 0) d = std::min(d, Dist[CellIndex(X - 1, Y - 1)] + 1);
-                    if (X + 1 < mWidth && Y > 0) d = std::min(d, Dist[CellIndex(X + 1, Y - 1)] + 1);
-                    Dist[Idx] = d;
-                }
-            }
-        }
-
-        for (int Y = mHeight - 1; Y >= 0; --Y)
-        {
-            for (int X = mWidth - 1; X >= 0; --X)
-            {
-                size_t Idx = CellIndex(X, Y);
-                if (Dist[Idx] > 0)
-                {
-                    int d = Dist[Idx];
-                    if (X + 1 < mWidth) d = std::min(d, Dist[CellIndex(X + 1, Y)] + 1);
-                    if (Y + 1 < mHeight) d = std::min(d, Dist[CellIndex(X, Y + 1)] + 1);
-                    if (X + 1 < mWidth && Y + 1 < mHeight) d = std::min(d, Dist[CellIndex(X + 1, Y + 1)] + 1);
-                    if (X > 0 && Y + 1 < mHeight) d = std::min(d, Dist[CellIndex(X - 1, Y + 1)] + 1);
-                    Dist[Idx] = d;
-                    mClearance[Idx] = (d > 1) ? (uint8_t)std::min(255, d - 1) : 0;
-                }
-            }
-        }
-    }
-
     int mWidth = 0;
     int mHeight = 0;
     uint32_t mVersion = 0;
     std::vector<uint8_t> mWalkable;
     std::vector<uint8_t> mHeightLevel;
     std::vector<int> mStaticOwner;
-    std::vector<uint8_t> mClearance;
     std::vector<NavigationObstacle> mObstacles;
 };
 

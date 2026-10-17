@@ -305,11 +305,15 @@ private:
         int StartCluster = -1;
         int TargetCluster = -1;
         int FootprintSignature = 0;
+        int IgnoredOwnerEntityID = -1;
+        int AdditionalIgnoredOwnerEntityID = -1;
 
         bool operator<(const CorridorKey& Other) const
         {
-            return std::tie(Version, StartCluster, TargetCluster, FootprintSignature) <
-                std::tie(Other.Version, Other.StartCluster, Other.TargetCluster, Other.FootprintSignature);
+            return std::tie(Version, StartCluster, TargetCluster, FootprintSignature,
+                            IgnoredOwnerEntityID, AdditionalIgnoredOwnerEntityID) <
+                std::tie(Other.Version, Other.StartCluster, Other.TargetCluster, Other.FootprintSignature,
+                         Other.IgnoredOwnerEntityID, Other.AdditionalIgnoredOwnerEntityID);
         }
     };
 
@@ -431,9 +435,11 @@ private:
             for (int Y = StartY; Y < EndY; ++Y)
             {
                 if (mGrid.CanTraverse(LeftCellX, Y, RightCellX, Y,
-                        Query.Footprint, -1, -1) &&
+                        Query.Footprint, Query.IgnoredOwnerEntityID,
+                        Query.AdditionalIgnoredOwnerEntityID) &&
                     mGrid.CanTraverse(RightCellX, Y, LeftCellX, Y,
-                        Query.Footprint, -1, -1))
+                        Query.Footprint, Query.IgnoredOwnerEntityID,
+                        Query.AdditionalIgnoredOwnerEntityID))
                 {
                     return true;
                 }
@@ -450,9 +456,11 @@ private:
             for (int X = StartX; X < EndX; ++X)
             {
                 if (mGrid.CanTraverse(X, TopCellY, X, BottomCellY,
-                        Query.Footprint, -1, -1) &&
+                        Query.Footprint, Query.IgnoredOwnerEntityID,
+                        Query.AdditionalIgnoredOwnerEntityID) &&
                     mGrid.CanTraverse(X, BottomCellY, X, TopCellY,
-                        Query.Footprint, -1, -1))
+                        Query.Footprint, Query.IgnoredOwnerEntityID,
+                        Query.AdditionalIgnoredOwnerEntityID))
                 {
                     return true;
                 }
@@ -469,7 +477,9 @@ private:
         const int TargetCluster = ClusterIndexForCell(TargetX, TargetY);
         const CorridorKey Key{
             mGrid.GetVersion(), StartCluster, TargetCluster,
-            Query.Footprint.Signature()
+            Query.Footprint.Signature(),
+            Query.IgnoredOwnerEntityID,
+            Query.AdditionalIgnoredOwnerEntityID
         };
         const auto Cached = mCorridorCache.find(Key);
         if (Cached != mCorridorCache.end())

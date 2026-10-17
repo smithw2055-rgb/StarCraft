@@ -348,11 +348,21 @@ int main()
         "airborne building exposes movement and an icon-backed landing command");
     Require(Game::Client::GameLoop::ExecuteHudCommandIndex(
                 EM, {FlightCommandCenter}, Hud, 8) &&
-            !Hud.HasPendingTarget(),
-        "Land command immediately starts landing without world-target mode");
+            Hud.HasPendingTarget() &&
+            Hud.GetPendingTargetMode() == Game::Client::UI::PendingTargetMode::Land,
+        "Land command enters pending target mode for landing placement");
+    auto* FlightBuildingTransform =
+        EM.GetComponent<Game::Components::TransformComponent>(FlightCommandCenter);
+    Require(Game::Client::GameLoop::ExecutePendingTargetCommand(
+                EM, {FlightCommandCenter},
+                Hud.GetPendingTargetMode(), -1,
+                Game::Client::GameLoop::ClickTargetContext{},
+                FlightBuildingTransform->Position),
+        "dispatching land target placement starts landing");
+    Hud.CancelPendingTarget();
     Require(FlightBuilding->IsLifted &&
             FlightBuilding->FlightPhase == Game::Components::BuildingFlightPhase::Landing,
-        "HUD lands at the current position and keeps flight state until the Landing animation signals completion");
+        "HUD lands at the target position and keeps flight state until the Landing animation signals completion");
 
     const int ResumeMineral = CreateMineralField(EM);
     EM.GetComponent<Game::Components::TransformComponent>(ResumeMineral)->Position =
@@ -1564,6 +1574,10 @@ int main()
     auto* VesselUnit = EM.GetComponent<Game::Components::UnitComponent>(VesselEntity);
     VesselUnit->EnergyPoints = 200;
     VesselUnit->MaxEnergyPoints = 250;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Terran_EMPShockwave)] = 1;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Terran_Irradiate)] = 1;
 
     Hud.UpdateContext(EM, {VesselEntity});
     const auto& VesselButtons = Hud.GetState().CommandPanel.ButtonDefs;
@@ -1599,6 +1613,10 @@ int main()
     auto* MedicUnit = EM.GetComponent<Game::Components::UnitComponent>(TestMedicEntity);
     MedicUnit->EnergyPoints = 200;
     MedicUnit->MaxEnergyPoints = 250;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Terran_Restoration)] = 1;
+    Game::Systems::UpgradeSystem::GetUpgrades(0).Levels[
+        static_cast<size_t>(Game::Systems::ResearchId::Terran_OpticalFlare)] = 1;
 
     Hud.UpdateContext(EM, {TestMedicEntity});
     const auto& MedicButtons = Hud.GetState().CommandPanel.ButtonDefs;

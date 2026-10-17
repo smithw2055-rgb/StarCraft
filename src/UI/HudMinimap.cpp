@@ -171,8 +171,27 @@ void Hud::UpdateMinimapTerrain(const Game::Map::GameMap* EcsMap,
         return;
 
     const std::string TilesetName = ClientMap ? ClientMap->TilesetName : "";
-    if (mMinimapTexWidth != MapW || mMinimapTexHeight != MapH ||
-        mMinimapTilesetName != TilesetName || mBaseTerrainColors.size() != (size_t)(MapW * MapH))
+    const double Now = Core::Platform::GetAbsoluteTime();
+    const bool TextureInvalid = !mMinimapTexture.Valid() ||
+                                mMinimapTexWidth != MapW ||
+                                mMinimapTexHeight != MapH ||
+                                mMinimapTilesetName != TilesetName ||
+                                mBaseTerrainColors.size() != (size_t)(MapW * MapH);
+
+    const uint32_t CurrentFogRev = Fog ? Fog->GetRevision() : 0;
+    const bool FogOrPlayerChanged = (CurrentFogRev != mLastFogRevision) || (LocalPlayerID != mLastLocalPlayerID);
+    const bool ThrottleElapsed = (mLastMinimapTerrainTime < 0.0) || (Now - mLastMinimapTerrainTime >= 0.066);
+
+    if (!TextureInvalid && (!FogOrPlayerChanged || !ThrottleElapsed))
+    {
+        return;
+    }
+
+    mLastFogRevision = CurrentFogRev;
+    mLastLocalPlayerID = LocalPlayerID;
+    mLastMinimapTerrainTime = Now;
+
+    if (TextureInvalid)
     {
         RebuildBaseTerrainColors(MapW, MapH, EcsMap, ClientMap);
         mMinimapTexWidth = MapW;
@@ -267,6 +286,7 @@ void Hud::DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
                              int MapWidthTiles,
                              int MapHeightTiles)
 {
+    (void)Entities;
     auto& D = Render::g_Draw2D;
     D.DrawRectLines((float)Layout.MinimapRect.X - 1, (float)Layout.MinimapRect.Y - 1,
                     (float)Layout.MinimapRect.W + 2, (float)Layout.MinimapRect.H + 2,
@@ -314,26 +334,6 @@ void Hud::DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
             D.DrawRect((float)PX - W * 0.5f, (float)PY - H * 0.5f, W, H, DotColor);
         }
     }
-    else
-    {
-        Entities.ForEachEntityWith<Game::Components::TransformComponent,
-                                   Game::Components::RenderComponent,
-                                   Game::Components::UnitComponent>([&](int EntityId)
-        {
-            auto* Transform = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
-            auto* Render = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
-            auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);
-            if (!Transform || !Render || !Render->Visible)
-                return;
-
-            const int PX = MinimapWorldToScreenX(ContentRect, Transform->Position.X, MapPxW);
-            const int PY = MinimapWorldToScreenY(ContentRect, Transform->Position.Y, MapPxH);
-            const int PlayerId = Player ? Player->PlayerID : 11;
-            const Render::Color Dot = (PlayerId == 0) ? Render::Color(80, 200, 255, 255)
-                                                       : Render::Color(220, 60, 60, 255);
-            D.DrawRect((float)PX - 1.0f, (float)PY - 1.0f, 2.0f, 2.0f, Dot);
-        });
-    }
 
     // 3. Draw Camera Viewport outline
     if (mState.Minimap.CamVisibleW > 0.0f && mState.Minimap.CamVisibleH > 0.0f)
@@ -363,7 +363,7 @@ void Hud::DrawMinimapOverlay(Core::ECS::EntityManager& Entities,
         {
             int PX = 0;
             int PY = 0;
-            if (!MinimapWorldToScreenPoint(Layout.MinimapRect,
+            if (!MinimapWorldToScreenPoint(ContentRect,
                                            MapWidthTiles,
                                            MapHeightTiles,
                                            Ping.Position.X,

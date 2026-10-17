@@ -179,8 +179,11 @@ int main()
                 Game::Races::GetUnitDefID("Pylon")) == 8,
         "Pylon provides Protoss supply");
     Require(Game::Races::GetSupplyProvidedByDefID(
-                Game::Races::GetUnitDefID("Nexus")) == 10,
+                Game::Races::GetUnitDefID("Nexus")) == 9,
         "Nexus provides base Protoss supply");
+    Require(Game::Races::GetSupplyProvidedByDefID(
+                Game::Races::GetUnitDefID("Hatchery")) == 1,
+        "Hatchery provides base Zerg supply");
     for (const auto& Def : Game::Races::GetProtossDefs())
     {
         if (!Def.IsBuilding)

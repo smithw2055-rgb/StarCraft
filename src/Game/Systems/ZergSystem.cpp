@@ -112,19 +112,17 @@ namespace
 
     bool HasCompletedBuildingDef(Core::ECS::EntityManager& EM, int PlayerID, int RequiredDefID)
     {
-        auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
-        for (int Bid : Buildings)
-        {
-            auto* B = EM.GetComponent<BuildingComponent>(Bid);
-            auto* BP = EM.GetComponent<PlayerComponent>(Bid);
-            if (!B || !BP || BP->PlayerID != PlayerID || B->UnderConstruction)
-                continue;
+        return EM.AnyEntityWith<BuildingComponent, PlayerComponent>(
+            [&](int Bid)
+            {
+                auto* B = EM.GetComponent<BuildingComponent>(Bid);
+                auto* BP = EM.GetComponent<PlayerComponent>(Bid);
+                if (!B || !BP || BP->PlayerID != PlayerID || B->UnderConstruction)
+                    return false;
 
-            if (Game::Races::BuildingDefSatisfiesRequirement(
-                    ResolveBuildingDefID(EM, Bid), RequiredDefID))
-                return true;
-        }
-        return false;
+                return Game::Races::BuildingDefSatisfiesRequirement(
+                    ResolveBuildingDefID(EM, Bid), RequiredDefID);
+            });
     }
 
     bool HasRequiredBuildings(Core::ECS::EntityManager& EM,

@@ -91,6 +91,7 @@ public:
     bool IsAlive(EntityID Id) const;
     ComponentMask GetMask(EntityID Id) const;
     size_t GetEntityCount() const { return mLivingEntityCount; }
+    size_t GetEntityCapacity() const { return mAlive.size(); }
 
     template<typename T>
     T& AddComponent(EntityID Id)
@@ -164,6 +165,23 @@ public:
             if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
                 Func(Id);
         }
+    }
+
+    template<typename... Components, typename Predicate>
+    bool AnyEntityWith(Predicate&& Pred)
+    {
+        ComponentMask RequiredMask = CreateMask<Components...>();
+        const size_t Count = mActiveEntities.size();
+        for (size_t i = 0; i < Count && i < mActiveEntities.size(); ++i)
+        {
+            EntityID Id = mActiveEntities[i];
+            if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
+            {
+                if (Pred(Id))
+                    return true;
+            }
+        }
+        return false;
     }
 
 private:

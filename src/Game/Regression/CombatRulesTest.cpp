@@ -1450,8 +1450,15 @@ int main()
         StatusDamageEM, MatrixUnit, AttackerCombat, -1, 50);
     Require(MatrixUnitData->DefensiveMatrixPoints == 200,
         "Defensive Matrix absorbs incoming damage and updates matrix points");
-    Require(MatrixUnitData->HitPoints == 99,
-        "Defensive Matrix limits penetrated damage to 1 point while active");
+    Require(MatrixUnitData->HitPoints == 100 && MatrixUnitData->HitPointSubDamage == 128,
+        "Defensive Matrix limits penetrated damage to 0.5 points (128 subdamage) per hit");
+
+    Game::Systems::CombatSystem::ApplyDamage(
+        StatusDamageEM, MatrixUnit, AttackerCombat, -1, 50);
+    Require(MatrixUnitData->DefensiveMatrixPoints == 150,
+        "Second hit further reduces Defensive Matrix points");
+    Require(MatrixUnitData->HitPoints == 99 && MatrixUnitData->HitPointSubDamage == 0,
+        "Two scratch hits accumulate to 1 full point of vitality damage");
 
     StatusDamageEM.GetComponent<Game::Components::StatusEffectComponent>(MatrixUnit)
         ->AddEffect(Game::Components::StatusEffect::EMP, 1.0f, -1);
@@ -3004,6 +3011,69 @@ int main()
         const int SelectedTarget = Game::Systems::CombatSystem::FindNearestEnemy(PrioEM, MarineAttacker, 128.0f);
         Require(SelectedTarget == FurtherZealot,
                 "Combat target acquisition prioritizes armed enemy unit over closer unarmed building");
+    }
+
+    {
+        // Friendly force-attack with EnemyOnly splash weapon damages direct target, but not other nearby friendlies
+        Core::ECS::SystemManager SplashForceSysMgr;
+        auto& SplashForceEM = SplashForceSysMgr.GetEntityManager();
+        Game::Systems::BulletSystem SplashForceBulletSys(SplashForceSysMgr);
+
+        const int AttackerID = SpawnUnit(SplashForceEM, {0.0f, 0.0f}, 0, false);
+        const int FriendlyDirectTarget = SpawnUnit(SplashForceEM, {32.0f, 0.0f}, 0, false);
+        const int FriendlyBystander = SpawnUnit(SplashForceEM, {35.0f, 0.0f}, 0, false);
+
+        auto* DirectTargetUnit = SplashForceEM.GetComponent<Game::Components::UnitComponent>(FriendlyDirectTarget);
+        auto* BystanderUnit = SplashForceEM.GetComponent<Game::Components::UnitComponent>(FriendlyBystander);
+        DirectTargetUnit->HitPoints = 100;
+        DirectTargetUnit->MaxHitPoints = 100;
+        BystanderUnit->HitPoints = 100;
+        BystanderUnit->MaxHitPoints = 100;
+
+        // Apply EnemyRadial splash damage (like Archon) targeting FriendlyDirectTarget
+        SplashForceBulletSys.ApplySplashDamage(
+            SplashForceEM, {32.0f, 0.0f},
+            10.0f, 20.0f, 30.0f,
+            40, Game::Components::DamageType::Normal,
+            0, 0, AttackerID,
+            Game::Components::SplashType::EnemyRadial,
+            true, false, false, 1,
+            FriendlyDirectTarget,
+            {}, {}, false);
+
+        Require(DirectTargetUnit->HitPoints < 100,
+                "Splash weapon with EnemyOnly damages directly targeted friendly unit");
+        Require(BystanderUnit->HitPoints == 100,
+                "Splash weapon with EnemyOnly does not damage nearby friendly bystanders");
+    }
+
+    {
+        // Alliance integration in CombatSystem::AreEnemies and target acquisition
+        Core::ECS::SystemManager AllySysMgr;
+        auto& AllyEM = AllySysMgr.GetEntityManager();
+        Game::Systems::BulletSystem AllyBulletSys(AllySysMgr);
+        Game::Systems::CombatSystem AllyCombatSys(AllySysMgr, AllyBulletSys);
+
+        const int UnitP0 = SpawnUnit(AllyEM, {100.0f, 100.0f}, 0, false);
+        const int UnitP1 = SpawnUnit(AllyEM, {130.0f, 100.0f}, 1, false);
+
+        // Before alliance: units are enemies
+        Require(Game::Systems::CombatSystem::AreEnemies(UnitP0, UnitP1, AllyEM),
+                "Units from different players are enemies by default");
+        Require(Game::Systems::CombatSystem::FindNearestEnemy(AllyEM, UnitP0, 64.0f) == UnitP1,
+                "Enemy unit is targeted by FindNearestEnemy");
+
+        // Set alliance checker
+        Game::Systems::CombatSystem::SetAllianceChecker([](int A, int B) {
+            return (A == 0 && B == 1) || (A == 1 && B == 0);
+        });
+
+        Require(!Game::Systems::CombatSystem::AreEnemies(UnitP0, UnitP1, AllyEM),
+                "Allied units are not enemies when AllianceChecker reports allied");
+        Require(Game::Systems::CombatSystem::FindNearestEnemy(AllyEM, UnitP0, 64.0f) == -1,
+                "Allied unit is not targeted by FindNearestEnemy");
+
+        Game::Systems::CombatSystem::SetAllianceChecker(nullptr);
     }
 
     std::printf("CombatRulesTest passed\n");

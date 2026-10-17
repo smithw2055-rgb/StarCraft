@@ -1248,6 +1248,9 @@ int main()
                 "Completed Turret gains active detector status");
         Require(EM.GetComponent<Game::Components::CombatComponent>(Turret) != nullptr,
                 "Completed Turret receives CombatComponent for defense");
+        auto* BuilderCmd = EM.GetComponent<Game::Components::CommandComponent>(BuilderScv);
+        Require(!BuilderCmd || BuilderCmd->CurrentCommand != Game::Components::CommandType::Harvest,
+                "SCV stays idle upon non-gas building completion and does not harvest minerals");
     }
 
     std::printf("BuildingPlacementTest passed\n");

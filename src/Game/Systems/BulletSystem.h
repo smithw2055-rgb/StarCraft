@@ -60,12 +60,6 @@ public:
                     int HitCount = 1,
                     bool ForceMissAtLaunch = false);
 
-private:
-    void UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, float DeltaTime);
-    void BulletHit(Core::ECS::EntityManager& EM, int BulletID);
-    void SpawnImpactVisual(Core::ECS::EntityManager& EM,
-                           int BulletID,
-                           const Core::Math::Vec2& ImpactPosition);
     void ApplySplashDamage(Core::ECS::EntityManager& EM,
                            const Core::Math::Vec2& Center,
                            float InnerRadius,
@@ -82,8 +76,16 @@ private:
                            bool IsRangedAttack,
                            int HitCount,
                            int DirectHitID,
-                           const Core::Math::Vec2& LineStart,
-                           const Core::Math::Vec2& LineEnd);
+                           const Core::Math::Vec2& LineStart = {},
+                           const Core::Math::Vec2& LineEnd = {},
+                           bool CanDamageSelf = false);
+
+private:
+    void UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, float DeltaTime);
+    void BulletHit(Core::ECS::EntityManager& EM, int BulletID);
+    void SpawnImpactVisual(Core::ECS::EntityManager& EM,
+                           int BulletID,
+                           const Core::Math::Vec2& ImpactPosition);
 
     Core::ECS::SystemManager& mSystemMgr;
     std::unordered_map<int, bool> mNextHeadingOffsetClockwise;

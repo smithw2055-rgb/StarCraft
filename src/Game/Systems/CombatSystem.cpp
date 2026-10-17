@@ -27,6 +27,7 @@ static bool CanAttackTarget(const CombatComponent& Combat,
 namespace
 {
     CombatSystem::DetectorChecker gDetectorChecker;
+    CombatSystem::AllianceChecker gAllianceChecker;
     static const Game::Pathfinding::NavigationSpatialHash* sActiveCombatSpatialHash = nullptr;
     constexpr float kAutoTargetLockSeconds = 2.5f;
     constexpr float kInvalidDirectAttackAutoAcquireDelay = 0.35f;
@@ -414,8 +415,12 @@ namespace
     {
         auto* PA = EM.GetComponent<PlayerComponent>(A);
         auto* PB = EM.GetComponent<PlayerComponent>(B);
-        return PA && PB && PA->PlayerID != PB->PlayerID &&
-               !PA->IsRescuePassive && !PB->IsRescuePassive;
+        if (!PA || !PB) return false;
+        if (PA->PlayerID == PB->PlayerID || PA->IsRescuePassive || PB->IsRescuePassive)
+            return false;
+        if (gAllianceChecker && gAllianceChecker(PA->PlayerID, PB->PlayerID))
+            return false;
+        return true;
     }
 }
 
@@ -684,6 +689,10 @@ static Core::Math::Vec2 ComputeCombatFormationTarget(
     {
         StandOff = std::min(StandOff, RangePixels - 6.0f);
     }
+    else if (!SelfRanged)
+    {
+        StandOff = TargetRadius + SelfRadius + 4.0f;
+    }
 
     return TargetTrans->Position - Forward * StandOff +
            Lateral * LateralOffset;
@@ -736,18 +745,21 @@ static bool IsProtectedByDarkSwarm(Core::ECS::EntityManager& EM, int TargetID)
     const auto* TargetTrans = EM.GetComponent<TransformComponent>(TargetID);
     if (!TargetTrans)
         return false;
-    for (int AreaID : EM.GetEntitiesWith<TransformComponent, SpellAreaComponent>())
-    {
-        const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
-        const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
-        if (AreaTrans && Area && Area->Effect == StatusEffect::DarkSwarm &&
-            Area->DurationRemaining > 0.0f &&
-            TargetTrans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
+    bool Protected = false;
+    EM.ForEachEntityWith<TransformComponent, SpellAreaComponent>(
+        [&](int AreaID)
         {
-            return true;
-        }
-    }
-    return false;
+            if (Protected) return;
+            const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
+            const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
+            if (AreaTrans && Area && Area->Effect == StatusEffect::DarkSwarm &&
+                Area->DurationRemaining > 0.0f &&
+                TargetTrans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
+            {
+                Protected = true;
+            }
+        });
+    return Protected;
 }
 
 static bool IsUnderDisruptionWeb(Core::ECS::EntityManager& EM, int EntityID)
@@ -766,18 +778,21 @@ static bool IsUnderDisruptionWeb(Core::ECS::EntityManager& EM, int EntityID)
     if (!Trans)
         return false;
 
-    for (int AreaID : EM.GetEntitiesWith<TransformComponent, SpellAreaComponent>())
-    {
-        const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
-        const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
-        if (AreaTrans && Area && Area->Effect == StatusEffect::DisruptionWeb &&
-            Area->DurationRemaining > 0.0f &&
-            Trans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
+    bool UnderWeb = false;
+    EM.ForEachEntityWith<TransformComponent, SpellAreaComponent>(
+        [&](int AreaID)
         {
-            return true;
-        }
-    }
-    return false;
+            if (UnderWeb) return;
+            const auto* AreaTrans = EM.GetComponent<TransformComponent>(AreaID);
+            const auto* Area = EM.GetComponent<SpellAreaComponent>(AreaID);
+            if (AreaTrans && Area && Area->Effect == StatusEffect::DisruptionWeb &&
+                Area->DurationRemaining > 0.0f &&
+                Trans->Position.DistanceTo(AreaTrans->Position) <= Area->Radius)
+            {
+                UnderWeb = true;
+            }
+        });
+    return UnderWeb;
 }
 
 static bool IsInvulnerableByStatus(Core::ECS::EntityManager& EM, int TargetID)
@@ -1008,7 +1023,6 @@ static void ClearDirectAttackOrderForInvalidTarget(Core::ECS::EntityManager& EM,
             Combat->TargetEntityID = -1;
             Combat->AutoTargetEntityID = -1;
             Combat->LastDamagerEntityID = -1;
-            Combat->AutoTargetLockSeconds = 0.0f;
             Combat->PendingAttackFrame = false;
             Combat->PendingAttackTargetEntityID = -1;
             Combat->PendingAttackDamage = 0;
@@ -1038,6 +1052,11 @@ static void ClearDirectAttackOrderForInvalidTarget(Core::ECS::EntityManager& EM,
 void CombatSystem::SetDetectorChecker(DetectorChecker Checker)
 {
     gDetectorChecker = std::move(Checker);
+}
+
+void CombatSystem::SetAllianceChecker(AllianceChecker Checker)
+{
+    gAllianceChecker = std::move(Checker);
 }
 
 void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
@@ -1090,19 +1109,12 @@ void CombatSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
                                     const std::vector<int>& Units,
                                     Core::Math::Vec2 Target)
 {
-    for (int ID : Units)
-    {
-        CommandSystem::IssueAttackMove(EM, {ID}, Target);
-    }
+    CommandSystem::IssueAttackMove(EM, Units, Target);
 }
 
 bool CombatSystem::AreEnemies(int A, int B, Core::ECS::EntityManager& EM)
 {
-    auto* PA = EM.GetComponent<PlayerComponent>(A);
-    auto* PB = EM.GetComponent<PlayerComponent>(B);
-    if (!PA || !PB) return false;
-    return PA->PlayerID != PB->PlayerID &&
-           !PA->IsRescuePassive && !PB->IsRescuePassive;
+    return AreEnemyPlayers(EM, A, B);
 }
 
 static int EvaluateTargetAttackPriority(Core::ECS::EntityManager& EM, int AttackerID, int TargetID)
@@ -1251,19 +1263,7 @@ int CombatSystem::PickWeaponDamage(const CombatComponent& Combat,
 
     if (TargetIsAir)
         return Combat.CanTargetAir ? Combat.AirDamage : 0;
-    if (!Combat.CanTargetGround)
-        return 0;
-
-    // Pick ground or air weapon based on what the target accepts and what we have
-    // For now, prefer ground unless the unit explicitly targets air only
-    if (Combat.CanTargetAir && Combat.AirDamage > 0 && !Combat.CanTargetGround)
-        return Combat.AirDamage;
-    if (Combat.CanTargetGround && Combat.GroundDamage > 0)
-        return Combat.GroundDamage;
-    if (Combat.CanTargetAir && Combat.AirDamage > 0)
-        return Combat.AirDamage;
-
-    return Combat.GroundDamage > 0 ? Combat.GroundDamage : Combat.AirDamage;
+    return Combat.CanTargetGround ? Combat.GroundDamage : 0;
 }
 
 int CombatSystem::PickWeaponHitCount(const CombatComponent& Combat,
@@ -1413,20 +1413,10 @@ void CombatSystem::ApplyDamageRaw(Core::ECS::EntityManager& EM, int TargetID,
                 TargetUnit->DefensiveMatrixPoints =
                     (NewMatrixRaw + kSubPointsPerPoint - 1) / kSubPointsPerPoint;
 
-                // Fixed 1 point (256 raw subpoints) scratch damage
-                int ShieldRaw = ExactVitalRaw(TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage);
-                if (TargetUnit->MaxShieldPoints > 0 && ShieldRaw >= kSubPointsPerPoint)
-                {
-                    ShieldRaw -= kSubPointsPerPoint;
-                    StoreVitalRaw(ShieldRaw, TargetUnit->ShieldPoints, TargetUnit->ShieldSubDamage);
-                    HadShieldDamage = true;
-                }
-                else
-                {
-                    int HitPointsRaw = ExactVitalRaw(TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
-                    HitPointsRaw = std::max(0, HitPointsRaw - kSubPointsPerPoint);
-                    StoreVitalRaw(HitPointsRaw, TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
-                }
+                // Fixed scratch damage (0.5 visible points / MinimumDamageRaw = 128) dealt directly to HP
+                int HitPointsRaw = ExactVitalRaw(TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
+                HitPointsRaw = std::max(0, HitPointsRaw - MinimumDamageRaw);
+                StoreVitalRaw(HitPointsRaw, TargetUnit->HitPoints, TargetUnit->HitPointSubDamage);
                 RemainingDamageRaw = 0;
             }
             else

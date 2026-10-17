@@ -64,6 +64,10 @@ namespace
         {ResearchId::Terran_ColossusReactor, "Colossus Reactor", "PhysicsLab",     150, 150, 0,  0,  1, 2500, 0},
         {ResearchId::Terran_CharonBoosters,  "Charon Boosters",  "MachineShop",    100, 100, 0,  0,  1, 2000, 0},
         {ResearchId::Terran_PersonalCloaking,"Personal Cloaking","CovertOps",      100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_EMPShockwave,    "EMP Shockwave",    "ScienceFacility",200, 200, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_Irradiate,       "Irradiate",        "ScienceFacility",200, 200, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_Restoration,     "Restoration",      "Academy",        100, 100, 0,  0,  1, 1200, 0},
+        {ResearchId::Terran_OpticalFlare,    "Optical Flare",    "Academy",        100, 100, 0,  0,  1, 1200, 0},
 
         // Zerg
         {ResearchId::Zerg_MeleeAttacks,      "Melee Attacks",      "Evolution Chamber", 100, 100, 50, 50, 3, 4000, 480},
@@ -165,26 +169,21 @@ namespace
         if (RequiredDefID < 0)
             return false;
 
-        for (int EntityID : MutableEM.GetEntitiesWith<BuildingComponent,
-                                                       UnitComponent,
-                                                       PlayerComponent>())
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
-            const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
-            if (!Player || Player->PlayerID != PlayerID || !Building ||
-                Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+        return MutableEM.AnyEntityWith<BuildingComponent, UnitComponent, PlayerComponent>(
+            [&](int EntityID)
             {
-                continue;
-            }
+                const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+                const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
+                const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+                if (!Player || Player->PlayerID != PlayerID || !Building ||
+                    Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
+                {
+                    return false;
+                }
 
-            if (Game::Races::BuildingDefSatisfiesRequirement(
-                    ResolveDefID(EM, EntityID), RequiredDefID))
-            {
-                return true;
-            }
-        }
-        return false;
+                return Game::Races::BuildingDefSatisfiesRequirement(
+                    ResolveDefID(EM, EntityID), RequiredDefID);
+            });
     }
 
     bool PlayerHasOwnedBuilding(const Core::ECS::EntityManager& EM,

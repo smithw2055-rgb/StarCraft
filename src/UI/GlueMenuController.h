@@ -223,6 +223,7 @@ private:
     int mBriefingMission = 0;
     int mBriefingLineIndex = -1;
     float mBriefingLineTimer = 0.0f;
+    double mLastUpdateTime = 0.0;
 };
 
 } // namespace Game::Client::UI::Glue

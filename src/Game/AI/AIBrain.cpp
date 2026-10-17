@@ -225,6 +225,7 @@ AIBrain::AIBrain(Core::ECS::SystemManager& SysMgr, int AIPlayerID, int TargetPla
     , mFog(Fog)
 {
     mDecisionInterval = GetAIDifficultyProfile(mDifficulty).DecisionIntervalSeconds;
+    mDecisionTimer = (float)(mAIPlayerID % 8) * 0.23f;
 }
 
 Core::Math::Vec2 AIBrain::FindBaseLocation(Core::ECS::EntityManager& EM)
@@ -687,9 +688,55 @@ int AIBrain::CountBuildings(Core::ECS::EntityManager& EM, int PlayerID, bool Exc
     return Count;
 }
 
+void AIBrain::BuildEntityCountCache(Core::ECS::EntityManager& EM)
+{
+    mCachedCompletedCount.clear();
+    mCachedTotalCount.clear();
+    auto Entities = EM.GetEntitiesWith<PlayerComponent>();
+    for (int Eid : Entities)
+    {
+        auto* P = EM.GetComponent<PlayerComponent>(Eid);
+        if (!P || P->PlayerID != mAIPlayerID) continue;
+
+        auto* Bldg = EM.GetComponent<BuildingComponent>(Eid);
+        auto* Unit = EM.GetComponent<UnitComponent>(Eid);
+
+        if (Bldg)
+        {
+            if (Unit && Unit->HitPoints > 0 && Bldg->BuildingDefID >= 0)
+            {
+                mCachedTotalCount[Bldg->BuildingDefID]++;
+                if (!Bldg->UnderConstruction)
+                    mCachedCompletedCount[Bldg->BuildingDefID]++;
+            }
+            continue;
+        }
+
+        if (Unit && Unit->HitPoints > 0)
+        {
+            const int DefID = ResolveUnitDefID(*Unit);
+            if (DefID >= 0)
+            {
+                mCachedTotalCount[DefID]++;
+                mCachedCompletedCount[DefID]++;
+            }
+        }
+    }
+    mEntityCountCacheValid = true;
+}
+
 int AIBrain::CountByDefID(Core::ECS::EntityManager& EM, int PlayerID, int DefID,
                           bool IncludeUnderConstruction)
 {
+    if (mEntityCountCacheValid && PlayerID == mAIPlayerID)
+    {
+        const int Pending = IncludeUnderConstruction
+            ? BuildingSystem::CountPendingBuilds(PlayerID, DefID) : 0;
+        const auto& Map = IncludeUnderConstruction ? mCachedTotalCount : mCachedCompletedCount;
+        auto It = Map.find(DefID);
+        return Pending + (It != Map.end() ? It->second : 0);
+    }
+
     int Count = IncludeUnderConstruction
         ? BuildingSystem::CountPendingBuilds(PlayerID, DefID) : 0;
     auto Entities = EM.GetEntitiesWith<PlayerComponent>();
@@ -1505,6 +1552,20 @@ void AIBrain::UpdateSafeTerranRallyPoints(Core::ECS::EntityManager& EM)
     const Game::Pathfinding::NavigationFootprint RallyFootprint{
         16, 16, 16, 16};
 
+    std::vector<Core::Math::Vec2> ActiveResourcePositions;
+    for (int ResourceID :
+         EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+    {
+        const auto* Resource =
+            EM.GetComponent<ResourceComponent>(ResourceID);
+        const auto* ResourcePosition =
+            EM.GetComponent<TransformComponent>(ResourceID);
+        if (Resource && ResourcePosition && Resource->Amount > 0)
+        {
+            ActiveResourcePositions.push_back(ResourcePosition->Position);
+        }
+    }
+
     const auto IsSafe = [&](const Core::Math::Vec2& Candidate,
                             int ProducerHeight)
     {
@@ -1546,15 +1607,9 @@ void AIBrain::UpdateSafeTerranRallyPoints(Core::ECS::EntityManager& EM)
             }
         }
 
-        for (int ResourceID :
-             EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        for (const auto& ResPos : ActiveResourcePositions)
         {
-            const auto* Resource =
-                EM.GetComponent<ResourceComponent>(ResourceID);
-            const auto* ResourcePosition =
-                EM.GetComponent<TransformComponent>(ResourceID);
-            if (Resource && ResourcePosition && Resource->Amount > 0 &&
-                Candidate.DistanceTo(ResourcePosition->Position) < 112.0f)
+            if (Candidate.DistanceTo(ResPos) < 112.0f)
             {
                 return false;
             }
@@ -2899,7 +2954,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
     if (mStage >= 1)
     {
         // Morph Hatchery→Lair
-        if (lairCount < 1 && hatcheryCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 100)
+        if (lairCount < 1 && hiveCount < 1 && hatcheryCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 100)
         {
             auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
             for (int Bid : Buildings)
@@ -3349,8 +3404,20 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
             if (Unit && Player && Player->PlayerID == mAIPlayerID &&
                 Unit->ChkUnitID == 67 && Unit->HitPoints > 0 && !Warp)
             {
-                if (Unit->EnergyPoints < 75 || highTemplarCount >= 3)
-                    ReadyTemplars.push_back(Eid);
+                const bool HasPsionicStorm = UpgradeSystem::HasResearch(mAIPlayerID, ResearchId::Protoss_PsionicStorm);
+                if (HasPsionicStorm)
+                {
+                    if ((Unit->EnergyPoints < 25.0f && Unit->HitPoints < 40) ||
+                        (highTemplarCount > highTemplarTarget && Unit->EnergyPoints < 40.0f))
+                    {
+                        ReadyTemplars.push_back(Eid);
+                    }
+                }
+                else
+                {
+                    if (highTemplarCount >= 2)
+                        ReadyTemplars.push_back(Eid);
+                }
             }
         }
         for (size_t i = 1; i < ReadyTemplars.size(); i += 2)
@@ -3533,7 +3600,7 @@ void AIBrain::ManageEconomy(Core::ECS::EntityManager& EM)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
         auto* P = EM.GetComponent<PlayerComponent>(Eid);
-        if (!U || !P) continue;
+        if (!U || !P || U->HitPoints <= 0) continue;
         if (P->PlayerID != mAIPlayerID) continue;
         if (RaceVal < 0 || RaceVal > 2 || U->ChkUnitID != WorkerChkIDs[RaceVal]) continue;
         if (Eid == mScoutUnitID) continue;
@@ -3982,6 +4049,54 @@ void AIBrain::ManageCombatAbilities(Core::ECS::EntityManager& EM)
     if (!TargetPosition)
         mEnemyBasePos = FindEnemyBaseLocation(EM);
 
+    auto FindBestSpellTargetNear = [&](const Core::Math::Vec2& CasterPos, float MaxCastRange, int MinEnemies) -> std::pair<Core::Math::Vec2, bool>
+    {
+        Core::Math::Vec2 BestTarget;
+        int BestScore = -1;
+        constexpr float SplashRadius = 96.0f;
+
+        for (int EnemyID : VisibleEnemies)
+        {
+            const auto* EPos = EM.GetComponent<TransformComponent>(EnemyID);
+            if (!EPos) continue;
+            const float DistToCaster = CasterPos.DistanceTo(EPos->Position);
+            if (DistToCaster > MaxCastRange) continue;
+
+            int EnemyCount = 0;
+            for (int OtherID : VisibleEnemies)
+            {
+                const auto* OtherPos = EM.GetComponent<TransformComponent>(OtherID);
+                if (OtherPos && OtherPos->Position.DistanceTo(EPos->Position) <= SplashRadius)
+                    ++EnemyCount;
+            }
+            if (EnemyCount < MinEnemies) continue;
+
+            int FriendlyCount = 0;
+            EM.ForEachEntityWith<UnitComponent, PlayerComponent, TransformComponent>(
+                [&](int UnitID)
+                {
+                    auto* UP = EM.GetComponent<PlayerComponent>(UnitID);
+                    auto* UU = EM.GetComponent<UnitComponent>(UnitID);
+                    auto* UPos = EM.GetComponent<TransformComponent>(UnitID);
+                    if (UP && UU && UPos && UP->PlayerID == mAIPlayerID && UU->HitPoints > 0)
+                    {
+                        if (UPos->Position.DistanceTo(EPos->Position) <= SplashRadius)
+                            ++FriendlyCount;
+                    }
+                });
+
+            if (FriendlyCount > EnemyCount / 2) continue;
+
+            int Score = EnemyCount * 2 - FriendlyCount * 3;
+            if (Score > BestScore)
+            {
+                BestScore = Score;
+                BestTarget = EPos->Position;
+            }
+        }
+        return {BestTarget, BestScore >= 0};
+    };
+
     bool StormCast = false;
     bool EmpCast = false;
     bool PlagueCast = false;
@@ -4011,18 +4126,16 @@ void AIBrain::ManageCombatAbilities(Core::ECS::EntityManager& EM)
             continue;
         const auto Def = Game::Races::GetUnitDefByID(DefID);
 
-        if ((Def.Name == "Marine" || Def.Name == "Firebat") && Distance <= 480.0f &&
+        if ((Def.Name == "Marine" || Def.Name == "Firebat") && Distance <= 240.0f &&
             UpgradeSystem::HasResearch(mAIPlayerID, ResearchId::Terran_StimPacks))
         {
             auto* Status = EM.GetComponent<StatusEffectComponent>(EntityID);
-            if (!Status || !Status->HasEffect(StatusEffect::Stim))
+            if ((!Status || !Status->HasEffect(StatusEffect::Stim)) && Unit->HitPoints > 20)
             {
                 Order Stim;
                 Stim.Type = OrderType::UseTech;
                 Stim.AbilityID = (int)ResearchId::Terran_StimPacks;
                 CommandSystem::IssueOrder(EM, EntityID, Stim, false);
-                CombatSystem::IssueAttackMove(
-                    EM, {EntityID}, TargetPosition->Position);
             }
         }
         else if (Def.Name == "SiegeTank" && Distance <= 420.0f)
@@ -4072,29 +4185,38 @@ void AIBrain::ManageCombatAbilities(Core::ECS::EntityManager& EM)
                 }
             }
         }
-        else if (!StormCast && ClusterSize >= 4 && Distance <= 320.0f &&
-                 Def.Name == "High Templar" &&
+        else if (!StormCast && Def.Name == "High Templar" &&
                  UpgradeSystem::HasResearch(
-                     mAIPlayerID, ResearchId::Protoss_PsionicStorm) &&
-                 SpellSystem::CastSpell(EM, EntityID, SpellType::PsionicStorm,
-                                        -1, TargetPosition->Position))
+                     mAIPlayerID, ResearchId::Protoss_PsionicStorm))
         {
-            StormCast = true;
+            auto [SpellTarget, HasTarget] =
+                FindBestSpellTargetNear(Position->Position, 320.0f, 3);
+            if (HasTarget && SpellSystem::CastSpell(EM, EntityID, SpellType::PsionicStorm,
+                                                    -1, SpellTarget))
+            {
+                StormCast = true;
+            }
         }
-        else if (!EmpCast && ClusterSize >= 3 && Distance <= 320.0f &&
-                 Def.Name == "ScienceVessel" &&
-                 SpellSystem::CastSpell(EM, EntityID, SpellType::EMPShockwave,
-                                        -1, TargetPosition->Position))
+        else if (!EmpCast && Def.Name == "ScienceVessel")
         {
-            EmpCast = true;
+            auto [SpellTarget, HasTarget] =
+                FindBestSpellTargetNear(Position->Position, 320.0f, 2);
+            if (HasTarget && SpellSystem::CastSpell(EM, EntityID, SpellType::EMPShockwave,
+                                                    -1, SpellTarget))
+            {
+                EmpCast = true;
+            }
         }
-        else if (!PlagueCast && ClusterSize >= 4 && Distance <= 320.0f &&
-                 Def.Name == "Defiler" &&
-                 UpgradeSystem::HasResearch(mAIPlayerID, ResearchId::Zerg_Plague) &&
-                 SpellSystem::CastSpell(EM, EntityID, SpellType::Plague,
-                                        -1, TargetPosition->Position))
+        else if (!PlagueCast && Def.Name == "Defiler" &&
+                 UpgradeSystem::HasResearch(mAIPlayerID, ResearchId::Zerg_Plague))
         {
-            PlagueCast = true;
+            auto [SpellTarget, HasTarget] =
+                FindBestSpellTargetNear(Position->Position, 320.0f, 3);
+            if (HasTarget && SpellSystem::CastSpell(EM, EntityID, SpellType::Plague,
+                                                    -1, SpellTarget))
+            {
+                PlagueCast = true;
+            }
         }
     }
 }
@@ -4312,10 +4434,36 @@ bool AIBrain::DefendBaseIfNeeded(Core::ECS::EntityManager& EM)
         for (int Eid : Defenders)
         {
             auto* Unit = EM.GetComponent<UnitComponent>(Eid);
-            if (Unit && Unit->ChkUnitID == 34)
+            if (!Unit) continue;
+            if (Unit->ChkUnitID == 34)
+            {
                 MedicDefenders.push_back(Eid);
-            else
-                CombatDefenders.push_back(Eid);
+                continue;
+            }
+            if (Unit->ChkUnitID == 30)
+            {
+                if (auto* Trans = EM.GetComponent<TransformComponent>(Eid))
+                {
+                    if (Trans->Position.DistanceTo(ThreatPosition) > 384.0f)
+                    {
+                        CommandSystem::SetSiegeMode(EM, Eid, false);
+                    }
+                }
+            }
+            else if (Unit->ChkUnitID == 103)
+            {
+                auto* Burrow = EM.GetComponent<BurrowComponent>(Eid);
+                auto* Trans = EM.GetComponent<TransformComponent>(Eid);
+                if (Burrow && Burrow->IsBurrowed && Trans &&
+                    Trans->Position.DistanceTo(ThreatPosition) > 192.0f &&
+                    !Burrow->IsTransitioning())
+                {
+                    Order UnburrowOrder;
+                    UnburrowOrder.Type = OrderType::Unburrow;
+                    CommandSystem::IssueOrder(EM, Eid, UnburrowOrder, false);
+                }
+            }
+            CombatDefenders.push_back(Eid);
         }
         if (!CombatDefenders.empty())
         {
@@ -5139,6 +5287,12 @@ void AIBrain::Update(float DeltaTime)
     mDecisionTimer += DeltaTime;
     if (mDecisionTimer < mDecisionInterval) return;
     mDecisionTimer = 0.0f;
+
+    BuildEntityCountCache(EM);
+    struct CacheGuard {
+        AIBrain& Brain;
+        ~CacheGuard() { Brain.InvalidateEntityCountCache(); }
+    } Guard{*this};
 
     if (AIShouldStopAfterElimination(
             mShowcaseMode, mElapsedSeconds,

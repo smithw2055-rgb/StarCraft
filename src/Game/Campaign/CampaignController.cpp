@@ -179,14 +179,11 @@ void CampaignController::Update(Core::ECS::EntityManager& EM, float DeltaTime)
     if (!mActive || !mTriggerVM)
         return;
     if (mState != CampaignState::Playing)
-    {
-        RefreshLeaderboardValue(EM);
         return;
-    }
 
     mStateTimer += DeltaTime;
     mTriggerVM->Update(EM, DeltaTime);
-    SyncLeaderboardFromTriggerVM(EM);
+    SyncLeaderboardFromTriggerVM(EM, DeltaTime);
     SyncMessagesFromTriggerVM(DeltaTime);
     SyncObjectivesFromTriggerVM();
     SyncStateFromTriggerVM();
@@ -196,6 +193,7 @@ void CampaignController::Reset()
 {
     mState = CampaignState::Playing;
     mStateTimer = 0.0f;
+    mLeaderboardRefreshTimer = 0.0f;
     mActivePortraitUnitID = kNoPortraitUnitID;
     mSyncedObjectiveSourceCount = 0;
     mObjectives.clear();
@@ -267,11 +265,12 @@ void CampaignController::SyncObjectivesFromTriggerVM()
     mSyncedObjectiveSourceCount = VmObjectives.size();
 }
 
-void CampaignController::SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& EM)
+void CampaignController::SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& EM, float DeltaTime)
 {
     if (!mTriggerVM)
         return;
 
+    bool NewLeaderboardEvent = false;
     for (const auto& Event : mTriggerVM->GetEvents())
     {
         switch (Event.ActionID)
@@ -283,17 +282,24 @@ void CampaignController::SyncLeaderboardFromTriggerVM(Core::ECS::EntityManager& 
                 mLeaderboard.Label = Event.Text.empty() ? "Units" : Event.Text;
                 mLeaderboard.UnitID = (uint16_t)Event.Data;
                 mLeaderboard.PlayerID = Event.PlayerID;
+                NewLeaderboardEvent = true;
                 break;
             }
             case 32: // Leaderboard computer players.
                 mLeaderboard.IncludeComputerPlayers = true;
+                NewLeaderboardEvent = true;
                 break;
             default:
                 break;
         }
     }
 
-    RefreshLeaderboardValue(EM);
+    mLeaderboardRefreshTimer -= DeltaTime;
+    if (NewLeaderboardEvent || mLeaderboardRefreshTimer <= 0.0f)
+    {
+        mLeaderboardRefreshTimer = 0.25f;
+        RefreshLeaderboardValue(EM);
+    }
 }
 
 void CampaignController::RefreshLeaderboardValue(Core::ECS::EntityManager& EM)
@@ -302,19 +308,19 @@ void CampaignController::RefreshLeaderboardValue(Core::ECS::EntityManager& EM)
         return;
 
     int Count = 0;
-    for (int EntityID : EM.GetEntitiesWith<Components::UnitComponent,
-                                           Components::PlayerComponent>())
-    {
-        auto* Unit = EM.GetComponent<Components::UnitComponent>(EntityID);
-        auto* Player = EM.GetComponent<Components::PlayerComponent>(EntityID);
-        if (!Unit || !Player || Unit->HitPoints <= 0)
-            continue;
-        if (!Trigger::MatchUnitGroup(Unit->ChkUnitID, mLeaderboard.UnitID))
-            continue;
-        if (!mLeaderboard.IncludeComputerPlayers && Player->PlayerID != mLeaderboard.PlayerID)
-            continue;
-        ++Count;
-    }
+    EM.ForEachEntityWith<Components::UnitComponent, Components::PlayerComponent>(
+        [&](int EntityID)
+        {
+            auto* Unit = EM.GetComponent<Components::UnitComponent>(EntityID);
+            auto* Player = EM.GetComponent<Components::PlayerComponent>(EntityID);
+            if (!Unit || !Player || Unit->HitPoints <= 0)
+                return;
+            if (!Trigger::MatchUnitGroup(Unit->ChkUnitID, mLeaderboard.UnitID))
+                return;
+            if (!mLeaderboard.IncludeComputerPlayers && Player->PlayerID != mLeaderboard.PlayerID)
+                return;
+            ++Count;
+        });
     mLeaderboard.CurrentValue = Count;
 }
 
