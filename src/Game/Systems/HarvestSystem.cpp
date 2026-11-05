@@ -69,7 +69,13 @@ namespace
             Path->CurrentSpeed = 0.0f;
             Path->CurrentVelocity = {0.0f, 0.0f};
             Path->StallTimer = 0.0f;
+            Path->StallTicks = 0;
             Path->HasLastWaypointDistance = false;
+            if (const auto* Trans = EM.GetComponent<TransformComponent>(EntityID))
+            {
+                Path->RequestedDestination = Trans->Position;
+                Path->ResolvedPathDestination = Trans->Position;
+            }
         }
     }
 
@@ -381,6 +387,13 @@ namespace
             Cmd->CurrentCommand = CommandType::Harvest;
             Cmd->TargetEntityID = TargetResourceID;
             Cmd->TargetPosition = TargetPosition;
+            if (Cmd->CurrentOrderIndex >= 0 &&
+                Cmd->CurrentOrderIndex < (int)Cmd->Orders.size())
+            {
+                Cmd->Orders[Cmd->CurrentOrderIndex].Type = OrderType::Gather;
+                Cmd->Orders[Cmd->CurrentOrderIndex].TargetEntityID = TargetResourceID;
+                Cmd->Orders[Cmd->CurrentOrderIndex].TargetPosition = TargetPosition;
+            }
         }
     }
 
@@ -547,6 +560,15 @@ namespace
             return;
         if (auto* Transform = EM.GetComponent<TransformComponent>(HarvesterID))
             Transform->Position = Harvest.GasExitPosition;
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(HarvesterID))
+        {
+            Path->FixedPosition = Core::Math::FixedVec2(
+                Harvest.GasExitPosition.X, Harvest.GasExitPosition.Y);
+            Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+            Path->HasFixedPosition = true;
+            Path->RequestedDestination = Harvest.GasExitPosition;
+            Path->ResolvedPathDestination = Harvest.GasExitPosition;
+        }
         if (auto* Render = EM.GetComponent<RenderComponent>(HarvesterID))
             Render->Visible = true;
         Harvest.InsideGasBuilding = false;
@@ -612,7 +634,7 @@ namespace
         const auto* Resource = EM.GetComponent<ResourceComponent>(TargetResourceID);
         if (Resource && Resource->Type == ResourceType::VespeneGas)
         {
-            constexpr float kGasDoorwayTolerance = 24.0f;
+            constexpr float kGasDoorwayTolerance = 16.0f;
             if (CollisionBoundsGap(EM, HarvesterID, TargetResourceID) <= kGasDoorwayTolerance)
                 return true;
             if (const auto* Trans = EM.GetComponent<TransformComponent>(HarvesterID))
@@ -782,7 +804,10 @@ namespace
         WorkerPath->Path = {Departure.Position};
         WorkerPath->PathIndex = 0;
         WorkerPath->RequestedDestination = Departure.Position;
-        WorkerPath->RequestedTargetEntityID = TargetResourceID;
+        WorkerPath->ResolvedPathDestination = Departure.Position;
+        WorkerPath->LastPathStatus = Game::Pathfinding::PathStatus::Exact;
+        WorkerPath->LastPathEndReason = Game::Pathfinding::PathEndReason::None;
+        WorkerPath->RequestedTargetEntityID = -1;
         WorkerPath->RequestedIgnoreEntityID = -1;
         WorkerPath->RequestedAdditionalIgnoreEntityID = -1;
         WorkerPath->NodeTolerance = 1.0f;
@@ -813,18 +838,21 @@ namespace
         if (!DepotTrans)
             return false;
 
+        const Core::Math::Vec2 DeliveryTarget =
+            ResolveDepotDeliveryTarget(EM, HarvesterID, DepotID);
+
         if (const auto* ExistingPath =
                 EM.GetComponent<PathfindingComponent>(HarvesterID);
             ExistingPath && ExistingPath->HasRecentMoveFailure &&
-            ExistingPath->RecentMoveFailureTicks > 0)
+            ExistingPath->RecentMoveFailureTicks > 0 &&
+            (ExistingPath->RecentFailedMoveTarget.DistanceTo(DeliveryTarget) <= 32.0f ||
+             ExistingPath->RecentFailedMoveTarget.DistanceTo(DepotTrans->Position) <= 32.0f))
         {
             // A blocked depot approach waits for the deterministic retry
             // window instead of issuing the same searches every tick.
             return false;
         }
 
-        const Core::Math::Vec2 DeliveryTarget =
-            ResolveDepotDeliveryTarget(EM, HarvesterID, DepotID);
         bool HasPath = CommandSystem::IssueMoveAndHasPath(
             EM, HarvesterID, DeliveryTarget, DepotID);
         RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, DepotTrans->Position);
@@ -848,6 +876,25 @@ namespace
                 }
             }
         }
+        if (HasPath && !IsInsideDepotDeliveryZone(EM, HarvesterID, DepotID))
+        {
+            if (auto* Path = EM.GetComponent<PathfindingComponent>(HarvesterID))
+            {
+                if (Path->LastPathStatus == Game::Pathfinding::PathStatus::Partial &&
+                    (Path->ResolvedPathDestination.DistanceTo(DeliveryTarget) <= 64.0f ||
+                     EntityEdgeDistance(EM, Path->ResolvedPathDestination, DepotID) <= 24.0f))
+                {
+                    Path->NodeTolerance = 1.0f;
+                    if (Path->Path.empty() ||
+                        Path->Path.back().DistanceTo(DeliveryTarget) > 0.5f)
+                    {
+                        Path->Path.push_back(DeliveryTarget);
+                    }
+                    Path->RequestedDestination = DeliveryTarget;
+                    Path->ResolvedPathDestination = DeliveryTarget;
+                }
+            }
+        }
 
         // A same-tile query can have no waypoints while the worker still needs
         // to move the final few pixels into the depot. Preserve that short
@@ -863,7 +910,10 @@ namespace
                 Path->Path = {DeliveryTarget};
                 Path->PathIndex = 0;
                 Path->RequestedDestination = DeliveryTarget;
-                Path->RequestedTargetEntityID = DepotID;
+                Path->ResolvedPathDestination = DeliveryTarget;
+                Path->LastPathStatus = Game::Pathfinding::PathStatus::Exact;
+                Path->LastPathEndReason = Game::Pathfinding::PathEndReason::None;
+                Path->RequestedTargetEntityID = -1;
                 Path->RequestedIgnoreEntityID = DepotID;
                 Path->NodeTolerance = 2.0f;
                 Path->RepathFailCount = 0;
@@ -1097,6 +1147,19 @@ namespace
                 if (auto* Path =
                         EM.GetComponent<PathfindingComponent>(HarvesterID))
                 {
+                    if (Path->LastPathStatus ==
+                            Game::Pathfinding::PathStatus::Partial &&
+                        Path->ResolvedPathDestination.DistanceTo(Candidate) > 16.0f)
+                    {
+                        ClearMotion(EM, HarvesterID);
+                        Path->HasRecentMoveFailure = true;
+                        Path->RecentFailedMoveTarget = Candidate;
+                        Path->RecentMoveFailureTicks = 24;
+                        Path->RecentMoveFailureCooldown = 1.0f;
+                        RestoreHarvestCommand(
+                            EM, HarvesterID, TargetResourceID, TargetPosition);
+                        return false;
+                    }
                     Path->NodeTolerance = 1.0f;
                     if (Path->Path.empty() ||
                         Path->Path.back().DistanceTo(Candidate) > 0.5f)
@@ -1104,6 +1167,7 @@ namespace
                         Path->Path.push_back(Candidate);
                     }
                     Path->RequestedDestination = Candidate;
+                    Path->ResolvedPathDestination = Candidate;
                 }
             }
             RestoreHarvestCommand(EM, HarvesterID, TargetResourceID, TargetPosition);
@@ -2167,6 +2231,12 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     }
                 }
 
+                const bool AlreadyApproachingRefinery =
+                    Path && !IsMoveSettled(Path) &&
+                    (Path->RequestedDestination.DistanceTo(EdgeTarget) <= 1.0f ||
+                     EntityEdgeDistance(
+                         EM, Path->RequestedDestination, Harvest->TargetResourceID) <= 32.0f);
+
                 if (!HasGatherTurn)
                 {
                     Harvest->State = AtRefineryEdge
@@ -2177,8 +2247,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                     {
                         ClearMotion(EM, ID);
                     }
-                    else if (!Path || IsMoveSettled(Path) ||
-                             Path->RequestedDestination.DistanceTo(EdgeTarget) > 1.0f)
+                    else if (!AlreadyApproachingRefinery)
                     {
                         IssueGasQueueMove(
                             EM,
@@ -2193,8 +2262,7 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
                 {
                     Harvest->State = HarvestState::MovingToResource;
                     Harvest->QueuedAtResource = false;
-                    if (!Path || IsMoveSettled(Path) ||
-                        Path->RequestedDestination.DistanceTo(EdgeTarget) > 1.0f)
+                    if (!AlreadyApproachingRefinery)
                     {
                         IssueGasQueueMove(
                             EM,

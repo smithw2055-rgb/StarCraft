@@ -52,18 +52,16 @@ public:
 
     void ZoomAt(float ScreenX, float ScreenY, float Delta)
     {
-        // Keep world point under cursor stable.
         float WX, WY;
         ScreenToWorld(ScreenX, ScreenY, WX, WY);
         AdjustZoom(Delta);
-        if (mZoom > 0.0001f)
+        if (mTargetZoom > 0.0001f)
         {
-            float NewSX = (WX - mX) * mZoom;
-            float NewSY = (WY - mY) * mZoom;
-            float DSX = NewSX - ScreenX;
-            float DSY = NewSY - ScreenY;
-            mTargetX += DSX / mZoom;
-            mTargetY += DSY / mZoom;
+            const float HalfW = (mViewportW * 0.5f) / mTargetZoom;
+            const float HalfH = (mViewportH * 0.5f) / mTargetZoom;
+            mTargetX = WX + HalfW - ScreenX / mTargetZoom;
+            mTargetY = WY + HalfH - ScreenY / mTargetZoom;
+            ClampTargetToBounds();
         }
     }
 
@@ -163,8 +161,8 @@ private:
         if (!mHasBounds)
             return;
 
-        float HalfW = (mViewportW * 0.5f) / mZoom;
-        float HalfH = (mViewportH * 0.5f) / mZoom;
+        float HalfW = (mViewportW * 0.5f) / mTargetZoom;
+        float HalfH = (mViewportH * 0.5f) / mTargetZoom;
         float MinX = mMapMinX + HalfW;
         float MaxX = mMapMaxX - HalfW;
         float MinY = mMapMinY + HalfH;

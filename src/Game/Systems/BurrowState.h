@@ -82,6 +82,15 @@ inline bool CompleteTransition(Core::ECS::EntityManager& EM,
             Cloak->IsCloaked = false;
     }
     SetVisualBurrowed(EM, EntityID, ToBurrowed);
+    if (auto* Cmd = EM.GetComponent<CommandComponent>(EntityID))
+    {
+        const auto ExpectedOrderType = ToBurrowed ? OrderType::Burrow : OrderType::Unburrow;
+        if (Cmd->CurrentOrderIndex >= 0 && (size_t)Cmd->CurrentOrderIndex < Cmd->Orders.size() &&
+            Cmd->Orders[(size_t)Cmd->CurrentOrderIndex].Type == ExpectedOrderType)
+        {
+            Cmd->AdvanceQueue();
+        }
+    }
     return true;
 }
 

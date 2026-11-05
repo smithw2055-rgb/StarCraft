@@ -158,12 +158,17 @@ public:
     void ForEachEntityWith(Fn&& Func)
     {
         ComponentMask RequiredMask = CreateMask<Components...>();
-        const size_t Count = mActiveEntities.size();
-        for (size_t i = 0; i < Count && i < mActiveEntities.size(); ++i)
+        for (size_t i = 0; i < mActiveEntities.size(); )
         {
             EntityID Id = mActiveEntities[i];
-            if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
-                Func(Id);
+            if ((mMasks[(size_t)Id] & RequiredMask) != RequiredMask)
+            {
+                ++i;
+                continue;
+            }
+            Func(Id);
+            if (i < mActiveEntities.size() && mActiveEntities[i] == Id)
+                ++i;
         }
     }
 

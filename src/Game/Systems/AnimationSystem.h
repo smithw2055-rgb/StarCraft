@@ -119,6 +119,7 @@ private:
         bool WasPendingAttack = false;
         bool HasPlayedBuilt = false;
         float StepAccumulator = 0.0f;
+        float SparkCooldown = 0.0f;
     };
 
     struct UnitAnimData
@@ -382,15 +383,13 @@ inline int AnimationSystem::SelectIScriptAnimationForState(
         }
         if (ConstructionProgress >= 0.6f)
         {
-            const int AlmostBuilt =
-                ResolvePlayableIScriptAnimation(Game::IScriptAnims::Anim_AlmostBuilt, HasAnim);
-            if (AlmostBuilt >= 0)
-                return AlmostBuilt;
+            if (HasAnim(Game::IScriptAnims::Anim_AlmostBuilt))
+                return Game::IScriptAnims::Anim_AlmostBuilt;
         }
-        if (HasAnim(Game::IScriptAnims::Anim_SpecialState1))
-            return Game::IScriptAnims::Anim_SpecialState1;
         if (HasAnim(Game::IScriptAnims::Anim_SpecialState2))
             return Game::IScriptAnims::Anim_SpecialState2;
+        if (HasAnim(Game::IScriptAnims::Anim_SpecialState1))
+            return Game::IScriptAnims::Anim_SpecialState1;
         if (HasAnim(Game::IScriptAnims::Anim_Init))
             return Game::IScriptAnims::Anim_Init;
         return -1;
@@ -482,10 +481,10 @@ inline AnimState AnimationSystem::GetAnimStateFromComponents(
              Cmd->CurrentCommand == Components::CommandType::HoldPosition);
         if (!IsExplicitlyStopped)
         {
-            const bool IsActuallyMoving = Path->CurrentSpeed > 0.05f || Path->CurrentVelocity.Length() > 0.05f;
+            const bool IsActuallyMoving = Path->CurrentSpeed > 0.15f || Path->CurrentVelocity.LengthSq() > 0.04f;
             const bool HasUnfinishedPath = !Path->Path.empty() && Path->PathIndex < (int)Path->Path.size();
-            const bool IsStalledOrFailed = Path->HasRecentMoveFailure || Path->DestinationStallTicks > 0;
-            if (IsActuallyMoving || (HasUnfinishedPath && !IsStalledOrFailed))
+            const bool IsStalledOrFailed = Path->HasRecentMoveFailure || Path->DestinationStallTicks > 0 || Path->StallTicks > 0;
+            if ((IsActuallyMoving && !IsStalledOrFailed) || (HasUnfinishedPath && !IsStalledOrFailed))
                 return AnimState::Walking;
         }
     }

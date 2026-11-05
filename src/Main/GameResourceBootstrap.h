@@ -168,6 +168,11 @@ inline bool InitializeClientResourcesAndSystemAssetResolvers(Game::Client::Clien
         });
     ConfigureAnimationImageAttachmentPersistenceResolver(
         [&Client](uint32_t ImageID) {
+            if (ImageID == 135u || ImageID == 136u ||
+                ImageID == 926u || ImageID == 927u || ImageID == 928u)
+            {
+                return true;
+            }
             const auto* DataLoader = Client.GetDataAssets().GetDataLoader();
             const auto* Relation = DataLoader
                 ? DataLoader->FindImageRelationByID(ImageID)

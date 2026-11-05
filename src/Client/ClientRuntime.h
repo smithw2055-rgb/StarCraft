@@ -74,6 +74,7 @@ struct ClientRuntime
     int GetLocalPlayerId() const;
     bool SetConsoleRace(const std::string& RaceName);
     void CancelPointerGesture();
+    void ResetSessionState();
     void PruneSelection(Core::ECS::EntityManager& Entities);
     void HandleControlGroupHotkeys(Core::ECS::EntityManager& Entities);
     std::vector<Core::ECS::EntityID> CollectSelectedAliveIds(Core::ECS::EntityManager& Entities) const;

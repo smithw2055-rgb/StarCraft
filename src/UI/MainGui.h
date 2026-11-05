@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "GuiHudHost.h"
@@ -82,6 +83,7 @@ private:
 
     GuiHudHost Host_;
     std::string AssetRoot_;
+    mutable std::unordered_map<int, std::string> PortraitUriCache_;
 
     int Minerals_ = 50;
     int Gas_ = 0;

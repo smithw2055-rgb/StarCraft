@@ -33,18 +33,21 @@ struct Shader2D
     GpuPipelineHandle Pipeline;
     GpuPipelineHandle HealthBarPipeline;
     GpuPipelineHandle SpriteEffectPipeline;
+    GpuPipelineHandle PipelineNoBlend;
+    GpuPipelineHandle HealthBarPipelineNoBlend;
+    GpuPipelineHandle SpriteEffectPipelineNoBlend;
     GpuSamplerHandle Sampler;
 
     bool Init();
     void Shutdown();
 
-    // Recreate pipeline (call when blending / depth changes)
+    // Recreate the pipeline set for the requested blend mode.
     void RebuildPipeline(bool AlphaBlend, bool DepthEnabled);
 
     // Bind the pipeline + default sampler
-    void BindPipeline();
-    void BindHealthBarPipeline();
-    void BindSpriteEffectPipeline();
+    void BindPipeline(bool AlphaBlend = true);
+    void BindHealthBarPipeline(bool AlphaBlend = true);
+    void BindSpriteEffectPipeline(bool AlphaBlend = true);
     void ApplyHealthBarParams(const HealthBarShaderParams& Params);
     void ApplySpriteEffectParams(const SpriteEffectShaderParams& Params);
     void BindDefaultSampler();

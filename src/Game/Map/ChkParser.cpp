@@ -218,8 +218,8 @@ void ChkParser::ParseUNIT(const ChkSectionInfo& S)
         P.StateFlags  = U[26] | (U[27] << 8);
         mUnits.push_back(P);
 
-        // Extract start locations (unit ID 115)
-        if (P.UnitID == 115)
+        // Extract start locations (unit ID 214 = StarCraft standard, 115 = legacy)
+        if (P.UnitID == 214 || P.UnitID == 115)
         {
             StartLocation SL;
             SL.X = P.X;

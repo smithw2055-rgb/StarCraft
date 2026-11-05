@@ -25,6 +25,13 @@ void Hud::CancelPendingTarget()
     mState.ActiveCommand = -1;
 }
 
+void Hud::BeginCommandTarget(PendingTargetMode Mode, HudCommandId CommandId)
+{
+    CancelPendingTarget();
+    mState.CommandPanel.PendingTargetModeValue = Mode;
+    mState.CommandPanel.PendingCommandId = CommandId;
+}
+
 void Hud::OnButtonInvoked(int ButtonIndex)
 {
     if (ButtonIndex < 0 || ButtonIndex >= (int)mState.CommandPanel.ButtonDefs.size())

@@ -518,12 +518,19 @@ uint32_t GameDataLoader::ResolveUnitConstructionImageID(uint32_t ChkUnitID) cons
 
     const uint32_t ImageID = mUnits[(size_t)ChkUnitID].ConstructionImageID;
     // Brood War uses construction image id 0 as a sentinel for buildings
-    // without a separate construction GRP (notably Terran Refinery and
-    // Protoss Assimilator). OpenBW's set_construction_graphic falls back to
-    // the unit's normal sprite image in this case. Treating 0 as a real image
-    // renders the SCV graphic inside the building footprint instead.
+    // without an explicit units.dat construction GRP. For Zerg ground
+    // buildings (other than Extractor 149, which has ConstructionImageID 105),
+    // OpenBW uses the Zerg building morph cocoon (104 for Lair/Hive/Greater
+    // Spire upgrades, 102 for normal Zerg structures). For Terran Refinery and
+    // Protoss Assimilator, fall back to the unit's normal sprite image.
     if (ImageID == 0)
+    {
+        if (ChkUnitID == 132 || ChkUnitID == 133 || ChkUnitID == 137)
+            return 104u;
+        if (ChkUnitID >= 131 && ChkUnitID <= 152 && ChkUnitID != 149)
+            return 102u;
         return ResolveUnitImageID(ChkUnitID);
+    }
     if (ImageID == UINT32_MAX || ImageID >= mImages.size())
         return UINT32_MAX;
 

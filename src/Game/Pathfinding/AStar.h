@@ -5,6 +5,7 @@
 #include <functional>
 
 #include "Core/Math/Vec2.h"
+#include "Game/Pathfinding/NavigationGrid.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -26,6 +27,8 @@ struct PathResult
     std::vector<Core::Math::Vec2> Waypoints;
     bool Found = false;
     int NodesSearched = 0;
+    PathStatus Status = PathStatus::Exact;
+    Core::Math::Vec2 ResolvedDestination;
 };
 
 class AStar

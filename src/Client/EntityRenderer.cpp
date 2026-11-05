@@ -75,8 +75,8 @@ namespace
                                      float RadiusX,
                                      float RadiusY)
     {
-        const int Segments = std::max(96, (int)std::lround(RadiusX * 3.0f));
-        const Render::Color Shadow(0, 28, 0, 220);
+        const int Segments = std::clamp((int)std::lround(RadiusX * 1.2f), 24, 36);
+        const Render::Color Shadow(0, 28, 0, 200);
         const Render::Color Green(70, 255, 86, 255);
         for (int I = 0; I < Segments; ++I)
         {
@@ -95,15 +95,15 @@ namespace
         const Render::Color Edge(92, 176, 255, 210);
         const float RadiusX = Game::ProtossPower::PylonRadiusWorld;
         const float RadiusY = RadiusX * 0.5f;
-        for (int Y = -(int)RadiusY; Y <= (int)RadiusY; Y += 2)
+        for (int Y = -(int)RadiusY; Y <= (int)RadiusY; Y += 4)
         {
             const float NormalizedY = (float)Y / RadiusY;
             const float HalfWidth = RadiusX * std::sqrt(
                 std::max(0.0f, 1.0f - NormalizedY * NormalizedY));
             Draw.DrawRect(WorldX - HalfWidth, WorldY + (float)Y,
-                          HalfWidth * 2.0f, 2.0f, Fill);
+                          HalfWidth * 2.0f, 4.0f, Fill);
         }
-        constexpr int Segments = 256;
+        constexpr int Segments = 64;
         for (int I = 0; I < Segments; ++I)
         {
             const float Angle = ((float)I / (float)Segments) * kTwoPi;
@@ -1369,6 +1369,26 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
 
     for (const auto& Item : SortedItems)
     {
+        if (!IsEntitySelected(Item.EntityId))
+            continue;
+        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(Item.EntityId);
+        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(Item.EntityId);
+        auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(Item.EntityId);
+        if (!Trans || !RenderComp || !RenderComp->Visible || !Unit)
+            continue;
+        const bool IsBuilding =
+            Entities.GetComponent<Game::Components::BuildingComponent>(Item.EntityId) != nullptr;
+        DrawSelectionVisual(Draw, GetSelectionVisual(Item.EntityId, *Trans, *Unit, IsBuilding));
+    }
+
+    for (int EntityId : SelectedIds)
+    {
+        if (Entities.IsAlive(EntityId))
+            DrawRallyIndicator(Draw, Entities, EntityId);
+    }
+
+    for (const auto& Item : SortedItems)
+    {
         const int EntityId = Item.EntityId;
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
@@ -1378,18 +1398,13 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             continue;
 
         bool DrewSprite = false;
-        const bool IsSelected = IsEntitySelected(EntityId);
         const bool IsResource = Entities.GetComponent<Game::Components::ResourceComponent>(EntityId) != nullptr;
         const bool IsBuilding = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId) != nullptr;
         const auto* Building =
             Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
         const float FlightBodyOffsetY = BuildingFlightBodyOffsetY(Building);
-        const bool ShowHealthBar = !IsResource && Unit->MaxHitPoints > 0 && IsSelected;
         const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(
             Entities, EntityId, mDataAssets, mSpriteAssets, RenderComp->ImageID);
-
-        if (IsSelected)
-            DrawSelectionVisual(Draw, GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding));
 
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
@@ -1445,18 +1460,6 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                                      Player);
                 DrewSprite = true;
                 ++DebugSpriteCount;
-
-                if (ShowHealthBar)
-                {
-                    const FootprintVisual& F =
-                        GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding).Footprint;
-                    const float BarW = StatusBarWidthFromSpriteData(
-                        mDataAssets, Unit->ChkUnitID, F, IsBuilding);
-                    DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F), BarW,
-                                            Unit->HitPoints, Unit->MaxHitPoints,
-                                            Unit->ShieldPoints, Unit->MaxShieldPoints,
-                                            Unit->EnergyPoints, Unit->MaxEnergyPoints);
-                }
             }
         }
 
@@ -1495,18 +1498,6 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             const float Y = Trans->Position.Y + FlightBodyOffsetY - Size * 0.5f;
             Draw.DrawRect(X, Y, Size, Size, Base);
             Draw.DrawRectLines(X, Y, Size, Size, Render::Color(0, 0, 0, 255), 2.0f);
-
-            if (ShowHealthBar)
-            {
-                const FootprintVisual& F =
-                    GetSelectionVisual(EntityId, *Trans, *Unit, IsBuilding).Footprint;
-                DrawSegmentedStatusBars(Draw, F.CenterX, StatusBarY(F),
-                                        StatusBarWidthFromSpriteData(
-                                            mDataAssets, Unit->ChkUnitID, F, IsBuilding),
-                                        Unit->HitPoints, Unit->MaxHitPoints,
-                                        Unit->ShieldPoints, Unit->MaxShieldPoints,
-                                        Unit->EnergyPoints, Unit->MaxEnergyPoints);
-            }
         }
 
         if (DebugEntityMarkersEnabled())
@@ -1588,9 +1579,27 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         }
     }
 
-    for (int EntityId : Entities.GetEntitiesWith<Game::Components::CommandComponent>())
+    for (const auto& Item : SortedItems)
     {
-        DrawRallyIndicator(Draw, Entities, EntityId);
+        if (!IsEntitySelected(Item.EntityId))
+            continue;
+        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(Item.EntityId);
+        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(Item.EntityId);
+        auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(Item.EntityId);
+        if (!Trans || !RenderComp || !RenderComp->Visible || !Unit || Unit->MaxHitPoints <= 0)
+            continue;
+        if (Entities.GetComponent<Game::Components::ResourceComponent>(Item.EntityId))
+            continue;
+        const bool IsBuilding =
+            Entities.GetComponent<Game::Components::BuildingComponent>(Item.EntityId) != nullptr;
+        const FootprintVisual& F =
+            GetSelectionVisual(Item.EntityId, *Trans, *Unit, IsBuilding).Footprint;
+        DrawSegmentedStatusBars(
+            Draw, F.CenterX, StatusBarY(F),
+            StatusBarWidthFromSpriteData(mDataAssets, Unit->ChkUnitID, F, IsBuilding),
+            Unit->HitPoints, Unit->MaxHitPoints,
+            Unit->ShieldPoints, Unit->MaxShieldPoints,
+            Unit->EnergyPoints, Unit->MaxEnergyPoints);
     }
 
     if (DebugEntityRenderEnabled() && DebugEntityFrames > 0)

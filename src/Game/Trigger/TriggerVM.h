@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -96,7 +97,7 @@ public:
     void SetSwitch(int Idx, bool Value);
     bool GetSwitch(int Idx) const;
     void SetCountdownTimer(int Seconds);
-    int GetCountdownTimer() const { return (int)mCountdownTimer; }
+    int GetCountdownTimer() const { return (int)std::ceil(mCountdownTimer); }
     void SetTimerPaused(bool Paused) { mTimerPaused = Paused; }
     void AddDeath(int PlayerID, int UnitID, int Count = 1);
     int GetDeathCount(int PlayerID, int UnitID) const;
@@ -123,6 +124,7 @@ private:
         bool Completed = false;
         bool Waiting = false;
         int WaitTimerMs = 0;
+        float WaitTimerRemainingSeconds = 0.0f;
     };
 
     struct RunningAIScript

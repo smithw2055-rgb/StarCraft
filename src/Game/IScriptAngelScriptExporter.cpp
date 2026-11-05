@@ -338,6 +338,9 @@ class IScriptState
     int warpOverlayFrame;
     bool spawnFrameSet;
     int spawnFrame;
+    bool noBreakCode;
+    bool readyToRepeatAttack;
+    int repeatAttackPC;
     int pc;
     int currentAnim;
     int waitRemaining;
@@ -382,6 +385,9 @@ class IScriptState
         warpOverlayFrame = 0;
         spawnFrameSet = false;
         spawnFrame = -1;
+        noBreakCode = false;
+        readyToRepeatAttack = false;
+        repeatAttackPC = -1;
         pc = -1;
         currentAnim = -1;
         waitRemaining = 0;
@@ -433,6 +439,9 @@ class IScriptState
     state.orderDone = false;
     state.hasWarpOverlay = false;
     state.warpOverlayFrame = 0;
+    state.noBreakCode = false;
+    state.readyToRepeatAttack = false;
+    state.repeatAttackPC = -1;
     state.waitRemaining = 0;
     state.callDepth = 0;
 }
@@ -659,6 +668,12 @@ class IScriptState
                    << " && currentDirection_" << I.PC << " <= " << A(1) << ") ? " << A(2)
                    << " : " << I.NextPC << ";\n            break;\n";
             break;
+        case Opc_RandCondJmp:
+            Output << "            int randomRoll_" << I.PC
+                   << " = int(NextRandom(state) & 0xff);\n"
+                   << "            state.pc = randomRoll_" << I.PC << " <= " << A(0)
+                   << " ? " << A(1) << " : " << I.NextPC << ";\n            break;\n";
+            break;
         case Opc_ImgUlNextId:
             Output << "            host.CreateImageOverlay(state.imageId + 1, " << A(0) << ", "
                    << A(1) << ", false);\n";
@@ -681,22 +696,75 @@ class IScriptState
                    << "            host.OrderDone(" << A(0) << ");\n";
             EmitPCAdvance(Output, I);
             break;
+        case Opc_Move:
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_GotoRepeatAttk:
+            Output << "            state.noBreakCode = false;\n"
+                   << "            state.readyToRepeatAttack = true;\n"
+                   << "            if (state.repeatAttackPC >= 0) state.pc = state.repeatAttackPC;\n"
+                   << "            else state.pc = " << I.NextPC << ";\n";
+            break;
+        case Opc_EngFrame:
+            Output << "            state.baseFrameIndex = " << A(0) << ";\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_EngSet:
+            Output << "            state.baseFrameIndex = " << (A(0) * 17) << ";\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_NoBrkCodeStart:
+            Output << "            state.noBreakCode = true;\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_NoBrkCodeEnd:
+            Output << "            state.noBreakCode = false;\n";
+            EmitPCAdvance(Output, I);
+            break;
         case Opc_Unknown0C:
         case Opc_UflUnstable:
-        case Opc_TurnCCWise:
-        case Opc_TurnCWise:
-        case Opc_Turn1CWise:
-        case Opc_TurnRand:
-        case Opc_Move:
-        case Opc_GotoRepeatAttk:
-        case Opc_EngFrame:
-        case Opc_EngSet:
         case Opc_Unknown2D:
-        case Opc_NoBrkCodeStart:
-        case Opc_NoBrkCodeEnd:
         case Opc_Unknown3E:
         case Opc_Unknown43:
             EmitUnknown(Output, I);
+            break;
+        case Opc_TurnCWise:
+            Output << "            state.currentDirection = (state.currentDirection + "
+                   << A(0) << " * 8) & 0xff;\n"
+                   << "            state.flDirect = state.currentDirection;\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_TurnCCWise:
+            Output << "            state.currentDirection = (state.currentDirection - "
+                   << A(0) << " * 8) & 0xff;\n"
+                   << "            state.flDirect = state.currentDirection;\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_Turn1CWise:
+            Output << "            state.currentDirection = (state.currentDirection + 8) & 0xff;\n"
+                   << "            state.flDirect = state.currentDirection;\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_TurnRand:
+            Output << "            int turnRange_" << I.PC << " = " << A(0)
+                   << " > 0 ? " << A(0) << " : 32;\n"
+                   << "            int turnStep_" << I.PC
+                   << " = int((NextRandom(state) & 0xff) % turnRange_" << I.PC << ") * 8;\n"
+                   << "            state.currentDirection = (state.currentDirection + turnStep_"
+                   << I.PC << ") & 0xff;\n"
+                   << "            state.flDirect = state.currentDirection;\n"
+                   << "            RefreshDirectionalFrame(state);\n";
+            EmitPCAdvance(Output, I);
+            break;
+        case Opc_SetFlSpeed:
+            Output << "            state.flSpeed = " << A(0) << ";\n"
+                   << "            host.FlightState(state.flDirect, state.flSpeed, 2);\n";
+            EmitPCAdvance(Output, I);
             break;
         case Opc_TmpRmGraphicStart:
             Output << "            host.TemporaryGraphicState(true);\n";

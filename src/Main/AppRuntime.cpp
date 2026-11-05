@@ -18,7 +18,6 @@ namespace Game::Client::GameLoop
 namespace
 {
     constexpr const char* kDevInstallPath = "C:\\Projects\\StarCraft";
-    constexpr const char* kDevAssetRoot = "C:\\Projects\\StarCraft\\assets";
 
     std::string ResolveMapSelectionPath(const std::string& Path, const std::string& InstallPath)
     {
@@ -58,17 +57,65 @@ namespace
 bool AppRuntime::DetectGameInstall()
 {
     std::error_code Ec;
-    if (!std::filesystem::is_directory(kDevAssetRoot, Ec))
+
+    auto TryRoot = [&](const std::string& Root) -> bool
     {
-        Core::Utils::Logger::Error("GameMain",
-            std::string("Hardcoded dev assets directory not found: ") + kDevAssetRoot);
+        if (Root.empty())
+            return false;
+
+        const std::filesystem::path RootPath(Root);
+        const std::filesystem::path AssetsPath = RootPath / "assets";
+        if (std::filesystem::is_directory(AssetsPath, Ec))
+        {
+            InstallPath = RootPath.lexically_normal().string();
+            AssetRoot = AssetsPath.lexically_normal().string();
+            return true;
+        }
+
+        if (std::filesystem::is_directory(RootPath, Ec) &&
+            std::filesystem::is_directory(RootPath / "ui", Ec))
+        {
+            AssetRoot = RootPath.lexically_normal().string();
+            InstallPath = RootPath.parent_path().lexically_normal().string();
+            return true;
+        }
         return false;
+    };
+
+    if (const char* EnvAssetRoot = std::getenv("STARCRAFT_ASSET_ROOT"))
+    {
+        if (TryRoot(EnvAssetRoot))
+        {
+            Core::Utils::Logger::Info("GameMain", "Using STARCRAFT_ASSET_ROOT: " + AssetRoot);
+            return true;
+        }
     }
 
-    InstallPath = kDevInstallPath;
-    AssetRoot = kDevAssetRoot;
-    Core::Utils::Logger::Info("GameMain", "Using hardcoded dev assets: " + AssetRoot);
-    return true;
+    if (const char* EnvInstall = std::getenv("STARCRAFT_INSTALL_PATH"))
+    {
+        if (TryRoot(EnvInstall))
+        {
+            Core::Utils::Logger::Info("GameMain", "Using STARCRAFT_INSTALL_PATH: " + AssetRoot);
+            return true;
+        }
+    }
+
+    const std::filesystem::path Current = std::filesystem::current_path(Ec);
+    if (!Ec && TryRoot(Current.string()))
+    {
+        Core::Utils::Logger::Info("GameMain", "Using working directory assets: " + AssetRoot);
+        return true;
+    }
+
+    if (TryRoot(kDevInstallPath))
+    {
+        Core::Utils::Logger::Info("GameMain", "Using hardcoded dev assets: " + AssetRoot);
+        return true;
+    }
+
+    Core::Utils::Logger::Error("GameMain",
+        "Game assets directory not found. Set STARCRAFT_ASSET_ROOT or STARCRAFT_INSTALL_PATH.");
+    return false;
 }
 
 void AppRuntime::SetMapPathOverride(std::string Path)

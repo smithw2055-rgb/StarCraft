@@ -8,6 +8,8 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
+#include "Game/Systems/BuildingSystem.h"
+#include "Game/PlayerColor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -91,12 +93,21 @@ namespace
 
     void ClearUnitMotionAfterTeleport(Core::ECS::EntityManager& EM, int EntityID)
     {
+        const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
         if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
         {
             Path->Path.clear();
             Path->PathIndex = 0;
             Path->CurrentSpeed = 0.0f;
+            Path->TargetSpeed = 0.0f;
             Path->CurrentVelocity = {0.0f, 0.0f};
+            Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+            if (Trans)
+            {
+                Path->FixedPosition = Core::Math::FixedVec2(Trans->Position.X, Trans->Position.Y);
+                Path->HasFixedPosition = true;
+                Path->RequestedDestination = Trans->Position;
+            }
         }
 
         if (auto* Cmd = EM.GetComponent<CommandComponent>(EntityID))
@@ -104,7 +115,7 @@ namespace
             Cmd->CancelAll();
             Cmd->CommandQueue.clear();
             Cmd->TargetEntityID = -1;
-            Cmd->TargetPosition = {};
+            Cmd->TargetPosition = Trans ? Trans->Position : Core::Math::Vec2{};
         }
     }
 }
@@ -229,11 +240,16 @@ void TriggerVM::Update(Core::ECS::EntityManager& EM, float DeltaTime)
     {
         if (Running.Waiting)
         {
-            Running.WaitTimerMs -= (int)(DeltaTime * 1000.0f);
-            if (Running.WaitTimerMs <= 0)
+            Running.WaitTimerRemainingSeconds -= DeltaTime;
+            if (Running.WaitTimerRemainingSeconds <= 0.0f)
             {
+                Running.WaitTimerRemainingSeconds = 0.0f;
                 Running.WaitTimerMs = 0;
                 Running.Waiting = false;
+            }
+            else
+            {
+                Running.WaitTimerMs = (int)(Running.WaitTimerRemainingSeconds * 1000.0f);
             }
         }
     }
@@ -537,7 +553,7 @@ bool TriggerVM::TestCondition(Core::ECS::EntityManager& EM, const SCRCondition& 
         case 23:
             return false;
         case 1:
-            return CompareCount(Cond.ComparisonType, (int)mCountdownTimer, Cond.Amount);
+            return CompareCount(Cond.ComparisonType, (int)std::ceil(mCountdownTimer), Cond.Amount);
         case 2:
             return CompareCount(Cond.ComparisonType,
                 CountMatchingUnits(EM, Owner, Cond.PlayerID, Cond.UnitID, 0), Cond.Amount);
@@ -646,8 +662,17 @@ bool TriggerVM::TestCondition(Core::ECS::EntityManager& EM, const SCRCondition& 
             for (int Player : ResolvePlayers(Owner, Cond.PlayerID))
             {
                 for (int Other = 0; Other < 8; ++Other)
-                    if (Other != Player && IsPlayerActive(Other) && !AreAllied(Player, Other))
-                        ++Count;
+                {
+                    if (Other == Player || !IsPlayerActive(Other) || AreAllied(Player, Other))
+                        continue;
+                    if (!mData.RawData.empty())
+                    {
+                        const uint8_t OtherOwner = mData.Players[(size_t)Other].Owner;
+                        if (OtherOwner == kChkOwnerRescuePassive || OtherOwner == 7 /*Neutral*/)
+                            continue;
+                    }
+                    ++Count;
+                }
             }
             return CompareCount(Cond.ComparisonType, Count, Cond.Amount);
         }
@@ -692,7 +717,8 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                 return true;
             }
             Running.Waiting = true;
-            Running.WaitTimerMs = std::max(0, (int)Action.Time);
+            Running.WaitTimerRemainingSeconds = (float)std::max(0, (int)Action.Time) / 1000.0f;
+            Running.WaitTimerMs = (int)Action.Time;
             Running.ActionFlags[Running.CurrentActionIndex] |= 0x01;
             return false;
         case 5:
@@ -709,12 +735,26 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             return true;
         case 7:
         {
+            if (Running.Waiting) return false;
+            if (Running.ActionFlags[Running.CurrentActionIndex] & 0x01)
+            {
+                Running.ActionFlags[Running.CurrentActionIndex] &= ~0x01;
+                return true;
+            }
             const TriggerLocation* Loc = GetLocationById(Action.LocationID);
             const Core::Math::Vec2 Pos = Loc ? Loc->Center() : Core::Math::Vec2{};
             if (Loc && mConfig.CenterView)
                 mConfig.CenterView(Pos);
             Emit(Type, Owner, mData.GetString(Action.StringID), Pos, Action.UnitID,
                 mData.GetWavPath(Action.WavID), Action.Time);
+            if (Action.Time > 0)
+            {
+                Running.Waiting = true;
+                Running.WaitTimerRemainingSeconds = (float)std::max(0, (int)Action.Time) / 1000.0f;
+                Running.WaitTimerMs = (int)Action.Time;
+                Running.ActionFlags[Running.CurrentActionIndex] |= 0x01;
+                return false;
+            }
             return true;
         }
         case 8:
@@ -772,7 +812,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
             return true;
         case 14:
         {
-            int Timer = (int)mCountdownTimer;
+            int Timer = (int)std::ceil(mCountdownTimer);
             ApplyNumberModifier(Timer, Modifier, (int)Action.Time);
             mCountdownTimer = (float)std::max(0, Timer);
             return true;
@@ -945,6 +985,7 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                 {
                     const int OldPlayerID = Player->PlayerID;
                     Player->PlayerID = NewPlayerID;
+                    Player->PlayerColor = Game::PlayerColorForID(NewPlayerID);
                     Player->IsRescuePassive = false;
                     if (auto* Unit = EM.GetComponent<UnitComponent>(ID))
                     {
@@ -954,6 +995,15 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                             OldRes.SupplyUsed = std::max(0, OldRes.SupplyUsed - Unit->SupplyCost);
                             auto& NewRes = Game::Systems::HarvestSystem::GetResources(NewPlayerID);
                             NewRes.SupplyUsed += Unit->SupplyCost;
+                        }
+                        const int DefID = Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+                        const int SupplyProvided = Game::Races::GetSupplyProvidedByDefID(DefID);
+                        if (SupplyProvided > 0)
+                        {
+                            auto& OldRes = Game::Systems::HarvestSystem::GetResources(OldPlayerID);
+                            OldRes.SupplyMax = std::max(0, OldRes.SupplyMax - SupplyProvided);
+                            auto& NewRes = Game::Systems::HarvestSystem::GetResources(NewPlayerID);
+                            NewRes.SupplyMax += SupplyProvided;
                         }
                     }
                 }
@@ -972,9 +1022,17 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                 if (auto* Unit = EM.GetComponent<UnitComponent>(ID))
                 {
                     int Percent = std::clamp((int)Action.Secondary, 0, 100);
-                    if (Type == 49) Unit->HitPoints = std::max(1, Unit->MaxHitPoints * Percent / 100);
+                    if (Type == 49)
+                    {
+                        Unit->HitPoints = std::max(1, Unit->MaxHitPoints * Percent / 100);
+                        Unit->HitPointSubDamage = 0;
+                    }
                     else if (Type == 50) Unit->EnergyPoints = Unit->MaxEnergyPoints * Percent / 100;
-                    else if (Type == 51) Unit->ShieldPoints = Unit->MaxShieldPoints * Percent / 100;
+                    else if (Type == 51)
+                    {
+                        Unit->ShieldPoints = Unit->MaxShieldPoints * Percent / 100;
+                        Unit->ShieldSubDamage = 0;
+                    }
                     else if (Type == 53)
                     {
                         const int MaxHangar =
@@ -1130,8 +1188,17 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
         !EM.GetComponent<PathfindingComponent>(Eid))
     {
         auto& Path = EM.AddComponent<PathfindingComponent>(Eid);
-        if (mConfig.ResolveCollisionBounds)
-            ApplyCollisionBounds(Path, mConfig.ResolveCollisionBounds(ChkUnitID));
+        UnitCollisionBounds Bounds = mConfig.ResolveCollisionBounds ? mConfig.ResolveCollisionBounds(ChkUnitID) : UnitCollisionBounds{};
+        if (!Bounds.IsValid && IsBuildingUnitID(ChkUnitID))
+        {
+            const auto Footprint = Game::Systems::BuildingSystem::BuildingFootprintSizeForChk(ChkUnitID);
+            Bounds.IsValid = true;
+            Bounds.Left = Footprint.W * 16 - 1;
+            Bounds.Right = Footprint.W * 16 - 1;
+            Bounds.Up = Footprint.H * 16 - 1;
+            Bounds.Down = Footprint.H * 16 - 1;
+        }
+        ApplyCollisionBounds(Path, Bounds);
     }
 
     if (ChkUnitID >= 176 && ChkUnitID <= 178)
@@ -1181,6 +1248,14 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
                 Status.IsCloaked = true;
             }
         }
+    }
+
+    if (auto* Path = EM.GetComponent<PathfindingComponent>(Eid))
+    {
+        Path->FixedPosition = Core::Math::FixedVec2(Pos.X, Pos.Y);
+        Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+        Path->HasFixedPosition = true;
+        Path->RequestedDestination = Pos;
     }
 
     return Eid;
@@ -1300,14 +1375,25 @@ void TriggerVM::UpdateRescuePassiveUnits(Core::ECS::EntityManager& EM)
                 continue;
 
             const int OldPlayerID = RescuePlayer->PlayerID;
-            RescuePlayer->PlayerID = RescuerPlayer->PlayerID;
+            const int NewPlayerID = RescuerPlayer->PlayerID;
+            RescuePlayer->PlayerID = NewPlayerID;
+            RescuePlayer->PlayerColor = Game::PlayerColorForID(NewPlayerID);
             RescuePlayer->IsRescuePassive = false;
             if (RescueUnit->SupplyCost > 0)
             {
                 auto& OldRes = Game::Systems::HarvestSystem::GetResources(OldPlayerID);
                 OldRes.SupplyUsed = std::max(0, OldRes.SupplyUsed - RescueUnit->SupplyCost);
-                auto& NewRes = Game::Systems::HarvestSystem::GetResources(RescuePlayer->PlayerID);
+                auto& NewRes = Game::Systems::HarvestSystem::GetResources(NewPlayerID);
                 NewRes.SupplyUsed += RescueUnit->SupplyCost;
+            }
+            const int DefID = Game::Races::GetUnitDefIDByChkUnitID(RescueUnit->ChkUnitID);
+            const int SupplyProvided = Game::Races::GetSupplyProvidedByDefID(DefID);
+            if (SupplyProvided > 0)
+            {
+                auto& OldRes = Game::Systems::HarvestSystem::GetResources(OldPlayerID);
+                OldRes.SupplyMax = std::max(0, OldRes.SupplyMax - SupplyProvided);
+                auto& NewRes = Game::Systems::HarvestSystem::GetResources(NewPlayerID);
+                NewRes.SupplyMax += SupplyProvided;
             }
             Logger::Info(
                 "TriggerVM",
@@ -1453,6 +1539,12 @@ int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript
             continue;
         if (!EM.GetComponent<CombatComponent>(ID))
             continue;
+        if (EM.GetComponent<BuildingComponent>(ID))
+            continue;
+        if (Unit->Speed <= 0.0f)
+            continue;
+        if (Unit->ChkUnitID == 7 || Unit->ChkUnitID == 41 || Unit->ChkUnitID == 64 || Unit->ChkUnitID == 42)
+            continue;
         Attackers.push_back(ID);
     }
 
@@ -1513,6 +1605,8 @@ int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript
         const bool IsAtAssignedTarget = SameAttackMove &&
             Trans->Position.DistanceTo(AssignedTarget) <=
             std::max(NodeTolerance, kAIScriptRetargetPixels);
+        const auto* Combat = EM.GetComponent<CombatComponent>(ID);
+        const bool InActiveCombat = Combat && Combat->TargetEntityID >= 0;
         const bool CompletedAssignedOrder =
             !TargetChanged &&
             Cmd &&
@@ -1520,7 +1614,8 @@ int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript
             Cmd->TargetEntityID < 0 &&
             HasAssignedTarget;
         if (!TargetChanged &&
-            ((SameAttackMove && (HasActivePath || IsAtAssignedTarget)) ||
+            (InActiveCombat ||
+             (SameAttackMove && (HasActivePath || IsAtAssignedTarget)) ||
              RecentlyFailedAssignedTarget ||
              CompletedAssignedOrder))
             continue;

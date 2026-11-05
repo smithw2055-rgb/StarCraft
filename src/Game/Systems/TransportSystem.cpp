@@ -72,6 +72,8 @@ namespace
             return Fail("invalid transport or passenger");
         if (!IsTransportUnit(EM, TransportID, TU, TP))
             return Fail("unit cannot transport passengers");
+        if (const auto* TB = EM.GetComponent<BuildingComponent>(TransportID); TB && TB->UnderConstruction)
+            return Fail("transport building is under construction");
         if (TP->PlayerID != PP->PlayerID)
             return Fail("cannot load enemy unit");
         if (PU->HitPoints <= 0 || EM.GetComponent<ResourceComponent>(PassengerID) ||
@@ -111,6 +113,7 @@ namespace
 
     void ClearPassengerMotion(Core::ECS::EntityManager& EM, int PassengerID)
     {
+        const auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
         if (auto* Path = EM.GetComponent<PathfindingComponent>(PassengerID))
         {
             Path->Path.clear();
@@ -118,6 +121,13 @@ namespace
             Path->CurrentSpeed = 0.0f;
             Path->TargetSpeed = 0.0f;
             Path->CurrentVelocity = {};
+            Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+            if (PT)
+            {
+                Path->FixedPosition = Core::Math::FixedVec2(PT->Position.X, PT->Position.Y);
+                Path->HasFixedPosition = true;
+                Path->RequestedDestination = PT->Position;
+            }
         }
         if (auto* Command = EM.GetComponent<CommandComponent>(PassengerID))
         {
@@ -139,6 +149,22 @@ namespace
             {
                 Unit->Speed = Game::Races::GetUnitDefByID(DefID).Speed *
                               UpgradeSystem::GetMovementSpeedMultiplier(EM, PassengerID);
+            }
+        }
+        const auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(PassengerID))
+        {
+            Path->Path.clear();
+            Path->PathIndex = 0;
+            Path->CurrentSpeed = 0.0f;
+            Path->TargetSpeed = 0.0f;
+            Path->CurrentVelocity = {};
+            Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+            if (PT)
+            {
+                Path->FixedPosition = Core::Math::FixedVec2(PT->Position.X, PT->Position.Y);
+                Path->HasFixedPosition = true;
+                Path->RequestedDestination = PT->Position;
             }
         }
     }
@@ -579,8 +605,10 @@ bool TransportSystem::EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, 
         if (auto* BU = EM.GetComponent<UnitComponent>(Bid))
             if (BU->ChkUnitID == 0x86 && !B->UnderConstruction)
             {
-                auto* UT = EM.GetComponent<TransformComponent>(UnitID);
-                if (UT) UT->Position = Core::Math::Vec2(T->Position.X + 24.0f, T->Position.Y);
+                const Core::Math::Vec2 ExitPos(T->Position.X + 24.0f, T->Position.Y);
+                if (auto* UT = EM.GetComponent<TransformComponent>(UnitID))
+                    UT->Position = ExitPos;
+                ClearPassengerMotion(EM, UnitID);
                 Logger::Info("TransportSystem",
                     "Unit " + std::to_string(UnitID) + " entered Nydus Canal");
                 return true;

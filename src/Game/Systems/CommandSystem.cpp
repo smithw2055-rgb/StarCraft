@@ -2,6 +2,7 @@
 #include "Game/Components.h"
 #include "Game/Pathfinding/AStar.h"
 #include "Game/Pathfinding/NavigationService.h"
+#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Game/Pathfinding/RegionPathfinder.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -350,12 +351,18 @@ static StaticBlockerRect StaticBlockerRectForEntity(Core::ECS::EntityManager& EM
         switch (Unit->ChkUnitID)
         {
             case 106: // Terran Command Center
+            case 131: // Zerg Hatchery
+            case 132: // Zerg Lair
+            case 133: // Zerg Hive
+            case 154: // Protoss Nexus
                 Half = {64.0f, 48.0f};
                 break;
             case 111: // Terran Barracks
             case 113: // Terran Factory
             case 114: // Terran Starport
             case 116: // Terran Science Facility
+            case 160: // Protoss Gateway
+            case 167: // Protoss Stargate
                 Half = {56.0f, 40.0f};
                 break;
             case 107: // Terran Comsat Station
@@ -365,6 +372,8 @@ static StaticBlockerRect StaticBlockerRectForEntity(Core::ECS::EntityManager& EM
             case 120: // Terran Machine Shop
             case 124: // Terran Missile Turret
             case 125: // Terran Bunker
+            case 156: // Protoss Pylon
+            case 162: // Protoss Photon Cannon
                 Half = {32.0f, 24.0f};
                 break;
             default:
@@ -387,15 +396,13 @@ BuildNavigationObstacles(Core::ECS::EntityManager& EM,
                          Core::ECS::EntityID AdditionalDynamicBlockerID = -1)
 {
     std::vector<Game::Pathfinding::NavigationObstacle> Obstacles;
-    for (const auto EntityID :
-         EM.GetEntitiesWith<TransformComponent, UnitComponent>())
-    {
+    const auto AddObstacle = [&](int EntityID) {
         if (EntityID == MovingID)
-            continue;
+            return;
         if (!IsStaticGroundBlocker(EM, EntityID) &&
             EntityID != AdditionalDynamicBlockerID)
         {
-            continue;
+            return;
         }
 
         const StaticBlockerRect Rect =
@@ -408,6 +415,21 @@ BuildNavigationObstacles(Core::ECS::EntityManager& EM,
         Obstacle.Right = std::max(0, (int)std::ceil(Rect.Right));
         Obstacle.Down = std::max(0, (int)std::ceil(Rect.Bottom));
         Obstacles.push_back(Obstacle);
+    };
+
+    for (const auto EntityID : EM.GetEntitiesWith<BuildingComponent, TransformComponent>())
+    {
+        AddObstacle(EntityID);
+    }
+    for (const auto EntityID : EM.GetEntitiesWith<ResourceComponent, TransformComponent>())
+    {
+        AddObstacle(EntityID);
+    }
+    if (AdditionalDynamicBlockerID >= 0 &&
+        !EM.GetComponent<BuildingComponent>(AdditionalDynamicBlockerID) &&
+        !EM.GetComponent<ResourceComponent>(AdditionalDynamicBlockerID))
+    {
+        AddObstacle(AdditionalDynamicBlockerID);
     }
     return Obstacles;
 }
@@ -607,20 +629,46 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
     }
 
     sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
-    auto Obstacles = BuildNavigationObstacles(
-        EM, EntityID, AvoidDynamicEntityID);
+    auto Obstacles = BuildNavigationObstacles(EM, EntityID, -1);
 
     Game::Pathfinding::NavigationPathQuery Query;
     Query.Start = Trans->Position;
     Query.Target = Target;
     Query.IgnoredOwnerEntityID = PathingIgnoreEntityID;
     Path->RequestedAdditionalIgnoreEntityID = -1;
+    if (const auto* Harvest = EM.GetComponent<HarvestComponent>(EntityID);
+        Harvest &&
+        Harvest->State == HarvestState::MovingToResource &&
+        PathingIgnoreEntityID >= 0 &&
+        PathingIgnoreEntityID != Harvest->TargetResourceID)
+    {
+        const auto* TargetRes =
+            EM.GetComponent<ResourceComponent>(Harvest->TargetResourceID);
+        Query.IgnoredOwnerEntityID =
+            (TargetRes && TargetRes->Type == ResourceType::VespeneGas)
+                ? Harvest->TargetResourceID
+                : -1;
+        Query.AdditionalIgnoredOwnerEntityID = PathingIgnoreEntityID;
+    }
     for (const auto& Obs : Obstacles)
     {
-        if (Obs.OwnerEntityID == PathingIgnoreEntityID)
+        if (Obs.OwnerEntityID == Query.IgnoredOwnerEntityID)
             continue;
-        const auto BlockerRect = ExpandedStaticBlockerRectForMover(
-            EM, Obs.OwnerEntityID, *Path);
+        if (std::fabs(Trans->Position.X - Obs.Position.X) >
+                (float)Obs.Left + (float)Obs.Right + 2.0f ||
+            std::fabs(Trans->Position.Y - Obs.Position.Y) >
+                (float)Obs.Up + (float)Obs.Down + 2.0f)
+        {
+            continue;
+        }
+        // Only drop a static blocker from the plan when the unit is genuinely
+        // inside its real (unexpanded) footprint and therefore cannot take a
+        // legal first step. Using the mover-expanded rectangle here treated a
+        // unit that merely touched a building as "embedded": every repath
+        // ignored the building, produced a straight route through it, and left
+        // the unit pinned against the edge oscillating in place.
+        const auto BlockerRect = StaticBlockerRectForEntity(
+            EM, Obs.OwnerEntityID);
         if (PointInsideStaticBlockerRect(Trans->Position, BlockerRect))
         {
             Query.AdditionalIgnoredOwnerEntityID = Obs.OwnerEntityID;
@@ -629,24 +677,29 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
         }
     }
 
-    Game::Pathfinding::NavigationService* Service = &sNavigationService;
-    Game::Pathfinding::NavigationService TemporaryService;
+    sNavigationService.SyncStaticObstacles(std::move(Obstacles));
     if (AvoidDynamicEntityID >= 0 &&
+        AvoidDynamicEntityID != EntityID &&
         !IsStaticGroundBlocker(EM, AvoidDynamicEntityID))
     {
-        // Dynamic blockers are query-local. They must never invalidate the
-        // shared static navigation version or poison another unit's corridor.
-        TemporaryService.SetBaseGrid(Map->GetNavigationGrid());
-        TemporaryService.SyncStaticObstacles(std::move(Obstacles));
-        Service = &TemporaryService;
-    }
-    else
-    {
-        sNavigationService.SyncStaticObstacles(std::move(Obstacles));
+        const StaticBlockerRect DynamicRect =
+            StaticBlockerRectForEntity(EM, AvoidDynamicEntityID);
+        if (PointInsideStaticBlockerRect(Trans->Position, DynamicRect) &&
+            Query.AdditionalIgnoredOwnerEntityID < 0)
+        {
+            Query.AdditionalIgnoredOwnerEntityID = AvoidDynamicEntityID;
+            Path->RequestedAdditionalIgnoreEntityID = AvoidDynamicEntityID;
+        }
+        Query.HasAvoidedObstacle = true;
+        Query.AvoidedObstacle.OwnerEntityID = AvoidDynamicEntityID;
+        Query.AvoidedObstacle.Position = DynamicRect.Position;
+        Query.AvoidedObstacle.Left = std::max(0, (int)std::ceil(DynamicRect.Left));
+        Query.AvoidedObstacle.Up = std::max(0, (int)std::ceil(DynamicRect.Top));
+        Query.AvoidedObstacle.Right = std::max(0, (int)std::ceil(DynamicRect.Right));
+        Query.AvoidedObstacle.Down = std::max(0, (int)std::ceil(DynamicRect.Bottom));
     }
 
-    Query.MaximumExpandedCells =
-        Map ? (Map->GetWidth() * Map->GetHeight() * 16) : 16384;
+    Query.MaximumExpandedCells = 16384;
     if (Path->HasCollisionBounds)
     {
         Query.Footprint.Left = Path->CollisionLeft;
@@ -662,7 +715,9 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
         Query.Footprint.Down = Path->CollisionRadius;
     }
 
-    auto Result = Service->QueryPath(Query);
+    auto Result = sNavigationService.QueryPath(Query);
+    Path->RequestedAdditionalIgnoreEntityID =
+        Result.AdditionalIgnoredOwnerEntityID;
     Path->LastPathStatus = Result.Status;
     Path->LastPathEndReason = Result.EndReason;
     Path->ResolvedPathDestination = Result.ResolvedDestination;
@@ -671,12 +726,13 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
     bool HasUsablePath = Result.HasUsablePath();
     if (HasUsablePath &&
         Result.Status == Game::Pathfinding::PathStatus::Partial &&
-        PathingIgnoreEntityID >= 0)
+        Query.IgnoredOwnerEntityID >= 0)
     {
+        const int TargetIgnoreID = Query.IgnoredOwnerEntityID;
         const auto* InteractionTransform =
-            EM.GetComponent<TransformComponent>(PathingIgnoreEntityID);
+            EM.GetComponent<TransformComponent>(TargetIgnoreID);
         const auto InteractionRect = ExpandedStaticBlockerRectForMover(
-            EM, PathingIgnoreEntityID, *Path);
+            EM, TargetIgnoreID, *Path);
         const float MinimumX =
             InteractionRect.Position.X - InteractionRect.Left;
         const float MaximumX =
@@ -694,12 +750,12 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
             std::max(MinimumY - Result.ResolvedDestination.Y,
                      Result.ResolvedDestination.Y - MaximumY));
         float InteractionTolerance = 2.0f;
-        if (const auto* Res = EM.GetComponent<ResourceComponent>(PathingIgnoreEntityID);
+        if (const auto* Res = EM.GetComponent<ResourceComponent>(TargetIgnoreID);
             Res && Res->Type == ResourceType::VespeneGas)
         {
             InteractionTolerance = 48.0f;
         }
-        else if (EM.GetComponent<BuildingComponent>(PathingIgnoreEntityID))
+        else if (EM.GetComponent<BuildingComponent>(TargetIgnoreID))
         {
             InteractionTolerance = 32.0f;
         }
@@ -738,7 +794,12 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
     if (HasUsablePath)
     {
         Path->Path = std::move(Result.Waypoints);
-        Path->ConsecutiveMoveFailures = 0;
+        if (DestinationChanged ||
+            Result.Status == Game::Pathfinding::PathStatus::Exact ||
+            Trans->Position.DistanceTo(Result.ResolvedDestination) > 24.0f)
+        {
+            Path->ConsecutiveMoveFailures = 0;
+        }
         Path->RecentMoveFailureNavigationVersion = Result.NavigationVersion;
     }
     else
@@ -996,6 +1057,21 @@ void CommandSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr->GetEntityManager();
     auto Units = EM.GetEntitiesWith<CommandComponent, TransformComponent>();
 
+    static thread_local Game::Pathfinding::NavigationSpatialHash sCommandSpatialHash;
+    static thread_local std::vector<std::pair<int, int>> sActiveMedicHealTargets;
+    sCommandSpatialHash.Clear();
+    sActiveMedicHealTargets.clear();
+    for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    {
+        if (const auto* T = EM.GetComponent<TransformComponent>(Eid))
+            sCommandSpatialHash.Insert(Eid, T->Position);
+        if (const auto* U = EM.GetComponent<UnitComponent>(Eid);
+            U && U->HitPoints > 0 && U->HealTargetEntityID >= 0)
+        {
+            sActiveMedicHealTargets.emplace_back(Eid, U->HealTargetEntityID);
+        }
+    }
+
     for (int ID : Units)
     {
         auto* Cmd = EM.GetComponent<CommandComponent>(ID);
@@ -1048,8 +1124,13 @@ void CommandSystem::Update(float DeltaTime)
                 auto* MyTrans = EM.GetComponent<TransformComponent>(ID);
                 if (!MyTrans) break;
 
-                auto Enemies = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
-                for (int Eid : Enemies)
+                static thread_local std::vector<int> GuardNeighbors;
+                GuardNeighbors.clear();
+                sCommandSpatialHash.QueryInto(
+                    MyTrans->Position.X - BestDist, MyTrans->Position.Y - BestDist,
+                    MyTrans->Position.X + BestDist, MyTrans->Position.Y + BestDist,
+                    GuardNeighbors);
+                for (int Eid : GuardNeighbors)
                 {
                     auto* EUnit = EM.GetComponent<UnitComponent>(Eid);
                     auto* EPlayer = EM.GetComponent<PlayerComponent>(Eid);
@@ -1090,7 +1171,13 @@ void CommandSystem::Update(float DeltaTime)
                     {
                         int BestTarget = -1;
                         float BestDist = 160.0f;
-                        for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+                        static thread_local std::vector<int> MedicStopNeighbors;
+                        MedicStopNeighbors.clear();
+                        sCommandSpatialHash.QueryInto(
+                            MyTrans->Position.X - BestDist, MyTrans->Position.Y - BestDist,
+                            MyTrans->Position.X + BestDist, MyTrans->Position.Y + BestDist,
+                            MedicStopNeighbors);
+                        for (int Eid : MedicStopNeighbors)
                         {
                             if (Eid == ID) continue;
                             auto* EUnit = EM.GetComponent<UnitComponent>(Eid);
@@ -1099,7 +1186,19 @@ void CommandSystem::Update(float DeltaTime)
                             if (!EUnit || !EPlayer || !ETrans) continue;
                             if (EPlayer->PlayerID != MyPlayer->PlayerID) continue;
                             if (EUnit->HitPoints <= 0 || EUnit->HitPoints >= EUnit->MaxHitPoints) continue;
+                            if (EM.GetComponent<BuildingComponent>(Eid) != nullptr) continue;
+                            if (ShouldMoveAsAir(EM, Eid)) continue;
                             if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
+                            bool AlreadyHealed = false;
+                            for (const auto& [OtherMedicID, TargetID] : sActiveMedicHealTargets)
+                            {
+                                if (OtherMedicID != ID && TargetID == Eid)
+                                {
+                                    AlreadyHealed = true;
+                                    break;
+                                }
+                            }
+                            if (AlreadyHealed) continue;
 
                             float D = MyTrans->Position.DistanceTo(ETrans->Position);
                             if (D < BestDist)
@@ -1133,7 +1232,13 @@ void CommandSystem::Update(float DeltaTime)
                     {
                         int BestTarget = -1;
                         float BestDist = 160.0f;
-                        for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+                        static thread_local std::vector<int> MedicFollowNeighbors;
+                        MedicFollowNeighbors.clear();
+                        sCommandSpatialHash.QueryInto(
+                            MyTrans->Position.X - BestDist, MyTrans->Position.Y - BestDist,
+                            MyTrans->Position.X + BestDist, MyTrans->Position.Y + BestDist,
+                            MedicFollowNeighbors);
+                        for (int Eid : MedicFollowNeighbors)
                         {
                             if (Eid == ID) continue;
                             auto* EUnit = EM.GetComponent<UnitComponent>(Eid);
@@ -1142,7 +1247,19 @@ void CommandSystem::Update(float DeltaTime)
                             if (!EUnit || !EPlayer || !ETrans) continue;
                             if (EPlayer->PlayerID != MyPlayer->PlayerID) continue;
                             if (EUnit->HitPoints <= 0 || EUnit->HitPoints >= EUnit->MaxHitPoints) continue;
+                            if (EM.GetComponent<BuildingComponent>(Eid) != nullptr) continue;
+                            if (ShouldMoveAsAir(EM, Eid)) continue;
                             if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
+                            bool AlreadyHealed = false;
+                            for (const auto& [OtherMedicID, TargetID] : sActiveMedicHealTargets)
+                            {
+                                if (OtherMedicID != ID && TargetID == Eid)
+                                {
+                                    AlreadyHealed = true;
+                                    break;
+                                }
+                            }
+                            if (AlreadyHealed) continue;
 
                             float D = MyTrans->Position.DistanceTo(ETrans->Position);
                             if (D < BestDist)
@@ -1422,9 +1539,27 @@ void CommandSystem::Update(float DeltaTime)
                         MyUnit->ChkUnitID == 34 && MyUnit->EnergyPoints > 0 &&
                         TargetPlayer->PlayerID == MyPlayer->PlayerID &&
                         TargetUnit->HitPoints > 0 && TargetUnit->HitPoints < TargetUnit->MaxHitPoints &&
+                        EM.GetComponent<BuildingComponent>(Order->TargetEntityID) == nullptr &&
+                        !ShouldMoveAsAir(EM, Order->TargetEntityID) &&
                         Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID))
                     {
-                        ContinueHeal = true;
+                        bool OtherMedicHealing = false;
+                        for (int OtherMedicID : EM.GetEntitiesWith<UnitComponent>())
+                        {
+                            if (OtherMedicID == ID) continue;
+                            const auto* OtherMedic = EM.GetComponent<UnitComponent>(OtherMedicID);
+                            if (OtherMedic && OtherMedic->HitPoints > 0 &&
+                                OtherMedic->HealTargetEntityID == Order->TargetEntityID)
+                            {
+                                OtherMedicHealing = true;
+                                break;
+                            }
+                        }
+                        if (!OtherMedicHealing)
+                            ContinueHeal = true;
+                    }
+                    if (ContinueHeal)
+                    {
                         if (MyUnit->HealTargetEntityID != Order->TargetEntityID)
                         {
                             MyUnit->HealTargetEntityID = Order->TargetEntityID;
@@ -1752,6 +1887,28 @@ void CommandSystem::IssueOrder(Core::ECS::EntityManager& EM,
                     };
                 }
                 ++FormationSlot;
+
+                if (gCmdMap && !Group.TargetInsideBounds)
+                {
+                    const int OriginHeight = gCmdMap->GetGroundHeightAtWorld(InOrder.TargetPosition);
+                    const int TargetHeight = gCmdMap->GetGroundHeightAtWorld(EntityOrder.TargetPosition);
+                    if (OriginHeight != TargetHeight)
+                    {
+                        EntityOrder.TargetPosition = InOrder.TargetPosition;
+                    }
+                    else
+                    {
+                        const float CollisionR = (float)CollisionRadiusForUnit(EM.GetComponent<UnitComponent>(ID));
+                        const int R = (int)std::ceil(CollisionR);
+                        const Game::Pathfinding::NavigationFootprint Footprint{R, R, R, R};
+                        if (!gCmdMap->GetNavigationGrid().HasLineOfSightWorld(
+                                InOrder.TargetPosition, EntityOrder.TargetPosition,
+                                Footprint, -1, -1))
+                        {
+                            EntityOrder.TargetPosition = InOrder.TargetPosition;
+                        }
+                    }
+                }
             }
         }
 
@@ -1800,14 +1957,26 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
                                const Core::Math::Vec2& Target,
                                int PathingIgnoreEntityID)
 {
-    for (Core::ECS::EntityID EntityID : Entities)
-        InterruptHarvest(EM, EntityID);
+    IssueMove(EM, Entities, Target, PathingIgnoreEntityID, false);
+}
+
+void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
+                               const std::vector<Core::ECS::EntityID>& Entities,
+                               const Core::Math::Vec2& Target,
+                               int PathingIgnoreEntityID,
+                               bool Queued)
+{
+    if (!Queued)
+    {
+        for (Core::ECS::EntityID EntityID : Entities)
+            InterruptHarvest(EM, EntityID);
+    }
 
     Order MoveOrder;
     MoveOrder.Type = OrderType::Move;
     MoveOrder.TargetPosition = Target;
     MoveOrder.PathingIgnoreEntityID = PathingIgnoreEntityID;
-    IssueOrder(EM, Entities, MoveOrder, false);
+    IssueOrder(EM, Entities, MoveOrder, Queued);
 }
 
 void CommandSystem::InterruptHarvest(Core::ECS::EntityManager& EM,
@@ -1840,6 +2009,14 @@ void CommandSystem::InterruptHarvest(Core::ECS::EntityManager& EM,
     {
         if (auto* Transform = EM.GetComponent<TransformComponent>(EntityID))
             Transform->Position = Harvest->GasExitPosition;
+        if (auto* Path = EM.GetComponent<PathfindingComponent>(EntityID))
+        {
+            Path->FixedPosition = Core::Math::FixedVec2(
+                Harvest->GasExitPosition.X, Harvest->GasExitPosition.Y);
+            Path->FixedVelocity = Core::Math::FixedVec2::Zero();
+            Path->HasFixedPosition = true;
+            Path->RequestedDestination = Harvest->GasExitPosition;
+        }
         if (auto* Render = EM.GetComponent<RenderComponent>(EntityID))
             Render->Visible = true;
         Harvest->InsideGasBuilding = false;
@@ -1874,10 +2051,23 @@ void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
                                      const std::vector<int>& Units,
                                      Core::Math::Vec2 Target)
 {
+    IssueAttackMove(EM, Units, Target, false);
+}
+
+void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
+                                     const std::vector<int>& Units,
+                                     Core::Math::Vec2 Target,
+                                     bool Queued)
+{
+    if (!Queued)
+    {
+        for (int EntityID : Units)
+            InterruptHarvest(EM, EntityID);
+    }
     Order AtkOrder;
     AtkOrder.Type = OrderType::AttackMove;
     AtkOrder.TargetPosition = Target;
-    IssueOrder(EM, Units, AtkOrder, false);
+    IssueOrder(EM, Units, AtkOrder, Queued);
 }
 
 void CommandSystem::QueueOrder(Core::ECS::EntityManager& EM,
@@ -1916,7 +2106,7 @@ void CommandSystem::SetRallyPoint(Core::ECS::EntityManager& EM,
         Cmd = &EM.AddComponent<CommandComponent>(EntityID);
     Cmd->RallyPoint = Point;
     Cmd->HasRallyPoint = true;
-    Cmd->RallyDisplayTimer = 2.5f;
+    Cmd->RallyDisplayTimer = 1.5f;
 }
 
 bool CommandSystem::CanSetSiegeMode(Core::ECS::EntityManager& EM,

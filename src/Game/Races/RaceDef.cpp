@@ -1,5 +1,6 @@
 #include "Game/Races/RaceDef.h"
 
+#include <array>
 #include <unordered_map>
 #include <cassert>
 
@@ -10,6 +11,8 @@ static std::vector<UnitDef> TerranDefs;
 static std::vector<UnitDef> ZergDefs;
 static std::vector<UnitDef> ProtossDefs;
 static std::unordered_map<std::string, int> NameToID;
+static std::array<int, 256> ChkToDefID;
+static std::array<int, 256> ChkToTerranDefID;
 static bool DefsInitialized = false;
 
 static void InitDefs()
@@ -22,12 +25,12 @@ static void InitDefs()
     T.push_back({"SCV",             Race::Terran, UnitSize::Small,  60,  0,  0, 0,  1,  50,   0,  17,  5,  0, 0, 1, 2.8f, 8,  false});
     T.push_back({"Marine",          Race::Terran, UnitSize::Small,  40,  0,  0, 0,  1,  50,   0,  24,  6,  6, 4, 1, 2.5f, 7,  false});
     T.push_back({"Firebat",         Race::Terran, UnitSize::Small,  50,  0,  0, 1,  1,  50,  25,  24,  8,  0, 1, 1, 2.5f, 7,  false});
-    T.push_back({"Medic",           Race::Terran, UnitSize::Small,  60,  0, 50, 1,  1,  50,  25,  24,  0,  0, 0, 0, 2.5f, 8,  false});
-    T.push_back({"Ghost",           Race::Terran, UnitSize::Small,  45,  0, 50, 0,  1,  25,  75,  30, 10, 10, 7, 1, 2.5f, 9,  false});
+    T.push_back({"Medic",           Race::Terran, UnitSize::Small,  60,  0,200, 1,  1,  50,  25,  24,  0,  0, 0, 0, 2.5f, 8,  false});
+    T.push_back({"Ghost",           Race::Terran, UnitSize::Small,  45,  0,200, 0,  1,  25,  75,  30, 10, 10, 7, 1, 2.5f, 9,  false});
     T.push_back({"Vulture",         Race::Terran, UnitSize::Medium, 80,  0,  0, 0,  2,  75,   0,  30, 20,  0, 5, 1, 3.0f, 8,  false});
     T.push_back({"Goliath",         Race::Terran, UnitSize::Large, 125,  0,  0, 1,  2, 100,  50,  37, 12, 20, 6, 1, 2.6f, 8,  false});
     T.push_back({"SiegeTank",       Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 150, 100,  45, 30,  0, 7, 1, 2.3f, 10, false});
-    T.push_back({"Wraith",          Race::Terran, UnitSize::Large, 120,  0,  0, 0,  2, 150, 100,  60,  8, 20, 5, 1, 3.2f, 9,  false});
+    T.push_back({"Wraith",          Race::Terran, UnitSize::Large, 120,  0,200, 0,  2, 150, 100,  60,  8, 20, 5, 1, 3.2f, 9,  false});
     T.push_back({"Dropship",        Race::Terran, UnitSize::Large, 150,  0,  0, 1,  2, 100, 100,  50,  0,  0, 0, 0, 3.0f, 8,  false});
     T.push_back({"ScienceVessel",   Race::Terran, UnitSize::Large, 200,  0,200, 1,  2, 100, 225,  80,  0,  0, 0, 0, 2.8f, 11, false});
     T.push_back({"Battlecruiser",   Race::Terran, UnitSize::Large, 500,  0,200, 3,  6, 400, 300,  90, 25, 25, 6, 1, 2.1f, 11, false});
@@ -166,7 +169,7 @@ static void InitDefs()
 
     auto& Z = ZergDefs;
     int LarvaID = (int)Z.size();
-    Z.push_back({"Larva",            Race::Zerg, UnitSize::Small,  25,  0,  0,10,  0,  0,   0,  1,   0,  0,  0, 0,  0,   0,   false});
+    Z.push_back({"Larva",            Race::Zerg, UnitSize::Small,  25,  0,  0,10,  0,  0,   0,  1,   0,  0,  0, 0,  0,   4,   false});
     int ZDroneID = (int)Z.size();
     Z.push_back({"Drone",            Race::Zerg, UnitSize::Small,  40,  0,  0, 0,  1,  50,  0,  17,  5,  0,  0, 1,  2.9f, 8,  false});
     int ZOverlordID = (int)Z.size();
@@ -181,7 +184,7 @@ static void InitDefs()
     int ZScourgeID = (int)Z.size();
     Z.push_back({"Scourge",          Race::Zerg, UnitSize::Small,  25,  0,  0, 0,  1,  25,  75, 20,  0,110, 1, 1,  4.5f, 5,  false});
     int ZQueenID = (int)Z.size();
-    Z.push_back({"Queen",            Race::Zerg, UnitSize::Medium,120,  0,  0, 0,  2,  100, 100,30,  0,  0,  0, 0,  2.0f,10,  false});
+    Z.push_back({"Queen",            Race::Zerg, UnitSize::Medium,120,  0,200, 0,  2,  100, 100,30,  0,  0,  0, 0,  2.0f,10,  false});
     int ZUltraliskID = (int)Z.size();
     Z.push_back({"Ultralisk",        Race::Zerg, UnitSize::Large, 400,  0,  0, 1,  4,  200, 200,39,  20, 0,  1, 1,  2.9f, 7,  false});
     int ZDefilerID = (int)Z.size();
@@ -191,7 +194,7 @@ static void InitDefs()
     int ZBroodlingID = (int)Z.size();
     Z.push_back({"Broodling",        Race::Zerg, UnitSize::Small,  30,  0,  0, 0,  0,  0,   0,  1,   4,  0,  1, 1,  2.5f, 5,  false});
     int ZInfestedID = (int)Z.size();
-    Z.push_back({"Infested Terran",  Race::Zerg, UnitSize::Small,  60,  0,  0, 0,  1,  0,   0,  20, 500, 0,  5, 1,  2.5f, 8,  false});
+    Z.push_back({"Infested Terran",  Race::Zerg, UnitSize::Small,  60,  0,  0, 0,  1,  100, 50, 25, 500, 0,  5, 1,  2.5f, 8,  false});
     int ZGuardianID = (int)Z.size();
     Z.push_back({"Guardian",         Race::Zerg, UnitSize::Large, 150,  0,  0, 2,  2,  50,  100,33,  20, 0,  8, 1,  2.5f, 10, false});
     int ZDevourerID = (int)Z.size();
@@ -270,6 +273,7 @@ static void InitDefs()
     Z[ZSpireID].RequiredBuildings = {ZLairID};
     Z[ZQueensNestID].RequiredBuildings = {ZLairID};
     Z[ZGreaterSpireID].RequiredBuildings = {ZSpireID, ZHiveID};
+    Z[ZNydusCanalID].RequiredBuildings = {ZHiveID};
     Z[ZUltraliskCavernID].RequiredBuildings = {ZHiveID};
     Z[ZDefilerMoundID].RequiredBuildings = {ZHiveID};
     Z[ZCreepColonyID].RequiredBuildings = {ZHatcheryID};
@@ -290,7 +294,7 @@ static void InitDefs()
     int PArchonID = (int)P.size();
     P.push_back({"Archon",     Race::Protoss, UnitSize::Large,  10,350, 0, 0,  4,  0,   0,  1,  30, 30,  2, 1,  2.0f, 8,  false});
     int PDarkArchonID = (int)P.size();
-    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Large,  25,200, 0, 1,  4,  0,   0,  1,  0,  0,  0, 0,  2.0f,10,  false});
+    P.push_back({"Dark Archon",Race::Protoss, UnitSize::Large,  25,200,200, 1,  4,  0,   0,  1,  0,  0,  0, 0,  2.0f,10,  false});
     int PReaverID = (int)P.size();
     P.push_back({"Reaver",     Race::Protoss, UnitSize::Large, 100, 80, 0, 0,  4, 200, 100,35, 100,  0,  8, 1,  2.0f, 9,  false});
     int PShuttleID = (int)P.size();
@@ -298,11 +302,11 @@ static void InitDefs()
     int PScoutID = (int)P.size();
     P.push_back({"Scout",      Race::Protoss, UnitSize::Large, 150,100, 0, 0,  3, 275, 125,40,  8,  14, 4, 1,  3.5f, 8,  false});
     int PCorsairID = (int)P.size();
-    P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium,100, 80, 0, 1,  2, 150, 100,30,  0,   5, 5, 1,  3.5f, 9,  false});
+    P.push_back({"Corsair",    Race::Protoss, UnitSize::Medium,100, 80,200, 1,  2, 150, 100,30,  0,   5, 5, 1,  3.5f, 9,  false});
     int PCarrierID = (int)P.size();
     P.push_back({"Carrier",    Race::Protoss, UnitSize::Large, 300,150, 0, 4,  6, 350, 250,60,  6,   6, 6, 1,  2.5f,11, false});
     int PArbiterID = (int)P.size();
-    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150, 0, 1,  4, 100, 350,50,  10, 10, 5, 1,  2.5f, 9, false});
+    P.push_back({"Arbiter",    Race::Protoss, UnitSize::Large, 200,150,200, 1,  4, 100, 350,50,  10, 10, 5, 1,  2.5f, 9, false});
     int PObserverID = (int)P.size();
     P.push_back({"Observer",   Race::Protoss, UnitSize::Small,  40, 20, 0, 0,  1,  25,  75, 20,  0,  0,  0, 0,  2.5f, 9,  false});
 
@@ -322,7 +326,7 @@ static void InitDefs()
     int PCyberneticsCoreID = (int)P.size();
     P.push_back({"Cybernetics Core", Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 200, 0,  40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PShieldBatteryID = (int)P.size();
-    P.push_back({"Shield Battery",   Race::Protoss, UnitSize::Large, 200, 200, 0, 1,  0, 100, 0,  20,  0,  0,  0, 0,  0,   11, true, false, false, true});
+    P.push_back({"Shield Battery",   Race::Protoss, UnitSize::Large, 200, 200,200, 1,  0, 100, 0,  20,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PRoboticsFacilityID = (int)P.size();
     P.push_back({"Robotics Facility",Race::Protoss, UnitSize::Large, 500, 500, 0, 1,  0, 200, 200,40,  0,  0,  0, 0,  0,   11, true, false, false, true});
     int PStargateID = (int)P.size();
@@ -370,6 +374,7 @@ static void InitDefs()
     // Protoss building requirements
     P[PGatewayID].RequiredBuildings = {PNexusID};
     P[PForgeID].RequiredBuildings = {PNexusID};
+    P[PPhotonCannonID].RequiredBuildings = {PForgeID};
     P[PCyberneticsCoreID].RequiredBuildings = {PGatewayID};
     P[PShieldBatteryID].RequiredBuildings = {PGatewayID};
     P[PRoboticsFacilityID].RequiredBuildings = {PCyberneticsCoreID};
@@ -446,14 +451,14 @@ static void InitDefs()
 
     // ---- Hero & Special Units (data-driven alignment with openbw-ref) ----
     const int TerranHeroBase = (int)T.size();
-    T.push_back({"JimRaynorMarine",    Race::Terran, UnitSize::Small, 100,  0,  0, 3,  1,  0,   0,  24, 12,  0, 5, 1, 2.6f, 7,  false});
-    T.push_back({"JimRaynorVulture",   Race::Terran, UnitSize::Medium,300,  0,  0, 1,  2,  0,   0,  30, 30,  0, 5, 1, 3.2f, 8,  false});
-    T.push_back({"SarahKerrigan",      Race::Terran, UnitSize::Small, 250,  0,50, 1,  1,  0,   0,  30, 30,  0, 6, 1, 2.6f, 9,  false});
-    T.push_back({"EdmundDukeSiege",    Race::Terran, UnitSize::Large, 400,  0,  0, 2,  2,  0,   0,  45, 70,  0, 7, 1, 2.3f, 10, false});
-    T.push_back({"GuiMontag",          Race::Terran, UnitSize::Small, 160,  0,  0, 1,  1,  0,   0,  24, 15,  0, 2, 1, 2.6f, 7,  false});
-    T.push_back({"ArcturusMengsk",     Race::Terran, UnitSize::Large, 500,  0,200, 3,  6,  0,   0,  90, 50, 50, 6, 1, 2.2f, 11, false});
-    T.push_back({"Hyperion",           Race::Terran, UnitSize::Large, 850,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
-    T.push_back({"NoradII",            Race::Terran, UnitSize::Large, 700,  0,200, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f, 11, false});
+    T.push_back({"JimRaynorMarine",    Race::Terran, UnitSize::Small, 200,  0,  0, 3,  1,  0,   0,  24, 18, 18, 5, 1, 2.6f, 8,  false});
+    T.push_back({"JimRaynorVulture",   Race::Terran, UnitSize::Medium,300,  0,  0, 3,  2,  0,   0,  30, 30,  0, 5, 1, 3.2f, 8,  false});
+    T.push_back({"SarahKerrigan",      Race::Terran, UnitSize::Small, 250,  0,250, 3,  1,  0,   0,  30, 30, 30, 7, 1, 2.6f,10,  false});
+    T.push_back({"EdmundDukeSiege",    Race::Terran, UnitSize::Large, 400,  0,  0, 3,  2,  0,   0,  45,150,  0,12, 1, 0.0f,10,  false});
+    T.push_back({"GuiMontag",          Race::Terran, UnitSize::Small, 160,  0,  0, 3,  1,  0,   0,  24, 16,  0, 1, 1, 2.6f, 8,  false});
+    T.push_back({"ArcturusMengsk",     Race::Terran, UnitSize::Large, 500,  0,250, 3,  6,  0,   0,  90, 50, 50, 6, 1, 2.2f,11,  false});
+    T.push_back({"Hyperion",           Race::Terran, UnitSize::Large, 850,  0,250, 4,  6,  0,   0,  90, 30, 30, 6, 1, 2.1f,11,  false});
+    T.push_back({"NoradII",            Race::Terran, UnitSize::Large, 700,  0,250, 4,  6,  0,   0,  90, 50, 50, 6, 1, 2.1f,11,  false});
     T[TerranHeroBase + 0].ChkUnitID = 20;
     T[TerranHeroBase + 1].ChkUnitID = 19;
     T[TerranHeroBase + 2].ChkUnitID = 16;
@@ -464,24 +469,24 @@ static void InitDefs()
     T[TerranHeroBase + 7].ChkUnitID = 29;
 
     const int ZergHeroBase = (int)Z.size();
-    Z.push_back({"Torrasque",          Race::Zerg,   UnitSize::Large, 800,  0,  0, 4,  6,  0,   0,  50, 50,  0, 2, 1, 2.8f, 10, false});
-    Z.push_back({"InfestedKerrigan",   Race::Zerg,   UnitSize::Small, 300,  0,50, 2,  1,  0,   0,  30, 50,  0, 5, 1, 2.6f, 9,  false});
-    Z.push_back({"HunterKiller",       Race::Zerg,   UnitSize::Medium,250,  0,  0, 2,  2,  0,   0,  30, 25, 25, 5, 1, 2.8f, 10, false});
-    Z.push_back({"DevouringOne",       Race::Zerg,   UnitSize::Small, 200,  0,  0, 1,  1,  0,   0,  20, 20,  0, 2, 1, 2.6f, 8,  false});
+    Z.push_back({"Torrasque",          Race::Zerg,   UnitSize::Large, 800,  0,  0, 4,  6,  0,   0,  50, 50,  0, 1, 1, 2.8f,10,  false});
+    Z.push_back({"InfestedKerrigan",   Race::Zerg,   UnitSize::Small, 400,  0,250, 2,  1,  0,   0,  30, 50,  0, 1, 1, 2.6f, 9,  false});
+    Z.push_back({"HunterKiller",       Race::Zerg,   UnitSize::Medium,160,  0,  0, 2,  2,  0,   0,  30, 20, 20, 5, 1, 2.8f,10,  false});
+    Z.push_back({"DevouringOne",       Race::Zerg,   UnitSize::Small, 120,  0,  0, 2,  1,  0,   0,  20, 10,  0, 1, 1, 3.4f, 8,  false});
     Z[ZergHeroBase + 0].ChkUnitID = 48;
     Z[ZergHeroBase + 1].ChkUnitID = 51;
     Z[ZergHeroBase + 2].ChkUnitID = 53;
     Z[ZergHeroBase + 3].ChkUnitID = 54;
 
     const int ProtossHeroBase = (int)P.size();
-    P.push_back({"FenixZealot",        Race::Protoss, UnitSize::Medium,240, 50,  0, 1,  2,  0,   0,  40, 20,  0, 1, 0, 2.8f, 8,  false});
-    P.push_back({"FenixDragoon",       Race::Protoss, UnitSize::Large, 300,100,  0, 2,  2,  0,   0,  50, 35, 35, 5, 0, 2.5f, 9,  false});
-    P.push_back({"Zeratul",            Race::Protoss, UnitSize::Small, 200, 80,  0, 1,  1,  0,   0,  30, 50,  0, 1, 0, 2.8f, 9,  false});
-    P.push_back({"Tassadar",           Race::Protoss, UnitSize::Small, 200, 80,100, 1,  2,  0,   0,  40, 30,  0, 0, 0, 2.5f, 10, false});
-    P.push_back({"Warbringer",         Race::Protoss, UnitSize::Large, 300,150,  0, 2,  4,  0,   0,  60, 60,  0, 1, 0, 2.5f, 9,  false});
-    P.push_back({"Gantrithor",         Race::Protoss, UnitSize::Large, 500,200,  0, 3,  6,  0,   0,  90, 50, 50, 6, 0, 2.2f, 11, false});
-    P.push_back({"Danimoth",           Race::Protoss, UnitSize::Large, 400,150,  0, 2,  4,  0,   0,  90, 30, 30, 5, 0, 2.5f, 10, false});
-    P.push_back({"Aldaris",            Race::Protoss, UnitSize::Large, 500,150,100, 2,  4,  0,   0,  90, 40, 40, 6, 0, 2.2f, 11, false});
+    P.push_back({"FenixZealot",        Race::Protoss, UnitSize::Small, 240,240,  0, 2,  2,  0,   0,  40, 20,  0, 1, 1, 2.8f, 8,  false});
+    P.push_back({"FenixDragoon",       Race::Protoss, UnitSize::Large, 240,240,  0, 3,  2,  0,   0,  50, 45, 45, 5, 1, 2.5f, 9,  false});
+    P.push_back({"Zeratul",            Race::Protoss, UnitSize::Small,  60,400,  0, 1,  1,  0,   0,  30,100,  0, 1, 1, 2.8f, 9,  false});
+    P.push_back({"Tassadar",           Race::Protoss, UnitSize::Small,  80,300,250, 2,  2,  0,   0,  40, 20,  0, 2, 1, 2.5f,10,  false});
+    P.push_back({"Warbringer",         Race::Protoss, UnitSize::Large, 200,400,  0, 3,  4,  0,   0,  60,100,  0, 8, 1, 2.5f, 9,  false});
+    P.push_back({"Gantrithor",         Race::Protoss, UnitSize::Large, 450,400,  0, 4,  6,  0,   0,  90, 50, 50, 8, 1, 2.2f,11,  false});
+    P.push_back({"Danimoth",           Race::Protoss, UnitSize::Large, 300,500,250, 3,  4,  0,   0,  90, 20, 20, 5, 1, 2.5f,10,  false});
+    P.push_back({"Aldaris",            Race::Protoss, UnitSize::Large, 500,150,250, 2,  4,  0,   0,  90, 40, 40, 6, 1, 2.2f,11,  false});
     P[ProtossHeroBase + 0].ChkUnitID = 77;
     P[ProtossHeroBase + 1].ChkUnitID = 78;
     P[ProtossHeroBase + 2].ChkUnitID = 75;
@@ -505,12 +510,33 @@ static void InitDefs()
     T[CritterBase + 3].ChkUnitID = 94;
     T[CritterBase + 4].ChkUnitID = 95;
     T[CritterBase + 5].ChkUnitID = 96;
+    ChkToDefID.fill(-1);
+    ChkToTerranDefID.fill(-1);
     for (int I = 0; I < (int)T.size(); ++I)
+    {
         NameToID[T[I].Name] = I;
+        const int Chk = T[I].ChkUnitID;
+        if (Chk >= 0 && Chk < (int)ChkToTerranDefID.size() && ChkToTerranDefID[(size_t)Chk] < 0)
+            ChkToTerranDefID[(size_t)Chk] = I;
+        if (Chk >= 0 && Chk < (int)ChkToDefID.size() && ChkToDefID[(size_t)Chk] < 0)
+            ChkToDefID[(size_t)Chk] = I;
+    }
     for (int I = 0; I < (int)ZergDefs.size(); ++I)
-        NameToID[ZergDefs[I].Name] = I + (int)T.size();
+    {
+        const int DefID = I + (int)T.size();
+        NameToID[ZergDefs[I].Name] = DefID;
+        const int Chk = ZergDefs[I].ChkUnitID;
+        if (Chk >= 0 && Chk < (int)ChkToDefID.size() && ChkToDefID[(size_t)Chk] < 0)
+            ChkToDefID[(size_t)Chk] = DefID;
+    }
     for (int I = 0; I < (int)ProtossDefs.size(); ++I)
-        NameToID[ProtossDefs[I].Name] = I + (int)T.size() + (int)ZergDefs.size();
+    {
+        const int DefID = I + (int)T.size() + (int)ZergDefs.size();
+        NameToID[ProtossDefs[I].Name] = DefID;
+        const int Chk = ProtossDefs[I].ChkUnitID;
+        if (Chk >= 0 && Chk < (int)ChkToDefID.size() && ChkToDefID[(size_t)Chk] < 0)
+            ChkToDefID[(size_t)Chk] = DefID;
+    }
 
     ApplyDefaultWeaponMetadata(T);
     ApplyDefaultWeaponMetadata(ZergDefs);
@@ -675,6 +701,72 @@ static void InitDefs()
                  Components::DamageType::Normal);
     P[(size_t)PPhotonCannonID].AttackRange = 7.0f;
 
+    // Hero weapons.dat calibration
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 0)], 18, 1, 1, 15, Components::DamageType::Normal); // JimRaynorMarine
+    SetAirWeapon(T[(size_t)(TerranHeroBase + 0)], 18, 1, 1, 15, Components::DamageType::Normal);
+    T[(size_t)(TerranHeroBase + 0)].AttackRange = 5.0f;
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 1)], 30, 2, 1, 30, Components::DamageType::Concussive); // JimRaynorVulture
+    T[(size_t)(TerranHeroBase + 1)].AttackRange = 5.0f;
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 2)], 30, 1, 1, 22, Components::DamageType::Concussive); // SarahKerrigan
+    SetAirWeapon(T[(size_t)(TerranHeroBase + 2)], 30, 1, 1, 22, Components::DamageType::Concussive);
+    T[(size_t)(TerranHeroBase + 2)].AttackRange = 7.0f;
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 3)], 150, 5, 1, 75, Components::DamageType::Explosive); // EdmundDukeSiege
+    T[(size_t)(TerranHeroBase + 3)].AttackRange = 12.0f;
+    T[(size_t)(TerranHeroBase + 3)].WeaponBeh = Components::WeaponBehavior::AppearOnTarget;
+    SetSplash(T[(size_t)(TerranHeroBase + 3)], Components::SplashType::Radial, 10, 25, 40);
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 4)], 16, 1, 2, 22, Components::DamageType::Concussive); // GuiMontag
+    T[(size_t)(TerranHeroBase + 4)].AttackRange = 1.0f;
+    T[(size_t)(TerranHeroBase + 4)].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetSplash(T[(size_t)(TerranHeroBase + 4)], Components::SplashType::Line, 15, 20, 25);
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 5)], 50, 3, 1, 30, Components::DamageType::Normal); // ArcturusMengsk
+    SetAirWeapon(T[(size_t)(TerranHeroBase + 5)], 50, 3, 1, 30, Components::DamageType::Normal);
+    T[(size_t)(TerranHeroBase + 5)].AttackRange = 6.0f;
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 6)], 30, 3, 1, 15, Components::DamageType::Normal); // Hyperion
+    SetAirWeapon(T[(size_t)(TerranHeroBase + 6)], 30, 3, 1, 15, Components::DamageType::Normal);
+    T[(size_t)(TerranHeroBase + 6)].AttackRange = 6.0f;
+    SetGroundWeapon(T[(size_t)(TerranHeroBase + 7)], 50, 3, 1, 30, Components::DamageType::Normal); // NoradII
+    SetAirWeapon(T[(size_t)(TerranHeroBase + 7)], 50, 3, 1, 30, Components::DamageType::Normal);
+    T[(size_t)(TerranHeroBase + 7)].AttackRange = 6.0f;
+
+    SetGroundWeapon(Z[(size_t)(ZergHeroBase + 0)], 50, 3, 1, 15, Components::DamageType::Normal); // Torrasque
+    Z[(size_t)(ZergHeroBase + 0)].AttackRange = 25.0f / 32.0f;
+    Z[(size_t)(ZergHeroBase + 0)].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetGroundWeapon(Z[(size_t)(ZergHeroBase + 1)], 50, 1, 1, 15, Components::DamageType::Normal); // InfestedKerrigan
+    Z[(size_t)(ZergHeroBase + 1)].AttackRange = 15.0f / 32.0f;
+    Z[(size_t)(ZergHeroBase + 1)].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetGroundWeapon(Z[(size_t)(ZergHeroBase + 2)], 20, 1, 1, 15, Components::DamageType::Explosive); // HunterKiller
+    SetAirWeapon(Z[(size_t)(ZergHeroBase + 2)], 20, 1, 1, 15, Components::DamageType::Explosive);
+    Z[(size_t)(ZergHeroBase + 2)].AttackRange = 5.0f;
+    SetGroundWeapon(Z[(size_t)(ZergHeroBase + 3)], 10, 1, 1, 8, Components::DamageType::Normal); // DevouringOne
+    Z[(size_t)(ZergHeroBase + 3)].AttackRange = 15.0f / 32.0f;
+    Z[(size_t)(ZergHeroBase + 3)].WeaponBeh = Components::WeaponBehavior::Melee;
+
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 0)], 20, 1, 2, 22, Components::DamageType::Normal); // FenixZealot
+    P[(size_t)(ProtossHeroBase + 0)].AttackRange = 15.0f / 32.0f;
+    P[(size_t)(ProtossHeroBase + 0)].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 1)], 45, 2, 1, 22, Components::DamageType::Explosive); // FenixDragoon
+    SetAirWeapon(P[(size_t)(ProtossHeroBase + 1)], 45, 2, 1, 22, Components::DamageType::Explosive);
+    P[(size_t)(ProtossHeroBase + 1)].AttackRange = 4.0f;
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 2)], 100, 3, 1, 22, Components::DamageType::Normal); // Zeratul
+    P[(size_t)(ProtossHeroBase + 2)].AttackRange = 15.0f / 32.0f;
+    P[(size_t)(ProtossHeroBase + 2)].WeaponBeh = Components::WeaponBehavior::Melee;
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 3)], 20, 1, 1, 22, Components::DamageType::Normal); // Tassadar
+    P[(size_t)(ProtossHeroBase + 3)].AttackRange = 2.0f;
+    SetSplash(P[(size_t)(ProtossHeroBase + 3)], Components::SplashType::EnemyRadial, 3, 15, 30);
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 4)], 100, 25, 1, 60, Components::DamageType::Normal); // Warbringer
+    P[(size_t)(ProtossHeroBase + 4)].AttackRange = 8.0f;
+    P[(size_t)(ProtossHeroBase + 4)].WeaponBeh = Components::WeaponBehavior::Lob;
+    SetSplash(P[(size_t)(ProtossHeroBase + 4)], Components::SplashType::Radial, 20, 40, 60);
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 5)], 50, 1, 1, 24, Components::DamageType::Normal); // Gantrithor
+    SetAirWeapon(P[(size_t)(ProtossHeroBase + 5)], 50, 1, 1, 24, Components::DamageType::Normal);
+    P[(size_t)(ProtossHeroBase + 5)].AttackRange = 8.0f;
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 6)], 20, 1, 1, 45, Components::DamageType::Explosive); // Danimoth
+    SetAirWeapon(P[(size_t)(ProtossHeroBase + 6)], 20, 1, 1, 45, Components::DamageType::Explosive);
+    P[(size_t)(ProtossHeroBase + 6)].AttackRange = 5.0f;
+    SetGroundWeapon(P[(size_t)(ProtossHeroBase + 7)], 40, 2, 1, 22, Components::DamageType::Normal); // Aldaris
+    SetAirWeapon(P[(size_t)(ProtossHeroBase + 7)], 40, 2, 1, 22, Components::DamageType::Normal);
+    P[(size_t)(ProtossHeroBase + 7)].AttackRange = 6.0f;
+
     ApplyDefaultWeaponMetadata(T);
     ApplyDefaultWeaponMetadata(Z);
     ApplyDefaultWeaponMetadata(P);
@@ -716,34 +808,16 @@ UnitDef GetUnitDefByID(int ID)
 int GetTerranDefIDByChkUnitID(int ChkUnitID)
 {
     InitDefs();
-    for (int I = 0; I < (int)TerranDefs.size(); ++I)
-    {
-        if (TerranDefs[I].ChkUnitID == ChkUnitID)
-            return I;
-    }
+    if (ChkUnitID >= 0 && ChkUnitID < (int)ChkToTerranDefID.size())
+        return ChkToTerranDefID[(size_t)ChkUnitID];
     return -1;
 }
 
 int GetUnitDefIDByChkUnitID(int ChkUnitID)
 {
     InitDefs();
-    for (int I = 0; I < (int)TerranDefs.size(); ++I)
-    {
-        if (TerranDefs[I].ChkUnitID == ChkUnitID)
-            return I;
-    }
-    const int ZergOffset = (int)TerranDefs.size();
-    for (int I = 0; I < (int)ZergDefs.size(); ++I)
-    {
-        if (ZergDefs[I].ChkUnitID == ChkUnitID)
-            return ZergOffset + I;
-    }
-    const int ProtossOffset = ZergOffset + (int)ZergDefs.size();
-    for (int I = 0; I < (int)ProtossDefs.size(); ++I)
-    {
-        if (ProtossDefs[I].ChkUnitID == ChkUnitID)
-            return ProtossOffset + I;
-    }
+    if (ChkUnitID >= 0 && ChkUnitID < (int)ChkToDefID.size())
+        return ChkToDefID[(size_t)ChkUnitID];
     return -1;
 }
 
@@ -866,13 +940,16 @@ bool IsMechanicalChkUnitID(int ChkUnitID)
         case 17:  // Alan Schezar (Goliath)
         case 18:  // Alan Schezar Turret
         case 19:  // Jim Raynor (Vulture)
-        case 21:  // Edmund Duke (Tank Mode)
-        case 22:  // Edmund Duke (Siege Mode)
-        case 23:  // Edmund Duke Turret
-        case 24:  // Edmund Duke Turret (Siege Mode)
-        case 25:  // Tom Kazansky (Wraith)
-        case 27:  // Norad II (Battlecruiser)
+        case 21:  // Tom Kazansky (Wraith)
+        case 22:  // Magellan (Science Vessel)
+        case 23:  // Edmund Duke (Tank Mode)
+        case 24:  // Edmund Duke Turret
+        case 25:  // Edmund Duke (Siege Mode)
+        case 26:  // Edmund Duke Turret (Siege Mode)
+        case 27:  // Arcturus Mengsk (Battlecruiser)
         case 28:  // Hyperion (Battlecruiser)
+        case 29:  // Norad II (Battlecruiser)
+        case 102: // Gerard DuGalle (Battlecruiser)
         // Protoss Mechanical Units
         case 64:  // Probe
         case 66:  // Dragoon
@@ -885,11 +962,12 @@ bool IsMechanicalChkUnitID(int ChkUnitID)
         case 84:  // Observer
         case 85:  // Scarab
         // Protoss Mechanical Heroes
-        case 78:  // Mojo (Scout)
-        case 80:  // Artanis (Scout)
-        case 81:  // Danimoth (Arbiter)
+        case 78:  // Fenix (Dragoon)
+        case 80:  // Mojo (Scout)
+        case 81:  // Warbringer (Reaver)
         case 82:  // Gantrithor (Carrier)
-        case 86:  // Warbringer (Reaver)
+        case 86:  // Danimoth (Arbiter)
+        case 88:  // Artanis (Scout)
             return true;
         default:
             return false;

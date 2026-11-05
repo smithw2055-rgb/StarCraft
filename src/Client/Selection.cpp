@@ -18,11 +18,14 @@ namespace
     int sConsecutiveClickCount = 0;
     int sLastClickedEntity = -1;
     double sLastEntityClickTime = 0.0;
+    double sLastClickTime = 0.0;
+    int sLastClickId = -1;
+    int sLastClickX = 0;
+    int sLastClickY = 0;
 
     bool IsShiftHeld()
     {
-        return Core::Platform::IsKeyDown(225) ||
-               Core::Platform::IsKeyDown(229);
+        return Core::Platform::IsShiftDown();
     }
 
     bool IsVisible(Core::ECS::EntityManager& Entities, int EntityId)
@@ -456,10 +459,6 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
         return;
     }
 
-    static double sLastClickTime = 0.0;
-    static int sLastClickId = -1;
-    static int sLastClickX = 0;
-    static int sLastClickY = 0;
     const double Now = Core::Platform::GetAbsoluteTime();
 
     if (Core::Platform::IsMouseButtonPressed(0))
@@ -641,9 +640,14 @@ void Selection::RecallControlGroup(int GroupIndex, Core::ECS::EntityManager& Ent
         return;
 
     mSelected.clear();
+    const bool SingleBuildingGroup =
+        Group.size() == 1 && IsBuilding(Entities, Group.front());
     for (int EntityId : Group)
     {
-        if (IsMultiSelectable(Entities, EntityId) &&
+        const bool Selectable =
+            IsMultiSelectable(Entities, EntityId) ||
+            (SingleBuildingGroup && EntityId == Group.front());
+        if (Selectable &&
             IsOwnedByLocalPlayer(Entities, EntityId) &&
             IsVisible(Entities, EntityId))
         {
@@ -687,6 +691,30 @@ bool Selection::IsControlGroupEmpty(int GroupIndex) const
 void Selection::SetUnitClickSoundCallback(UnitClickSoundCallback Callback)
 {
     sUnitClickSoundCallback = std::move(Callback);
+}
+
+void Selection::ResetClickTracking()
+{
+    sLastClickTime = 0.0;
+    sLastClickId = -1;
+    sLastClickX = 0;
+    sLastClickY = 0;
+    sConsecutiveClickCount = 0;
+    sLastClickedEntity = -1;
+    sLastEntityClickTime = 0.0;
+}
+
+void Selection::ResetSessionState()
+{
+    mPhase = Phase::Idle;
+    mStartX = 0;
+    mStartY = 0;
+    mEndX = 0;
+    mEndY = 0;
+    mSelected.clear();
+    for (auto& Group : mControlGroups)
+        Group.clear();
+    ResetClickTracking();
 }
 
 } // namespace Game::Client

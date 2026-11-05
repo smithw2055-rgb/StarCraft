@@ -313,6 +313,26 @@ void TilesetRenderer::Render(const GameMap& Map)
             Draw.DrawSpriteFromImage((*Images)[MegaIdx], PX, PY, TileSize, TileSize);
     };
 
+    std::array<uint16_t, 16> ValidCreepMegatiles{};
+    size_t ValidCreepMegatileCount = 0;
+    if (mCv5 && mCv5->size() >= 32)
+    {
+        for (size_t Variant = 0; Variant < 16; ++Variant)
+        {
+            const uint16_t MegaIdx = (*mCv5)[16u + Variant];
+            bool IsValidAtlas = UseAtlas && (
+                (!Atlas->MegaIdxToSlot.empty() && MegaIdx < Atlas->MegaIdxToSlot.size() && Atlas->MegaIdxToSlot[MegaIdx] >= 0) ||
+                (Atlas->MegaIdxToSlot.empty() && MegaIdx < (uint16_t)Atlas->FrameCount)
+            );
+            if (MegaIdx != 0 &&
+                (IsValidAtlas ||
+                 (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())))
+            {
+                ValidCreepMegatiles[ValidCreepMegatileCount++] = MegaIdx;
+            }
+        }
+    }
+
     for (int TY = MinTY; TY < MaxTY; ++TY)
     {
         for (int TX = MinTX; TX < MaxTX; ++TX)
@@ -322,29 +342,10 @@ void TilesetRenderer::Render(const GameMap& Map)
                 continue;
             const float PX = (float)(TX * TileSize);
             const float PY = (float)(TY * TileSize);
-            if (mCv5 && mCv5->size() >= 32)
+            if (ValidCreepMegatileCount > 0)
             {
-                std::array<uint16_t, 16> ValidCreepMegatiles{};
-                size_t ValidCount = 0;
-                for (size_t Variant = 0; Variant < 16; ++Variant)
-                {
-                    const uint16_t MegaIdx = (*mCv5)[16u + Variant];
-                    bool IsValidAtlas = UseAtlas && (
-                        (!Atlas->MegaIdxToSlot.empty() && MegaIdx < Atlas->MegaIdxToSlot.size() && Atlas->MegaIdxToSlot[MegaIdx] >= 0) ||
-                        (Atlas->MegaIdxToSlot.empty() && MegaIdx < (uint16_t)Atlas->FrameCount)
-                    );
-                    if (MegaIdx != 0 &&
-                        (IsValidAtlas ||
-                         (Images && MegaIdx < Images->size() && (*Images)[MegaIdx].Valid())))
-                    {
-                        ValidCreepMegatiles[ValidCount++] = MegaIdx;
-                    }
-                }
-                if (ValidCount > 0)
-                {
-                    const size_t Variant = (size_t)(TX * 17 + TY * 31) % ValidCount;
-                    DrawMegatile(ValidCreepMegatiles[Variant], PX, PY);
-                }
+                const size_t Variant = (size_t)(TX * 17 + TY * 31) % ValidCreepMegatileCount;
+                DrawMegatile(ValidCreepMegatiles[Variant], PX, PY);
             }
         }
     }

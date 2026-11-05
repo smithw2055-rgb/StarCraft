@@ -23,6 +23,8 @@
 #include "third_party/sokol/sokol_glue.h"
 #include "third_party/sokol/sokol_log.h"
 
+#include "Render/Draw2D.h"
+
 namespace Render
 {
 
@@ -90,6 +92,7 @@ bool IsActive() { return g_active; }
 
 void BeginFrame()
 {
+    UploadPendingFontGlyphs();
     sg_pass Pass = {};
     Pass.action = g_passAction;
     Pass.swapchain = sglue_swapchain();

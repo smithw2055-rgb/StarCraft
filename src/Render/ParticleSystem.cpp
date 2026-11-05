@@ -41,18 +41,28 @@ int ParticleSystem::EmitOne(float X, float Y, float VX, float VY,
     return -1;
 }
 
+namespace
+{
+    uint32_t sParticleRand = 0x87654321;
+    inline uint32_t FastRand()
+    {
+        sParticleRand = sParticleRand * 1664525u + 1013904223u;
+        return (sParticleRand >> 16) & 0x7fff;
+    }
+}
+
 void ParticleSystem::EmitExplosion(float X, float Y, int Count)
 {
     for (int I = 0; I < Count; I++)
     {
-        float Angle = (float)(std::rand() % 360) * 3.14159f / 180.0f;
-        float Speed = 20.0f + (float)(std::rand() % 60);
+        float Angle = (float)(FastRand() % 360) * 3.14159f / 180.0f;
+        float Speed = 20.0f + (float)(FastRand() % 60);
         float VX = std::cos(Angle) * Speed;
         float VY = std::sin(Angle) * Speed;
-        float Life = 0.3f + (float)(std::rand() % 30) / 100.0f;
-        float Size = 2.0f + (float)(std::rand() % 4);
-        int R = 200 + (std::rand() % 55);
-        int G = 100 + (std::rand() % 50);
+        float Life = 0.3f + (float)(FastRand() % 30) / 100.0f;
+        float Size = 2.0f + (float)(FastRand() % 4);
+        int R = 200 + (FastRand() % 55);
+        int G = 100 + (FastRand() % 50);
         EmitOne(X, Y, VX, VY, Life, Size, Color((uint8_t)R, (uint8_t)G, 20, 220));
     }
 }
@@ -61,8 +71,8 @@ void ParticleSystem::EmitDamageSpark(float X, float Y)
 {
     for (int I = 0; I < 4; I++)
     {
-        float Angle = (float)(std::rand() % 360) * 3.14159f / 180.0f;
-        float Speed = 30.0f + (float)(std::rand() % 40);
+        float Angle = (float)(FastRand() % 360) * 3.14159f / 180.0f;
+        float Speed = 30.0f + (float)(FastRand() % 40);
         float VX = std::cos(Angle) * Speed;
         float VY = std::sin(Angle) * Speed;
         EmitOne(X, Y, VX, VY, 0.2f, 2.0f, Color(255, 220, 80, 255));
@@ -73,12 +83,12 @@ void ParticleSystem::EmitBuildingComplete(float X, float Y)
 {
     for (int I = 0; I < 15; I++)
     {
-        float Angle = (float)(std::rand() % 360) * 3.14159f / 180.0f;
-        float Speed = 15.0f + (float)(std::rand() % 30);
+        float Angle = (float)(FastRand() % 360) * 3.14159f / 180.0f;
+        float Speed = 15.0f + (float)(FastRand() % 30);
         float VX = std::cos(Angle) * Speed;
         float VY = std::sin(Angle) * Speed;
-        float Life = 0.5f + (float)(std::rand() % 30) / 100.0f;
-        int G = 180 + (std::rand() % 75);
+        float Life = 0.5f + (float)(FastRand() % 30) / 100.0f;
+        int G = 180 + (FastRand() % 75);
         EmitOne(X, Y, VX, VY, Life, 3.0f, Color(60, (uint8_t)G, 60, 200));
     }
 }
@@ -88,11 +98,11 @@ void ParticleSystem::EmitDeathBurst(float X, float Y, int Count)
     EmitExplosion(X, Y, Count);
     for (int I = 0; I < Count / 2; I++)
     {
-        float Angle = (float)(std::rand() % 360) * 3.14159f / 180.0f;
-        float Speed = 10.0f + (float)(std::rand() % 40);
+        float Angle = (float)(FastRand() % 360) * 3.14159f / 180.0f;
+        float Speed = 10.0f + (float)(FastRand() % 40);
         float VX = std::cos(Angle) * Speed;
         float VY = std::sin(Angle) * Speed;
-        float Life = 0.6f + (float)(std::rand() % 40) / 100.0f;
+        float Life = 0.6f + (float)(FastRand() % 40) / 100.0f;
         EmitOne(X, Y, VX, VY, Life, 6.0f, Color(100, 100, 100, 180));
     }
 }

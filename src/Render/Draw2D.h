@@ -139,4 +139,6 @@ private:
 
 extern Draw2D g_Draw2D;
 
+void UploadPendingFontGlyphs();
+
 } // namespace Render

@@ -379,6 +379,13 @@ void IScriptVM::LoadScript(int AnimationID, const std::vector<int>* ProgramData,
     mSprite.OrderDone = false;
     mSprite.HasWarpOverlay = false;
     mSprite.WarpOverlayFrame = 0;
+    mSprite.NoBreakCode = false;
+    mSprite.ReadyToRepeatAttack = false;
+    mSprite.RepeatAttackPC = -1;
+    mSprite.EngFramePending = false;
+    mSprite.EngSetPending = false;
+    mSprite.EngSetIndex = 0;
+    mSprite.IgnoredRest = false;
     mWaitRemaining = 0;
     mEvents.clear();
     mCallStack.clear();
@@ -595,7 +602,11 @@ std::array<IScriptVM::OpcodeHandlerFn, IScriptOpcodes::kCount> IScriptVM::InitOp
         VM.AdvanceArgs(1);
         return false;
     };
-    Table[Opc_IgnoreRest] = [](IScriptVM& VM) { VM.mSprite.PC = -1; return true; };
+    Table[Opc_IgnoreRest] = [](IScriptVM& VM) {
+        VM.mSprite.IgnoredRest = true;
+        VM.mSprite.PC = -1;
+        return true;
+    };
     Table[Opc_TurnCWise] = [](IScriptVM& VM) {
         const int Steps = VM.PeekArg(1);
         VM.mSprite.CurrentDirection = (VM.mSprite.CurrentDirection + Steps * 8) & 0xFF;
@@ -629,6 +640,49 @@ std::array<IScriptVM::OpcodeHandlerFn, IScriptOpcodes::kCount> IScriptVM::InitOp
         VM.AdvanceArgs(1);
         return false;
     };
+    Table[Opc_EngFrame] = [](IScriptVM& VM) {
+        VM.mSprite.BaseFrameIndex = VM.PeekArg(1);
+        VM.mSprite.EngFramePending = true;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    Table[Opc_EngSet] = [](IScriptVM& VM) {
+        const int FrameSet = VM.PeekArg(1);
+        VM.mSprite.BaseFrameIndex = FrameSet * 17;
+        VM.mSprite.EngSetPending = true;
+        VM.mSprite.EngSetIndex = FrameSet;
+        VM.RefreshDirectionalFrame();
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    Table[Opc_Move] = [](IScriptVM& VM) {
+        // In Brood War (bwgame.h opc_move), move(px) sets the flingy's next
+        // movement step speed; world position is advanced by MovementSystem
+        // and image offset (HorPos / VertPos) is never modified by Opc_Move.
+        (void)VM.PeekArg(1);
+        VM.AdvanceArgs(1);
+        return false;
+    };
+    Table[Opc_GotoRepeatAttk] = [](IScriptVM& VM) {
+        VM.mSprite.NoBreakCode = false;
+        VM.mSprite.ReadyToRepeatAttack = true;
+        if (VM.mSprite.RepeatAttackPC >= 0)
+            VM.mSprite.PC = VM.mSprite.RepeatAttackPC;
+        else
+            VM.AdvanceArgs(0);
+        return false;
+    };
+    Table[Opc_NoBrkCodeStart] = [](IScriptVM& VM) {
+        VM.mSprite.NoBreakCode = true;
+        VM.AdvanceArgs(0);
+        return false;
+    };
+    Table[Opc_NoBrkCodeEnd] = [](IScriptVM& VM) {
+        VM.mSprite.NoBreakCode = false;
+        VM.AdvanceArgs(0);
+        return false;
+    };
 
     auto Skip0 = [](IScriptVM& VM) { VM.AdvanceArgs(0); return false; };
     auto Skip1 = [](IScriptVM& VM) { VM.AdvanceArgs(1); return false; };
@@ -636,15 +690,13 @@ std::array<IScriptVM::OpcodeHandlerFn, IScriptOpcodes::kCount> IScriptVM::InitOp
     auto Skip3 = [](IScriptVM& VM) { VM.AdvanceArgs(3); return false; };
 
     for (int Op : {Opc_Unknown0C, Opc_Turn1CWise,
-                   Opc_GotoRepeatAttk, Opc_Unknown2D,
-                   Opc_NoBrkCodeStart, Opc_NoBrkCodeEnd, Opc_IgnoreRest,
+                   Opc_Unknown2D, Opc_IgnoreRest,
                    Opc_TmpRmGraphicStart, Opc_TmpRmGraphicEnd, Opc_Return,
                    Opc_Unknown3E, Opc_Unknown43})
         if (!Table[Op]) Table[Op] = Skip0;
 
     for (int Op : {Opc_SetHorPos, Opc_SetVertPos, Opc_Wait, Opc_SetFlipState, Opc_TurnCCWise,
                    Opc_TurnCWise, Opc_TurnRand, Opc_SetSpawnFrame, Opc_SigOrder,
-                   Opc_Move, Opc_EngFrame, Opc_EngSet,
                    Opc_OrderDone, Opc_UflUnstable})
         if (!Table[Op]) Table[Op] = Skip1;
 

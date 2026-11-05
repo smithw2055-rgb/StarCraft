@@ -276,7 +276,7 @@ namespace
 
     static bool CanDarkSwarmDeflect(WeaponBehavior Behavior, SplashType Splash)
     {
-        if (Splash == SplashType::Line)
+        if (Splash != SplashType::None)
             return false;
         return Behavior == WeaponBehavior::FlyDirect ||
                Behavior == WeaponBehavior::Missile ||
@@ -344,6 +344,7 @@ namespace
                 const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
                 if (!Transform || !Unit || !Player || Unit->HitPoints <= 0 ||
                     Player->PlayerID == SourcePlayerID ||
+                    CombatSystem::AreAllied(Player->PlayerID, SourcePlayerID) ||
                     Player->IsRescuePassive ||
                     EM.GetComponent<BuildingComponent>(EntityID) ||
                     !IsAirTarget(EM, EntityID) ||
@@ -590,13 +591,6 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
         TargetPos = TargetPos - AimDirection * 30.0f;
         BulletComp.ImpactAtProjectilePosition = true;
     }
-    if (Visual &&
-        (Visual->BulletType == kBulletAppearAtSourceUnit ||
-         Visual->BulletType == kBulletSelfDestruct))
-    {
-        BulletComp.ImpactAtProjectilePosition = true;
-    }
-
     bool SpawnAtTarget =
         BulletComp.Behavior == WeaponBehavior::AppearOnTarget ||
         BulletComp.Behavior == WeaponBehavior::Persist;
@@ -605,7 +599,8 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
         SpawnAtTarget =
             Visual->BulletType == kBulletAppearAtTargetUnit ||
             Visual->BulletType == kBulletPersistAtTargetPos ||
-            Visual->BulletType == kBulletAppearAtTargetPos;
+            Visual->BulletType == kBulletAppearAtTargetPos ||
+            Visual->BulletType == kBulletSelfDestruct;
     }
 
     BulletTrans.Position = SpawnAtTarget ? TargetPos : SourceTrans.Position;
@@ -647,8 +642,8 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
         }
         case WeaponBehavior::AppearOnTarget:
         {
-            BulletComp.MaxLifetime = 0.05f;
-            BulletComp.LifetimeRemaining = 0.05f;
+            BulletComp.MaxLifetime = 0.35f;
+            BulletComp.LifetimeRemaining = 0.35f;
             BulletComp.Velocity = LaunchDirection * BulletComp.Speed;
             break;
         }
@@ -752,10 +747,10 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
         ProxyUnit.HitPoints = 0;
         ProxyUnit.MaxHitPoints = 1;
         ProxyUnit.SupplyCost = 0;
-        if (const auto* BulletPlayer =
+        if (const auto* ExistingBulletPlayer =
                 EM.GetComponent<PlayerComponent>(BulletID))
         {
-            EM.AddComponent<PlayerComponent>(ProxyID) = *BulletPlayer;
+            EM.AddComponent<PlayerComponent>(ProxyID) = *ExistingBulletPlayer;
         }
     }
 
@@ -890,6 +885,7 @@ bool BulletSystem::ResolveIScriptDamageFrame(int BulletEntityID)
         auto* TargetPlayer = EM.GetComponent<PlayerComponent>(TargetID);
         if (!TargetTrans || !TargetUnit || TargetUnit->HitPoints <= 0 ||
             !TargetPlayer || TargetPlayer->PlayerID == SourcePlayerID ||
+            (CombatSystem::AreAllied(TargetPlayer->PlayerID, SourcePlayerID) && Bullet->TargetEntityID != TargetID) ||
             TargetPlayer->IsRescuePassive ||
             IsProtectedResourceNode(EM, TargetID) ||
             IsInvulnerableByStatus(EM, TargetID))
@@ -958,10 +954,19 @@ void BulletSystem::UpdateBullet(Core::ECS::EntityManager& EM, int BulletID, floa
         }
         case WeaponBehavior::AppearOnTarget:
         {
-            if (Bullet->LifetimeRemaining <= Bullet->MaxLifetime - 0.01f)
+            if (!Bullet->HasHit && Bullet->LifetimeRemaining <= Bullet->MaxLifetime - 0.01f)
+            {
                 BulletHit(EM, BulletID);
-            else
-                SyncRenderDirection();
+            }
+            if (!EM.IsAlive(BulletID))
+                return;
+            Bullet = EM.GetComponent<BulletComponent>(BulletID);
+            if (!Bullet || Bullet->LifetimeRemaining <= 0.0f)
+            {
+                EM.DestroyEntity(BulletID);
+                return;
+            }
+            SyncRenderDirection();
             return;
         }
         case WeaponBehavior::Persist:
@@ -1098,7 +1103,8 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
     int DirectHitID = Bullet->TargetEntityID;
 
     if (DirectHitID >= 0 &&
-        Bullet->Behavior == WeaponBehavior::Melee &&
+        (Bullet->Behavior == WeaponBehavior::Melee ||
+         Bullet->Behavior == WeaponBehavior::AppearOnTarget) &&
         !Bullet->ImpactAtProjectilePosition)
     {
         auto* TTarget = EM.GetComponent<TransformComponent>(DirectHitID);
@@ -1171,6 +1177,7 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                 if (!CandidateUnit || CandidateUnit->HitPoints <= 0 ||
                     !CandidateTrans || !CandidatePlayer ||
                     CandidatePlayer->PlayerID == SourcePlayerID ||
+                    CombatSystem::AreAllied(CandidatePlayer->PlayerID, SourcePlayerID) ||
                     CandidatePlayer->IsRescuePassive ||
                     IsProtectedResourceNode(EM, CandidateID) ||
                     IsInvulnerableByStatus(EM, CandidateID))
@@ -1189,7 +1196,11 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
                         EM.GetComponent<CloakComponent>(CandidateID);
                     Cloak && (Cloak->IsCloaked || Cloak->IsBurrowed))
                 {
-                    return;
+                    if (SourcePlayerID < 0 ||
+                        !CombatSystem::IsTargetDetectedForPlayer(EM, CandidateID, SourcePlayerID))
+                    {
+                        return;
+                    }
                 }
                 if (SourcePlayerID >= 0 && SourcePlayerID < 8)
                 {
@@ -1329,7 +1340,15 @@ void BulletSystem::BulletHit(Core::ECS::EntityManager& EM, int BulletID)
         EM.DestroyEntity(Bullet->SourceEntityID);
     }
 
-    EM.DestroyEntity(BulletID);
+    const bool DeferDestruction =
+        Bullet->Behavior == WeaponBehavior::AppearOnTarget &&
+        Bullet->LifetimeRemaining > 0.0f &&
+        EM.GetComponent<RenderComponent>(BulletID) != nullptr;
+
+    if (!DeferDestruction)
+    {
+        EM.DestroyEntity(BulletID);
+    }
 }
 
 void BulletSystem::SpawnImpactVisual(Core::ECS::EntityManager& EM,
@@ -1428,7 +1447,7 @@ void BulletSystem::ApplySplashDamage(Core::ECS::EntityManager& EM,
         if (IsProtectedResourceNode(EM, UID)) return;
         if (UID == SourceEntityID && !CanDamageSelf) return;
         if (UID != DirectHitID && EnemyOnly &&
-            (UP->PlayerID == SourcePlayerID || UP->IsRescuePassive)) return;
+            (UP->PlayerID == SourcePlayerID || CombatSystem::AreAllied(UP->PlayerID, SourcePlayerID) || UP->IsRescuePassive)) return;
         if (IsInvulnerableByStatus(EM, UID)) return;
 
         const bool TargetIsAir = IsAirTarget(EM, UID);

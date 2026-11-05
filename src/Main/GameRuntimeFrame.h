@@ -157,6 +157,10 @@ inline void UpdateGameRuntimeFrame(
         ++SimulationTicksThisHostFrame;
     }
 
+    if (SimulationTicksThisHostFrame > 0 && Runtime.Session.Game.IsMapLoaded())
+    {
+        Runtime.Session.Game.SyncCreepPresentation();
+    }
     RefreshGui();
 }
 

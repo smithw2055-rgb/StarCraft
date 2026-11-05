@@ -54,8 +54,10 @@ void CommandSystem::IssueMove(Core::ECS::EntityManager& EM,
 
 void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
                                     const std::vector<int>& Units,
-                                    Core::Math::Vec2 Target)
+                                    Core::Math::Vec2 Target,
+                                    bool Queued)
 {
+    (void)Queued;
     for (int EntityID : Units)
     {
         auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID);
@@ -65,6 +67,21 @@ void CommandSystem::IssueAttackMove(Core::ECS::EntityManager& EM,
         Cmd->TargetPosition = Target;
         Cmd->TargetEntityID = -1;
     }
+}
+
+void CommandSystem::QueueOrder(Core::ECS::EntityManager& EM,
+                               Core::ECS::EntityID EntityID,
+                               const Components::Order& InOrder)
+{
+    if (auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID))
+        Cmd->QueueOrder(InOrder);
+}
+
+void CommandSystem::AdvanceQueue(Core::ECS::EntityManager& EM,
+                                 Core::ECS::EntityID EntityID)
+{
+    if (auto* Cmd = EM.GetComponent<Components::CommandComponent>(EntityID))
+        Cmd->AdvanceQueue();
 }
 
 bool AnimationSystem::HasIScriptAnimationForImage(int ImageID, int AnimID)

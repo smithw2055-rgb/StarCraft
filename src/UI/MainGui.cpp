@@ -44,6 +44,7 @@ bool MainGui::Init(const std::string& AssetRoot, int ScreenW, int ScreenH,
                          const std::string& XamlPath)
 {
     AssetRoot_ = AssetRoot;
+    PortraitUriCache_.clear();
     return Host_.Initialize(AssetRoot, ScreenW, ScreenH, XamlPath);
 }
 
@@ -389,14 +390,23 @@ void MainGui::UpdateCommandCard(Core::ECS::EntityManager& Entities,
 
 std::string MainGui::GetPortraitUri(int ChkUnitId) const
 {
+    if (auto It = PortraitUriCache_.find(ChkUnitId); It != PortraitUriCache_.end())
+        return It->second;
+
     const std::string PortraitKey = ResolvePortraitKeyForChkUnitId(ChkUnitId);
     if (PortraitKey.empty() || AssetRoot_.empty())
+    {
+        PortraitUriCache_.emplace(ChkUnitId, std::string{});
         return {};
+    }
 
     const std::filesystem::path PortraitDir =
         std::filesystem::path(AssetRoot_) / "portrait" / PortraitKey;
     if (!std::filesystem::exists(PortraitDir) || !std::filesystem::is_directory(PortraitDir))
+    {
+        PortraitUriCache_.emplace(ChkUnitId, std::string{});
         return {};
+    }
 
     std::vector<std::filesystem::path> IdleClips;
     for (const auto& Entry : std::filesystem::directory_iterator(PortraitDir))
@@ -416,7 +426,10 @@ std::string MainGui::GetPortraitUri(int ChkUnitId) const
     }
 
     if (IdleClips.empty())
+    {
+        PortraitUriCache_.emplace(ChkUnitId, std::string{});
         return {};
+    }
 
     std::sort(IdleClips.begin(), IdleClips.end(), [](const auto& A, const auto& B)
     {
@@ -425,6 +438,7 @@ std::string MainGui::GetPortraitUri(int ChkUnitId) const
 
     std::string Relative = "portrait/" + PortraitKey + "/" + IdleClips.front().filename().string();
     std::replace(Relative.begin(), Relative.end(), '\\', '/');
+    PortraitUriCache_.emplace(ChkUnitId, Relative);
     return Relative;
 }
 

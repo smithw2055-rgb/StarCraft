@@ -82,10 +82,12 @@ static std::vector<int16_t> GenNoise(float DurationSec, float Volume = 0.3f)
 {
     int N = (int)(DurationSec * kSampleRate);
     std::vector<int16_t> S(N);
+    uint32_t Seed = 123456789u;
     for (int I = 0; I < N; I++)
     {
+        Seed = Seed * 1664525u + 1013904223u;
         float Env = 1.0f - (float)I / N;
-        float Val = ((float)(std::rand() % 20001 - 10000) / 10000.0f) * Volume * Env;
+        float Val = ((float)((int)(Seed % 20001u) - 10000) / 10000.0f) * Volume * Env;
         S[I] = (int16_t)(Val * 32767.0f);
     }
     return S;

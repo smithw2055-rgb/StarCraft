@@ -45,7 +45,6 @@ void ProtossSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr.GetEntityManager();
     UpdatePowerGrid(EM);
     RechargeShields(EM, DeltaTime);
-    CheckPowerStatus(EM);
     UpdateArchonWarps(EM, DeltaTime);
 }
 
@@ -84,37 +83,38 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
     std::fill(mPowerGrid.begin(), mPowerGrid.end(), false);
 
     // Pylon power is a four-tile circle around its center.
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-    for (int Eid : Units)
+    constexpr int kPylonChkID = 156;
+    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+    for (int Eid : Buildings)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
         auto* T = EM.GetComponent<TransformComponent>(Eid);
-        if (!U || !T) continue;
-        const int PylonDefID = Game::Races::GetUnitDefID("Pylon");
-        const int PylonChkID = Game::Races::GetUnitDefByID(PylonDefID).ChkUnitID;
-        if (U->ChkUnitID != PylonChkID) continue;
+        auto* PB = EM.GetComponent<BuildingComponent>(Eid);
+        if (!U || !T || !PB) continue;
+        if (U->ChkUnitID != kPylonChkID) continue;
         if (U->HitPoints <= 0) continue;
+        if (PB->UnderConstruction)
+            continue;
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
 
-    for (int DY = -Game::ProtossPower::PylonRadiusTiles;
-         DY <= Game::ProtossPower::PylonRadiusTiles; ++DY)
-    {
-        for (int DX = -Game::ProtossPower::PylonRadiusTiles;
-             DX <= Game::ProtossPower::PylonRadiusTiles; ++DX)
+        for (int DY = -Game::ProtossPower::PylonRadiusTiles;
+             DY <= Game::ProtossPower::PylonRadiusTiles; ++DY)
         {
-            if (!Game::ProtossPower::ContainsTileOffset(DX, DY))
-                continue;
-            int X = TX + DX, Y = TY + DY;
-            if (X >= 0 && X < W && Y >= 0 && Y < H)
-                mPowerGrid[Y * W + X] = true;
+            for (int DX = -Game::ProtossPower::PylonRadiusTiles;
+                 DX <= Game::ProtossPower::PylonRadiusTiles; ++DX)
+            {
+                if (!Game::ProtossPower::ContainsTileOffset(DX, DY))
+                    continue;
+                int X = TX + DX, Y = TY + DY;
+                if (X >= 0 && X < W && Y >= 0 && Y < H)
+                    mPowerGrid[Y * W + X] = true;
+            }
         }
-    }
     }
 
     // Update building power status
-    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
@@ -145,7 +145,7 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
         if (!BU || !BT || !BB) continue;
         if (BU->ChkUnitID != 172) continue; // Protoss Shield Battery
         if (BU->EnergyPoints <= 0) continue;
-        if (BB->UnderConstruction) continue;
+        if (BB->UnderConstruction || (BB->RequiresPylon && !BB->HasPylonPower)) continue;
 
         // Find nearby friendly units that need shield recharge
         float RechargeRate = 26.6f * DeltaTime; // ~26.6 shield per second
@@ -199,6 +199,7 @@ bool ProtossSystem::CanRechargeShieldsTarget(Core::ECS::EntityManager& EM,
     return BatteryUnit && BatteryBuilding && BatteryPlayer && BatteryTransform &&
            TargetUnit && TargetPlayer && TargetTransform &&
            BatteryUnit->ChkUnitID == 172 && !BatteryBuilding->UnderConstruction &&
+           (!BatteryBuilding->RequiresPylon || BatteryBuilding->HasPylonPower) &&
            BatteryUnit->EnergyPoints > 0 &&
            BatteryPlayer->PlayerID == TargetPlayer->PlayerID &&
            TargetUnit->MaxShieldPoints > 0 &&

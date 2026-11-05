@@ -83,6 +83,7 @@ private:
 
     std::vector<uint8_t> mCreepGrid;
     std::vector<uint8_t> mCreepRecedingGrid;
+    std::vector<uint8_t> mSustainedCreepGrid;
     int mMapWidth = 0;
     int mMapHeight = 0;
     float mCreepTimer = 0.0f;

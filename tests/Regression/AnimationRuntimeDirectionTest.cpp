@@ -2650,6 +2650,382 @@ int main()
     Require(ThirtyTwoWaySignatures.size() >= 17,
             "full 32-way directional coverage spans all 17 mirrored GRP frames");
 
+    Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
+    const int WalkingOffsetUnit = SpawnWalkingDirectionalUnit(EM, 512.0f);
+    for (int Frame = 0; Frame < 24; ++Frame)
+    {
+        Anim.Update(1.0f / 24.0f);
+    }
+    const auto* WalkingRender = EM.GetComponent<Game::Components::RenderComponent>(WalkingOffsetUnit);
+    Require(WalkingRender != nullptr, "walking unit still has RenderComponent");
+    Require(std::fabs(WalkingRender->VisualOffset.X) < 0.0001f &&
+                std::fabs(WalkingRender->VisualOffset.Y) < 0.0001f,
+            "Opc_Move during walking does not corrupt Render.VisualOffset away from unit shadow");
+
+    // 1. Verify Dragoon impact effect (Image 523 -> imgol 427) completes and destroys itself without restarting
+    {
+        const int ImpactEffect = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(ImpactEffect).Position = {640.0f, 640.0f};
+        auto& DragoonImpactRender = EM.AddComponent<Game::Components::RenderComponent>(ImpactEffect);
+        DragoonImpactRender.ImageID = 523u;
+        DragoonImpactRender.TotalFrames = 32;
+        auto& EffectComp = EM.AddComponent<Game::Components::EffectComponent>(ImpactEffect);
+        EffectComp.InitialAnimation = Game::IScriptAnims::Anim_Death;
+        EffectComp.LifetimeRemaining = 8.0f;
+        EffectComp.DestroyWhenAnimationCompletes = true;
+        for (int Step = 0; Step < 24; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            if (!EM.IsAlive(ImpactEffect))
+                break;
+        }
+        Require(!EM.IsAlive(ImpactEffect),
+                "Dragoon projectile impact effect (Image 523 -> child 427) finishes and destroys itself within 24 ticks instead of looping for 8s");
+    }
+
+    // 2. Verify Dark Archon (Image 925) and Archon (Image 134) preserve inner body (926/135) and swirl (927/136) across walking/idle
+    for (uint32_t OuterImage : {134u, 925u})
+    {
+        const uint32_t ExpectedBody = (OuterImage == 134u) ? 135u : 926u;
+        const uint32_t ExpectedSwirl = (OuterImage == 134u) ? 136u : 927u;
+        const int ArchonEntity = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(ArchonEntity).Position = {700.0f, 700.0f};
+        auto& ArchonRender = EM.AddComponent<Game::Components::RenderComponent>(ArchonEntity);
+        ArchonRender.ImageID = OuterImage;
+        ArchonRender.TotalFrames = 64;
+        auto& ArchonUnit = EM.AddComponent<Game::Components::UnitComponent>(ArchonEntity);
+        ArchonUnit.ChkUnitID = (OuterImage == 134u) ? 68 : 63;
+        ArchonUnit.HitPoints = 10;
+        ArchonUnit.MaxHitPoints = 10;
+        auto& ArchonPath = EM.AddComponent<Game::Components::PathfindingComponent>(ArchonEntity);
+        ArchonPath.CurrentSpeed = 64.0f;
+        ArchonPath.CurrentVelocity = {64.0f, 0.0f};
+        ArchonPath.Path = {{764.0f, 700.0f}};
+        for (int Step = 0; Step < 24; ++Step)
+            Anim.Update(1.0f / 24.0f);
+        ArchonPath.CurrentSpeed = 0.0f;
+        ArchonPath.CurrentVelocity = {};
+        ArchonPath.Path.clear();
+        for (int Step = 0; Step < 6; ++Step)
+            Anim.Update(1.0f / 24.0f);
+        const auto* ArchonTree = EM.GetComponent<Game::Components::ImageTreeComponent>(ArchonEntity);
+        bool FoundBody = false;
+        bool FoundSwirl = false;
+        if (ArchonTree)
+        {
+            for (const auto& Node : ArchonTree->Nodes)
+            {
+                if (!Node.Visible)
+                    continue;
+                if (Node.ImageID == ExpectedBody && Node.PersistentSpriteAttachment)
+                    FoundBody = true;
+                if (Node.ImageID == ExpectedSwirl && Node.PersistentSpriteAttachment)
+                    FoundSwirl = true;
+            }
+        }
+        Require(FoundBody && FoundSwirl,
+                "Archon and Dark Archon retain visible persistent inner body and swirl overlays across state transitions");
+    }
+
+    // 3. Verify Zerg building morph cocoon (Image 102) stays on SpecialState2 at 70% progress and only enters AlmostBuilt in final 0.30s
+    {
+        const int ZergCocoon = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(ZergCocoon).Position = {800.0f, 800.0f};
+        auto& CocoonRender = EM.AddComponent<Game::Components::RenderComponent>(ZergCocoon);
+        CocoonRender.ImageID = 102u;
+        CocoonRender.TotalFrames = 64;
+        auto& CocoonUnit = EM.AddComponent<Game::Components::UnitComponent>(ZergCocoon);
+        CocoonUnit.ChkUnitID = 142; // Spawning Pool
+        CocoonUnit.UnitRace = Game::Components::Race::Zerg;
+        CocoonUnit.HitPoints = 500;
+        CocoonUnit.MaxHitPoints = 750;
+        auto& CocoonBldg = EM.AddComponent<Game::Components::BuildingComponent>(ZergCocoon);
+        CocoonBldg.BuildingDefID = 1;
+        CocoonBldg.UnderConstruction = true;
+        CocoonBldg.TotalBuildTime = 40.0f;
+        CocoonBldg.BuildProgress = 28.0f; // 70% progress (12s remaining)
+        for (int Step = 0; Step < 8; ++Step)
+            Anim.Update(1.0f / 24.0f);
+        Require(CocoonRender.FrameIndex < 28,
+                "Zerg morph cocoon at 70% progress loops SpecialState2 pulsing frames instead of freezing on AlmostBuilt frame 30");
+
+        // Now complete construction and switch to Spawning Pool (Image 57)
+        CocoonBldg.BuildProgress = 40.0f;
+        CocoonBldg.UnderConstruction = false;
+        CocoonRender.ImageID = 57u;
+        for (int Step = 0; Step < 12; ++Step)
+            Anim.Update(1.0f / 24.0f);
+        const auto* PoolTree = EM.GetComponent<Game::Components::ImageTreeComponent>(ZergCocoon);
+        bool BurstStillVisible = false;
+        if (PoolTree)
+        {
+            for (const auto& Node : PoolTree->Nodes)
+            {
+                if (Node.Visible && (Node.ImageID >= 107u && Node.ImageID <= 109u))
+                    BurstStillVisible = true;
+            }
+        }
+        Require(!BurstStillVisible,
+                "Finished Zerg building slime burst overlay (107..109) finishes within 12 ticks and does not freeze");
+    }
+
+    // 4. Verify Terran Refinery construction -> completion and pre-completed Refinery hold Built frame 0 across ticks
+    {
+        Require(RefineryConstructionRender.FrameIndex == 1,
+                "Refinery construction at 0% holds Init frame 1");
+        RefineryConstructionBuilding.BuildProgress = 10.0f;
+        Anim.Update(1.0f / 24.0f);
+        Require(RefineryConstructionRender.FrameIndex == 2,
+                "Refinery construction at 25% selects SpecialState1 frame 2");
+        RefineryConstructionBuilding.BuildProgress = 18.0f;
+        Anim.Update(1.0f / 24.0f);
+        Require(RefineryConstructionRender.FrameIndex == 3,
+                "Refinery construction at 45% selects SpecialState2 frame 3");
+        RefineryConstructionBuilding.BuildProgress = 26.0f;
+        Anim.Update(1.0f / 24.0f);
+        Require(RefineryConstructionRender.FrameIndex == 4,
+                "Refinery construction at 65% selects AlmostBuilt frame 4");
+        RefineryConstructionBuilding.BuildProgress = 40.0f;
+        RefineryConstructionBuilding.UnderConstruction = false;
+        for (int Step = 0; Step < 24; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            const auto* ConstructedTree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(RefineryConstruction);
+            bool ConstructedOverlayVisible = false;
+            if (ConstructedTree)
+            {
+                for (const auto& Node : ConstructedTree->Nodes)
+                {
+                    ConstructedOverlayVisible = ConstructedOverlayVisible ||
+                        (Node.Visible && Node.ImageID == 308u);
+                }
+            }
+            Require(RefineryConstructionRender.FrameIndex == 0 && ConstructedOverlayVisible,
+                    "completed Refinery from construction holds Built frame 0 and overlay 308 across subsequent ticks");
+            const auto* PreCompletedTree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(CompletedRefinery);
+            bool PreCompletedOverlayVisible = false;
+            if (PreCompletedTree)
+            {
+                for (const auto& Node : PreCompletedTree->Nodes)
+                {
+                    PreCompletedOverlayVisible = PreCompletedOverlayVisible ||
+                        (Node.Visible && Node.ImageID == 308u);
+                }
+            }
+            Require(RefineryRender.FrameIndex == 0 && PreCompletedOverlayVisible,
+                    "pre-completed Refinery holds Built frame 0 and overlay 308 across subsequent ticks without reverting to Init frame 1");
+        }
+    }
+
+    // 5. Verify Zerg Extractor construction -> completion across 60 ticks and CreateGasOverlays uses VM's current frame
+    {
+        std::vector<size_t> ExtractorGasOverlayFrames;
+        Game::Systems::AnimationSystem::SetOverlayOffsetResolver(
+            [&](uint32_t ImageID, size_t OverlayType, size_t Frame,
+                size_t OverlayIndex, bool /*Flipped*/) -> std::optional<Core::Math::Vec2>
+            {
+                if (ImageID == 93u && OverlayType == 2u && OverlayIndex == 0u)
+                {
+                    ExtractorGasOverlayFrames.push_back(Frame);
+                }
+                return Core::Math::Vec2{0.0f, -16.0f};
+            });
+
+        const int Extractor = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(Extractor).Position = {900.0f, 800.0f};
+        auto& ExtractorResource = EM.AddComponent<Game::Components::ResourceComponent>(Extractor);
+        ExtractorResource.Type = Game::Components::ResourceType::VespeneGas;
+        ExtractorResource.Amount = 2500;
+        auto& ExtractorRender = EM.AddComponent<Game::Components::RenderComponent>(Extractor);
+        ExtractorRender.ImageID = 105u; // Zerg Extractor morph cocoon
+        ExtractorRender.TotalFrames = 16;
+        auto& ExtractorUnit = EM.AddComponent<Game::Components::UnitComponent>(Extractor);
+        ExtractorUnit.ChkUnitID = 149; // Zerg Extractor
+        ExtractorUnit.UnitRace = Game::Components::Race::Zerg;
+        ExtractorUnit.HitPoints = 750;
+        ExtractorUnit.MaxHitPoints = 750;
+        auto& ExtractorBldg = EM.AddComponent<Game::Components::BuildingComponent>(Extractor);
+        ExtractorBldg.BuildingDefID = 149;
+        ExtractorBldg.UnderConstruction = true;
+        ExtractorBldg.TotalBuildTime = 40.0f;
+        ExtractorBldg.BuildProgress = 20.0f;
+        for (int Step = 0; Step < 8; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+        }
+
+        // Complete Extractor construction -> switches to Image 93 (Script 56)
+        ExtractorBldg.BuildProgress = 40.0f;
+        ExtractorBldg.UnderConstruction = false;
+        ExtractorRender.ImageID = 93u;
+        bool SawAnimatedPulseFrame = false;
+        bool SawBurstOverlay = false;
+        for (int Step = 0; Step < 60; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            if (ExtractorRender.FrameIndex >= 1 && ExtractorRender.FrameIndex <= 3)
+            {
+                SawAnimatedPulseFrame = true;
+            }
+            const auto* ExtractorTree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(Extractor);
+            bool ShadowVisible = false;
+            if (ExtractorTree)
+            {
+                for (const auto& Node : ExtractorTree->Nodes)
+                {
+                    if (!Node.Visible)
+                        continue;
+                    if (Node.ImageID == 94u)
+                        ShadowVisible = true;
+                    if (Node.ImageID == 109u)
+                        SawBurstOverlay = true;
+                }
+            }
+            Require(ShadowVisible,
+                    "completed Zerg Extractor keeps shadow (Image 94) visible across 60 post-completion ticks");
+        }
+        Require(SawBurstOverlay && SawAnimatedPulseFrame,
+                "completed Zerg Extractor plays AlmostBuilt burst (Image 109) and loops Built pulsing frames (1..3)");
+        Require(!ExtractorGasOverlayFrames.empty(),
+                "completed Zerg Extractor spawns gas overlays during 60 post-completion ticks");
+        for (size_t GasFrame : ExtractorGasOverlayFrames)
+        {
+            Require(GasFrame == 3u,
+                    "Zerg Extractor CreateGasOverlays resolves LO offset at peak pulse frame 3");
+        }
+        Game::Systems::AnimationSystem::SetOverlayOffsetResolver({});
+    }
+
+    // 6. Verify Protoss Assimilator Materializing -> WarpIn -> completion holds frame 0 and shadow (Image 160) across 60 ticks
+    {
+        const int Assimilator = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(Assimilator).Position = {1000.0f, 800.0f};
+        auto& AssimilatorResource = EM.AddComponent<Game::Components::ResourceComponent>(Assimilator);
+        AssimilatorResource.Type = Game::Components::ResourceType::VespeneGas;
+        AssimilatorResource.Amount = 2500;
+        auto& AssimilatorRender = EM.AddComponent<Game::Components::RenderComponent>(Assimilator);
+        AssimilatorRender.ImageID = 158u;
+        AssimilatorRender.TotalFrames = 4;
+        auto& AssimilatorUnit = EM.AddComponent<Game::Components::UnitComponent>(Assimilator);
+        AssimilatorUnit.ChkUnitID = 157; // Protoss Assimilator
+        AssimilatorUnit.UnitRace = Game::Components::Race::Protoss;
+        AssimilatorUnit.HitPoints = 450;
+        AssimilatorUnit.MaxHitPoints = 450;
+        auto& AssimilatorBldg = EM.AddComponent<Game::Components::BuildingComponent>(Assimilator);
+        AssimilatorBldg.BuildingDefID = 157;
+        AssimilatorBldg.UnderConstruction = true;
+        AssimilatorBldg.ProtossPhase = Game::Components::ProtossConstructionPhase::Materializing;
+        AssimilatorBldg.TotalBuildTime = 40.0f;
+        AssimilatorBldg.BuildProgress = 40.0f;
+
+        for (int Step = 0; Step < 24 && !AssimilatorBldg.ProtossPhaseSignal; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+        }
+        Require(AssimilatorBldg.ProtossPhaseSignal,
+                "Protoss Assimilator Materializing script (Script 193) emits sigorder 1 completion signal");
+
+        // Advance to WarpIn phase
+        AssimilatorBldg.ProtossPhase = Game::Components::ProtossConstructionPhase::WarpIn;
+        AssimilatorBldg.ProtossPhaseSignal = false;
+        for (int Step = 0; Step < 6; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+        }
+
+        // Complete construction
+        AssimilatorBldg.UnderConstruction = false;
+        AssimilatorBldg.ProtossPhase = Game::Components::ProtossConstructionPhase::None;
+
+        for (int Step = 0; Step < 60; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            const auto* AssimilatorTree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(Assimilator);
+            bool ShadowVisible = false;
+            if (AssimilatorTree)
+            {
+                for (const auto& Node : AssimilatorTree->Nodes)
+                {
+                    if (Node.Visible && Node.ImageID == 160u)
+                        ShadowVisible = true;
+                }
+            }
+            Require(AssimilatorRender.FrameIndex == 0 && ShadowVisible,
+                    "completed Protoss Assimilator holds frame 0 and shadow (Image 160) across 60 post-completion ticks");
+        }
+    }
+
+    // 7. Verify Zerg Hatchery -> Lair morph resets HasPlayedBuilt and replays AlmostBuilt -> Built on completion
+    {
+        const int Hatchery = EM.CreateEntity();
+        EM.AddComponent<Game::Components::TransformComponent>(Hatchery).Position = {1100.0f, 800.0f};
+        auto& HatcheryRender = EM.AddComponent<Game::Components::RenderComponent>(Hatchery);
+        HatcheryRender.ImageID = 70u; // Hatchery
+        HatcheryRender.TotalFrames = 8;
+        auto& HatcheryUnit = EM.AddComponent<Game::Components::UnitComponent>(Hatchery);
+        HatcheryUnit.ChkUnitID = 131; // Hatchery
+        HatcheryUnit.UnitRace = Game::Components::Race::Zerg;
+        HatcheryUnit.HitPoints = 1250;
+        HatcheryUnit.MaxHitPoints = 1250;
+        auto& HatcheryBldg = EM.AddComponent<Game::Components::BuildingComponent>(Hatchery);
+        HatcheryBldg.BuildingDefID = 131;
+        HatcheryBldg.UnderConstruction = false;
+        for (int Step = 0; Step < 12; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+        }
+
+        // Start morphing Hatchery into Lair (ChkUnitID 132, cocoon Image 104 -> final Image 74)
+        HatcheryUnit.ChkUnitID = 132;
+        HatcheryBldg.BuildingDefID = 132;
+        HatcheryBldg.UnderConstruction = true;
+        HatcheryBldg.TotalBuildTime = 40.0f;
+        HatcheryBldg.BuildProgress = 10.0f;
+        HatcheryRender.ImageID = 104u;
+        for (int Step = 0; Step < 8; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+        }
+
+        // Complete morph into Lair (Image 74)
+        HatcheryBldg.BuildProgress = 40.0f;
+        HatcheryBldg.UnderConstruction = false;
+        HatcheryRender.ImageID = 74u;
+        bool SawLairBurst = false;
+        bool SawLairPulse = false;
+        for (int Step = 0; Step < 60; ++Step)
+        {
+            Anim.Update(1.0f / 24.0f);
+            if (HatcheryRender.FrameIndex >= 1 && HatcheryRender.FrameIndex <= 3)
+            {
+                SawLairPulse = true;
+            }
+            const auto* LairTree =
+                EM.GetComponent<Game::Components::ImageTreeComponent>(Hatchery);
+            bool LairShadowVisible = false;
+            if (LairTree)
+            {
+                for (const auto& Node : LairTree->Nodes)
+                {
+                    if (!Node.Visible)
+                        continue;
+                    if (Node.ImageID == 75u)
+                        LairShadowVisible = true;
+                    if (Node.ImageID >= 107u && Node.ImageID <= 109u)
+                        SawLairBurst = true;
+                }
+            }
+            Require(LairShadowVisible,
+                    "completed Zerg Lair after Hatchery morph keeps shadow (Image 75) visible across 60 ticks");
+        }
+        Require(SawLairBurst && SawLairPulse,
+                "Zerg Hatchery -> Lair morph resets HasPlayedBuilt during morph and plays Lair AlmostBuilt burst + Built pulse loop");
+    }
+
     Game::Systems::AnimationSystem::SetWeaponImageResolver({});
 
     std::printf("AnimationRuntimeDirectionTest passed\n");

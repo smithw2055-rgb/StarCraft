@@ -47,9 +47,13 @@ struct SpellCooldown
 class SpellSystem : public Core::ECS::ISystem
 {
 public:
+    using ImageIDResolver = std::function<uint32_t(int)>;
+
     SpellSystem(Core::ECS::SystemManager& SysMgr) : mSystemMgr(SysMgr) {}
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "SpellSystem"; }
+
+    static void SetImageResolver(ImageIDResolver Resolver);
 
     // Check if a unit can cast a spell
     static bool CanCastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellType Spell,

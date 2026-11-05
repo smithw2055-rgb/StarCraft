@@ -131,8 +131,13 @@ void Draw2D::Shutdown()
     }
 }
 
-void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material)
+void UploadPendingFontGlyphs()
 {
+    if (g_FontInitialized)
+        g_Font.UploadPendingGlyphs();
+}
+
+void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material){
     if (mCurrentMaterial != Material)
     {
         Flush();
@@ -141,15 +146,14 @@ void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material)
     if (mCurrentAlphaBlend != AlphaBlend)
     {
         Flush();
-        mShader.RebuildPipeline(AlphaBlend, false);
         mCurrentAlphaBlend = AlphaBlend;
     }
     if (Material == BatchMaterial::HealthBar)
-        mShader.BindHealthBarPipeline();
+        mShader.BindHealthBarPipeline(AlphaBlend);
     else if (Material == BatchMaterial::SpriteEffect)
-        mShader.BindSpriteEffectPipeline();
+        mShader.BindSpriteEffectPipeline(AlphaBlend);
     else
-        mShader.BindPipeline();
+        mShader.BindPipeline(AlphaBlend);
 }
 
 void Draw2D::SetHealthBarParams(float Fraction, Color Fill)
@@ -495,7 +499,6 @@ void Draw2D::DrawHealthBar(float X, float Y, float W, float H, float Fraction, C
     SetHealthBarParams(Fraction, Fill);
     SetPipeline(true, BatchMaterial::HealthBar);
     AddQuad(X, Y, W, H, 0.0f, 0.0f, 1.0f, 1.0f, Fill, false);
-    Flush();
 }
 
 void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Thickness)

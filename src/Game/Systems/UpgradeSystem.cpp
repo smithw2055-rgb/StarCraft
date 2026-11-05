@@ -283,20 +283,24 @@ namespace
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
         return D.Name == "SCV" || D.Name == "Marine" || D.Name == "Firebat" ||
-               D.Name == "Medic" || D.Name == "Ghost";
+               D.Name == "Medic" || D.Name == "Ghost" ||
+               D.Name == "JimRaynorMarine" || D.Name == "SarahKerrigan" ||
+               D.Name == "GuiMontag";
     }
 
     bool IsTerranVehicle(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
-        return D.Name == "Vulture" || D.Name == "Goliath" || D.Name == "SiegeTank";
+        return D.Name == "Vulture" || D.Name == "Goliath" || D.Name == "SiegeTank" ||
+               D.Name == "JimRaynorVulture" || D.Name == "EdmundDukeSiege";
     }
 
     bool IsTerranShip(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
         return D.Name == "Wraith" || D.Name == "Dropship" || D.Name == "ScienceVessel" ||
-               D.Name == "Battlecruiser" || D.Name == "Valkyrie";
+               D.Name == "Battlecruiser" || D.Name == "Valkyrie" ||
+               D.Name == "ArcturusMengsk" || D.Name == "Hyperion" || D.Name == "NoradII";
     }
 
     bool IsZergGround(int DefID)
@@ -311,7 +315,8 @@ namespace
     bool IsZergMelee(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
-        return D.Name == "Zergling" || D.Name == "Ultralisk" || D.Name == "Broodling";
+        return D.Name == "Zergling" || D.Name == "Ultralisk" || D.Name == "Broodling" ||
+               D.Name == "Torrasque" || D.Name == "InfestedKerrigan" || D.Name == "DevouringOne";
     }
 
     bool IsZergFlyer(int DefID)
@@ -324,16 +329,18 @@ namespace
     bool IsProtossGround(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
-        return D.RaceType == Race::Protoss && !D.Name.empty() &&
+        return D.RaceType == Race::Protoss && !D.Name.empty() && !D.IsBuilding &&
                D.Name != "Scout" && D.Name != "Corsair" && D.Name != "Carrier" &&
-               D.Name != "Arbiter" && D.Name != "Observer" && D.Name != "Shuttle";
+               D.Name != "Arbiter" && D.Name != "Observer" && D.Name != "Shuttle" &&
+               D.Name != "Gantrithor" && D.Name != "Danimoth";
     }
 
     bool IsProtossAir(int DefID)
     {
         const auto& D = Game::Races::GetUnitDefByID(DefID);
         return D.Name == "Scout" || D.Name == "Corsair" || D.Name == "Carrier" ||
-               D.Name == "Arbiter" || D.Name == "Shuttle" || D.Name == "Observer";
+               D.Name == "Arbiter" || D.Name == "Shuttle" || D.Name == "Observer" ||
+               D.Name == "Gantrithor" || D.Name == "Danimoth";
     }
 
     ResearchId GetEnergyUpgradeForDef(const Game::Races::UnitDef& Def)
@@ -937,83 +944,88 @@ float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& 
                                                 int EntityID)
 {
     auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-    const int PlayerID = Player ? Player->PlayerID : 0;
-    const int DefID = ResolveDefID(EM, EntityID);
-    if (DefID < 0)
+    const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit)
         return 1.0f;
 
-    const auto& Def = Game::Races::GetUnitDefByID(DefID);
-    // Brood War stores movement as 8.8 fixed-point values. Most upgrades add
-    // floor(base / 2), Overlords are clamped to the 853 raw minimum, and the
-    // Scout upgrade sets the special 1707 raw speed.
-    if ((Def.Name == "Vulture" || Def.Name == "JimRaynorVulture") &&
-        HasResearch(PlayerID, ResearchId::Terran_IonThrusters))
+    switch (Unit->ChkUnitID)
     {
-        return 2560.0f / 1707.0f;
+        case 2:  // Vulture
+        case 19: // JimRaynorVulture
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Terran_IonThrusters)
+                ? (2560.0f / 1707.0f) : 1.0f;
+        }
+        case 37: // Zergling
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Zerg_MetabolicBoost) ? 1.5f : 1.0f;
+        }
+        case 38: // Hydralisk
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Zerg_MuscularAugments) ? 1.5f : 1.0f;
+        }
+        case 39: // Ultralisk
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Zerg_AnabolicSynthesis) ? 1.5f : 1.0f;
+        }
+        case 42: // Overlord
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Zerg_PneumatizedCarapace)
+                ? (853.0f / 213.0f) : 1.0f;
+        }
+        case 65: // Zealot
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Protoss_ZealotSpeed) ? 1.5f : 1.0f;
+        }
+        case 69: // Shuttle
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Protoss_GraviticDrive)
+                ? (1699.0f / 1133.0f) : 1.0f;
+        }
+        case 70: // Scout
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Protoss_GraviticThrusters)
+                ? (1707.0f / 1280.0f) : 1.0f;
+        }
+        case 84: // Observer
+        {
+            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+            const int PlayerID = Player ? Player->PlayerID : 0;
+            return HasResearch(PlayerID, ResearchId::Protoss_GraviticBoosters)
+                ? (1279.0f / 853.0f) : 1.0f;
+        }
+        default:
+            return 1.0f;
     }
-    if (Def.Name == "Zergling" &&
-        HasResearch(PlayerID, ResearchId::Zerg_MetabolicBoost))
-    {
-        return 1.5f;
-    }
-    if (Def.Name == "Hydralisk" &&
-        HasResearch(PlayerID, ResearchId::Zerg_MuscularAugments))
-    {
-        return 1.5f;
-    }
-    if (Def.Name == "Ultralisk" &&
-        HasResearch(PlayerID, ResearchId::Zerg_AnabolicSynthesis))
-    {
-        return 1.5f;
-    }
-    if (Def.Name == "Zealot" &&
-        HasResearch(PlayerID, ResearchId::Protoss_ZealotSpeed))
-    {
-        return 1.5f;
-    }
-    if (Def.Name == "Overlord" &&
-        HasResearch(PlayerID, ResearchId::Zerg_PneumatizedCarapace))
-    {
-        return 853.0f / 213.0f;
-    }
-    if (Def.Name == "Shuttle" &&
-        HasResearch(PlayerID, ResearchId::Protoss_GraviticDrive))
-    {
-        return 1699.0f / 1133.0f;
-    }
-    if (Def.Name == "Observer" &&
-        HasResearch(PlayerID, ResearchId::Protoss_GraviticBoosters))
-    {
-        return 1279.0f / 853.0f;
-    }
-    if (Def.Name == "Scout" &&
-        HasResearch(PlayerID, ResearchId::Protoss_GraviticThrusters))
-    {
-        return 1707.0f / 1280.0f;
-    }
-
-    return 1.0f;
 }
 
 float UpgradeSystem::GetAttackCooldownMultiplier(const Core::ECS::EntityManager& EM,
                                                  int EntityID)
 {
     auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-    const int PlayerID = Player ? Player->PlayerID : 0;
-    const int DefID = ResolveDefID(EM, EntityID);
-    if (DefID < 0)
+    const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    if (!Unit || Unit->ChkUnitID != 37)
         return 1.0f;
 
-    const auto& Def = Game::Races::GetUnitDefByID(DefID);
-    if (Def.Name == "Zergling" &&
-        HasResearch(PlayerID, ResearchId::Zerg_AdrenalGlands))
-    {
-        return 0.5f;
-    }
-
-    return 1.0f;
+    const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
+    return HasResearch(PlayerID, ResearchId::Zerg_AdrenalGlands) ? 0.5f : 1.0f;
 }
 
 int UpgradeSystem::GetEffectiveMaxEnergyPoints(const Core::ECS::EntityManager& EM,

@@ -429,6 +429,13 @@ struct CommandComponent
     Core::Math::Vec2 TargetPosition;
     int TargetEntityID = -1;
 
+    // Patrol ping-pong: the endpoint the unit should head to after it reaches
+    // the current TargetPosition. Recorded when a Patrol order starts and
+    // swapped on each arrival so patrol keeps alternating without destroying
+    // the Patrol command.
+    Core::Math::Vec2 PatrolAnchor;
+    bool HasPatrolAnchor = false;
+
     // Rich order queue (replaces the above over time)
     std::vector<Order> Orders;
     int CurrentOrderIndex = -1;
@@ -438,9 +445,10 @@ struct CommandComponent
 
     void QueueOrder(const Order& InOrder)
     {
-        // If no current order, set it immediately
-        if (CurrentOrderIndex < 0 && Orders.empty())
+        // If no current order or previous queue finished, start immediately
+        if (!HasPendingOrders())
         {
+            Orders.clear();
             Orders.push_back(InOrder);
             CurrentOrderIndex = 0;
             ApplyOrder(InOrder);
@@ -488,6 +496,7 @@ struct CommandComponent
         CurrentCommand = CommandType::Stop;
         TargetPosition = {};
         TargetEntityID = -1;
+        HasPatrolAnchor = false;
     }
 
     bool HasPendingOrders() const
@@ -722,10 +731,10 @@ struct PathfindingComponent
     float Acceleration = 200.0f;    // pixels/sec^2
     float TurnRate = 8.0f;          // radians/sec
     float FacingAngle = 0.0f;       // current facing in radians
-    Core::Math::Vec2 RepulseVector; // accumulated repulse from neighbors
     Core::Math::Vec2 FriendlyYieldVector; // soft nudge requested by an allied mover
     Core::Math::Vec2 FriendlyYieldAnchor;
     bool HasFriendlyYieldAnchor = false;
+
 
     // Air / ground flag
     bool IsAir = false;

@@ -23,6 +23,8 @@ struct NavigationPathQuery
     int IgnoredOwnerEntityID = -1;
     int AdditionalIgnoredOwnerEntityID = -1;
     int MaximumExpandedCells = 8192;
+    bool HasAvoidedObstacle = false;
+    NavigationObstacle AvoidedObstacle;
 };
 
 struct NavigationPathResult
@@ -33,6 +35,7 @@ struct NavigationPathResult
     Core::Math::Vec2 ResolvedDestination;
     int ExpandedCells = 0;
     uint32_t NavigationVersion = 0;
+    int AdditionalIgnoredOwnerEntityID = -1;
 
     bool HasUsablePath() const
     {
@@ -68,6 +71,7 @@ public:
         {
             return;
         }
+        Grid.EnsureTerrainComponents();
         mBaseGridVersion = Grid.GetVersion();
         mGrid = Grid;
         mCorridorCache.clear();
@@ -92,6 +96,23 @@ public:
     {
         const auto BeginTime = std::chrono::steady_clock::now();
         ++mStats.QueryCount;
+
+        struct TempObstacleGuard
+        {
+            NavigationGrid& Grid;
+            bool Active = false;
+            TempObstacleGuard(NavigationGrid& InGrid, const NavigationPathQuery& InQuery)
+                : Grid(InGrid), Active(InQuery.HasAvoidedObstacle)
+            {
+                if (Active)
+                    Grid.SetTemporaryObstacle(InQuery.AvoidedObstacle);
+            }
+            ~TempObstacleGuard()
+            {
+                if (Active)
+                    Grid.ClearTemporaryObstacle();
+            }
+        } TempGuard(mGrid, Query);
 
         NavigationPathResult Result;
         Result.NavigationVersion = mGrid.GetVersion();
@@ -141,6 +162,19 @@ public:
                 Query.AdditionalIgnoredOwnerEntityID = StartOwner;
             }
         }
+        Result.AdditionalIgnoredOwnerEntityID = Query.AdditionalIgnoredOwnerEntityID;
+
+        const int FootprintR = std::clamp(
+            Query.Footprint.MinCellRadius(), 0,
+            NavigationGrid::MaxCachedClearanceRadius);
+        const bool UseClearanceComp =
+            !Query.HasAvoidedObstacle &&
+            Query.Footprint.MaxCellRadius() <= NavigationGrid::MaxCachedClearanceRadius;
+        const int StartTerrainComp = mGrid.GetEffectiveTerrainComponent(StartX, StartY);
+        const ReachableClearanceSet StartClearanceComps = UseClearanceComp
+            ? CollectReachableClearanceComponents(StartX, StartY, FootprintR, Query)
+            : ReachableClearanceSet{};
+        int StartClearanceComp = StartClearanceComps.Primary();
 
         const bool OriginalTargetPassable = mGrid.CanOccupy(
             TargetX, TargetY, Query.Footprint, Query.IgnoredOwnerEntityID,
@@ -149,14 +183,16 @@ public:
         int EffectiveTargetX = TargetX;
         int EffectiveTargetY = TargetY;
         bool EffectiveTargetPassable = OriginalTargetPassable;
+        bool GoalIsExactTarget = OriginalTargetPassable;
 
         if (!OriginalTargetPassable)
         {
             int ProjectedX = -1;
             int ProjectedY = -1;
             if (FindNearestPassableCell(
-                    TargetX, TargetY, StartX, StartY, Query, 64,
-                    ProjectedX, ProjectedY))
+                    TargetX, TargetY, StartX, StartY,
+                    StartTerrainComp, StartClearanceComps, FootprintR, UseClearanceComp,
+                    Query, 64, ProjectedX, ProjectedY))
             {
                 EffectiveTargetX = ProjectedX;
                 EffectiveTargetY = ProjectedY;
@@ -176,7 +212,57 @@ public:
             return Result;
         }
 
-        if (StartX == EffectiveTargetX && StartY == EffectiveTargetY && !OriginalTargetPassable)
+        const bool StartHasLocalEscape = HasLocalEscape(
+            StartX, StartY, EffectiveTargetX, EffectiveTargetY, Query, 32, 6);
+
+        if (EffectiveTargetPassable && UseClearanceComp && !StartClearanceComps.Empty())
+        {
+            const int TargetTerrainComp =
+                mGrid.GetEffectiveTerrainComponent(EffectiveTargetX, EffectiveTargetY);
+            const bool SameTerrain =
+                (StartTerrainComp == 0 || TargetTerrainComp == 0 ||
+                 StartTerrainComp == TargetTerrainComp);
+            const ReachableClearanceSet EffectiveTargetClearanceComps =
+                CollectReachableClearanceComponents(
+                    EffectiveTargetX, EffectiveTargetY, FootprintR, Query);
+            const int SharedClearanceComp =
+                StartClearanceComps.FirstSharedWith(EffectiveTargetClearanceComps);
+            if (SharedClearanceComp > 0)
+            {
+                StartClearanceComp = SharedClearanceComp;
+            }
+            else if (SameTerrain)
+            {
+                int ProjectedX = -1;
+                int ProjectedY = -1;
+                if (StartHasLocalEscape &&
+                    ProjectToStartClearanceComponent(
+                        TargetX, TargetY, StartX, StartY,
+                        StartClearanceComps, FootprintR, Query,
+                        ProjectedX, ProjectedY))
+                {
+                    EffectiveTargetX = ProjectedX;
+                    EffectiveTargetY = ProjectedY;
+                    EffectiveTargetPassable = true;
+                    GoalIsExactTarget = false;
+                    const int ProjectedComp =
+                        mGrid.GetClearanceComponent(EffectiveTargetX, EffectiveTargetY, FootprintR);
+                    if (ProjectedComp > 0)
+                        StartClearanceComp = ProjectedComp;
+                }
+                else
+                {
+                    Result.Status = PathStatus::Unreachable;
+                    Result.EndReason = OriginalTargetPassable
+                        ? PathEndReason::Disconnected
+                        : PathEndReason::GoalBlocked;
+                    FinishStats(Result, BeginTime);
+                    return Result;
+                }
+            }
+        }
+
+        if (StartX == EffectiveTargetX && StartY == EffectiveTargetY && !GoalIsExactTarget)
         {
             Result.Status = PathStatus::Partial;
             Result.EndReason = PathEndReason::GoalBlocked;
@@ -189,7 +275,7 @@ public:
         // Most harvest, return and construction paths are short and
         // unobstructed. Running the portal corridor and fine A* for a segment
         // already proven safe by footprint-aware supercover LOS is pure work.
-        if (OriginalTargetPassable &&
+        if (GoalIsExactTarget &&
             HasLineOfSight(StartX, StartY, TargetX, TargetY, Query))
         {
             Result.Status = PathStatus::Exact;
@@ -203,8 +289,8 @@ public:
         if (EffectiveTargetPassable &&
             HasLineOfSight(StartX, StartY, EffectiveTargetX, EffectiveTargetY, Query))
         {
-            Result.Status = OriginalTargetPassable ? PathStatus::Exact : PathStatus::Partial;
-            Result.EndReason = OriginalTargetPassable ? PathEndReason::None : PathEndReason::GoalBlocked;
+            Result.Status = GoalIsExactTarget ? PathStatus::Exact : PathStatus::Partial;
+            Result.EndReason = GoalIsExactTarget ? PathEndReason::None : PathEndReason::GoalBlocked;
             Result.ResolvedDestination = mGrid.CellToWorld(EffectiveTargetX, EffectiveTargetY);
             Result.Waypoints.push_back(Result.ResolvedDestination);
             FinishStats(Result, BeginTime);
@@ -213,34 +299,55 @@ public:
 
         const int Width = mGrid.GetWidth();
         const int StartIndex = StartY * Width + StartX;
-        const int NodeBudget = std::max(1, Query.MaximumExpandedCells);
+        const bool TargetHasLocalEscape = !EffectiveTargetPassable ||
+            (UseClearanceComp && StartClearanceComp > 0 &&
+             mGrid.GetClearanceComponent(EffectiveTargetX, EffectiveTargetY, FootprintR) == StartClearanceComp) ||
+            HasLocalEscape(EffectiveTargetX, EffectiveTargetY, StartX, StartY, Query, 32, 6);
+        const int NodeBudget = StartHasLocalEscape
+            ? (TargetHasLocalEscape
+                ? std::max(1, Query.MaximumExpandedCells)
+                : std::min(std::max(1, Query.MaximumExpandedCells), 512))
+            : std::min(std::max(1, Query.MaximumExpandedCells), 64);
 
-        std::vector<uint8_t> AllowedClusters;
         const std::vector<int> Corridor = GetClusterCorridor(
             StartX, StartY, EffectiveTargetX, EffectiveTargetY, Query);
         if (!Corridor.empty())
         {
-            BuildAllowedClusterMask(Corridor, AllowedClusters);
+            BuildAllowedClusterMask(Corridor, mAllowedClusters);
+        }
+        else
+        {
+            mAllowedClusters.clear();
         }
 
         AStarSearchState State;
-        if (!AllowedClusters.empty())
+        if (!mAllowedClusters.empty())
         {
             State = ExecuteAStar(
                 StartX, StartY, EffectiveTargetX, EffectiveTargetY,
-                Query, AllowedClusters, NodeBudget,
+                Query, mAllowedClusters, NodeBudget,
                 EffectiveTargetPassable, Result);
         }
 
-        if (!State.ReachedTarget && !State.BudgetReached && EffectiveTargetPassable)
+        const int EffectiveTargetTerrainComp =
+            mGrid.GetEffectiveTerrainComponent(EffectiveTargetX, EffectiveTargetY);
+        const bool SameEffectiveTerrain =
+            (StartTerrainComp == 0 || EffectiveTargetTerrainComp == 0 ||
+             StartTerrainComp == EffectiveTargetTerrainComp);
+        if (!State.ReachedTarget &&
+            ((State.PrunedByClusterMask && !Corridor.empty()) ||
+             (Corridor.empty() && SameEffectiveTerrain)) &&
+            EffectiveTargetPassable &&
+            StartHasLocalEscape && TargetHasLocalEscape)
         {
             // Coarse cluster corridor had an internal impassable barrier (e.g. cliff /
             // ramp disconnect). Fall back to unconstrained search across
-            // the full navigation grid to guarantee finding the genuine passable route.
-            AllowedClusters.clear();
+            // the navigation grid with a bounded budget to find the genuine passable route.
+            mAllowedClusters.clear();
+            const int FallbackBudget = std::min(NodeBudget, 8192);
             const auto FallbackState = ExecuteAStar(
                 StartX, StartY, EffectiveTargetX, EffectiveTargetY,
-                Query, AllowedClusters, NodeBudget,
+                Query, mAllowedClusters, FallbackBudget,
                 EffectiveTargetPassable, Result);
             if (FallbackState.ReachedTarget ||
                 FallbackState.BestH < State.BestH ||
@@ -254,7 +361,7 @@ public:
         {
             Result.Status = PathStatus::Unreachable;
             Result.EndReason = State.BudgetReached ? PathEndReason::NodeBudget :
-                (OriginalTargetPassable ? PathEndReason::Disconnected :
+                (GoalIsExactTarget ? PathEndReason::Disconnected :
                     PathEndReason::GoalBlocked);
             FinishStats(Result, BeginTime);
             return Result;
@@ -277,15 +384,17 @@ public:
                 State.BestIndex % Width, State.BestIndex / Width));
 
         Result.Status = State.ReachedTarget
-            ? (OriginalTargetPassable ? PathStatus::Exact : PathStatus::Partial)
-            : (State.BudgetReached ? PathStatus::Partial : PathStatus::Unreachable);
+            ? (GoalIsExactTarget ? PathStatus::Exact : PathStatus::Partial)
+            : ((State.BestIndex != StartIndex && State.BestIndex >= 0)
+                ? PathStatus::Partial
+                : PathStatus::Unreachable);
         Result.EndReason = State.ReachedTarget
-            ? (OriginalTargetPassable ? PathEndReason::None : PathEndReason::GoalBlocked)
+            ? (GoalIsExactTarget ? PathEndReason::None : PathEndReason::GoalBlocked)
             : (State.BudgetReached ? PathEndReason::NodeBudget :
-                (OriginalTargetPassable ? PathEndReason::Disconnected :
+                (GoalIsExactTarget ? PathEndReason::Disconnected :
                     PathEndReason::GoalBlocked));
         Result.ResolvedDestination = Result.Waypoints.back();
-        if (OriginalTargetPassable && State.ReachedTarget &&
+        if (GoalIsExactTarget && State.ReachedTarget &&
             mGrid.CanOccupyWorld(Query.Target, Query.Footprint,
                 Query.IgnoredOwnerEntityID,
                 Query.AdditionalIgnoredOwnerEntityID))
@@ -317,8 +426,352 @@ private:
         }
     };
 
+    struct ReachableClearanceSet
+    {
+        std::array<int, 8> Comps{};
+        int Count = 0;
+
+        bool Empty() const
+        {
+            return Count <= 0;
+        }
+
+        int Primary() const
+        {
+            return Count > 0 ? Comps[0] : 0;
+        }
+
+        bool Contains(int Comp) const
+        {
+            if (Comp <= 0)
+                return false;
+            for (int Index = 0; Index < Count; ++Index)
+            {
+                if (Comps[Index] == Comp)
+                    return true;
+            }
+            return false;
+        }
+
+        void Add(int Comp)
+        {
+            if (Comp <= 0 || Contains(Comp) || Count >= (int)Comps.size())
+                return;
+            Comps[Count++] = Comp;
+        }
+
+        int FirstSharedWith(const ReachableClearanceSet& Other) const
+        {
+            for (int Index = 0; Index < Count; ++Index)
+            {
+                if (Other.Contains(Comps[Index]))
+                    return Comps[Index];
+            }
+            return 0;
+        }
+    };
+
+    ReachableClearanceSet CollectReachableClearanceComponents(
+        int StartCellX, int StartCellY,
+        int FootprintR,
+        const NavigationPathQuery& Query,
+        int StopOnComp = 0) const
+    {
+        ReachableClearanceSet Result;
+        if (!mGrid.IsInBounds(StartCellX, StartCellY))
+            return Result;
+        const int Direct = mGrid.GetClearanceComponent(StartCellX, StartCellY, FootprintR);
+        if (Direct > 0)
+        {
+            Result.Add(Direct);
+            return Result;
+        }
+
+        if (!mGrid.CanOccupy(StartCellX, StartCellY, Query.Footprint,
+                             Query.IgnoredOwnerEntityID,
+                             Query.AdditionalIgnoredOwnerEntityID))
+        {
+            return Result;
+        }
+
+        constexpr int WindowRadius = 18;
+        constexpr int WindowSide = WindowRadius * 2 + 1;
+        uint8_t Visited[WindowSide * WindowSide]{};
+        std::pair<int8_t, int8_t> Queue[WindowSide * WindowSide];
+        int Head = 0;
+        int Tail = 0;
+
+        Visited[WindowRadius * WindowSide + WindowRadius] = 1;
+        Queue[Tail++] = {static_cast<int8_t>(0), static_cast<int8_t>(0)};
+
+        const bool StartOverlapsIgnored =
+            (Query.AdditionalIgnoredOwnerEntityID >= 0) &&
+            !mGrid.CanOccupy(StartCellX, StartCellY, Query.Footprint,
+                             Query.IgnoredOwnerEntityID, -1);
+        const int AdditionalIgnored = StartOverlapsIgnored
+            ? Query.AdditionalIgnoredOwnerEntityID
+            : -1;
+
+        static constexpr int DX[8] = { 1, 0, -1, 0, 1, -1, -1, 1 };
+        static constexpr int DY[8] = { 0, 1, 0, -1, 1, 1, -1, -1 };
+
+        while (Head < Tail)
+        {
+            const auto [RelX, RelY] = Queue[Head++];
+            const int CurX = StartCellX + (int)RelX;
+            const int CurY = StartCellY + (int)RelY;
+
+            bool CardinalPassable[4] = {false, false, false, false};
+            for (int Dir = 0; Dir < 8; ++Dir)
+            {
+                const int NextRelX = (int)RelX + DX[Dir];
+                const int NextRelY = (int)RelY + DY[Dir];
+                if (std::abs(NextRelX) > WindowRadius || std::abs(NextRelY) > WindowRadius)
+                    continue;
+                const int NextX = StartCellX + NextRelX;
+                const int NextY = StartCellY + NextRelY;
+                if (!mGrid.IsInBounds(NextX, NextY))
+                    continue;
+
+                if (Dir >= 4)
+                {
+                    const bool CardOk =
+                        (Dir == 4 && CardinalPassable[0] && CardinalPassable[1]) ||
+                        (Dir == 5 && CardinalPassable[2] && CardinalPassable[1]) ||
+                        (Dir == 6 && CardinalPassable[2] && CardinalPassable[3]) ||
+                        (Dir == 7 && CardinalPassable[0] && CardinalPassable[3]);
+                    if (!CardOk)
+                        continue;
+                }
+
+                if (!mGrid.CanTraverse(CurX, CurY, NextX, NextY,
+                        Query.Footprint, Query.IgnoredOwnerEntityID, AdditionalIgnored))
+                {
+                    continue;
+                }
+                if (Dir < 4)
+                    CardinalPassable[Dir] = true;
+
+                const int Comp = mGrid.GetClearanceComponent(NextX, NextY, FootprintR);
+                if (Comp > 0)
+                {
+                    Result.Add(Comp);
+                    if (StopOnComp > 0 && Comp == StopOnComp)
+                        return Result;
+                    continue;
+                }
+
+                const int VisitedIdx =
+                    (NextRelY + WindowRadius) * WindowSide + (NextRelX + WindowRadius);
+                if (Visited[VisitedIdx])
+                    continue;
+                Visited[VisitedIdx] = 1;
+                Queue[Tail++] = {(int8_t)NextRelX, (int8_t)NextRelY};
+            }
+        }
+        return Result;
+    }
+
+    bool ProjectToStartClearanceComponent(
+        int TargetX, int TargetY,
+        int StartX, int StartY,
+        const ReachableClearanceSet& StartClearanceComps,
+        int FootprintR,
+        const NavigationPathQuery& Query,
+        int& OutX, int& OutY) const
+    {
+        if (StartClearanceComps.Empty())
+            return false;
+
+        int AnchorX = StartX;
+        int AnchorY = StartY;
+        {
+            int X = TargetX;
+            int Y = TargetY;
+            const int DX = std::abs(StartX - TargetX);
+            const int DY = std::abs(StartY - TargetY);
+            const int SX = (TargetX < StartX) ? 1 : -1;
+            const int SY = (TargetY < StartY) ? 1 : -1;
+            int Err = DX - DY;
+            while (true)
+            {
+                if (StartClearanceComps.Contains(
+                        mGrid.GetClearanceComponent(X, Y, FootprintR)))
+                {
+                    AnchorX = X;
+                    AnchorY = Y;
+                    break;
+                }
+                if (X == StartX && Y == StartY)
+                    break;
+                const int E2 = Err * 2;
+                if (E2 > -DY) { Err -= DY; X += SX; }
+                if (E2 < DX) { Err += DX; Y += SY; }
+            }
+        }
+
+        const bool NeedsExactOccupyCheck =
+            Query.Footprint.MaxCellRadius() > FootprintR;
+        int BestX = -1;
+        int BestY = -1;
+        int BestDistSq = std::numeric_limits<int>::max();
+        int BestStartDistSq = std::numeric_limits<int>::max();
+
+        auto SearchWindow = [&](int CenterX, int CenterY, int Radius)
+        {
+            const int MinY = std::max(0, CenterY - Radius);
+            const int MaxY = std::min(mGrid.GetHeight() - 1, CenterY + Radius);
+            const int MinX = std::max(0, CenterX - Radius);
+            const int MaxX = std::min(mGrid.GetWidth() - 1, CenterX + Radius);
+            for (int Y = MinY; Y <= MaxY; ++Y)
+            {
+                for (int X = MinX; X <= MaxX; ++X)
+                {
+                    if (!StartClearanceComps.Contains(
+                            mGrid.GetClearanceComponent(X, Y, FootprintR)))
+                    {
+                        continue;
+                    }
+                    if (NeedsExactOccupyCheck &&
+                        !mGrid.CanOccupy(X, Y, Query.Footprint,
+                            Query.IgnoredOwnerEntityID,
+                            Query.AdditionalIgnoredOwnerEntityID))
+                    {
+                        continue;
+                    }
+                    const int DX = X - TargetX;
+                    const int DY = Y - TargetY;
+                    const int DistSq = DX * DX + DY * DY;
+                    const int SDX = X - StartX;
+                    const int SDY = Y - StartY;
+                    const int StartDistSq = SDX * SDX + SDY * SDY;
+                    if (std::make_tuple(DistSq, StartDistSq, Y, X) <
+                        std::make_tuple(BestDistSq, BestStartDistSq, BestY, BestX))
+                    {
+                        BestDistSq = DistSq;
+                        BestStartDistSq = StartDistSq;
+                        BestX = X;
+                        BestY = Y;
+                    }
+                }
+            }
+        };
+
+        SearchWindow(AnchorX, AnchorY, 12);
+        if (std::max(std::abs(TargetX - AnchorX), std::abs(TargetY - AnchorY)) <= 24)
+            SearchWindow(TargetX, TargetY, 16);
+
+        if (BestX >= 0)
+        {
+            OutX = BestX;
+            OutY = BestY;
+            return true;
+        }
+        return false;
+    }
+
+    bool HasLocalEscape(
+        int StartCellX, int StartCellY,
+        int GoalCellX, int GoalCellY,
+        const NavigationPathQuery& Query,
+        int MaxVisitedCells = 16,
+        int RequiredChebyshevRadius = 4) const
+    {
+        if (!mGrid.IsInBounds(StartCellX, StartCellY))
+            return false;
+        if (std::max(std::abs(StartCellX - GoalCellX),
+                     std::abs(StartCellY - GoalCellY)) <= 2)
+        {
+            return true;
+        }
+
+        constexpr int WindowRadius = 8;
+        constexpr int WindowSide = WindowRadius * 2 + 1;
+        uint8_t Visited[WindowSide * WindowSide]{};
+        std::pair<int8_t, int8_t> Queue[WindowSide * WindowSide];
+        int Head = 0;
+        int Tail = 0;
+
+        Visited[WindowRadius * WindowSide + WindowRadius] = 1;
+        Queue[Tail++] = {static_cast<int8_t>(0), static_cast<int8_t>(0)};
+
+        const bool StartOverlapsIgnored =
+            (Query.AdditionalIgnoredOwnerEntityID >= 0) &&
+            !mGrid.CanOccupy(StartCellX, StartCellY, Query.Footprint,
+                             Query.IgnoredOwnerEntityID, -1);
+        const int AdditionalIgnored = StartOverlapsIgnored
+            ? Query.AdditionalIgnoredOwnerEntityID
+            : -1;
+
+        static constexpr int DX[8] = { 1, 0, -1, 0, 1, -1, -1, 1 };
+        static constexpr int DY[8] = { 0, 1, 0, -1, 1, 1, -1, -1 };
+
+        while (Head < Tail)
+        {
+            const auto [RelX, RelY] = Queue[Head++];
+            const int CurX = StartCellX + (int)RelX;
+            const int CurY = StartCellY + (int)RelY;
+
+            if (std::max(std::abs(CurX - GoalCellX), std::abs(CurY - GoalCellY)) <= 2)
+                return true;
+            if (std::max(std::abs((int)RelX), std::abs((int)RelY)) >= RequiredChebyshevRadius)
+                return true;
+            if (Tail >= MaxVisitedCells)
+                return true;
+
+            bool CardinalPassable[4] = {false, false, false, false};
+            for (int Dir = 0; Dir < 8; ++Dir)
+            {
+                const int NextRelX = (int)RelX + DX[Dir];
+                const int NextRelY = (int)RelY + DY[Dir];
+                if (std::abs(NextRelX) > WindowRadius || std::abs(NextRelY) > WindowRadius)
+                    continue;
+                const int NextX = StartCellX + NextRelX;
+                const int NextY = StartCellY + NextRelY;
+                if (!mGrid.IsInBounds(NextX, NextY))
+                    continue;
+
+                if (Dir >= 4)
+                {
+                    const bool CardOk =
+                        (Dir == 4 && CardinalPassable[0] && CardinalPassable[1]) ||
+                        (Dir == 5 && CardinalPassable[2] && CardinalPassable[1]) ||
+                        (Dir == 6 && CardinalPassable[2] && CardinalPassable[3]) ||
+                        (Dir == 7 && CardinalPassable[0] && CardinalPassable[3]);
+                    if (!CardOk)
+                        continue;
+                }
+
+                if (!mGrid.CanTraverse(CurX, CurY, NextX, NextY,
+                        Query.Footprint, Query.IgnoredOwnerEntityID, AdditionalIgnored))
+                {
+                    continue;
+                }
+                if (Dir < 4)
+                    CardinalPassable[Dir] = true;
+
+                const int VisitedIdx =
+                    (NextRelY + WindowRadius) * WindowSide + (NextRelX + WindowRadius);
+                if (Visited[VisitedIdx])
+                    continue;
+
+                Visited[VisitedIdx] = 1;
+                Queue[Tail++] = {(int8_t)NextRelX, (int8_t)NextRelY};
+                if (Tail >= MaxVisitedCells ||
+                    std::max(std::abs(NextRelX), std::abs(NextRelY)) >= RequiredChebyshevRadius ||
+                    std::max(std::abs(NextX - GoalCellX), std::abs(NextY - GoalCellY)) <= 2)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     bool FindNearestPassableCell(
         int CenterX, int CenterY, int StartX, int StartY,
+        int StartTerrainComp, const ReachableClearanceSet& StartClearanceComps,
+        int FootprintR, bool UseClearanceComp,
         const NavigationPathQuery& Query,
         int MaxRadius,
         int& OutX, int& OutY) const
@@ -333,13 +786,23 @@ private:
         }
 
         const int TargetHeight = mGrid.GetHeightLevel(CenterX, CenterY);
+        const int StartHeight = mGrid.IsInBounds(StartX, StartY) ? mGrid.GetHeightLevel(StartX, StartY) : -1;
+        const int PreferredHeight = (StartHeight >= 0) ? StartHeight : TargetHeight;
+        const int TargetTerrainComp = mGrid.GetEffectiveTerrainComponent(CenterX, CenterY);
+        const bool TargetOnDisconnectedTerrain =
+            (StartTerrainComp > 0 && TargetTerrainComp > 0 &&
+             StartTerrainComp != TargetTerrainComp);
         int BestX = -1;
         int BestY = -1;
+        int BestCompMismatch = std::numeric_limits<int>::max();
+        int BestPocketPenalty = std::numeric_limits<int>::max();
         int BestHeightDiff = std::numeric_limits<int>::max();
         int BestDistSq = std::numeric_limits<int>::max();
         int BestStartDistSq = std::numeric_limits<int>::max();
 
-        const int EffectiveMaxRadius = std::max(MaxRadius, 64);
+        const int EffectiveMaxRadius = TargetOnDisconnectedTerrain
+            ? std::min(MaxRadius, 8)
+            : std::min(std::max(MaxRadius, 16), 24);
         for (int R = 1; R <= EffectiveMaxRadius; ++R)
         {
             bool FoundAtRadius = false;
@@ -359,16 +822,73 @@ private:
                                         Query.IgnoredOwnerEntityID,
                                         Query.AdditionalIgnoredOwnerEntityID))
                     {
+                        const int CellTerrainComp = mGrid.GetEffectiveTerrainComponent(X, Y);
+                        const int TerrainMismatch =
+                            (StartTerrainComp > 0 && CellTerrainComp > 0 &&
+                             StartTerrainComp != CellTerrainComp) ? 1 : 0;
+
+                        int ClearanceMismatch = 0;
+                        bool ProvenConnected = false;
+                        if (UseClearanceComp && !StartClearanceComps.Empty())
+                        {
+                            const int CellClearanceComp =
+                                mGrid.GetClearanceComponent(X, Y, FootprintR);
+                            if (CellClearanceComp > 0)
+                            {
+                                if (StartClearanceComps.Contains(CellClearanceComp))
+                                {
+                                    ClearanceMismatch = 0;
+                                    ProvenConnected = true;
+                                }
+                                else
+                                {
+                                    ClearanceMismatch = 1;
+                                }
+                            }
+                            else
+                            {
+                                const ReachableClearanceSet CellComps =
+                                    CollectReachableClearanceComponents(
+                                        X, Y, FootprintR, Query,
+                                        StartClearanceComps.Primary());
+                                if (StartClearanceComps.FirstSharedWith(CellComps) > 0)
+                                {
+                                    ClearanceMismatch = 0;
+                                    ProvenConnected = true;
+                                }
+                                else
+                                {
+                                    ClearanceMismatch = 1;
+                                }
+                            }
+                        }
+
+                        const int CompMismatch = TerrainMismatch * 2 + ClearanceMismatch;
+                        if (CompMismatch > BestCompMismatch)
+                            continue;
+
                         const int CellHeight = mGrid.GetHeightLevel(X, Y);
-                        const int HeightDiff = (TargetHeight >= 0 && CellHeight >= 0)
-                            ? std::abs(CellHeight - TargetHeight) : 0;
+                        const int HeightDiff = (PreferredHeight >= 0 && CellHeight >= 0)
+                            ? std::abs(CellHeight - PreferredHeight) : 0;
                         const int DistSq = DX * DX + DY * DY;
                         const int StartDistSq = (X - StartX) * (X - StartX) + (Y - StartY) * (Y - StartY);
 
-                        const auto CandidateKey = std::make_tuple(HeightDiff, DistSq, StartDistSq);
-                        const auto BestKey = std::make_tuple(BestHeightDiff, BestDistSq, BestStartDistSq);
+                        const auto OptimisticKey = std::make_tuple(
+                            CompMismatch, 0, HeightDiff, DistSq, StartDistSq);
+                        const auto BestKey = std::make_tuple(
+                            BestCompMismatch, BestPocketPenalty, BestHeightDiff, BestDistSq, BestStartDistSq);
+                        if (OptimisticKey >= BestKey)
+                            continue;
+
+                        const int PocketPenalty = ProvenConnected
+                            ? 0
+                            : (HasLocalEscape(X, Y, StartX, StartY, Query, 16, 4) ? 0 : 1);
+                        const auto CandidateKey = std::make_tuple(
+                            CompMismatch, PocketPenalty, HeightDiff, DistSq, StartDistSq);
                         if (CandidateKey < BestKey)
                         {
+                            BestCompMismatch = CompMismatch;
+                            BestPocketPenalty = PocketPenalty;
                             BestHeightDiff = HeightDiff;
                             BestDistSq = DistSq;
                             BestStartDistSq = StartDistSq;
@@ -379,12 +899,17 @@ private:
                     }
                 }
             }
-            if (FoundAtRadius && BestHeightDiff == 0)
+            if (FoundAtRadius &&
+                BestCompMismatch == 0 &&
+                BestPocketPenalty == 0 &&
+                BestHeightDiff == 0)
             {
                 OutX = BestX;
                 OutY = BestY;
                 return true;
             }
+            if (TargetOnDisconnectedTerrain && BestX >= 0)
+                break;
         }
         if (BestX >= 0)
         {
@@ -429,17 +954,22 @@ private:
             const int LeftClusterX = std::min(AX, BX);
             const int LeftCellX = (LeftClusterX + 1) * ClusterCellSize - 1;
             const int RightCellX = LeftCellX + 1;
+            const int FromX = (DeltaX > 0) ? LeftCellX : RightCellX;
+            const int ToX = (DeltaX > 0) ? RightCellX : LeftCellX;
             const int StartY = AY * ClusterCellSize;
             const int EndY = std::min(
                 mGrid.GetHeight(), (AY + 1) * ClusterCellSize);
             for (int Y = StartY; Y < EndY; ++Y)
             {
-                if (mGrid.CanTraverse(LeftCellX, Y, RightCellX, Y,
+                const int AdditionalIgnored =
+                    (Query.AdditionalIgnoredOwnerEntityID >= 0 &&
+                     !mGrid.CanOccupy(FromX, Y, Query.Footprint,
+                                      Query.IgnoredOwnerEntityID, -1))
+                    ? Query.AdditionalIgnoredOwnerEntityID
+                    : -1;
+                if (mGrid.CanTraverse(FromX, Y, ToX, Y,
                         Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID) &&
-                    mGrid.CanTraverse(RightCellX, Y, LeftCellX, Y,
-                        Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID))
+                        AdditionalIgnored))
                 {
                     return true;
                 }
@@ -450,17 +980,22 @@ private:
             const int TopClusterY = std::min(AY, BY);
             const int TopCellY = (TopClusterY + 1) * ClusterCellSize - 1;
             const int BottomCellY = TopCellY + 1;
+            const int FromY = (DeltaY > 0) ? TopCellY : BottomCellY;
+            const int ToY = (DeltaY > 0) ? BottomCellY : TopCellY;
             const int StartX = AX * ClusterCellSize;
             const int EndX = std::min(
                 mGrid.GetWidth(), (AX + 1) * ClusterCellSize);
             for (int X = StartX; X < EndX; ++X)
             {
-                if (mGrid.CanTraverse(X, TopCellY, X, BottomCellY,
+                const int AdditionalIgnored =
+                    (Query.AdditionalIgnoredOwnerEntityID >= 0 &&
+                     !mGrid.CanOccupy(X, FromY, Query.Footprint,
+                                      Query.IgnoredOwnerEntityID, -1))
+                    ? Query.AdditionalIgnoredOwnerEntityID
+                    : -1;
+                if (mGrid.CanTraverse(X, FromY, X, ToY,
                         Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID) &&
-                    mGrid.CanTraverse(X, BottomCellY, X, TopCellY,
-                        Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID))
+                        AdditionalIgnored))
                 {
                     return true;
                 }
@@ -473,6 +1008,13 @@ private:
         int StartX, int StartY, int TargetX, int TargetY,
         const NavigationPathQuery& Query)
     {
+        const int StartComp = mGrid.GetEffectiveTerrainComponent(StartX, StartY);
+        const int TargetComp = mGrid.GetEffectiveTerrainComponent(TargetX, TargetY);
+        if (StartComp > 0 && TargetComp > 0 && StartComp != TargetComp)
+        {
+            return {};
+        }
+
         const int StartCluster = ClusterIndexForCell(StartX, StartY);
         const int TargetCluster = ClusterIndexForCell(TargetX, TargetY);
         const CorridorKey Key{
@@ -481,16 +1023,20 @@ private:
             Query.IgnoredOwnerEntityID,
             Query.AdditionalIgnoredOwnerEntityID
         };
-        const auto Cached = mCorridorCache.find(Key);
-        if (Cached != mCorridorCache.end())
+        if (!Query.HasAvoidedObstacle)
         {
-            ++mStats.CorridorCacheHits;
-            return Cached->second;
+            const auto Cached = mCorridorCache.find(Key);
+            if (Cached != mCorridorCache.end())
+            {
+                ++mStats.CorridorCacheHits;
+                return Cached->second;
+            }
         }
         if (StartCluster == TargetCluster)
         {
             std::vector<int> Result{StartCluster};
-            mCorridorCache[Key] = Result;
+            if (!Query.HasAvoidedObstacle)
+                mCorridorCache[Key] = Result;
             return Result;
         }
 
@@ -498,22 +1044,22 @@ private:
         const int ClusterH = ClusterHeight();
         const int ClusterCount = ClusterW * ClusterH;
         const int Infinity = std::numeric_limits<int>::max();
-        std::vector<int> G((size_t)ClusterCount, Infinity);
-        std::vector<int> Parent((size_t)ClusterCount, -1);
-        std::vector<uint8_t> Closed((size_t)ClusterCount, 0);
-        std::vector<int> Open;
-        G[StartCluster] = 0;
-        Open.push_back(StartCluster);
+        mClusterG.assign((size_t)ClusterCount, Infinity);
+        mClusterParent.assign((size_t)ClusterCount, -1);
+        mClusterClosed.assign((size_t)ClusterCount, 0);
+        mClusterOpen.clear();
+        mClusterG[StartCluster] = 0;
+        mClusterOpen.push_back(StartCluster);
 
         static constexpr int CDX[4] = { 1, 0, -1, 0 };
         static constexpr int CDY[4] = { 0, 1, 0, -1 };
-        while (!Open.empty())
+        while (!mClusterOpen.empty())
         {
             int BestOpen = 0;
-            for (int Index = 1; Index < (int)Open.size(); ++Index)
+            for (int Index = 1; Index < (int)mClusterOpen.size(); ++Index)
             {
-                const int Candidate = Open[Index];
-                const int CurrentBest = Open[BestOpen];
+                const int Candidate = mClusterOpen[Index];
+                const int CurrentBest = mClusterOpen[BestOpen];
                 const int CandidateX = Candidate % ClusterW;
                 const int CandidateY = Candidate / ClusterW;
                 const int BestX = CurrentBest % ClusterW;
@@ -521,12 +1067,12 @@ private:
                 const int TargetClusterX = TargetCluster % ClusterW;
                 const int TargetClusterY = TargetCluster / ClusterW;
                 const auto CandidateKey = std::make_tuple(
-                    G[Candidate] +
+                    mClusterG[Candidate] +
                         10 * (std::abs(CandidateX - TargetClusterX) +
                               std::abs(CandidateY - TargetClusterY)),
                     CandidateY, CandidateX);
                 const auto BestKey = std::make_tuple(
-                    G[CurrentBest] +
+                    mClusterG[CurrentBest] +
                         10 * (std::abs(BestX - TargetClusterX) +
                               std::abs(BestY - TargetClusterY)),
                     BestY, BestX);
@@ -534,11 +1080,11 @@ private:
                     BestOpen = Index;
             }
 
-            const int Current = Open[BestOpen];
-            Open.erase(Open.begin() + BestOpen);
-            if (Closed[Current])
+            const int Current = mClusterOpen[BestOpen];
+            mClusterOpen.erase(mClusterOpen.begin() + BestOpen);
+            if (mClusterClosed[Current])
                 continue;
-            Closed[Current] = 1;
+            mClusterClosed[Current] = 1;
             if (Current == TargetCluster)
                 break;
 
@@ -554,22 +1100,22 @@ private:
                     continue;
                 }
                 const int Next = NextY * ClusterW + NextX;
-                if (Closed[Next] || !ClustersConnect(Current, Next, Query))
+                if (mClusterClosed[Next] || !ClustersConnect(Current, Next, Query))
                     continue;
-                const int NextG = G[Current] + 10;
-                if (NextG >= G[Next])
+                const int NextG = mClusterG[Current] + 10;
+                if (NextG >= mClusterG[Next])
                     continue;
-                G[Next] = NextG;
-                Parent[Next] = Current;
-                Open.push_back(Next);
+                mClusterG[Next] = NextG;
+                mClusterParent[Next] = Current;
+                mClusterOpen.push_back(Next);
             }
         }
 
         std::vector<int> Result;
-        if (Parent[TargetCluster] >= 0)
+        if (mClusterParent[TargetCluster] >= 0)
         {
             for (int Cluster = TargetCluster; Cluster >= 0;
-                 Cluster = Parent[Cluster])
+                 Cluster = mClusterParent[Cluster])
             {
                 Result.push_back(Cluster);
                 if (Cluster == StartCluster)
@@ -577,7 +1123,8 @@ private:
             }
             std::reverse(Result.begin(), Result.end());
         }
-        mCorridorCache[Key] = Result;
+        if (!Query.HasAvoidedObstacle)
+            mCorridorCache[Key] = Result;
         return Result;
     }
 
@@ -623,6 +1170,25 @@ private:
         int BestG = 0;
         bool ReachedTarget = false;
         bool BudgetReached = false;
+        bool PrunedByClusterMask = false;
+    };
+
+    struct OpenEntry
+    {
+        int Index = -1;
+        int G = 0;
+        int H = 0;
+        int X = 0;
+        int Y = 0;
+    };
+
+    struct OpenEntryGreater
+    {
+        bool operator()(const OpenEntry& A, const OpenEntry& B) const
+        {
+            return std::make_tuple(A.G + A.H, A.H, A.Y, A.X) >
+                std::make_tuple(B.G + B.H, B.H, B.Y, B.X);
+        }
     };
 
     AStarSearchState ExecuteAStar(
@@ -630,7 +1196,7 @@ private:
         const NavigationPathQuery& Query,
         const std::vector<uint8_t>& AllowedClusters,
         int NodeBudget,
-        bool TargetPassable,
+        bool /*TargetPassable*/,
         NavigationPathResult& Result)
     {
         AStarSearchState State;
@@ -641,30 +1207,13 @@ private:
         const int StartIndex = StartY * Width + StartX;
         const int TargetIndex = TargetY * Width + TargetX;
 
-        struct OpenEntry
-        {
-            int Index = -1;
-            int G = 0;
-            int H = 0;
-            int X = 0;
-            int Y = 0;
-        };
-        struct OpenEntryGreater
-        {
-            bool operator()(const OpenEntry& A, const OpenEntry& B) const
-            {
-                return std::make_tuple(A.G + A.H, A.H, A.Y, A.X) >
-                    std::make_tuple(B.G + B.H, B.H, B.Y, B.X);
-            }
-        };
-
-        std::priority_queue<OpenEntry,
-            std::vector<OpenEntry>, OpenEntryGreater> Open;
+        OpenEntryGreater HeapComp;
+        mOpenHeap.clear();
         TouchNode(StartIndex);
         mGCost[StartIndex] = 0;
         mParent[StartIndex] = -1;
         const int StartH = Octile(StartX - TargetX, StartY - TargetY);
-        Open.push({StartIndex, 0, StartH, StartX, StartY});
+        mOpenHeap.push_back({StartIndex, 0, StartH, StartX, StartY});
 
         State.BestIndex = StartIndex;
         State.BestH = StartH;
@@ -674,7 +1223,7 @@ private:
         static constexpr int DY[8] = { 0, 1, 0, -1, 1, 1, -1, -1 };
 
         int ExpandedThisCall = 0;
-        while (!Open.empty())
+        while (!mOpenHeap.empty())
         {
             if (ExpandedThisCall >= NodeBudget)
             {
@@ -682,8 +1231,9 @@ private:
                 break;
             }
 
-            const OpenEntry Current = Open.top();
-            Open.pop();
+            std::pop_heap(mOpenHeap.begin(), mOpenHeap.end(), HeapComp);
+            const OpenEntry Current = mOpenHeap.back();
+            mOpenHeap.pop_back();
             if (!IsTouched(Current.Index) || mClosed[Current.Index] ||
                 mGCost[Current.Index] != Current.G)
             {
@@ -693,8 +1243,8 @@ private:
             mClosed[Current.Index] = 1;
             ++ExpandedThisCall;
             ++Result.ExpandedCells;
-            const int CurrentX = Current.Index % Width;
-            const int CurrentY = Current.Index / Width;
+            const int CurrentX = Current.X;
+            const int CurrentY = Current.Y;
 
             if (Current.H < State.BestH ||
                 (Current.H == State.BestH &&
@@ -713,32 +1263,50 @@ private:
                 break;
             }
 
+            const bool CurrentlyOverlapsIgnored =
+                (Query.AdditionalIgnoredOwnerEntityID >= 0) &&
+                !mGrid.CanOccupy(CurrentX, CurrentY, Query.Footprint, Query.IgnoredOwnerEntityID, -1);
+            const int AdditionalIgnored = CurrentlyOverlapsIgnored
+                ? Query.AdditionalIgnoredOwnerEntityID
+                : -1;
+
+            bool CardinalPassable[4] = {false, false, false, false};
             for (int Direction = 0; Direction < 8; ++Direction)
             {
                 const int NextX = CurrentX + DX[Direction];
                 const int NextY = CurrentY + DY[Direction];
-                if (!mGrid.IsInBounds(NextX, NextY) ||
-                    !IsClusterAllowed(NextX, NextY, AllowedClusters))
-                {
+                if (!mGrid.IsInBounds(NextX, NextY))
                     continue;
+
+                if (Direction < 4)
+                {
+                    if (!mGrid.CanTraverse(CurrentX, CurrentY, NextX, NextY,
+                            Query.Footprint, Query.IgnoredOwnerEntityID,
+                            AdditionalIgnored))
+                    {
+                        continue;
+                    }
+                    CardinalPassable[Direction] = true;
+                    if (!IsClusterAllowed(NextX, NextY, AllowedClusters))
+                    {
+                        State.PrunedByClusterMask = true;
+                        continue;
+                    }
                 }
-                if (!mGrid.CanTraverse(CurrentX, CurrentY, NextX, NextY,
-                        Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID))
+                else
                 {
-                    continue;
-                }
-                if (Direction >= 4 &&
-                    (!mGrid.CanTraverse(CurrentX, CurrentY,
-                        CurrentX + DX[Direction], CurrentY,
-                        Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID) ||
-                     !mGrid.CanTraverse(CurrentX, CurrentY,
-                        CurrentX, CurrentY + DY[Direction],
-                        Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID)))
-                {
-                    continue;
+                    const bool CardOk =
+                        (Direction == 4 && CardinalPassable[0] && CardinalPassable[1]) ||
+                        (Direction == 5 && CardinalPassable[2] && CardinalPassable[1]) ||
+                        (Direction == 6 && CardinalPassable[2] && CardinalPassable[3]) ||
+                        (Direction == 7 && CardinalPassable[0] && CardinalPassable[3]);
+                    if (!CardOk)
+                        continue;
+                    if (!IsClusterAllowed(NextX, NextY, AllowedClusters))
+                    {
+                        State.PrunedByClusterMask = true;
+                        continue;
+                    }
                 }
 
                 const int NextIndex = NextY * Width + NextX;
@@ -749,10 +1317,19 @@ private:
                 if (NextG >= mGCost[NextIndex])
                     continue;
 
+                if (Direction >= 4 &&
+                    !mGrid.CanTraverse(CurrentX, CurrentY, NextX, NextY,
+                        Query.Footprint, Query.IgnoredOwnerEntityID,
+                        AdditionalIgnored))
+                {
+                    continue;
+                }
+
                 mGCost[NextIndex] = NextG;
                 mParent[NextIndex] = Current.Index;
                 const int H = Octile(NextX - TargetX, NextY - TargetY);
-                Open.push({NextIndex, NextG, H, NextX, NextY});
+                mOpenHeap.push_back({NextIndex, NextG, H, NextX, NextY});
+                std::push_heap(mOpenHeap.begin(), mOpenHeap.end(), HeapComp);
             }
         }
 
@@ -769,6 +1346,9 @@ private:
         const int StepX = StartX < EndX ? 1 : -1;
         const int StepY = StartY < EndY ? 1 : -1;
         int Error = DeltaX - DeltaY;
+        bool StillOverlapsAdditionalIgnored =
+            (Query.AdditionalIgnoredOwnerEntityID >= 0) &&
+            !mGrid.CanOccupy(StartX, StartY, Query.Footprint, Query.IgnoredOwnerEntityID, -1);
 
         while (X != EndX || Y != EndY)
         {
@@ -786,19 +1366,24 @@ private:
                 Y += StepY;
             }
 
+            if (StillOverlapsAdditionalIgnored &&
+                mGrid.CanOccupy(PreviousX, PreviousY, Query.Footprint, Query.IgnoredOwnerEntityID, -1))
+            {
+                StillOverlapsAdditionalIgnored = false;
+            }
             if (!mGrid.CanTraverse(PreviousX, PreviousY, X, Y,
                     Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID))
+                    StillOverlapsAdditionalIgnored ? Query.AdditionalIgnoredOwnerEntityID : -1))
             {
                 return false;
             }
             if (X != PreviousX && Y != PreviousY &&
                 (!mGrid.CanTraverse(PreviousX, PreviousY, X, PreviousY,
                     Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID) ||
+                    StillOverlapsAdditionalIgnored ? Query.AdditionalIgnoredOwnerEntityID : -1) ||
                  !mGrid.CanTraverse(PreviousX, PreviousY, PreviousX, Y,
                     Query.Footprint, Query.IgnoredOwnerEntityID,
-                        Query.AdditionalIgnoredOwnerEntityID)))
+                    StillOverlapsAdditionalIgnored ? Query.AdditionalIgnoredOwnerEntityID : -1)))
             {
                 return false;
             }
@@ -855,6 +1440,8 @@ private:
         mGCost.clear();
         mParent.clear();
         mClosed.clear();
+        mOpenHeap.clear();
+        mAllowedClusters.clear();
     }
 
     void EnsureWorkspace()
@@ -867,6 +1454,7 @@ private:
         mGCost.resize(Count);
         mParent.resize(Count);
         mClosed.resize(Count);
+        mOpenHeap.reserve(4096);
         mGeneration = 1;
     }
 
@@ -919,6 +1507,12 @@ private:
     std::vector<int> mGCost;
     std::vector<int> mParent;
     std::vector<uint8_t> mClosed;
+    std::vector<OpenEntry> mOpenHeap;
+    std::vector<uint8_t> mAllowedClusters;
+    std::vector<int> mClusterG;
+    std::vector<int> mClusterParent;
+    std::vector<uint8_t> mClusterClosed;
+    std::vector<int> mClusterOpen;
 };
 
 } // namespace Game::Pathfinding

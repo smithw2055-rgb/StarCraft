@@ -8,6 +8,7 @@
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
+#include "Game/Races/RaceDef.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -108,8 +109,111 @@ public:
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetSubunitImageResolver(ImageIDResolver Resolver);
     static void SetConstructionImageResolver(ImageIDResolver Resolver);
+    static uint32_t ResolveConstructionImageID(int ChkUnitID);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
     static void SetAddonOffsetResolver(AddonOffsetResolver Resolver);
+
+    struct BuildingFootprintTiles
+    {
+        int W = 3;
+        int H = 2;
+    };
+    static inline BuildingFootprintTiles BuildingFootprintSizeForChk(int ChkUnitID)
+    {
+        switch (ChkUnitID)
+        {
+            // 4x3 (128x96)
+            case 106: // Terran Command Center
+            case 111: // Terran Barracks
+            case 113: // Terran Factory
+            case 114: // Terran Starport
+            case 116: // Terran Science Facility
+            case 119: // Norad II (Crashed)
+            case 126: // Crashed Norad II
+            case 130: // Infested Command Center
+            case 131: // Zerg Hatchery
+            case 132: // Zerg Lair
+            case 133: // Zerg Hive
+            case 147: // Overmind
+            case 148: // Overmind (With Shell)
+            case 151: // Cerebrate
+            case 152: // Cerebrate Daggoth
+            case 153: // Overmind (Without Shell)
+            case 154: // Protoss Nexus
+            case 160: // Protoss Gateway
+            case 167: // Protoss Stargate
+            case 174: // Protoss Temple
+            case 175: // Xel'Naga Temple
+                return {4, 3};
+
+            // 4x2 (128x64)
+            case 110: // Terran Refinery
+            case 149: // Zerg Extractor
+            case 157: // Protoss Assimilator
+            case 188: // Vespene Geyser
+                return {4, 2};
+
+            // 3x2 (96x64)
+            case 109: // Terran Supply Depot
+            case 112: // Terran Academy
+            case 122: // Terran Engineering Bay
+            case 123: // Terran Armory
+            case 125: // Terran Bunker
+            case 127: // Ion Cannon
+            case 134: // Zerg Nydus Canal
+            case 135: // Zerg Hydralisk Den
+            case 136: // Zerg Defiler Mound
+            case 138: // Zerg Queen's Nest
+            case 139: // Zerg Evolution Chamber
+            case 140: // Zerg Ultralisk Cavern
+            case 142: // Zerg Spawning Pool
+            case 155: // Protoss Robotics Facility
+            case 159: // Protoss Observatory
+            case 163: // Protoss Citadel of Adun
+            case 164: // Protoss Cybernetics Core
+            case 165: // Protoss Templar Archives
+            case 166: // Protoss Forge
+            case 169: // Protoss Fleet Beacon
+            case 170: // Protoss Arbiter Tribunal
+            case 171: // Protoss Robotics Support Bay
+            case 189: // Special Warp Gate
+            case 190: // Special Psi Disrupter
+                return {3, 2};
+
+            // 2x2 (64x64)
+            case 107: // Terran Comsat Station
+            case 108: // Terran Nuclear Silo
+            case 115: // Terran Control Tower
+            case 117: // Terran Covert Ops
+            case 118: // Terran Physics Lab
+            case 120: // Terran Machine Shop
+            case 124: // Terran Missile Turret
+            case 137: // Zerg Greater Spire
+            case 141: // Zerg Spire
+            case 143: // Zerg Creep Colony
+            case 144: // Zerg Spore Colony
+            case 146: // Zerg Sunken Colony
+            case 150: // Mature Chrysalis
+            case 156: // Protoss Pylon
+            case 162: // Protoss Photon Cannon
+            case 172: // Protoss Shield Battery
+            case 173: // Khaydarin Crystal Formation
+            case 187: // Khaydarin Crystal Formation (Doodad)
+            case 200: // Power Generator
+            case 201: // Overmind Cocoon
+                return {2, 2};
+
+            // Special footprints
+            case 186: // Ruins (3x3)
+                return {3, 3};
+            case 168: // Stasis Cell / Prison (5x3)
+                return {5, 3};
+
+            default:
+                return {3, 2};
+        }
+    }
+    static inline BuildingFootprintTiles BuildingFootprintSizeForDef(int BuildingDefID);
 
     static bool CanBuild(const Core::ECS::EntityManager& EM,
                          int BuilderID,
@@ -194,5 +298,11 @@ private:
     Core::ECS::SystemManager& mSystemMgr;
     static const Game::Map::GameMap* sMap;
 };
+
+inline BuildingSystem::BuildingFootprintTiles BuildingSystem::BuildingFootprintSizeForDef(int BuildingDefID)
+{
+    auto Def = Races::GetUnitDefByID(BuildingDefID);
+    return BuildingFootprintSizeForChk(Def.ChkUnitID);
+}
 
 } // namespace Game::Systems

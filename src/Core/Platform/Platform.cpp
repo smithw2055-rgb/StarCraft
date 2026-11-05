@@ -325,6 +325,11 @@ namespace Core::Platform
             case SAPP_EVENTTYPE_UNFOCUSED:
                 g_windowFocused = false;
                 g_mouseInGameContentArea = false;
+                std::memset(g_keys, 0, sizeof(g_keys));
+                std::memset(g_keysPressed, 0, sizeof(g_keysPressed));
+                std::memset(g_keysReleased, 0, sizeof(g_keysReleased));
+                std::memset(g_keysPressedPending, 0, sizeof(g_keysPressedPending));
+                std::memset(g_keysReleasedPending, 0, sizeof(g_keysReleasedPending));
                 std::memset(g_mouseDown, 0, sizeof(g_mouseDown));
                 std::memset(g_mousePressedPending, 0, sizeof(g_mousePressedPending));
                 std::memset(g_mouseReleasedPending, 0, sizeof(g_mouseReleasedPending));
@@ -369,8 +374,9 @@ namespace Core::Platform
             case SAPP_EVENTTYPE_KEY_DOWN:
                 if (Event->key_code >= 0 && Event->key_code < kKeyCount)
                 {
+                    if (!Event->key_repeat && !g_keys[Event->key_code])
+                        g_keysPressedPending[Event->key_code] = true;
                     g_keys[Event->key_code] = 1;
-                    g_keysPressedPending[Event->key_code] = true;
                 }
                 break;
             case SAPP_EVENTTYPE_KEY_UP:

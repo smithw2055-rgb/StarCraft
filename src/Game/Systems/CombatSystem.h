@@ -27,6 +27,7 @@ public:
     CombatSystem(Core::ECS::SystemManager& SysMgr, BulletSystem& BulletSys,
                  Game::Map::GameMap* Map = nullptr)
         : mSystemMgr(SysMgr), mBulletSystem(BulletSys), mMap(Map) {}
+    void SetMap(Game::Map::GameMap* Map);
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "CombatSystem"; }
 
@@ -61,9 +62,17 @@ public:
     static void IssueAttack(Core::ECS::EntityManager& EM,
                              const std::vector<int>& Attackers,
                              int TargetEntityID);
+    static void IssueAttack(Core::ECS::EntityManager& EM,
+                             const std::vector<int>& Attackers,
+                             int TargetEntityID,
+                             bool Queued);
     static void IssueAttackMove(Core::ECS::EntityManager& EM,
                                  const std::vector<int>& Units,
                                  Core::Math::Vec2 Target);
+    static void IssueAttackMove(Core::ECS::EntityManager& EM,
+                                 const std::vector<int>& Units,
+                                 Core::Math::Vec2 Target,
+                                 bool Queued);
 
     static void ApplyDamage(Core::ECS::EntityManager& EM, int TargetID,
                             const Game::Components::CombatComponent& Attacker,
@@ -78,6 +87,10 @@ public:
                                           float ForwardOffsetPixels = 0.0f);
     static int FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, float MaxRange);
     static bool AreEnemies(int A, int B, Core::ECS::EntityManager& EM);
+    static bool AreAllied(int PlayerA, int PlayerB);
+    static bool IsTargetDetectedForPlayer(Core::ECS::EntityManager& EM,
+                                         int TargetID,
+                                         int ObserverPlayerID);
 
 private:
     bool BeginOrResolveAttack(Core::ECS::EntityManager& EM,

@@ -28,6 +28,8 @@ public:
                 const Render::Camera2D& Camera);
     void PruneAgainst(Core::ECS::EntityManager& Entities);
     void CancelPointerGesture();
+    void ResetClickTracking();
+    void ResetSessionState();
     void Init(Resource::Graphics::DataAssetCacheView DataAssets) { mDataAssets = DataAssets; }
     void SetLocalPlayerId(int PlayerId) { mLocalPlayerId = PlayerId; }
     int GetLocalPlayerId() const { return mLocalPlayerId; }

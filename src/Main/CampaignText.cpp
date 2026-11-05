@@ -22,6 +22,8 @@ std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxCha
 {
     std::vector<std::string> Lines;
     std::string Clean = SanitizeCampaignText(Text);
+    if (MaxChars == 0)
+        MaxChars = 1;
     size_t Pos = 0;
     while (Pos < Clean.size() && Lines.size() < MaxLines)
     {
@@ -41,6 +43,14 @@ std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxCha
             }
         }
 
+        if (End <= Pos)
+        {
+            End = Pos + 1;
+            while (End < Clean.size() &&
+                   (static_cast<uint8_t>(Clean[End]) & 0xC0) == 0x80)
+                ++End;
+        }
+
         std::string Line = Clean.substr(Pos, End - Pos);
         while (!Line.empty() && Line.front() == ' ')
             Line.erase(Line.begin());
@@ -56,14 +66,18 @@ std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxCha
     if (Pos < Clean.size() && !Lines.empty())
     {
         std::string& Last = Lines.back();
-        if (Last.size() + 3 > MaxChars && Last.size() > 3)
+        if (MaxChars > 3 && Last.size() + 3 > MaxChars && Last.size() > 3)
         {
             size_t Cut = MaxChars - 3;
             while (Cut > 0 && (static_cast<uint8_t>(Last[Cut]) & 0xC0) == 0x80)
                 --Cut;
             Last.resize(Cut);
+            Last += "...";
         }
-        Last += "...";
+        else if (MaxChars <= 3)
+        {
+            Last += "...";
+        }
     }
     return Lines;
 }

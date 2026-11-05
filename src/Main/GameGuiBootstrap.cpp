@@ -56,7 +56,6 @@ void InitializeGuiRuntime(
     Gui.UseGui = false;
 
 #if ENABLE_GUI_UI
-    AssetRoot = "C://Projects//StarCraft//assets";
     Aero::GUI::Init();
 
     Gui.GuiInitialized = true;

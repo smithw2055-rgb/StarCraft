@@ -14,7 +14,8 @@ out*
 
 # Docs and tests not intended for this tracked slice
 docs/
-tests/
+tests/*
+!tests/Regression/
 
 # Root project/config files to exclude
 *.json

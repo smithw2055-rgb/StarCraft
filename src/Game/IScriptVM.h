@@ -233,6 +233,13 @@ public:
         int WarpOverlayFrame = 0;
         bool SpawnFrameSet = false;
         int SpawnFrame = -1;
+        bool NoBreakCode = false;
+        bool ReadyToRepeatAttack = false;
+        int RepeatAttackPC = -1;
+        bool EngFramePending = false;
+        bool EngSetPending = false;
+        int EngSetIndex = 0;
+        bool IgnoredRest = false;
         int PC = 0;
     };
 

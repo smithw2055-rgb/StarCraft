@@ -34,6 +34,7 @@ struct ReplayAction
     uint16_t Param2 = 0;
     uint16_t Param3 = 0;
     uint8_t Param4 = 0;
+    std::vector<uint16_t> SelectedEntities;
 };
 
 // ── ReplayReader (bit-level decompression) ──────────────────
@@ -54,7 +55,9 @@ public:
         uint32_t HeaderSize = ReadU32();
         uint32_t GameInfoSize = ReadU32();
 
-        if (mData.size() < 12 + HeaderSize + GameInfoSize) return false;
+        if (mData.size() < 8ull + (uint64_t)HeaderSize) return false;
+        if ((uint64_t)GameInfoSize > (uint64_t)HeaderSize) return false;
+        if (mData.size() < 12ull + (uint64_t)GameInfoSize) return false;
 
         mReadPos = 12;
         ParseGameInfo(GameInfoSize);
@@ -96,25 +99,30 @@ private:
             mHeader.PlayerNames[p][24] = '\0';
         }
 
-        mHeader.MapWidth = ReadU16();
-        mHeader.MapHeight = ReadU16();
-        mHeader.RandomSeed = ReadU32();
-        mHeader.GameType = ReadU8();
+        size_t End = Start + Size;
+        if (mReadPos + 2 <= End) mHeader.MapWidth = ReadU16();
+        if (mReadPos + 2 <= End) mHeader.MapHeight = ReadU16();
+        if (mReadPos + 4 <= End) mHeader.RandomSeed = ReadU32();
+        if (mReadPos < End) mHeader.GameType = ReadU8();
 
-        for (int i = 0; i < 12; ++i) mHeader.ControllerType[i] = ReadU8();
-        for (int i = 0; i < 12; ++i) mHeader.RaceType[i] = ReadU8();
-        for (int i = 0; i < 12; ++i) mHeader.ColorType[i] = ReadU8();
-        for (int i = 0; i < 12; ++i) mHeader.ForceType[i] = ReadU8();
+        for (int i = 0; i < 12 && mReadPos < End; ++i) mHeader.ControllerType[i] = ReadU8();
+        for (int i = 0; i < 12 && mReadPos < End; ++i) mHeader.RaceType[i] = ReadU8();
+        for (int i = 0; i < 12 && mReadPos < End; ++i) mHeader.ColorType[i] = ReadU8();
+        for (int i = 0; i < 12 && mReadPos < End; ++i) mHeader.ForceType[i] = ReadU8();
 
-        mHeader.CampaignID = ReadU16();
+        if (mReadPos + 2 <= End) mHeader.CampaignID = ReadU16();
 
-        uint32_t MapDataSize = ReadU32();
-        if (MapDataSize > 0 && mReadPos + MapDataSize <= mData.size())
+        if (mReadPos + 4 <= End)
         {
-            mMapData.insert(mMapData.end(), mData.begin() + mReadPos,
-                            mData.begin() + mReadPos + MapDataSize);
-            mReadPos += MapDataSize;
+            uint32_t MapDataSize = ReadU32();
+            if (MapDataSize > 0 && mReadPos + MapDataSize <= End)
+            {
+                mMapData.insert(mMapData.end(), mData.begin() + mReadPos,
+                                mData.begin() + mReadPos + MapDataSize);
+                mReadPos += MapDataSize;
+            }
         }
+        mReadPos = End;
     }
 
     void DecompressActions()
@@ -144,7 +152,7 @@ private:
         };
 
         uint32_t Frame = 0;
-        uint32_t ActionCount = ReadBits(16);
+        uint32_t ActionCount = ReadBits(16) | (ReadBits(16) << 16);
 
         for (uint32_t i = 0; i < ActionCount && (Pos < mCompressedData.size() || BitsRemaining > 0); ++i)
         {
@@ -159,9 +167,14 @@ private:
             switch (Action.ActionType)
             {
                 case 0: // Select
+                {
+                    uint8_t Count = (uint8_t)ReadBits(8);
+                    for (uint8_t c = 0; c < Count; ++c)
+                        Action.SelectedEntities.push_back((uint16_t)ReadBits(16));
                     Action.Param1 = (uint16_t)ReadBits(16);
                     Action.Param2 = (uint16_t)ReadBits(16);
                     break;
+                }
                 case 1: // Right click
                     Action.Param1 = (uint16_t)ReadBits(16);
                     Action.Param2 = (uint16_t)ReadBits(16);
@@ -230,6 +243,7 @@ public:
     }
 
     void WriteU16(uint16_t V) { WriteBits(V, 8); WriteBits(V >> 8, 8); }
+    void WriteU32(uint32_t V) { WriteU16((uint16_t)(V & 0xFFFF)); WriteU16((uint16_t)((V >> 16) & 0xFFFF)); }
 
     void Flush()
     {
@@ -261,9 +275,10 @@ public:
 
     void RecordAction(uint32_t Frame, uint8_t PlayerID, uint8_t ActionType,
                       uint16_t Param1 = 0, uint16_t Param2 = 0,
-                      uint16_t Param3 = 0, uint8_t Param4 = 0)
+                      uint16_t Param3 = 0, uint8_t Param4 = 0,
+                      const std::vector<uint16_t>& SelectedEntities = {})
     {
-        mActions.push_back({Frame, PlayerID, ActionType, Param1, Param2, Param3, Param4});
+        mActions.push_back({Frame, PlayerID, ActionType, Param1, Param2, Param3, Param4, SelectedEntities});
     }
 
     std::vector<uint8_t> SerializeReplay() const
@@ -290,7 +305,7 @@ public:
         Result.insert(Result.end(), Compressed.begin(), Compressed.end());
 
         // Fix up sizes safely without strict aliasing violations
-        uint32_t HeaderSize = (uint32_t)(Result.size() - 4);
+        uint32_t HeaderSize = (uint32_t)(Result.size() - 8);
         std::memcpy(&Result[HeaderSizePos], &HeaderSize, sizeof(uint32_t));
         std::memcpy(&Result[GameInfoSizePos], &GameInfoSize, sizeof(uint32_t));
 
@@ -334,8 +349,8 @@ private:
         std::vector<uint8_t> Output;
         BitWriter BW(Output);
 
-        // Action count (16 bits)
-        BW.WriteU16((uint16_t)mActions.size());
+        // Action count (32 bits)
+        BW.WriteU32((uint32_t)mActions.size());
 
         uint32_t LastFrame = 0;
         for (auto& A : mActions)
@@ -345,9 +360,15 @@ private:
             LastFrame = A.Frame;
 
             if (Delta > 0 && Delta <= 255)
+            {
                 BW.WriteBits(Delta, 8);
+            }
             else
-                BW.WriteBits(0, 8), BW.WriteBits(Delta, 16);
+            {
+                uint32_t ClampedDelta = std::min(Delta, 65535u);
+                BW.WriteBits(0, 8);
+                BW.WriteBits(ClampedDelta, 16);
+            }
 
             // PlayerID (4 bits) + ActionType (4 bits)
             BW.WriteBits(A.PlayerID & 0x0F, 4);
@@ -356,9 +377,15 @@ private:
             switch (A.ActionType)
             {
                 case 0: // Select
+                {
+                    uint8_t Count = (uint8_t)std::min<size_t>(A.SelectedEntities.size(), 255);
+                    BW.WriteBits(Count, 8);
+                    for (uint8_t c = 0; c < Count; ++c)
+                        BW.WriteBits(A.SelectedEntities[c], 16);
                     BW.WriteBits(A.Param1, 16);
                     BW.WriteBits(A.Param2, 16);
                     break;
+                }
                 case 1: // Right click
                     BW.WriteBits(A.Param1, 16);
                     BW.WriteBits(A.Param2, 16);

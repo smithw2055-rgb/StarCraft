@@ -242,12 +242,20 @@ inline bool ConsumeGuiHudMinimapClick(
 #endif
 }
 
+// Shift is the SC1 waypoint-queue modifier. Kept in the presentation layer so
+// the Game simulation stays input-agnostic.
+inline bool IsShiftHeldForCommandQueue()
+{
+    return Core::Platform::IsShiftDown();
+}
+
 template <typename RecordGameActionT>
 inline bool ExecuteSmartClickAtWorldPosition(
     ClientRuntime& Client,
     GameSession& Session,
     const Core::Math::Vec2& Target,
-    RecordGameActionT&& RecordGameAction)
+    RecordGameActionT&& RecordGameAction,
+    bool Queued = false)
 {
     if (!Session.IsEcsInitialized())
         return false;
@@ -258,7 +266,7 @@ inline bool ExecuteSmartClickAtWorldPosition(
         return false;
 
     auto ClickTarget = Client.ResolveClickTargetContext(EM, EcsIds, Target);
-    ExecuteSmartClickCommand(EM, EcsIds, ClickTarget, Target);
+    ExecuteSmartClickCommand(EM, EcsIds, ClickTarget, Target, Queued);
     RecordGameAction(0, 1, (uint16_t)(Target.X), (uint16_t)(Target.Y));
     Client.CancelPointerGesture();
     return true;
@@ -424,11 +432,7 @@ inline void HandleClientWorldClickCommands(
         }
         else if (int HitEntityId = -1; (Hud.CheckMultiSelectSlotClick(MouseX, MouseY, HitEntityId) >= 0) && Session.IsEcsInitialized() && HitEntityId >= 0)
         {
-#if defined(_WIN32)
-            const bool ShiftHeld = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-#else
-            const bool ShiftHeld = false;
-#endif
+            const bool ShiftHeld = Core::Platform::IsShiftDown();
             if (ShiftHeld)
             {
                 auto Current = Client.GetSelectedIds();
@@ -503,7 +507,7 @@ inline void HandleClientWorldClickCommands(
             }
             auto& EM = Session.Entities();
             auto EcsIds = Client.CollectSelectedAliveIds(EM);
-            ExecuteAttackMoveCommand(EM, EcsIds, Target);
+            ExecuteAttackMoveCommand(EM, EcsIds, Target, IsShiftHeldForCommandQueue());
         }
     }
 
@@ -538,7 +542,8 @@ inline void HandleClientWorldClickCommands(
                 Client,
                 Session,
                 {MinimapWX, MinimapWY},
-                RecordGameAction);
+                RecordGameAction,
+                IsShiftHeldForCommandQueue());
         }
         else if (InHudBand)
         {
@@ -571,7 +576,8 @@ inline void HandleClientWorldClickCommands(
                 Client,
                 Session,
                 Target,
-                RecordGameAction);
+                RecordGameAction,
+                IsShiftHeldForCommandQueue());
         }
     }
 }
@@ -615,7 +621,7 @@ inline void HandleClientKeyboardCommands(
             else if (Core::Platform::IsKeyPressed(70))
                 Shortcut = KeyboardCommandShortcut::Follow;
 
-            ExecuteKeyboardCommandShortcut(EM, EcsIds, Shortcut);
+            ExecuteKeyboardCommandShortcut(EM, EcsIds, Hud, Shortcut);
         }
     }
 

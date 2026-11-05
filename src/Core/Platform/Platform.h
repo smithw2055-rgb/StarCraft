@@ -11,6 +11,10 @@ namespace Core::Platform
         constexpr int R = 82;
         constexpr int F6 = 295;
         constexpr int F9 = 298;
+        constexpr int LeftShift = 340;
+        constexpr int RightShift = 344;
+        constexpr int LeftControl = 341;
+        constexpr int RightControl = 345;
     }
 
     bool Initialize();
@@ -51,6 +55,14 @@ namespace Core::Platform
     bool IsKeyDown(int KeyCode);
     bool IsKeyPressed(int KeyCode);
     bool IsKeyReleased(int KeyCode);
+    inline bool IsShiftDown()
+    {
+        return IsKeyDown(KeyCode::LeftShift) || IsKeyDown(KeyCode::RightShift);
+    }
+    inline bool IsControlDown()
+    {
+        return IsKeyDown(KeyCode::LeftControl) || IsKeyDown(KeyCode::RightControl);
+    }
 
     // Frame timing
     float GetDeltaTime();

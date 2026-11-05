@@ -184,8 +184,34 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
 
     const Core::Math::Vec2 Preferred{
         ProducerTrans->Position.X,
-        ProducerTrans->Position.Y + ProducerBounds.Down + UnitBounds.Up + 6.0f};
+        ProducerTrans->Position.Y + ProducerBounds.Down + UnitBounds.Up + 12.0f};
     const bool SpawnIsAir = Game::Data::IsAirUnitType(UnitChkID);
+
+    struct NearbyCandidateUnit
+    {
+        Core::Math::Vec2 Position;
+        CollisionRect Bounds;
+    };
+    std::vector<NearbyCandidateUnit> NearbyUnits;
+    for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    {
+        if (EntityID == IgnoreEntityID)
+            continue;
+        const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+        const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
+        if (!Unit || !Trans || Unit->HitPoints <= 0)
+            continue;
+        const bool OtherIsAir = Game::Data::IsAirUnitType(Unit->ChkUnitID);
+        if (SpawnIsAir != OtherIsAir)
+            continue;
+        if (Trans->Position.DistanceTo(ProducerTrans->Position) > 850.0f)
+            continue;
+        const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
+        NearbyUnits.push_back({
+            Trans->Position,
+            BoundsFor(Path, ResolveCollisionBounds(Unit->ChkUnitID))
+        });
+    }
 
     const auto IsFree = [&](const Core::Math::Vec2& Candidate)
     {
@@ -236,7 +262,7 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                 if (CandidateHeight != ProducerHeight)
                     return false;
 
-                constexpr float TerrainSafetyMargin = 48.0f;
+                constexpr float TerrainSafetyMargin = 16.0f;
                 const float Left =
                     UnitBounds.Left + TerrainSafetyMargin;
                 const float Right =
@@ -255,6 +281,14 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                 };
                 for (const auto& Sample : SafetySamples)
                 {
+                    // Do not reject safety samples that lie inside the producer building's footprint
+                    if (Sample.X >= ProducerTrans->Position.X - ProducerBounds.Left &&
+                        Sample.X <= ProducerTrans->Position.X + ProducerBounds.Right &&
+                        Sample.Y >= ProducerTrans->Position.Y - ProducerBounds.Up &&
+                        Sample.Y <= ProducerTrans->Position.Y + ProducerBounds.Down)
+                    {
+                        continue;
+                    }
                     int X = 0;
                     int Y = 0;
                     gProductionMap->WorldToTile(Sample, X, Y);
@@ -269,24 +303,9 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
             }
         }
 
-        for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+        for (const auto& Other : NearbyUnits)
         {
-            // Ground units must also clear the producer footprint. The normal
-            // below-building candidate already does, but fallback rings cover
-            // every direction and may otherwise select a point inside it.
-            if (EntityID == IgnoreEntityID)
-                continue;
-            const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
-            const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
-            if (!Unit || !Trans || Unit->HitPoints <= 0)
-                continue;
-            const auto* Path = EM.GetComponent<PathfindingComponent>(EntityID);
-            const bool OtherIsAir = Game::Data::IsAirUnitType(Unit->ChkUnitID);
-            if (SpawnIsAir != OtherIsAir)
-                continue;
-            const auto OtherBounds = BoundsFor(
-                Path, ResolveCollisionBounds(Unit->ChkUnitID));
-            if (RectsOverlap(Candidate, UnitBounds, Trans->Position, OtherBounds))
+            if (RectsOverlap(Candidate, UnitBounds, Other.Position, Other.Bounds))
                 return false;
         }
         return true;
@@ -750,48 +769,58 @@ int ProductionSystem::DebugSpawnUnit(Core::ECS::EntityManager& EM,
     return EntityID;
 }
 
-static bool IsWorldPositionBlockedByBuilding(Core::ECS::EntityManager& EM,
-                                              const Core::Math::Vec2& Pos,
-                                              int ProducerBuildingID)
+static bool IsWorldPositionBlockedByBuildingOrUnit(Core::ECS::EntityManager& EM,
+                                                    const Core::Math::Vec2& Pos,
+                                                    int ProducerBuildingID,
+                                                    int NewUnitID = -1)
 {
     if (gProductionMap)
     {
-        int TileX = 0;
-        int TileY = 0;
+        int TileX = 0, TileY = 0;
         gProductionMap->WorldToTile(Pos, TileX, TileY);
         if (!gProductionMap->IsInBounds(TileX, TileY) || !gProductionMap->IsWalkable(TileX, TileY))
             return true;
     }
 
-    for (int EntityID : EM.GetEntitiesWith<TransformComponent, BuildingComponent>())
+    for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
     {
-        if (EntityID == ProducerBuildingID)
+        if (EntityID == ProducerBuildingID || EntityID == NewUnitID)
             continue;
         const auto* Trans = EM.GetComponent<TransformComponent>(EntityID);
         const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
         if (!Trans || !Unit || Unit->HitPoints <= 0)
             continue;
+        if (Game::Data::IsAirUnitType(Unit->ChkUnitID))
+            continue;
 
-        const auto Bounds = ResolveCollisionBounds(Unit->ChkUnitID);
-        const float Left = Trans->Position.X - Bounds.Left;
-        const float Right = Trans->Position.X + Bounds.Right;
-        const float Top = Trans->Position.Y - Bounds.Up;
-        const float Bottom = Trans->Position.Y + Bounds.Down;
-
-        if (Pos.X >= Left && Pos.X <= Right && Pos.Y >= Top && Pos.Y <= Bottom)
+        if (EM.GetComponent<BuildingComponent>(EntityID))
+        {
+            const auto Bounds = ResolveCollisionBounds(Unit->ChkUnitID);
+            if (Pos.X >= Trans->Position.X - Bounds.Left - 16.0f &&
+                Pos.X <= Trans->Position.X + Bounds.Right + 16.0f &&
+                Pos.Y >= Trans->Position.Y - Bounds.Up - 16.0f &&
+                Pos.Y <= Trans->Position.Y + Bounds.Down + 16.0f)
+            {
+                return true;
+            }
+        }
+        else if (Trans->Position.DistanceTo(Pos) < 28.0f)
+        {
             return true;
+        }
     }
     return false;
 }
 
 static Core::Math::Vec2 ResolveFreeRallyDestination(Core::ECS::EntityManager& EM,
                                                     const Core::Math::Vec2& TargetPos,
-                                                    int ProducerBuildingID)
+                                                    int ProducerBuildingID,
+                                                    int NewUnitID = -1)
 {
-    if (!IsWorldPositionBlockedByBuilding(EM, TargetPos, ProducerBuildingID))
+    if (!IsWorldPositionBlockedByBuildingOrUnit(EM, TargetPos, ProducerBuildingID, NewUnitID))
         return TargetPos;
 
-    constexpr float Step = 24.0f;
+    constexpr float Step = 32.0f;
     for (int Ring = 1; Ring <= 8; ++Ring)
     {
         const float R = (float)Ring * Step;
@@ -803,7 +832,7 @@ static Core::Math::Vec2 ResolveFreeRallyDestination(Core::ECS::EntityManager& EM
                 TargetPos.X + std::cos(Theta) * R,
                 TargetPos.Y + std::sin(Theta) * R
             };
-            if (!IsWorldPositionBlockedByBuilding(EM, Candidate, ProducerBuildingID))
+            if (!IsWorldPositionBlockedByBuildingOrUnit(EM, Candidate, ProducerBuildingID, NewUnitID))
                 return Candidate;
         }
     }
@@ -819,7 +848,7 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
 
     const auto UnitDef = Races::GetUnitDefByID(UnitDefID);
     const Core::Math::Vec2 SpawnPos =
-        FindSpawnPosition(EM, BuildingID, UnitDef.ChkUnitID);
+        FindSpawnPosition(EM, BuildingID, UnitDef.ChkUnitID, BuildingID);
     if (SpawnPos.X < 0.0f || SpawnPos.Y < 0.0f)
         return -1;
     int PlayerID = 0;
@@ -828,14 +857,18 @@ int ProductionSystem::SpawnUnit(Core::ECS::EntityManager& EM,
     const int NewUnitID = DebugSpawnUnit(EM, UnitDefID, SpawnPos, PlayerID);
     if (NewUnitID >= 0)
     {
+        if (auto* NewPath = EM.GetComponent<PathfindingComponent>(NewUnitID))
+            NewPath->RequestedIgnoreEntityID = BuildingID;
+
         if (const auto* ProducerCmd = EM.GetComponent<CommandComponent>(BuildingID);
             ProducerCmd && ProducerCmd->HasRallyPoint)
         {
             const Core::Math::Vec2 TargetRally =
-                ResolveFreeRallyDestination(EM, ProducerCmd->RallyPoint, BuildingID);
+                ResolveFreeRallyDestination(EM, ProducerCmd->RallyPoint, BuildingID, NewUnitID);
             Order RallyOrder;
             RallyOrder.Type = OrderType::Move;
             RallyOrder.TargetPosition = TargetRally;
+            RallyOrder.PathingIgnoreEntityID = BuildingID;
             CommandSystem::IssueOrder(EM, NewUnitID, RallyOrder, false);
         }
     }

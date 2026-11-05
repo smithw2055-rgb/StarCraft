@@ -96,9 +96,19 @@ void GameMap::Generate(int Width, int Height)
 void GameMap::SetTile(int X, int Y, const Tile& NewTile)
 {
     assert(IsInBounds(X, Y));
+    const Tile& OldTile = mTiles[Y * mWidth + X];
+    const bool NavChanged =
+        OldTile.Walkable != NewTile.Walkable ||
+        OldTile.GroundHeight != NewTile.GroundHeight ||
+        OldTile.SubtileWalkable != NewTile.SubtileWalkable ||
+        OldTile.SubtileGroundHeights != NewTile.SubtileGroundHeights ||
+        OldTile.SubtileRamp != NewTile.SubtileRamp;
     mTiles[Y * mWidth + X] = NewTile;
-    UpdateNavigationBuildTile(X, Y);
-    mNavigationGrid.CommitBaseChanges();
+    if (NavChanged)
+    {
+        UpdateNavigationBuildTile(X, Y);
+        mNavigationGrid.CommitBaseChanges();
+    }
 }
 
 void GameMap::UpdateNavigationBuildTile(int X, int Y)
@@ -113,10 +123,14 @@ void GameMap::UpdateNavigationBuildTile(int X, int Y)
         {
             const size_t SubtileIndex =
                 (size_t)SubY * 4 + (size_t)SubX;
+            const int CellX = X * Game::Pathfinding::NavigationCellsPerBuildTile + SubX;
+            const int CellY = Y * Game::Pathfinding::NavigationCellsPerBuildTile + SubY;
+            const bool PreservedRamp = T.SubtileRamp[SubtileIndex] || mNavigationGrid.IsRamp(CellX, CellY);
+            const bool CellWalkable = T.Walkable && T.SubtileWalkable[SubtileIndex];
             mNavigationGrid.SetBaseCell(
-                X * Game::Pathfinding::NavigationCellsPerBuildTile + SubX,
-                Y * Game::Pathfinding::NavigationCellsPerBuildTile + SubY,
-                T.Walkable, T.SubtileGroundHeights[SubtileIndex]);
+                CellX, CellY,
+                CellWalkable, T.SubtileGroundHeights[SubtileIndex],
+                PreservedRamp);
         }
     }
 }
@@ -160,11 +174,27 @@ bool GameMap::CanTraverseGround(int FromX, int FromY, int ToX, int ToY) const
 {
     if (!IsInBounds(FromX, FromY) || !IsInBounds(ToX, ToY))
         return false;
-    // Step heights with difference <= 1 are universally valid (including unwalkable start escape).
-    if (std::abs(GetGroundHeight(FromX, FromY) - GetGroundHeight(ToX, ToY)) <= 1)
+    const int H1 = GetGroundHeight(FromX, FromY);
+    const int H2 = GetGroundHeight(ToX, ToY);
+    if (H1 == H2)
         return true;
-    // In StarCraft 1 terrain data, walkable tiles connecting ground heights 0 and 2 represent ramps.
-    return IsWalkable(FromX, FromY) && IsWalkable(ToX, ToY);
+    if (std::abs(H1 - H2) > 1)
+        return false;
+    if (!mNavigationGrid.HasExplicitRamps())
+        return IsWalkable(FromX, FromY) && IsWalkable(ToX, ToY);
+
+    for (int SubY = 0; SubY < 4; ++SubY)
+    {
+        for (int SubX = 0; SubX < 4; ++SubX)
+        {
+            if (mNavigationGrid.IsRamp(FromX * 4 + SubX, FromY * 4 + SubY) ||
+                mNavigationGrid.IsRamp(ToX * 4 + SubX, ToY * 4 + SubY))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool GameMap::CanTraverseGround(const Core::Math::Vec2& From,
@@ -270,6 +300,19 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
             int WalkableCount = 0;
             int MiddleCount = 0;
             int HighCount = 0;
+            for (int MI = 0; MI < 16; ++MI)
+            {
+                size_t Vf4Off = (size_t)MegaIdx * 16 + MI;
+                if (Vf4Off >= Vf4Data->size()) continue;
+                const uint16_t Flags = (*Vf4Data)[Vf4Off];
+                if ((Flags & 0x0001) != 0)
+                {
+                    ++WalkableCount;
+                }
+                if ((Flags & 0x0002) != 0) ++MiddleCount;
+                if ((Flags & 0x0004) != 0) ++HighCount;
+            }
+
             for (int MI = 0; MI < 16; MI++)
             {
                 size_t Vf4Off = (size_t)MegaIdx * 16 + MI;
@@ -277,32 +320,41 @@ void GameMap::ApplyTilesetData(const std::vector<uint16_t>* Cv5Data,
                     continue;
 
                 const uint16_t Flags = (*Vf4Data)[Vf4Off];
-                if ((Flags & 0x0001) != 0)
-                    ++WalkableCount;
-                if ((Flags & 0x0002) != 0)
-                    ++MiddleCount;
-                if ((Flags & 0x0004) != 0)
-                    ++HighCount;
                 T.SubtileGroundHeights[(size_t)MI] =
                     (Flags & 0x0004) != 0 ? 2 :
                     (Flags & 0x0002) != 0 ? 1 : 0;
+                const bool SubWalkable = (Flags & 0x0001) != 0;
+                const bool SubIsRamp = (Flags & 0x0010) != 0;
+                T.SubtileWalkable[(size_t)MI] = SubWalkable;
+                T.SubtileRamp[(size_t)MI] = SubIsRamp;
                 mNavigationGrid.SetBaseCell(
                     X * Game::Pathfinding::NavigationCellsPerBuildTile +
                         (MI % 4),
                     Y * Game::Pathfinding::NavigationCellsPerBuildTile +
                         (MI / 4),
-                    (Flags & 0x0001) != 0,
-                    T.SubtileGroundHeights[(size_t)MI]);
+                    SubWalkable,
+                    T.SubtileGroundHeights[(size_t)MI],
+                    SubIsRamp);
             }
 
+            T.Terrain = MegaTileToTerrain(MT);
             T.Walkable = (WalkableCount >= 8);
             T.Buildable = (WalkableCount > 12);
+            if (!T.Walkable &&
+                T.Terrain != TerrainType::Water &&
+                T.Terrain != TerrainType::Lava &&
+                T.Terrain != TerrainType::HighRock)
+            {
+                T.Terrain = TerrainType::Rock;
+            }
             // Match the reference megatile aggregation: ramps/middle ground
             // remain level 1 while true high ground remains level 2.
             T.GroundHeight = HighCount >= 12 ? 2 :
                 (HighCount < 12 && MiddleCount + HighCount >= 12 ? 1 : 0);
             ++GroundHeightTiles[std::min(2, (int)T.GroundHeight)];
             T.HasCreep = false;
+            T.Resource = ResourceType::None;
+            T.ResourceAmount = 0;
             if (T.Walkable) WalkableTiles++;
             else UnwalkableTiles++;
         }
@@ -354,8 +406,10 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
         T.MegaTileID = MT;
         T.Terrain = MegaTileToTerrain(MT);
         T.Walkable = (T.Terrain != TerrainType::Water && T.Terrain != TerrainType::Lava
-                      && T.Terrain != TerrainType::HighRock);
+                      && T.Terrain != TerrainType::Rock && T.Terrain != TerrainType::HighRock);
         T.Buildable = T.Walkable;
+        T.SubtileWalkable.fill(T.Walkable);
+        T.SubtileRamp.fill(false);
         T.Resource = ResourceType::None;
         T.ResourceAmount = 0;
 
@@ -374,7 +428,7 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
         int TileX = U.X / 32;
         int TileY = U.Y / 32;
 
-        if (U.UnitID == 115) // Start Location
+        if (U.UnitID == 214 || U.UnitID == 115) // Start Location (214 = StarCraft standard, 115 = legacy)
         {
             StartLocationInfo SL;
             SL.TileX = TileX;
@@ -382,7 +436,7 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
             SL.PlayerIndex = U.Owner;
             mStartLocations.push_back(SL);
         }
-        else if (U.UnitID >= 100 && U.UnitID <= 102) // Mineral Patch
+        else if ((U.UnitID >= 176 && U.UnitID <= 178) || (U.UnitID >= 100 && U.UnitID <= 102)) // Mineral Patch (176..178 = StarCraft standard, 100..102 = legacy)
         {
             if (IsInBounds(TileX, TileY))
             {
@@ -392,7 +446,7 @@ void GameMap::LoadFromChk(const ChkParser& Parser)
                 T.Buildable = false;
             }
         }
-        else if (U.UnitID == 103) // Vespene Geyser
+        else if (U.UnitID == 188 || U.UnitID == 103) // Vespene Geyser (188 = StarCraft standard, 103 = legacy)
         {
             if (IsInBounds(TileX, TileY))
             {

@@ -133,22 +133,25 @@ inline void ExecuteHudCommandSlot(
     }
     case UI::ActionKind::Train:
     {
-        const auto* Unit =
-            EntityManager.GetComponent<Game::Components::UnitComponent>(
-                EntityIDs[0]);
-        const bool IsLarva =
-            Unit && Unit->ChkUnitID == 35 &&
-            EntityManager.GetComponent<Game::Components::LarvaComponent>(
-                EntityIDs[0]);
-        if (IsLarva)
+        for (int EntityID : EntityIDs)
         {
-            Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
-                EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
-        }
-        else
-        {
-            Game::Systems::ProductionSystem::StartTrain(
-                EntityManager, EntityIDs[0], CommandDef.TargetUnitDefID);
+            const auto* Unit =
+                EntityManager.GetComponent<Game::Components::UnitComponent>(
+                    EntityID);
+            const bool IsLarva =
+                Unit && Unit->ChkUnitID == 35 &&
+                EntityManager.GetComponent<Game::Components::LarvaComponent>(
+                    EntityID);
+            if (IsLarva)
+            {
+                Game::Systems::ZergSystem::StartMorphLarvaIntoUnit(
+                    EntityManager, EntityID, CommandDef.TargetUnitDefID);
+            }
+            else
+            {
+                Game::Systems::ProductionSystem::StartTrain(
+                    EntityManager, EntityID, CommandDef.TargetUnitDefID);
+            }
         }
         break;
     }
@@ -494,6 +497,7 @@ inline bool TryDispatchCommandHotkey(
 inline void ExecuteKeyboardCommandShortcut(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
+    UI::Hud& Hud,
     KeyboardCommandShortcut Shortcut)
 {
     if (EntityIDs.empty() || Shortcut == KeyboardCommandShortcut::None)
@@ -508,14 +512,10 @@ inline void ExecuteKeyboardCommandShortcut(
         SetAllCommand(EntityManager, EntityIDs, Game::Components::CommandType::HoldPosition);
         break;
     case KeyboardCommandShortcut::Patrol:
-        for (int EntityID : EntityIDs)
-            if (auto* Command = EntityManager.GetComponent<Game::Components::CommandComponent>(EntityID))
-                Command->CurrentCommand = Game::Components::CommandType::Patrol;
+        Hud.BeginCommandTarget(UI::PendingTargetMode::Patrol, UI::HudCommandId::Patrol);
         break;
     case KeyboardCommandShortcut::Follow:
-        for (int EntityID : EntityIDs)
-            if (auto* Command = EntityManager.GetComponent<Game::Components::CommandComponent>(EntityID))
-                Command->CurrentCommand = Game::Components::CommandType::Follow;
+        Hud.BeginCommandTarget(UI::PendingTargetMode::Follow, UI::HudCommandId::Follow);
         break;
     default:
         break;
@@ -737,12 +737,13 @@ inline bool ExecutePendingTargetCommand(
 inline void ExecuteAttackMoveCommand(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
-    const Core::Math::Vec2& Target)
+    const Core::Math::Vec2& Target,
+    bool Queued = false)
 {
     if (EntityIDs.empty())
         return;
 
-    Game::Systems::CombatSystem::IssueAttackMove(EntityManager, EntityIDs, Target);
+    Game::Systems::CombatSystem::IssueAttackMove(EntityManager, EntityIDs, Target, Queued);
 }
 
 inline bool TryIssueScvRepairCommand(
@@ -896,7 +897,8 @@ inline void ExecuteSmartClickCommand(
     Core::ECS::EntityManager& EntityManager,
     const std::vector<int>& EntityIDs,
     const ClickTargetContext& ClickTarget,
-    const Core::Math::Vec2& Target)
+    const Core::Math::Vec2& Target,
+    bool Queued = false)
 {
     if (EntityIDs.empty())
         return;
@@ -947,7 +949,7 @@ inline void ExecuteSmartClickCommand(
     {
         auto Attackers = FilterAttackersForTarget(EntityManager, ActingEntityIDs, ClickTarget.EnemyEntityID);
         if (!Attackers.empty())
-            Game::Systems::CombatSystem::IssueAttack(EntityManager, Attackers, ClickTarget.EnemyEntityID);
+            Game::Systems::CombatSystem::IssueAttack(EntityManager, Attackers, ClickTarget.EnemyEntityID, Queued);
 
         if (Attackers.size() < ActingEntityIDs.size())
         {
@@ -959,7 +961,7 @@ inline void ExecuteSmartClickCommand(
                     Movers.push_back(EntityID);
             }
             if (!Movers.empty())
-                Game::Systems::CommandSystem::IssueMove(EntityManager, Movers, Target);
+                Game::Systems::CommandSystem::IssueMove(EntityManager, Movers, Target, -1, Queued);
         }
     }
     else if (ClickTarget.ResourceEntityID >= 0)
@@ -970,7 +972,7 @@ inline void ExecuteSmartClickCommand(
     }
     else
     {
-        Game::Systems::CommandSystem::IssueMove(EntityManager, ActingEntityIDs, Target);
+        Game::Systems::CommandSystem::IssueMove(EntityManager, ActingEntityIDs, Target, -1, Queued);
     }
 }
 

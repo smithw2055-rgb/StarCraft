@@ -574,11 +574,15 @@ bool Shader2D::Init()
     (void)sWhiteImage;
 
     RebuildPipeline(true, false);
+    RebuildPipeline(false, false);
     return true;
 }
 
 void Shader2D::Shutdown()
 {
+    if (SpriteEffectPipelineNoBlend.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(SpriteEffectPipelineNoBlend.Pipeline)); SpriteEffectPipelineNoBlend.Pipeline = {}; }
+    if (HealthBarPipelineNoBlend.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(HealthBarPipelineNoBlend.Pipeline)); HealthBarPipelineNoBlend.Pipeline = {}; }
+    if (PipelineNoBlend.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(PipelineNoBlend.Pipeline)); PipelineNoBlend.Pipeline = {}; }
     if (SpriteEffectPipeline.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(SpriteEffectPipeline.Pipeline)); SpriteEffectPipeline.Pipeline = {}; }
     if (HealthBarPipeline.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(HealthBarPipeline.Pipeline)); HealthBarPipeline.Pipeline = {}; }
     if (Pipeline.Pipeline.id) { sg_destroy_pipeline(Render::ToSokol(Pipeline.Pipeline)); Pipeline.Pipeline = {}; }
@@ -629,24 +633,31 @@ void Shader2D::RebuildPipelineFor(GpuShaderHandle ShaderHandle,
 
 void Shader2D::RebuildPipeline(bool AlphaBlend, bool DepthEnabled)
 {
-    RebuildPipelineFor(Shader, Pipeline, AlphaBlend, DepthEnabled);
-    RebuildPipelineFor(HealthBarShader, HealthBarPipeline, AlphaBlend, DepthEnabled);
-    RebuildPipelineFor(SpriteEffectShader, SpriteEffectPipeline, AlphaBlend, DepthEnabled);
+    GpuPipelineHandle& Textured = AlphaBlend ? Pipeline : PipelineNoBlend;
+    GpuPipelineHandle& HealthBar = AlphaBlend ? HealthBarPipeline : HealthBarPipelineNoBlend;
+    GpuPipelineHandle& SpriteEffect =
+        AlphaBlend ? SpriteEffectPipeline : SpriteEffectPipelineNoBlend;
+    RebuildPipelineFor(Shader, Textured, AlphaBlend, DepthEnabled);
+    RebuildPipelineFor(HealthBarShader, HealthBar, AlphaBlend, DepthEnabled);
+    RebuildPipelineFor(SpriteEffectShader, SpriteEffect, AlphaBlend, DepthEnabled);
 }
 
-void Shader2D::BindPipeline()
+void Shader2D::BindPipeline(bool AlphaBlend)
 {
-    sg_apply_pipeline(Render::ToSokol(Pipeline.Pipeline));
+    sg_apply_pipeline(Render::ToSokol(
+        (AlphaBlend ? Pipeline : PipelineNoBlend).Pipeline));
 }
 
-void Shader2D::BindHealthBarPipeline()
+void Shader2D::BindHealthBarPipeline(bool AlphaBlend)
 {
-    sg_apply_pipeline(Render::ToSokol(HealthBarPipeline.Pipeline));
+    sg_apply_pipeline(Render::ToSokol(
+        (AlphaBlend ? HealthBarPipeline : HealthBarPipelineNoBlend).Pipeline));
 }
 
-void Shader2D::BindSpriteEffectPipeline()
+void Shader2D::BindSpriteEffectPipeline(bool AlphaBlend)
 {
-    sg_apply_pipeline(Render::ToSokol(SpriteEffectPipeline.Pipeline));
+    sg_apply_pipeline(Render::ToSokol(
+        (AlphaBlend ? SpriteEffectPipeline : SpriteEffectPipelineNoBlend).Pipeline));
 }
 
 void Shader2D::ApplyHealthBarParams(const HealthBarShaderParams& Params)

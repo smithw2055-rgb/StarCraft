@@ -42,6 +42,12 @@ public:
                           const Core::Math::Vec2& Target,
                           int PathingIgnoreEntityID);
 
+    static void IssueMove(Core::ECS::EntityManager& EM,
+                          const std::vector<Core::ECS::EntityID>& Entities,
+                          const Core::Math::Vec2& Target,
+                          int PathingIgnoreEntityID,
+                          bool Queued);
+
     // Explicit player commands must release only the affected worker from its
     // resource slot. Internal harvest/construction approach moves deliberately
     // bypass this through IssueMoveAndHasPath().
@@ -66,6 +72,11 @@ public:
     static void IssueAttackMove(Core::ECS::EntityManager& EM,
                                  const std::vector<int>& Units,
                                  Core::Math::Vec2 Target);
+
+    static void IssueAttackMove(Core::ECS::EntityManager& EM,
+                                 const std::vector<int>& Units,
+                                 Core::Math::Vec2 Target,
+                                 bool Queued);
 
     // New unified order interface
     static void IssueOrder(Core::ECS::EntityManager& EM,

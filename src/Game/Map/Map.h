@@ -31,6 +31,12 @@ struct Tile
     uint16_t MegaTileID = 0;
     uint8_t GroundHeight = 0;
     std::array<uint8_t, 16> SubtileGroundHeights{};
+    std::array<bool, 16> SubtileWalkable = {
+        true, true, true, true,
+        true, true, true, true,
+        true, true, true, true,
+        true, true, true, true};
+    std::array<bool, 16> SubtileRamp{};
 };
 
 struct StartLocationInfo

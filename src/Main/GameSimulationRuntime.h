@@ -28,8 +28,6 @@ inline void UpdateGameplaySimulationRuntime(
     });
 
     Session.UpdateSystems(Dt);
-    if (Session.IsMapLoaded())
-        Session.SyncCreepPresentation();
     Audio.UpdateForClientView(Client, Dt);
 
     if (Session.IsReplayRecording())

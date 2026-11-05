@@ -57,6 +57,7 @@ public:
     bool IsPointInHudBand(int ScreenX, int ScreenY, int ViewportWidth, int ViewportHeight) const;
 
     void OnButtonInvoked(int ButtonIndex);
+    void BeginCommandTarget(PendingTargetMode Mode, HudCommandId CommandId);
     void CancelPendingTarget();
     bool HasPendingTarget() const { return mState.CommandPanel.PendingTargetModeValue != PendingTargetMode::None; }
     PendingTargetMode GetPendingTargetMode() const { return mState.CommandPanel.PendingTargetModeValue; }

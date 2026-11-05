@@ -482,57 +482,86 @@ void ZergSystem::Update(float DeltaTime)
     // Expanding providers sustain their ellipse; every other living grounded
     // Zerg building sustains only its occupied footprint. No ordinary tech
     // building can chain new creep beyond the field that already exists.
-    std::vector<uint8_t> SustainedCreep(mCreepGrid.size(), 0);
-    for (const auto& Provider : CreepProviders)
+    bool AnyProviderRemoved = false;
+    for (const auto& Pair : mCreepProviderStates)
     {
-        VisitProviderTiles(
-            Provider.TileX, Provider.TileY,
-            Provider.FootprintWidth, Provider.FootprintHeight,
-            Provider.SustainsFullEllipse,
-            [&](int X, int Y)
-            {
-                const size_t Index =
-                    (size_t)Y * (size_t)mMapWidth + (size_t)X;
-                if (mCreepGrid[Index])
-                    SustainedCreep[Index] = 1;
-            });
-    }
-
-    // A source appearing over tiles that were already receding sustains them
-    // again. OpenBW clears the receding state instead of allowing those tiles
-    // to disappear underneath a new provider.
-    for (size_t Index = 0; Index < SustainedCreep.size(); ++Index)
-        if (SustainedCreep[Index])
-            mCreepRecedingGrid[Index] = 0;
-
-    // Only tiles inside a removed provider's maximum support area begin to
-    // recede. Pre-placed map creep outside that area remains untouched; creep
-    // inside it follows the same OpenBW removal rule as dynamically grown
-    // creep. A normal building's recorded footprint becomes eligible here
-    // after that building itself is destroyed.
-    for (auto It = mCreepProviderStates.begin();
-         It != mCreepProviderStates.end();)
-    {
-        if (std::find(LiveProviderIDs.begin(), LiveProviderIDs.end(), It->first) !=
+        if (std::find(LiveProviderIDs.begin(), LiveProviderIDs.end(), Pair.first) ==
             LiveProviderIDs.end())
         {
-            ++It;
-            continue;
+            AnyProviderRemoved = true;
+            break;
+        }
+    }
+    bool AnyRecedingTile = false;
+    if (!AnyProviderRemoved)
+    {
+        for (uint8_t Receding : mCreepRecedingGrid)
+        {
+            if (Receding)
+            {
+                AnyRecedingTile = true;
+                break;
+            }
+        }
+    }
+
+    if (AnyProviderRemoved || AnyRecedingTile)
+    {
+        mSustainedCreepGrid.assign(mCreepGrid.size(), 0);
+        for (const auto& Provider : CreepProviders)
+        {
+            VisitProviderTiles(
+                Provider.TileX, Provider.TileY,
+                Provider.FootprintWidth, Provider.FootprintHeight,
+                Provider.SustainsFullEllipse,
+                [&](int X, int Y)
+                {
+                    const size_t Index =
+                        (size_t)Y * (size_t)mMapWidth + (size_t)X;
+                    if (mCreepGrid[Index])
+                        mSustainedCreepGrid[Index] = 1;
+                });
         }
 
-        const auto& RemovedProvider = It->second;
-        VisitProviderTiles(
-            RemovedProvider.TileX, RemovedProvider.TileY,
-            RemovedProvider.FootprintWidth, RemovedProvider.FootprintHeight,
-            RemovedProvider.SustainsFullEllipse,
-            [&](int X, int Y)
+        // A source appearing over tiles that were already receding sustains them
+        // again. OpenBW clears the receding state instead of allowing those tiles
+        // to disappear underneath a new provider.
+        if (AnyRecedingTile)
+        {
+            for (size_t Index = 0; Index < mSustainedCreepGrid.size(); ++Index)
+                if (mSustainedCreepGrid[Index])
+                    mCreepRecedingGrid[Index] = 0;
+        }
+
+        // Only tiles inside a removed provider's maximum support area begin to
+        // recede. Pre-placed map creep outside that area remains untouched; creep
+        // inside it follows the same OpenBW removal rule as dynamically grown
+        // creep. A normal building's recorded footprint becomes eligible here
+        // after that building itself is destroyed.
+        for (auto It = mCreepProviderStates.begin();
+             It != mCreepProviderStates.end();)
+        {
+            if (std::find(LiveProviderIDs.begin(), LiveProviderIDs.end(), It->first) !=
+                LiveProviderIDs.end())
             {
-                const size_t Index =
-                    (size_t)Y * (size_t)mMapWidth + (size_t)X;
-                if (mCreepGrid[Index] && !SustainedCreep[Index])
-                    mCreepRecedingGrid[Index] = 1;
-            });
-        It = mCreepProviderStates.erase(It);
+                ++It;
+                continue;
+            }
+
+            const auto& RemovedProvider = It->second;
+            VisitProviderTiles(
+                RemovedProvider.TileX, RemovedProvider.TileY,
+                RemovedProvider.FootprintWidth, RemovedProvider.FootprintHeight,
+                RemovedProvider.SustainsFullEllipse,
+                [&](int X, int Y)
+                {
+                    const size_t Index =
+                        (size_t)Y * (size_t)mMapWidth + (size_t)X;
+                    if (mCreepGrid[Index] && !mSustainedCreepGrid[Index])
+                        mCreepRecedingGrid[Index] = 1;
+                });
+            It = mCreepProviderStates.erase(It);
+        }
     }
 
     const auto RecedeOneUnsupportedBoundaryTile = [&]()
@@ -619,22 +648,45 @@ void ZergSystem::SpreadCreep(Core::ECS::EntityManager& EM)
 
 void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
 {
+    std::vector<int> AllLarvaUnits;
+    bool CollectedLarvaUnits = false;
+    auto CollectLarvaUnits = [&]()
+    {
+        if (CollectedLarvaUnits)
+            return;
+        CollectedLarvaUnits = true;
+        auto AllUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+        for (int Uid : AllUnits)
+        {
+            auto* UU = EM.GetComponent<UnitComponent>(Uid);
+            if (UU && UU->ChkUnitID == 0x23 && UU->HitPoints > 0)
+                AllLarvaUnits.push_back(Uid);
+        }
+    };
+
     auto Buildings = EM.GetEntitiesWith<BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
-        if (!B || !B->IsOrganic || B->UnderConstruction) continue;
+        const auto* Morph = EM.GetComponent<MorphComponent>(Eid);
+        const bool IsUpgradingBuilding =
+            Morph && Morph->IsMorphing && Morph->SourceUnitID == Eid;
+        if (!B || !B->IsOrganic || (B->UnderConstruction && !IsUpgradingBuilding))
+            continue;
 
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
         if (!Unit || Unit->HitPoints <= 0) continue;
-        const int BuildingDefID =
-            Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
-        const auto BuildingDef = Game::Races::GetUnitDefByID(BuildingDefID);
-        if (BuildingDef.Name != "Hatchery" &&
-            BuildingDef.Name != "Lair" &&
-            BuildingDef.Name != "Hive")
+        if (Unit->ChkUnitID != 131 && Unit->ChkUnitID != 132 && Unit->ChkUnitID != 133)
         {
-            continue;
+            const int BuildingDefID =
+                Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
+            const auto BuildingDef = Game::Races::GetUnitDefByID(BuildingDefID);
+            if (BuildingDef.Name != "Hatchery" &&
+                BuildingDef.Name != "Lair" &&
+                BuildingDef.Name != "Hive")
+            {
+                continue;
+            }
         }
 
         auto* HatcheryPlayer = EM.GetComponent<PlayerComponent>(Eid);
@@ -642,11 +694,12 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
         if (!HatcheryPlayer || !HatcheryTrans)
             continue;
 
+        CollectLarvaUnits();
+
         // Larvae are owned by an individual Hatchery/Lair/Hive in OpenBW.
         // Adopt nearby map-placed larvae that predate the explicit link.
         int ExistingLarvae = 0;
-        auto AllUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
-        for (int Uid : AllUnits)
+        for (int Uid : AllLarvaUnits)
         {
             auto* UU = EM.GetComponent<UnitComponent>(Uid);
             auto* UP = EM.GetComponent<PlayerComponent>(Uid);
@@ -697,6 +750,7 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
                     LUnit.ChkUnitID = 0x23;
                     LUnit.HitPoints = 25;
                     LUnit.MaxHitPoints = 25;
+                    LUnit.Armor = 10;
                     LUnit.SupplyCost = 0;
                     LUnit.Speed = 0.0f;
                     LUnit.SightRange = 4;
@@ -1510,14 +1564,20 @@ bool ZergSystem::StartMorphBuilding(Core::ECS::EntityManager& EM,
         Bldg->UnderConstruction = true;
     }
 
-    // Use the target building's authored construction sequence immediately,
-    // just as a newly placed Zerg building does.  Gameplay identity remains
-    // the source type until completion so the upgrading base can still
-    // receive workers and resources.
+    // Use the target building's authored construction cocoon sequence
+    // immediately (104 for Lair/Hive/Greater Spire upgrades, 102 for Sunken/Spore
+    // upgrades), matching Brood War's Zerg building morph visuals. Gameplay
+    // identity remains the source type until completion so the upgrading base
+    // can still receive workers and resources.
     auto* Render = EM.GetComponent<RenderComponent>(BuildingID);
     if (!Render)
         Render = &EM.AddComponent<RenderComponent>(BuildingID);
-    Render->ImageID = ResolveImageID(TargetDef.ChkUnitID);
+    const uint32_t MorphConstructionImageID =
+        BuildingSystem::ResolveConstructionImageID(TargetDef.ChkUnitID);
+    Render->ImageID = (MorphConstructionImageID != UINT32_MAX &&
+                       MorphConstructionImageID != (uint32_t)TargetDef.ChkUnitID)
+        ? MorphConstructionImageID
+        : ResolveImageID(TargetDef.ChkUnitID);
     Render->FrameIndex = 0;
     Render->TotalFrames = 1;
 
@@ -1615,12 +1675,34 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         if (auto* Path = EM.GetComponent<PathfindingComponent>(MorphEntityID))
         {
             Path->IsAir = false;
-            ApplyCollisionBounds(*Path, ResolveCollisionBounds(TargetDef.ChkUnitID));
+            UnitCollisionBounds Bounds = ResolveCollisionBounds(TargetDef.ChkUnitID);
+            if (!Bounds.IsValid)
+            {
+                const auto Footprint = BuildingSystem::BuildingFootprintSizeForChk(TargetDef.ChkUnitID);
+                Bounds.IsValid = true;
+                Bounds.Left = Footprint.W * 16 - 1;
+                Bounds.Right = Footprint.W * 16 - 1;
+                Bounds.Up = Footprint.H * 16 - 1;
+                Bounds.Down = Footprint.H * 16 - 1;
+            }
+            ApplyCollisionBounds(*Path, Bounds);
         }
         auto* Render = EM.GetComponent<RenderComponent>(MorphEntityID);
         if (!Render)
             Render = &EM.AddComponent<RenderComponent>(MorphEntityID);
         Render->ImageID = ResolveImageID(TargetDef.ChkUnitID);
+
+        if (TargetDef.GroundDamage > 0 || TargetDef.AirDamage > 0)
+        {
+            auto* Combat = EM.GetComponent<CombatComponent>(MorphEntityID);
+            if (!Combat)
+                Combat = &EM.AddComponent<CombatComponent>(MorphEntityID);
+            Game::Races::ApplyCombatDefinition(*Combat, TargetDef, false);
+            if (TargetDef.ChkUnitID == 146) // Sunken Colony
+            {
+                Combat->WeaponBeh = WeaponBehavior::AppearOnTarget;
+            }
+        }
 
         Logger::Info("ZergSystem",
             "Building morph complete: " + TargetDef.Name +

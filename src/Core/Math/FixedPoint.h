@@ -146,11 +146,25 @@ struct FixedVec2
     FixedVec2& operator-=(const FixedVec2& Other) { X -= Other.X; Y -= Other.Y; return *this; }
     FixedVec2& operator*=(fp8 Scalar) { X *= Scalar; Y *= Scalar; return *this; }
 
-    fp8 LengthSq() const { return X * X + Y * Y; }
+    int64_t LengthSq() const
+    {
+        const int64_t RX = (int64_t)X.raw_value;
+        const int64_t RY = (int64_t)Y.raw_value;
+        return RX * RX + RY * RY;
+    }
     float LengthAsFloat() const { return std::sqrt((float)X.raw_value * X.raw_value / 65536.0f + (float)Y.raw_value * Y.raw_value / 65536.0f); }
 
-    fp8 Dot(const FixedVec2& Other) const { return X * Other.X + Y * Other.Y; }
-    fp8 DistanceSqTo(const FixedVec2& Other) const { return (*this - Other).LengthSq(); }
+    int64_t Dot(const FixedVec2& Other) const
+    {
+        return (int64_t)X.raw_value * Other.X.raw_value +
+               (int64_t)Y.raw_value * Other.Y.raw_value;
+    }
+    int64_t DistanceSqTo(const FixedVec2& Other) const
+    {
+        const int64_t DX = (int64_t)X.raw_value - Other.X.raw_value;
+        const int64_t DY = (int64_t)Y.raw_value - Other.Y.raw_value;
+        return DX * DX + DY * DY;
+    }
 
     static FixedVec2 Zero() { return {fp8::Zero(), fp8::Zero()}; }
 };

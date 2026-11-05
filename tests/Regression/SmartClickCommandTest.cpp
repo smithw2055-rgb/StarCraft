@@ -15,6 +15,15 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
                                const std::vector<int>& Attackers,
                                int TargetEntityID)
 {
+    IssueAttack(EM, Attackers, TargetEntityID, false);
+}
+
+void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
+                               const std::vector<int>& Attackers,
+                               int TargetEntityID,
+                               bool Queued)
+{
+    (void)Queued;
     for (int EntityID : Attackers)
     {
         auto* Command = EM.GetComponent<Game::Components::CommandComponent>(EntityID);
@@ -24,6 +33,7 @@ void CombatSystem::IssueAttack(Core::ECS::EntityManager& EM,
         Command->TargetEntityID = TargetEntityID;
     }
 }
+
 
 void CombatSystem::ApplyDamage(Core::ECS::EntityManager&,
                                int,

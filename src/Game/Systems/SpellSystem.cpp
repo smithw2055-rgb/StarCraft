@@ -19,6 +19,13 @@ using Core::Utils::Logger;
 
 namespace
 {
+    SpellSystem::ImageIDResolver gImageResolver;
+
+    uint32_t ResolveImageID(int ChkUnitID)
+    {
+        return gImageResolver ? gImageResolver(ChkUnitID) : static_cast<uint32_t>(ChkUnitID);
+    }
+
     bool IsMechanicalLockdownTarget(Core::ECS::EntityManager& EM, int EntityID)
     {
         const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
@@ -72,7 +79,6 @@ namespace
         Path.CurrentVelocity = {};
         Path.CurrentSpeed = 0.0f;
         Path.TargetSpeed = 0.0f;
-        Path.RepulseVector = {};
         Path.FriendlyYieldVector = {};
         Path.FriendlyYieldAnchor = {};
         Path.HasFriendlyYieldAnchor = false;
@@ -104,6 +110,11 @@ namespace
         Combat.LastDamagerEntityID = -1;
         Combat.AutoTargetLockSeconds = 0.0f;
     }
+}
+
+void SpellSystem::SetImageResolver(ImageIDResolver Resolver)
+{
+    gImageResolver = std::move(Resolver);
 }
 
 int SpellSystem::GetSpellEnergyCost(SpellType Spell)
@@ -480,6 +491,8 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 auto* TUnit = EM.GetComponent<UnitComponent>(TargetID);
                 if (!TTrans || !TUnit || TUnit->HitPoints <= 0 || TUnit->IsInvincible)
                     continue;
+                if (TUnit->LoadedInTransportID >= 0)
+                    continue;
 
                 if (auto* Status = EM.GetComponent<StatusEffectComponent>(TargetID);
                     Status && Status->HasEffect(StatusEffect::Stasis))
@@ -630,7 +643,14 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
                 auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
-                if (!UUnit || !UTrans) continue;
+                if (!UUnit || !UTrans || UUnit->HitPoints <= 0) continue;
+                if (UUnit->LoadedInTransportID >= 0) continue;
+                if (EM.GetComponent<BuildingComponent>(Uid) || EM.GetComponent<ResourceComponent>(Uid))
+                    continue;
+                if (UUnit->ChkUnitID == 71 || UUnit->ChkUnitID == 86)
+                    continue;
+                if (const auto* Burrow = EM.GetComponent<BurrowComponent>(Uid); Burrow && Burrow->IsBurrowed)
+                    continue;
                 if (UTrans->Position.DistanceTo(Pos) <= Radius)
                 {
                     auto* Status = EM.GetComponent<StatusEffectComponent>(Uid);
@@ -920,7 +940,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                         BPath.NodeTolerance = 8.0f;
                         BPath.IsAir = false;
 
-                        BRender.ImageID = (uint32_t)BroodlingDef.ChkUnitID;
+                        BRender.ImageID = ResolveImageID(BroodlingDef.ChkUnitID);
                         BRender.FrameIndex = 0;
                         BRender.TotalFrames = 1;
                         BRender.Tint = Core::Colors::White();
@@ -1044,16 +1064,18 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 {
                     const int EnergyDrained = TargetUnit->EnergyPoints;
                     TargetUnit->EnergyPoints = 0;
-                    CombatComponent FakeCombat;
-                    FakeCombat.GroundDmgType = DamageType::IgnoreArmor;
-                    FakeCombat.AirDmgType = DamageType::IgnoreArmor;
-                    FakeCombat.GroundDamage = EnergyDrained;
-                    FakeCombat.AirDamage = EnergyDrained;
-                    FakeCombat.WeaponBeh = WeaponBehavior::AppearOnTarget;
-                    FakeCombat.CanTargetGround = true;
-                    FakeCombat.CanTargetAir = true;
-                    FakeCombat.AttackRange = 10.0f;
-                    CombatSystem::ApplyDamage(EM, TargetEntityID, FakeCombat, CasterID, EnergyDrained);
+                    const auto* TargetStatus = EM.GetComponent<StatusEffectComponent>(TargetEntityID);
+                    const bool InStasis = TargetStatus && TargetStatus->HasEffect(StatusEffect::Stasis);
+                    if (!TargetUnit->IsInvincible && !InStasis)
+                    {
+                        TargetUnit->HitPoints = std::max(0, TargetUnit->HitPoints - EnergyDrained);
+                        TargetUnit->HitPointSubDamage = 0;
+                        if (TargetUnit->HitPoints <= 0)
+                        {
+                            RecordUnitDeath(EM, TargetEntityID, CasterID, true);
+                            EM.DestroyEntity(TargetEntityID);
+                        }
+                    }
                 }
             }
             Logger::Info("SpellSystem", "Feedback cast");
@@ -1191,7 +1213,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
                     if (auto* TargetRender = EM.GetComponent<RenderComponent>(TargetEntityID))
                     {
-                        TargetRender->ImageID = static_cast<uint32_t>(InfestedCommandCenterChkUnitID);
+                        TargetRender->ImageID = ResolveImageID(InfestedCommandCenterChkUnitID);
                     }
 
                     // Queen sacrifices herself to infest the Command Center
@@ -1262,6 +1284,8 @@ void SpellSystem::Update(float DeltaTime)
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
                 auto* UTrans = EM.GetComponent<TransformComponent>(Uid);
                 if (!UUnit || !UTrans || UUnit->HitPoints <= 0 || UUnit->IsInvincible)
+                    continue;
+                if (UUnit->LoadedInTransportID >= 0)
                     continue;
                 if (EM.GetComponent<BuildingComponent>(Uid) || EM.GetComponent<ResourceComponent>(Uid))
                     continue;

@@ -303,6 +303,11 @@ void ClientRuntime::CancelPointerGesture()
     Selector->CancelPointerGesture();
 }
 
+void ClientRuntime::ResetSessionState()
+{
+    Selector->ResetSessionState();
+}
+
 void ClientRuntime::PruneSelection(Core::ECS::EntityManager& Entities)
 {
     Selector->PruneAgainst(Entities);
@@ -310,8 +315,8 @@ void ClientRuntime::PruneSelection(Core::ECS::EntityManager& Entities)
 
 void ClientRuntime::HandleControlGroupHotkeys(Core::ECS::EntityManager& Entities)
 {
-    const bool CtrlDown = Core::Platform::IsKeyDown(341) || Core::Platform::IsKeyDown(345);
-    const bool ShiftDown = Core::Platform::IsKeyDown(340) || Core::Platform::IsKeyDown(344);
+    const bool CtrlDown = Core::Platform::IsControlDown();
+    const bool ShiftDown = Core::Platform::IsShiftDown();
 
     for (int K = 0; K < 10; K++)
     {

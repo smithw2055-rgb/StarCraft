@@ -216,7 +216,7 @@ static const uint8_t kFont5x7[][5] = {
     {0x08,0x04,0x08,0x10,0x08},
 };
 
-
+static constexpr int FirstChar = 32;
 
 bool BitmapFont::Init()
 {
@@ -251,11 +251,10 @@ bool BitmapFont::Init()
         }
     }
 
-    UpdateGpuTexture();
-    return mTexture.Image.id != 0;
+    return CreateGpuTexture();
 }
 
-void BitmapFont::UpdateGpuTexture()
+bool BitmapFont::CreateGpuTexture()
 {
     if (mTexture.View.id) { sg_destroy_view(Render::ToSokol(mTexture.View)); mTexture.View = {}; }
     if (mTexture.Image.id) { sg_destroy_image(Render::ToSokol(mTexture.Image)); mTexture.Image = {}; }
@@ -264,13 +263,14 @@ void BitmapFont::UpdateGpuTexture()
     Desc.width = AtlasW;
     Desc.height = AtlasH;
     Desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+    Desc.usage.dynamic_update = true;
     Desc.data.mip_levels[0] = { mPixels.data(), mPixels.size() };
     Desc.label = "bitmap-font-atlas";
     mTexture.Image = Render::FromSokol(sg_make_image(&Desc));
     if (mTexture.Image.id == 0)
     {
         Core::Utils::Logger::Error("BitmapFont", "sg_make_image failed");
-        return;
+        return false;
     }
 
     sg_view_desc VDesc = {};
@@ -282,7 +282,22 @@ void BitmapFont::UpdateGpuTexture()
         sg_destroy_image(Render::ToSokol(mTexture.Image));
         mTexture.Image = {};
         Core::Utils::Logger::Error("BitmapFont", "sg_make_view failed");
+        return false;
     }
+
+    mAtlasDirty = false;
+    return true;
+}
+
+void BitmapFont::UploadPendingGlyphs()
+{
+    if (!mAtlasDirty || mTexture.Image.id == 0 || mPixels.empty())
+        return;
+
+    sg_image_data Data = {};
+    Data.mip_levels[0] = { mPixels.data(), mPixels.size() };
+    sg_update_image(Render::ToSokol(mTexture.Image), &Data);
+    mAtlasDirty = false;
 }
 
 void BitmapFont::Shutdown()
@@ -292,6 +307,7 @@ void BitmapFont::Shutdown()
     mPixels.clear();
     mUnicodeSlots.clear();
     mNextSlot = 0;
+    mAtlasDirty = false;
 }
 
 void BitmapFont::GetCharUV(char C, float UV[4]) const
@@ -380,12 +396,20 @@ bool BitmapFont::GetGlyphUV(uint32_t Codepoint, float UV[4], bool& OutIsWide)
     auto It = mUnicodeSlots.find(Codepoint);
     if (It == mUnicodeSlots.end())
     {
-        constexpr int MaxSlots = 32 * 28; // 896
-        if (mNextSlot >= MaxSlots)
-            return false;
+        if (mSlotToCodepoint.size() < (size_t)MaxUnicodeSlots)
+            mSlotToCodepoint.resize(MaxUnicodeSlots, 0);
 
-        int SlotIndex = mNextSlot++;
+        int SlotIndex = mNextSlot % MaxUnicodeSlots;
+        ++mNextSlot;
+
+        uint32_t OldCodepoint = mSlotToCodepoint[(size_t)SlotIndex];
+        if (OldCodepoint != 0 && OldCodepoint != Codepoint)
+        {
+            mUnicodeSlots.erase(OldCodepoint);
+        }
+
         mUnicodeSlots[Codepoint] = SlotIndex;
+        mSlotToCodepoint[(size_t)SlotIndex] = Codepoint;
 
         int SlotCol = SlotIndex % 32;
         int SlotRow = SlotIndex / 32;
@@ -393,7 +417,7 @@ bool BitmapFont::GetGlyphUV(uint32_t Codepoint, float UV[4], bool& OutIsWide)
         int SlotY = 64 + SlotRow * 16;
 
         RenderChineseGlyph(Codepoint, SlotX, SlotY);
-        UpdateGpuTexture();
+        mAtlasDirty = true;
         It = mUnicodeSlots.find(Codepoint);
     }
 

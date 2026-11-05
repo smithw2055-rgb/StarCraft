@@ -79,10 +79,11 @@ struct GameSession
 
         for (int Y = 0; Y < MapData.Height; ++Y)
         {
+            const size_t RowBase = (size_t)Y * (size_t)MapData.Width;
             for (int X = 0; X < MapData.Width; ++X)
             {
-                const uint8_t HasCreep = (EcsMap.IsInBounds(X, Y) && EcsMap.GetTile(X, Y).HasCreep) ? 1 : 0;
-                MapData.Creep[(size_t)Y * (size_t)MapData.Width + (size_t)X] = HasCreep;
+                const uint8_t HasCreep = EcsMap.GetTile(X, Y).HasCreep ? 1 : 0;
+                MapData.Creep[RowBase + (size_t)X] = HasCreep;
             }
         }
     }
@@ -208,6 +209,16 @@ struct GameSession
     void BuildEcsMapFromLoadedMap(const TilesetDataT* TilesetData)
     {
         EcsMap.Generate(MapData.Width, MapData.Height);
+        EcsMap.GetStartLocations().clear();
+        for (const auto& SL : MapData.StartLocations)
+        {
+            Game::Map::StartLocationInfo Info;
+            Info.TileX = SL.TileX;
+            Info.TileY = SL.TileY;
+            Info.PlayerIndex = SL.PlayerId;
+            EcsMap.GetStartLocations().push_back(Info);
+        }
+
         const size_t EcsTileCount = (size_t)MapData.Width * (size_t)MapData.Height;
         if (MapData.MegaTileIds.size() >= EcsTileCount)
         {
@@ -223,6 +234,18 @@ struct GameSession
 
         if (TilesetData && TilesetData->Loaded)
             EcsMap.ApplyTilesetData(&TilesetData->Cv5, &TilesetData->Vf4);
+
+        if (MapData.Walkable.size() >= EcsTileCount)
+        {
+            for (int Y = 0; Y < MapData.Height; ++Y)
+            {
+                for (int X = 0; X < MapData.Width; ++X)
+                {
+                    const size_t Index = (size_t)Y * (size_t)MapData.Width + (size_t)X;
+                    MapData.Walkable[Index] = EcsMap.IsWalkable(X, Y) ? 1 : 0;
+                }
+            }
+        }
     }
 
     void RebuildRegionsFromEcsMap()

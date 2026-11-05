@@ -1462,6 +1462,257 @@ int main()
                 MovingRepairTransform->Position) < 48.0f,
         "SCV follows a moved mechanical target and completes its repair");
 
+    // End-to-end SCV mineral harvest + Command Center delivery cycle test
+    // using real CommandSystem + NavigationService + MovementSystem + HarvestSystem.
+    {
+        Core::ECS::SystemManager HarvestCycleSysMgr;
+        auto& HarvestCycleEM = HarvestCycleSysMgr.GetEntityManager();
+        Game::Map::GameMap HarvestCycleMap;
+        HarvestCycleMap.Generate(24, 24);
+        Game::Systems::CommandSystem::SetMap(&HarvestCycleMap);
+        Game::Systems::CommandSystem HarvestCycleCommands;
+        HarvestCycleCommands.Init(&HarvestCycleSysMgr);
+        Game::Systems::MovementSystem HarvestCycleMovement(
+            HarvestCycleSysMgr, &HarvestCycleMap);
+        Game::Systems::HarvestSystem HarvestCycleHarvest(HarvestCycleSysMgr);
+
+        constexpr int CyclePlayerID = 3;
+        auto& CycleResources =
+            Game::Systems::HarvestSystem::GetResources(CyclePlayerID);
+        CycleResources.Minerals = 50;
+        CycleResources.VespeneGas = 0;
+
+        const int CycleCommandCenter = CreateUnit(
+            HarvestCycleEM, 106, 0.0f, {384.0f, 384.0f});
+        auto* CycleCcUnit =
+            HarvestCycleEM.GetComponent<Game::Components::UnitComponent>(
+                CycleCommandCenter);
+        CycleCcUnit->UnitRace = Game::Components::Race::Terran;
+        CycleCcUnit->HitPoints = 1500;
+        CycleCcUnit->MaxHitPoints = 1500;
+        auto& CycleCcBuilding =
+            HarvestCycleEM.AddComponent<Game::Components::BuildingComponent>(
+                CycleCommandCenter);
+        CycleCcBuilding.IsBuilding = true;
+        CycleCcBuilding.IsLifted = false;
+        CycleCcBuilding.UnderConstruction = false;
+        CycleCcBuilding.BuildingDefID =
+            Game::Races::GetUnitDefID("CommandCenter");
+        auto& CycleCcPath =
+            HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(
+                CycleCommandCenter);
+        SetCollisionBounds(CycleCcPath, 64, 48, 63, 47);
+        HarvestCycleEM.AddComponent<Game::Components::PlayerComponent>(
+            CycleCommandCenter).PlayerID = CyclePlayerID;
+
+        const int CycleMineralA = CreateUnit(
+            HarvestCycleEM, 176, 0.0f, {160.0f, 352.0f});
+        auto& CycleMineralARes =
+            HarvestCycleEM.AddComponent<Game::Components::ResourceComponent>(
+                CycleMineralA);
+        CycleMineralARes.Type = Game::Components::ResourceType::Minerals;
+        CycleMineralARes.Amount = 1500;
+        CycleMineralARes.MaxAmount = 1500;
+        auto& CycleMineralAPath =
+            HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(
+                CycleMineralA);
+        SetCollisionBounds(CycleMineralAPath, 32, 16, 31, 15);
+
+        const int CycleMineralB = CreateUnit(
+            HarvestCycleEM, 176, 0.0f, {160.0f, 416.0f});
+        auto& CycleMineralBRes =
+            HarvestCycleEM.AddComponent<Game::Components::ResourceComponent>(
+                CycleMineralB);
+        CycleMineralBRes.Type = Game::Components::ResourceType::Minerals;
+        CycleMineralBRes.Amount = 1500;
+        CycleMineralBRes.MaxAmount = 1500;
+        auto& CycleMineralBPath =
+            HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(
+                CycleMineralB);
+        SetCollisionBounds(CycleMineralBPath, 32, 16, 31, 15);
+
+        std::vector<int> CycleScvs;
+        for (int Index = 0; Index < 2; ++Index)
+        {
+            const int CycleScv = CreateUnit(
+                HarvestCycleEM, 7, 2.8f,
+                {288.0f, 360.0f + (float)Index * 48.0f});
+            auto& CycleScvPath =
+                HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(
+                    CycleScv);
+            SetCollisionBounds(CycleScvPath, 11, 11, 11, 11);
+            HarvestCycleEM.AddComponent<Game::Components::PlayerComponent>(
+                CycleScv).PlayerID = CyclePlayerID;
+            auto& CycleScvHarvest =
+                HarvestCycleEM.AddComponent<Game::Components::HarvestComponent>(
+                    CycleScv);
+            CycleScvHarvest.MineInterval = 0.2f;
+            CycleScvs.push_back(CycleScv);
+        }
+
+        Require(Game::Systems::HarvestSystem::IssueHarvest(
+                    HarvestCycleEM, CycleScvs, CycleMineralA),
+            "SCVs accept mineral harvest order on real map");
+
+        for (int Step = 0; Step < 900 && CycleResources.Minerals < 50 + 32; ++Step)
+        {
+            HarvestCycleCommands.Update(0.05f);
+            HarvestCycleMovement.Update(0.05f);
+            HarvestCycleHarvest.Update(0.05f);
+            for (int CycleScv : CycleScvs)
+            {
+                const auto* Cmd =
+                    HarvestCycleEM.GetComponent<Game::Components::CommandComponent>(
+                        CycleScv);
+                Require(Cmd &&
+                        Cmd->CurrentCommand == Game::Components::CommandType::Harvest,
+                    "active SCV harvester preserves CommandType::Harvest throughout gather and return cycles");
+            }
+        }
+
+        Require(CycleResources.Minerals >= 50 + 32,
+            "SCVs complete multiple mineral harvest and Command Center delivery cycles without getting stuck");
+
+        // Now place SCVs at the upper-left delivery zone inside the Command Center
+        // (344, 352) and at the top-left corner band (319.2, 330.0), and order them
+        // to harvest the lower mineral patch (160, 416) so their departure trajectory
+        // moves diagonally down-left across the Command Center's expanded/unexpanded bounds.
+        const int BeforeCornerMinerals = CycleResources.Minerals;
+        HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+            CycleScvs[0])->Position = {344.0f, 352.0f};
+        HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+            CycleScvs[1])->Position = {319.2f, 330.0f};
+        for (int CycleScv : CycleScvs)
+        {
+            auto* Harvest =
+                HarvestCycleEM.GetComponent<Game::Components::HarvestComponent>(
+                    CycleScv);
+            Harvest->State = Game::Components::HarvestState::Idle;
+            Harvest->CarryingAmount = 0;
+        }
+        Require(Game::Systems::HarvestSystem::IssueHarvest(
+                    HarvestCycleEM, CycleScvs, CycleMineralB),
+            "SCVs inside Command Center delivery zone and corner band accept harvest order to lower mineral");
+
+        HarvestCycleCommands.Update(0.05f);
+        HarvestCycleMovement.Update(0.05f);
+        {
+            const auto* Pos0 =
+                HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+                    CycleScvs[0]);
+            const auto* Pos1 =
+                HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+                    CycleScvs[1]);
+            const auto* Path0 =
+                HarvestCycleEM.GetComponent<Game::Components::PathfindingComponent>(
+                    CycleScvs[0]);
+            const auto* Path1 =
+                HarvestCycleEM.GetComponent<Game::Components::PathfindingComponent>(
+                    CycleScvs[1]);
+            Require(Pos0 && Pos1 && Path0 && Path1 &&
+                    Pos0->Position.X < 343.5f &&
+                    Pos1->Position.X < 318.8f &&
+                    Path0->BlockedByEntityID < 0 &&
+                    Path1->BlockedByEntityID < 0,
+                "SCVs inside Command Center delivery zone and corner band immediately step toward lower mineral without static-blocker stall");
+        }
+        HarvestCycleHarvest.Update(0.05f);
+
+        bool BothReachedMineral = false;
+        for (int Step = 0;
+             Step < 900 &&
+             (CycleResources.Minerals < BeforeCornerMinerals + 32 || !BothReachedMineral);
+             ++Step)
+        {
+            HarvestCycleCommands.Update(0.05f);
+            HarvestCycleMovement.Update(0.05f);
+            HarvestCycleHarvest.Update(0.05f);
+            const auto* Pos0 =
+                HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+                    CycleScvs[0]);
+            const auto* Pos1 =
+                HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+                    CycleScvs[1]);
+            if (Pos0 && Pos1 && Pos0->Position.X < 240.0f && Pos1->Position.X < 240.0f)
+            {
+                BothReachedMineral = true;
+            }
+        }
+        Require(BothReachedMineral &&
+                CycleResources.Minerals >= BeforeCornerMinerals + 32,
+            "SCVs departing Command Center delivery zone and corner band diagonally to lower mineral do not get trapped");
+
+        // Partially surround the Command Center with adjacent buildings on the
+        // North and East sides (forming a sealed pocket on the East side while
+        // only the West side faces the mineral line) and place a stationary unit
+        // mid-route so harvesters must repath mid-route without losing their
+        // mineral/depot contact segment.
+        const auto AddAdjacentSupplyDepot = [&](Core::Math::Vec2 Pos,
+                                                int Left, int Up, int Right, int Down)
+        {
+            const int Depot = CreateUnit(HarvestCycleEM, 109, 0.0f, Pos);
+            auto* DepotUnit =
+                HarvestCycleEM.GetComponent<Game::Components::UnitComponent>(Depot);
+            DepotUnit->UnitRace = Game::Components::Race::Terran;
+            DepotUnit->HitPoints = 500;
+            DepotUnit->MaxHitPoints = 500;
+            auto& DepotBld =
+                HarvestCycleEM.AddComponent<Game::Components::BuildingComponent>(Depot);
+            DepotBld.IsBuilding = true;
+            DepotBld.IsLifted = false;
+            DepotBld.UnderConstruction = false;
+            DepotBld.BuildingDefID = Game::Races::GetUnitDefID("SupplyDepot");
+            auto& DepotPath =
+                HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(Depot);
+            SetCollisionBounds(DepotPath, Left, Up, Right, Down);
+            HarvestCycleEM.AddComponent<Game::Components::PlayerComponent>(Depot).PlayerID =
+                CyclePlayerID;
+            return Depot;
+        };
+        AddAdjacentSupplyDepot({352.0f, 304.0f}, 32, 24, 31, 23); // North of Command Center
+        AddAdjacentSupplyDepot({472.0f, 328.0f}, 32, 8, 31, 7);   // East pocket top wall
+        AddAdjacentSupplyDepot({472.0f, 440.f}, 32, 8, 31, 7);    // East pocket bottom wall
+        AddAdjacentSupplyDepot({504.0f, 384.0f}, 8, 64, 7, 63);   // East pocket right wall
+
+        const int MidRouteBlocker = CreateUnit(
+            HarvestCycleEM, 0, 0.0f, {272.0f, 416.0f});
+        auto& BlockerPath =
+            HarvestCycleEM.AddComponent<Game::Components::PathfindingComponent>(
+                MidRouteBlocker);
+        SetCollisionBounds(BlockerPath, 11, 11, 11, 11);
+        HarvestCycleEM.AddComponent<Game::Components::PlayerComponent>(
+            MidRouteBlocker).PlayerID = CyclePlayerID;
+
+        const int BeforePocketMinerals = CycleResources.Minerals;
+        HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+            CycleScvs[0])->Position = {408.0f, 384.0f};
+        HarvestCycleEM.GetComponent<Game::Components::TransformComponent>(
+            CycleScvs[1])->Position = {344.0f, 352.0f};
+        for (int CycleScv : CycleScvs)
+        {
+            auto* Harvest =
+                HarvestCycleEM.GetComponent<Game::Components::HarvestComponent>(
+                    CycleScv);
+            Harvest->State = Game::Components::HarvestState::Idle;
+            Harvest->CarryingAmount = 0;
+        }
+        Require(Game::Systems::HarvestSystem::IssueHarvest(
+                    HarvestCycleEM, CycleScvs, CycleMineralB),
+            "SCVs in partially surrounded Command Center accept harvest order");
+
+        for (int Step = 0;
+             Step < 900 && CycleResources.Minerals < BeforePocketMinerals + 32;
+             ++Step)
+        {
+            HarvestCycleCommands.Update(0.05f);
+            HarvestCycleMovement.Update(0.05f);
+            HarvestCycleHarvest.Update(0.05f);
+        }
+        Require(CycleResources.Minerals >= BeforePocketMinerals + 32,
+            "SCVs harvest and deliver across multiple cycles with partially surrounded Command Center and mid-route blocker");
+        Game::Systems::CommandSystem::SetMap(nullptr);
+    }
+
     std::printf("CommandSystemOrderTest passed\n");
     return 0;
 }

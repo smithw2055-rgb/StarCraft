@@ -105,6 +105,9 @@ static bool HasLineOfSight(const Map::GameMap& Map,
                            int ClearanceRadiusPixels,
                            const std::function<bool(int, int)>& ExtraBlockedTile)
 {
+    if (Map.GetGroundHeight(X0, Y0) != Map.GetGroundHeight(X1, Y1))
+        return false;
+
     int DX = std::abs(X1 - X0);
     int DY = std::abs(Y1 - Y0);
     int SX = (X0 < X1) ? 1 : -1;
@@ -120,6 +123,7 @@ static bool HasLineOfSight(const Map::GameMap& Map,
         if (E2 < DX) { Err += DX; CY += SY; }
 
         if (!Map.CanTraverseGround(PreviousX, PreviousY, CX, CY) ||
+            Map.GetGroundHeight(CX, CY) != Map.GetGroundHeight(X0, Y0) ||
             (CX != PreviousX && CY != PreviousY &&
              !CanStepDiagonal(Map, PreviousX, PreviousY, CX - PreviousX, CY - PreviousY,
                               ClearanceRadiusPixels, ExtraBlockedTile)) ||
@@ -133,121 +137,88 @@ static bool HasLineOfSight(const Map::GameMap& Map,
     return true;
 }
 
-static bool ResolveReachableGoalTile(const Map::GameMap& Map,
-                                     int StartX,
-                                     int StartY,
-                                     int DesiredEndX,
-                                     int DesiredEndY,
-                                     int ClearanceRadiusPixels,
-                                     const std::function<bool(int, int)>& ExtraBlockedTile,
-                                     int& OutEndX,
-                                     int& OutEndY)
+// Fast local spiral search around an unwalkable destination (e.g. clicked inside a
+// building, mineral patch, cliff, or water). Avoids running a full-map BFS before A*.
+static bool ResolveNearbyPassableGoalTile(
+    const Map::GameMap& Map,
+    int StartX,
+    int StartY,
+    int DesiredEndX,
+    int DesiredEndY,
+    int ClearanceRadiusPixels,
+    const std::function<bool(int, int)>& ExtraBlockedTile,
+    int& OutEndX,
+    int& OutEndY)
 {
-    const int Width = Map.GetWidth();
-    const int Height = Map.GetHeight();
-    if (Width <= 0 || Height <= 0)
-        return false;
-
-    // A unit can be pushed across a terrain-cell boundary or be spawned in an
-    // old map position whose center is no longer marked walkable. Rejecting
-    // that occupied start tile makes even a nearby recovery order fail. Permit
-    // the start cell itself and require full terrain/blocker clearance from the
-    // first step on; a sealed start still fails below because it cannot leave.
-    if (!Map.IsInBounds(StartX, StartY))
-        return false;
-
-    const int DirX[] = {1, -1, 0, 0, 1, -1, 1, -1};
-    const int DirY[] = {0, 0, 1, -1, 1, -1, -1, 1};
-    const int DirCount = AStar::GetConfig().AllowDiagonal ? 8 : 4;
-
-    static thread_local std::vector<uint32_t> sVisitedGen;
-    static thread_local uint32_t sVisitedCurrentGen = 0;
-    const size_t MapSize = (size_t)Width * (size_t)Height;
-    if (sVisitedGen.size() < MapSize)
-        sVisitedGen.resize(MapSize, 0);
-
-    ++sVisitedCurrentGen;
-    if (sVisitedCurrentGen == 0)
-    {
-        std::fill(sVisitedGen.begin(), sVisitedGen.end(), 0);
-        ++sVisitedCurrentGen;
-    }
-
-    std::queue<std::pair<int, int>> Open;
-    Open.push({StartX, StartY});
-    sVisitedGen[(size_t)StartY * (size_t)Width + (size_t)StartX] = sVisitedCurrentGen;
-
-    int BestX = StartX;
-    int BestY = StartY;
-    int BestDistSq = std::numeric_limits<int>::max();
-    int BestStartDistSq = 0;
-    int BestHeightDifference = std::numeric_limits<int>::max();
     const int DesiredHeight = Map.GetGroundHeight(DesiredEndX, DesiredEndY);
+    int BestSameHeightX = -1, BestSameHeightY = -1;
+    int BestSameHeightDistSq = std::numeric_limits<int>::max();
+    int BestSameHeightStartDistSq = std::numeric_limits<int>::max();
 
-    auto Consider = [&](int X, int Y)
+    int BestAnyHeightX = -1, BestAnyHeightY = -1;
+    int BestAnyHeightDistSq = std::numeric_limits<int>::max();
+    int BestAnyHeightStartDistSq = std::numeric_limits<int>::max();
+
+    constexpr int kMaxSearchRadius = 24;
+    for (int Radius = 1; Radius <= kMaxSearchRadius; ++Radius)
     {
-        const int HeightDifference =
-            std::abs(Map.GetGroundHeight(X, Y) - DesiredHeight);
-        const int ToEndX = X - DesiredEndX;
-        const int ToEndY = Y - DesiredEndY;
-        const int DistSq = ToEndX * ToEndX + ToEndY * ToEndY;
-        const int FromStartX = X - StartX;
-        const int FromStartY = Y - StartY;
-        const int StartDistSq = FromStartX * FromStartX + FromStartY * FromStartY;
-        if (HeightDifference < BestHeightDifference ||
-            (HeightDifference == BestHeightDifference &&
-             (DistSq < BestDistSq ||
-              (DistSq == BestDistSq && StartDistSq < BestStartDistSq))))
+        for (int DY = -Radius; DY <= Radius; ++DY)
         {
-            BestHeightDifference = HeightDifference;
-            BestDistSq = DistSq;
-            BestStartDistSq = StartDistSq;
-            BestX = X;
-            BestY = Y;
+            for (int DX = -Radius; DX <= Radius; ++DX)
+            {
+                if (std::abs(DX) != Radius && std::abs(DY) != Radius)
+                    continue;
+
+                const int CX = DesiredEndX + DX;
+                const int CY = DesiredEndY + DY;
+                if (!Map.IsInBounds(CX, CY))
+                    continue;
+                if (!IsWalkableWithClearance(Map, CX, CY, ClearanceRadiusPixels, ExtraBlockedTile))
+                    continue;
+
+                const int DistSq = DX * DX + DY * DY;
+                const int ToStartX = CX - StartX;
+                const int ToStartY = CY - StartY;
+                const int StartDistSq = ToStartX * ToStartX + ToStartY * ToStartY;
+
+                if (Map.GetGroundHeight(CX, CY) == DesiredHeight)
+                {
+                    if (DistSq < BestSameHeightDistSq ||
+                        (DistSq == BestSameHeightDistSq && StartDistSq < BestSameHeightStartDistSq))
+                    {
+                        BestSameHeightDistSq = DistSq;
+                        BestSameHeightStartDistSq = StartDistSq;
+                        BestSameHeightX = CX;
+                        BestSameHeightY = CY;
+                    }
+                }
+
+                if (DistSq < BestAnyHeightDistSq ||
+                    (DistSq == BestAnyHeightDistSq && StartDistSq < BestAnyHeightStartDistSq))
+                {
+                    BestAnyHeightDistSq = DistSq;
+                    BestAnyHeightStartDistSq = StartDistSq;
+                    BestAnyHeightX = CX;
+                    BestAnyHeightY = CY;
+                }
+            }
         }
-    };
 
-    while (!Open.empty())
-    {
-        auto [CurX, CurY] = Open.front();
-        Open.pop();
-        Consider(CurX, CurY);
-        if (CurX == DesiredEndX && CurY == DesiredEndY)
+        if (BestSameHeightX >= 0)
         {
-            OutEndX = CurX;
-            OutEndY = CurY;
+            OutEndX = BestSameHeightX;
+            OutEndY = BestSameHeightY;
             return true;
         }
-
-        for (int D = 0; D < DirCount; ++D)
-        {
-            const int NX = CurX + DirX[D];
-            const int NY = CurY + DirY[D];
-            if (!Map.IsInBounds(NX, NY))
-                continue;
-            const size_t NI = (size_t)NY * (size_t)Width + (size_t)NX;
-            if (sVisitedGen[NI] == sVisitedCurrentGen)
-                continue;
-            if (!Map.CanTraverseGround(CurX, CurY, NX, NY))
-                continue;
-            if (!IsWalkableWithClearance(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile))
-                continue;
-            if (!CanStepDiagonal(Map, CurX, CurY, DirX[D], DirY[D],
-                                 ClearanceRadiusPixels, ExtraBlockedTile))
-                continue;
-
-            sVisitedGen[NI] = sVisitedCurrentGen;
-            Open.push({NX, NY});
-        }
     }
 
-    OutEndX = BestX;
-    OutEndY = BestY;
-    const bool StayedAtStart = BestX == StartX && BestY == StartY;
-    const bool RequestedStart = DesiredEndX == StartX && DesiredEndY == StartY;
-    return BestDistSq != std::numeric_limits<int>::max() &&
-           BestHeightDifference == 0 &&
-           (!StayedAtStart || RequestedStart);
+    if (BestAnyHeightX >= 0)
+    {
+        OutEndX = BestAnyHeightX;
+        OutEndY = BestAnyHeightY;
+        return true;
+    }
+    return false;
 }
 
 PathResult AStar::FindPath(const Map::GameMap& Map,
@@ -319,30 +290,34 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
     if (!Map.IsInBounds(StartX, StartY))
         return Result;
 
-    int Width = Map.GetWidth();
-    int Height = Map.GetHeight();
+    const int Width = Map.GetWidth();
+    const int Height = Map.GetHeight();
     if (Width <= 0 || Height <= 0)
         return Result;
 
     EndX = std::clamp(EndX, 0, Width - 1);
     EndY = std::clamp(EndY, 0, Height - 1);
+    const int OriginalEndX = EndX;
+    const int OriginalEndY = EndY;
 
-    int ResolvedEndX = EndX;
-    int ResolvedEndY = EndY;
     if (!IsWalkableWithClearance(Map, EndX, EndY, ClearanceRadiusPixels, ExtraBlockedTile))
     {
-        if (!ResolveReachableGoalTile(Map, StartX, StartY, EndX, EndY,
-                                      ClearanceRadiusPixels, ExtraBlockedTile,
-                                      ResolvedEndX, ResolvedEndY))
+        int ResolvedEndX = EndX;
+        int ResolvedEndY = EndY;
+        if (ResolveNearbyPassableGoalTile(
+                Map, StartX, StartY, EndX, EndY,
+                ClearanceRadiusPixels, ExtraBlockedTile,
+                ResolvedEndX, ResolvedEndY))
         {
-            return Result;
+            EndX = ResolvedEndX;
+            EndY = ResolvedEndY;
         }
-        EndX = ResolvedEndX;
-        EndY = ResolvedEndY;
     }
 
     const int MapNodeCount = Width * Height;
-    const int NodeBudget = MaxNodes > 0 ? std::min(MaxNodes, MapNodeCount) : MapNodeCount;
+    const int NodeBudget = MaxNodes > 0
+        ? std::min(std::max(MaxNodes, 512), MapNodeCount)
+        : MapNodeCount;
 
     thread_local std::vector<PathNode> sNodes;
     thread_local std::vector<std::pair<int, int>> sOpen;
@@ -355,9 +330,7 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
     {
         std::fill(sClosedGen.begin(), sClosedGen.end(), 0);
         for (auto& Entry : sNodeMap)
-        {
             Entry = {0, -1};
-        }
         sPathGen = 1;
     }
 
@@ -367,111 +340,139 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
         sNodeMap.resize(MapNodeCount, {0, -1});
 
     sNodes.clear();
-    sNodes.reserve(NodeBudget);
-    sNodes.push_back({StartX, StartY, 0, Heuristic(StartX - EndX, StartY - EndY), -1});
+    sNodes.reserve(std::min(NodeBudget + 64, MapNodeCount));
+    const int InitialH = Heuristic(StartX - EndX, StartY - EndY);
+    sNodes.push_back({StartX, StartY, 0, InitialH, -1});
 
     sOpen.clear();
-    sOpen.reserve(NodeBudget);
+    sOpen.reserve(std::min(NodeBudget + 64, MapNodeCount));
     sOpen.push_back({sNodes[0].F(), 0});
 
     sNodeMap[StartY * Width + StartX] = {sPathGen, 0};
 
+    int BestPartialNodeIdx = 0;
+    int BestPartialDistSq =
+        (StartX - OriginalEndX) * (StartX - OriginalEndX) +
+        (StartY - OriginalEndY) * (StartY - OriginalEndY);
+
     const int DX[] = {1, -1, 0, 0, 1, -1, 1, -1};
     const int DY[] = {0, 0, 1, -1, 1, -1, -1, 1};
-    int DirCount = sConfig.AllowDiagonal ? 8 : 4;
-    int DiagStart = DirCount - 4;
-    auto Cmp = [](const std::pair<int,int>& A, const std::pair<int,int>& B) {
+    const int DirCount = sConfig.AllowDiagonal ? 8 : 4;
+    const int DiagStart = DirCount - 4;
+    auto Cmp = [](const std::pair<int, int>& A, const std::pair<int, int>& B)
+    {
         return A.first > B.first;
+    };
+
+    auto BuildSmoothedWaypoints = [&](int GoalNodeIdx)
+    {
+        std::vector<Core::Math::Vec2> Raw;
+        int P = GoalNodeIdx;
+        while (P >= 0)
+        {
+            Raw.push_back({
+                sNodes[(size_t)P].X * 32.0f + 16.0f,
+                sNodes[(size_t)P].Y * 32.0f + 16.0f
+            });
+            P = sNodes[(size_t)P].ParentIndex;
+        }
+        std::reverse(Raw.begin(), Raw.end());
+
+        if (Raw.size() > 2)
+        {
+            Result.Waypoints.push_back(Raw[0]);
+            size_t Anchor = 0;
+            while (Anchor + 1 < Raw.size())
+            {
+                size_t Furthest = Raw.size() - 1;
+                int AX = 0, AY = 0;
+                Map.WorldToTile(Raw[Anchor], AX, AY);
+                while (Furthest > Anchor + 1)
+                {
+                    int FX = 0, FY = 0;
+                    Map.WorldToTile(Raw[Furthest], FX, FY);
+                    if (HasLineOfSight(Map, AX, AY, FX, FY,
+                                       ClearanceRadiusPixels, ExtraBlockedTile))
+                    {
+                        break;
+                    }
+                    --Furthest;
+                }
+                Result.Waypoints.push_back(Raw[Furthest]);
+                Anchor = Furthest;
+            }
+        }
+        else
+        {
+            Result.Waypoints = std::move(Raw);
+        }
+        Result.Found = (Result.Status == PathStatus::Exact);
     };
 
     while (!sOpen.empty())
     {
         std::pop_heap(sOpen.begin(), sOpen.end(), Cmp);
-        int CurIdx = sOpen.back().second;
+        const int CurIdx = sOpen.back().second;
         sOpen.pop_back();
 
-        const int CurX = sNodes[CurIdx].X;
-        const int CurY = sNodes[CurIdx].Y;
-        const int CurG = sNodes[CurIdx].G;
+        const int CurX = sNodes[(size_t)CurIdx].X;
+        const int CurY = sNodes[(size_t)CurIdx].Y;
+        const int CurG = sNodes[(size_t)CurIdx].G;
 
-        int CI = CurY * Width + CurX;
-        if (sClosedGen[CI] == sPathGen) continue;
-        sClosedGen[CI] = sPathGen;
+        const int CI = CurY * Width + CurX;
+        if (sClosedGen[(size_t)CI] == sPathGen)
+            continue;
+        sClosedGen[(size_t)CI] = sPathGen;
         Result.NodesSearched++;
+
+        const int DistSqToOriginal =
+            (CurX - OriginalEndX) * (CurX - OriginalEndX) +
+            (CurY - OriginalEndY) * (CurY - OriginalEndY);
+        if (DistSqToOriginal < BestPartialDistSq)
+        {
+            BestPartialDistSq = DistSqToOriginal;
+            BestPartialNodeIdx = CurIdx;
+        }
 
         if (CurX == EndX && CurY == EndY)
         {
-            // Reconstruct with smoothing
-            std::vector<Core::Math::Vec2> Raw;
-            int P = CurIdx;
-            while (P >= 0)
-            {
-                Raw.push_back({
-                    sNodes[P].X * 32.0f + 16.0f,
-                    sNodes[P].Y * 32.0f + 16.0f
-                });
-                P = sNodes[P].ParentIndex;
-            }
-            std::reverse(Raw.begin(), Raw.end());
-
-            // Smooth path: skip waypoints with direct line of sight
-            if (Raw.size() > 2)
-            {
-                Result.Waypoints.push_back(Raw[0]);
-                size_t Anchor = 0;
-                while (Anchor + 1 < Raw.size())
-                {
-                    size_t Furthest = Raw.size() - 1;
-                    int AX = 0;
-                    int AY = 0;
-                    Map.WorldToTile(Raw[Anchor], AX, AY);
-                    while (Furthest > Anchor + 1)
-                    {
-                        int FX = 0;
-                        int FY = 0;
-                        Map.WorldToTile(Raw[Furthest], FX, FY);
-                        if (HasLineOfSight(Map, AX, AY, FX, FY,
-                                ClearanceRadiusPixels, ExtraBlockedTile))
-                        {
-                            break;
-                        }
-                        --Furthest;
-                    }
-                    Result.Waypoints.push_back(Raw[Furthest]);
-                    Anchor = Furthest;
-                }
-            }
-            else
-            {
-                Result.Waypoints = std::move(Raw);
-            }
-
-            Result.Found = true;
+            Result.Status = PathStatus::Exact;
+            Result.ResolvedDestination = {
+                (float)(EndX * 32 + 16),
+                (float)(EndY * 32 + 16)
+            };
+            BuildSmoothedWaypoints(CurIdx);
             return Result;
         }
 
-        if ((int)sNodes.size() >= NodeBudget) continue;
+        if (Result.NodesSearched >= NodeBudget || (int)sNodes.size() >= NodeBudget)
+            break;
 
-        for (int D = 0; D < DirCount; D++)
+        for (int D = 0; D < DirCount; ++D)
         {
-            int NX = CurX + DX[D];
-            int NY = CurY + DY[D];
+            const int NX = CurX + DX[D];
+            const int NY = CurY + DY[D];
 
-            if (!IsWalkable(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile)) continue;
-            if (!Map.CanTraverseGround(CurX, CurY, NX, NY)) continue;
+            if (!IsWalkable(Map, NX, NY, ClearanceRadiusPixels, ExtraBlockedTile))
+                continue;
+            if (!Map.CanTraverseGround(CurX, CurY, NX, NY))
+                continue;
 
             if (D >= DiagStart &&
                 !CanStepDiagonal(Map, CurX, CurY, DX[D], DY[D],
                                  ClearanceRadiusPixels, ExtraBlockedTile))
+            {
+                continue;
+            }
+
+            const int NI = NY * Width + NX;
+            if (sClosedGen[(size_t)NI] == sPathGen)
                 continue;
 
-            int NI = NY * Width + NX;
-            if (sClosedGen[NI] == sPathGen) continue;
+            const int StepCost = (D < DiagStart) ? 10 : 14;
+            const int NG = CurG + StepCost;
 
-            int StepCost = (D < DiagStart) ? 10 : 14;
-            int NG = CurG + StepCost;
-
-            auto& Entry = sNodeMap[NI];
+            auto& Entry = sNodeMap[(size_t)NI];
             if (Entry.first != sPathGen)
             {
                 Entry.first = sPathGen;
@@ -482,7 +483,7 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
             }
             else
             {
-                int NodeIdx = Entry.second;
+                const int NodeIdx = Entry.second;
                 if (NG < sNodes[(size_t)NodeIdx].G)
                 {
                     sNodes[(size_t)NodeIdx].G = NG;
@@ -492,6 +493,19 @@ PathResult AStar::FindPathTile(const Map::GameMap& Map,
                 }
             }
         }
+    }
+
+    // If the target was on an unreachable island/cliff or budget was reached,
+    // advance the unit to the closest reachable tile (cliff edge / shore) toward the destination.
+    if (BestPartialNodeIdx > 0 || (StartX == OriginalEndX && StartY == OriginalEndY))
+    {
+        Result.Status = PathStatus::Partial;
+        const auto& BestNode = sNodes[(size_t)BestPartialNodeIdx];
+        Result.ResolvedDestination = {
+            (float)(BestNode.X * 32 + 16),
+            (float)(BestNode.Y * 32 + 16)
+        };
+        BuildSmoothedWaypoints(BestPartialNodeIdx);
     }
 
     return Result;

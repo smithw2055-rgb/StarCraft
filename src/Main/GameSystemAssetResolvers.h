@@ -10,6 +10,7 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/NukeAndSpiderMineSystem.h"
 #include "Game/Systems/ProductionSystem.h"
+#include "Game/Systems/SpellSystem.h"
 #include "Game/Systems/ZergSystem.h"
 
 namespace Game::Client::GameLoop
@@ -21,6 +22,7 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
     Game::Systems::BuildingSystem::SetImageResolver(Resolver);
     Game::Systems::CommandSystem::SetImageResolver(Resolver);
     Game::Systems::NukeAndSpiderMineSystem::SetImageResolver(Resolver);
+    Game::Systems::SpellSystem::SetImageResolver(Resolver);
     Game::Systems::ZergSystem::SetImageResolver(std::move(Resolver));
 }
 
@@ -31,6 +33,7 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
     Game::Systems::BuildingSystem::SetImageResolver(Resolver);
     Game::Systems::CommandSystem::SetImageResolver(Resolver);
     Game::Systems::NukeAndSpiderMineSystem::SetImageResolver(Resolver);
+    Game::Systems::SpellSystem::SetImageResolver(Resolver);
     Game::Systems::ZergSystem::SetImageResolver(Resolver);
     Game::Systems::BuildingSystem::SetConstructionImageResolver(std::move(ConstructionResolver));
 }

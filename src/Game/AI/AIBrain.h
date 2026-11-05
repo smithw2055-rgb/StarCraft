@@ -14,15 +14,6 @@ namespace Game::Systems
 
 class FogOfWarSystem;
 
-enum class AIStrategy : uint8_t
-{
-    None,
-    EconomicFocus,
-    Rush,
-    Balanced,
-    TechRush
-};
-
 class AIBrain : public Core::ECS::ISystem
 {
 public:
@@ -67,6 +58,7 @@ private:
     void ManageEconomy(Core::ECS::EntityManager& EM);
     void ManageMilitary(Core::ECS::EntityManager& EM);
     void ManageMilitaryPatrol(Core::ECS::EntityManager& EM);
+    void ManageWoundedRetreat(Core::ECS::EntityManager& EM);
     void RefreshEnemyIntel(Core::ECS::EntityManager& EM);
     void ManageScouting(Core::ECS::EntityManager& EM);
     void ManageUpgrades(Core::ECS::EntityManager& EM, int RaceValue);
@@ -74,6 +66,7 @@ private:
     bool DefendBaseIfNeeded(Core::ECS::EntityManager& EM);
     void ManageTerranRepairs(Core::ECS::EntityManager& EM);
     void ManageTerranMedics(Core::ECS::EntityManager& EM);
+    void ManageTerranBunkers(Core::ECS::EntityManager& EM);
     void SendAttackWave(Core::ECS::EntityManager& EM, int WaveSize);
     void TrainWorkerIfNeeded(Core::ECS::EntityManager& EM, int ProducerDefID, int WorkerDefID, int MaxWorkers);
 
@@ -96,6 +89,7 @@ private:
     bool StartZergBuildingNear(Core::ECS::EntityManager& EM, int DroneID, int BuildingDefID,
                                const Core::Math::Vec2& NearPos);
     bool TrainUnitIfPossible(Core::ECS::EntityManager& EM, int UnitDefID);
+    int TrainUnitsIfPossible(Core::ECS::EntityManager& EM, int UnitDefID, int MaxCount);
     int FindAvailableAddonParent(Core::ECS::EntityManager& EM, int ParentDefID);
     int FindTerranBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID);
     int FindZergBuilderFor(Core::ECS::EntityManager& EM, int BuildingDefID);
@@ -149,7 +143,6 @@ private:
     int mBuildQueueIdx = 0;
     float mBuildTimer = 0.0f;
     float mLastConstructionOrderSeconds = -10000.0f;
-    AIStrategy mStrategy = AIStrategy::Balanced;
     bool mShowcaseMode = false;
     bool mDefendingBase = false;
     AIDifficulty mDifficulty = AIDifficulty::Medium;

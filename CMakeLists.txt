@@ -370,7 +370,7 @@ if(BUILD_ISCRIPT_ANGELSCRIPT_TOOL)
     endif()
 
     add_executable(IScriptAngelScriptExportTest
-        src/Game/Regression/IScriptAngelScriptExportTest.cpp
+        tests/Regression/IScriptAngelScriptExportTest.cpp
         src/Game/IScriptAngelScriptExporter.cpp
         src/Game/IScriptVM.cpp
         src/Core/Utils/Logger.cpp
@@ -389,7 +389,7 @@ if(BUILD_ISCRIPT_ANGELSCRIPT_TOOL)
 
     if(HAS_ANGELSCRIPT)
         add_executable(IScriptAngelScriptCompileTest
-            src/Game/Regression/IScriptAngelScriptCompileTest.cpp
+            tests/Regression/IScriptAngelScriptCompileTest.cpp
             src/Game/IScriptAngelScriptExporter.cpp
             src/Game/IScriptVM.cpp
             src/Core/Utils/Logger.cpp
@@ -414,7 +414,7 @@ endif()
 option(BUILD_COMBAT_RULES_TEST "Build combat rule regression test" ON)
 if(BUILD_COMBAT_RULES_TEST)
     add_executable(CombatRulesTest
-        src/Game/Regression/CombatRulesTest.cpp
+        tests/Regression/CombatRulesTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -443,7 +443,7 @@ endif()
 option(BUILD_SPELL_VISUAL_STATE_TEST "Build spell visual state regression test" ON)
 if(BUILD_SPELL_VISUAL_STATE_TEST)
     add_executable(SpellVisualStateTest
-        src/Game/Regression/SpellVisualStateTest.cpp
+        tests/Regression/SpellVisualStateTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -468,7 +468,7 @@ endif()
 option(BUILD_ANIMATION_STATE_TEST "Build animation state regression test" ON)
 if(BUILD_ANIMATION_STATE_TEST)
     add_executable(AnimationStateTest
-        src/Game/Regression/AnimationStateTest.cpp
+        tests/Regression/AnimationStateTest.cpp
     )
 
     target_include_directories(AnimationStateTest PRIVATE
@@ -487,7 +487,7 @@ endif()
 option(BUILD_ANIMATION_RUNTIME_DIRECTION_TEST "Build animation runtime direction regression test" ON)
 if(BUILD_ANIMATION_RUNTIME_DIRECTION_TEST)
     add_executable(AnimationRuntimeDirectionTest
-        src/Game/Regression/AnimationRuntimeDirectionTest.cpp
+        tests/Regression/AnimationRuntimeDirectionTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -513,7 +513,7 @@ endif()
 option(BUILD_ISCRIPT_OVERLAY_TEST "Build iscript overlay regression test" ON)
 if(BUILD_ISCRIPT_OVERLAY_TEST)
     add_executable(IScriptOverlayTest
-        src/Game/Regression/IScriptOverlayTest.cpp
+        tests/Regression/IScriptOverlayTest.cpp
         src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
     )
@@ -534,7 +534,7 @@ endif()
 option(BUILD_SPRITE_IMAGE_DATA_TEST "Build sprite/image data mapping regression test" ON)
 if(BUILD_SPRITE_IMAGE_DATA_TEST)
     add_executable(SpriteImageDataTest
-        src/Game/Regression/SpriteImageDataTest.cpp
+        tests/Regression/SpriteImageDataTest.cpp
         src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
         src/Resource/CascArchive.cpp
@@ -565,7 +565,7 @@ endif()
 option(BUILD_RACE_DEFINITION_MAPPING_TEST "Build race definition mapping regression test" ON)
 if(BUILD_RACE_DEFINITION_MAPPING_TEST)
     add_executable(RaceDefinitionMappingTest
-        src/Game/Regression/RaceDefinitionMappingTest.cpp
+        tests/Regression/RaceDefinitionMappingTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -588,7 +588,7 @@ endif()
 option(BUILD_AI_BRAIN_STRATEGY_TEST "Build AI difficulty strategy regression test" ON)
 if(BUILD_AI_BRAIN_STRATEGY_TEST)
     add_executable(AIBrainStrategyTest
-        src/Game/Regression/AIBrainStrategyTest.cpp
+        tests/Regression/AIBrainStrategyTest.cpp
     )
 
     target_include_directories(AIBrainStrategyTest PRIVATE
@@ -607,7 +607,7 @@ endif()
 option(BUILD_COMMAND_SYSTEM_ORDER_TEST "Build command system order legality regression test" ON)
 if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
     add_executable(CommandSystemOrderTest
-        src/Game/Regression/CommandSystemOrderTest.cpp
+        tests/Regression/CommandSystemOrderTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -638,7 +638,7 @@ endif()
 option(BUILD_HUD_MINIMAP_GEOMETRY_TEST "Build HUD minimap geometry regression test" ON)
 if(BUILD_HUD_MINIMAP_GEOMETRY_TEST)
     add_executable(HudMinimapGeometryTest
-        src/Game/Regression/HudMinimapGeometryTest.cpp
+        tests/Regression/HudMinimapGeometryTest.cpp
     )
 
     target_include_directories(HudMinimapGeometryTest PRIVATE
@@ -657,7 +657,7 @@ endif()
 option(BUILD_FOG_OF_WAR_STATUS_TEST "Build fog of war status regression test" ON)
 if(BUILD_FOG_OF_WAR_STATUS_TEST)
     add_executable(FogOfWarStatusTest
-        src/Game/Regression/FogOfWarStatusTest.cpp
+        tests/Regression/FogOfWarStatusTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -683,7 +683,7 @@ endif()
 option(BUILD_HUD_COMMAND_METADATA_TEST "Build HUD command metadata regression test" ON)
 if(BUILD_HUD_COMMAND_METADATA_TEST)
     add_executable(HudCommandMetadataTest
-        src/Game/Regression/HudCommandMetadataTest.cpp
+        tests/Regression/HudCommandMetadataTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -726,7 +726,7 @@ endif()
 option(BUILD_CHK_STRING_ENCODING_TEST "Build CHK string encoding regression test" ON)
 if(BUILD_CHK_STRING_ENCODING_TEST)
     add_executable(ChkStringEncodingTest
-        src/Game/Regression/ChkStringEncodingTest.cpp
+        tests/Regression/ChkStringEncodingTest.cpp
         src/Game/Map/ChkParser.cpp
     )
 
@@ -746,7 +746,7 @@ endif()
 option(BUILD_SMART_CLICK_COMMAND_TEST "Build smart-click command dispatch regression test" ON)
 if(BUILD_SMART_CLICK_COMMAND_TEST)
     add_executable(SmartClickCommandTest
-        src/Game/Regression/SmartClickCommandTest.cpp
+        tests/Regression/SmartClickCommandTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -788,7 +788,7 @@ endif()
 option(BUILD_SELECTION_INTERACTION_TEST "Build selection interaction regression test" ON)
 if(BUILD_SELECTION_INTERACTION_TEST)
     add_executable(SelectionInteractionTest
-        src/Game/Regression/SelectionInteractionTest.cpp
+        tests/Regression/SelectionInteractionTest.cpp
         src/Client/Selection.cpp
         src/Core/ECS/EntityManager.cpp
     )
@@ -809,7 +809,7 @@ endif()
 option(BUILD_SELECTION_FOOTPRINT_TEST "Build selection footprint regression test" ON)
 if(BUILD_SELECTION_FOOTPRINT_TEST)
     add_executable(SelectionFootprintTest
-        src/Game/Regression/SelectionFootprintTest.cpp
+        tests/Regression/SelectionFootprintTest.cpp
     )
 
     target_include_directories(SelectionFootprintTest PRIVATE
@@ -828,7 +828,7 @@ endif()
 option(BUILD_MOUSE_COORDINATE_TEST "Build mouse coordinate regression test" ON)
 if(BUILD_MOUSE_COORDINATE_TEST)
     add_executable(MouseCoordinateTest
-        src/Game/Regression/MouseCoordinateTest.cpp
+        tests/Regression/MouseCoordinateTest.cpp
     )
 
     target_include_directories(MouseCoordinateTest PRIVATE
@@ -847,7 +847,7 @@ endif()
 option(BUILD_CAMERA_EDGE_SCROLL_TEST "Build camera edge-scroll regression test" ON)
 if(BUILD_CAMERA_EDGE_SCROLL_TEST)
     add_executable(CameraEdgeScrollTest
-        src/Game/Regression/CameraEdgeScrollTest.cpp
+        tests/Regression/CameraEdgeScrollTest.cpp
         src/Client/CameraController.cpp
     )
 
@@ -867,7 +867,7 @@ endif()
 option(BUILD_MOVEMENT_COMMAND_TEST "Build movement command regression test" ON)
 if(BUILD_MOVEMENT_COMMAND_TEST)
     add_executable(MovementCommandTest
-        src/Game/Regression/MovementCommandTest.cpp
+        tests/Regression/MovementCommandTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -896,7 +896,7 @@ option(BUILD_NAVIGATION_PATHFINDING_TEST
     "Build minitile navigation pathfinding regression test" ON)
 if(BUILD_NAVIGATION_PATHFINDING_TEST)
     add_executable(NavigationPathfindingTest
-        src/Game/Regression/NavigationPathfindingTest.cpp)
+        tests/Regression/NavigationPathfindingTest.cpp)
 
     target_include_directories(NavigationPathfindingTest PRIVATE
         ${CMAKE_SOURCE_DIR}
@@ -917,7 +917,7 @@ option(BUILD_NAVIGATION_DETERMINISM_TEST
     "Build fixed-tick navigation determinism regression test" ON)
 if(BUILD_NAVIGATION_DETERMINISM_TEST)
     add_executable(NavigationDeterminismTest
-        src/Game/Regression/NavigationDeterminismTest.cpp
+        tests/Regression/NavigationDeterminismTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -947,7 +947,7 @@ option(BUILD_NAVIGATION_STRESS_TEST
     "Build 800-unit navigation stress benchmark" ON)
 if(BUILD_NAVIGATION_STRESS_TEST)
     add_executable(NavigationStressTest
-        src/Game/Regression/NavigationStressTest.cpp
+        tests/Regression/NavigationStressTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -976,7 +976,7 @@ endif()
 option(BUILD_PRODUCTION_ECONOMY_TEST "Build production economy regression test" ON)
 if(BUILD_PRODUCTION_ECONOMY_TEST)
     add_executable(ProductionEconomyTest
-        src/Game/Regression/ProductionEconomyTest.cpp
+        tests/Regression/ProductionEconomyTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1010,7 +1010,7 @@ endif()
 option(BUILD_ZERG_CREEP_REGRESSION_TEST "Build Zerg creep regression test" ON)
 if(BUILD_ZERG_CREEP_REGRESSION_TEST)
     add_executable(ZergCreepRegressionTest
-        src/Game/Regression/ZergCreepRegressionTest.cpp
+        tests/Regression/ZergCreepRegressionTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1043,7 +1043,7 @@ endif()
 option(BUILD_CURSOR_TARGETING_TEST "Build cursor targeting regression test" ON)
 if(BUILD_CURSOR_TARGETING_TEST)
     add_executable(CursorTargetingTest
-        src/Game/Regression/CursorTargetingTest.cpp
+        tests/Regression/CursorTargetingTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Game/Races/RaceDef.cpp
         src/Main/GameLoop/CursorTypes.cpp
@@ -1065,7 +1065,7 @@ endif()
 option(BUILD_HARVEST_SYSTEM_COMMAND_TEST "Build harvest command regression test" ON)
 if(BUILD_HARVEST_SYSTEM_COMMAND_TEST)
     add_executable(HarvestSystemCommandTest
-        src/Game/Regression/HarvestSystemCommandTest.cpp
+        tests/Regression/HarvestSystemCommandTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1094,7 +1094,7 @@ endif()
 option(BUILD_BUILDING_PLACEMENT_TEST "Build building placement regression test" ON)
 if(BUILD_BUILDING_PLACEMENT_TEST)
     add_executable(BuildingPlacementTest
-        src/Game/Regression/BuildingPlacementTest.cpp
+        tests/Regression/BuildingPlacementTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1122,7 +1122,7 @@ endif()
 option(BUILD_MATCH_OUTCOME_TEST "Build match outcome regression test" ON)
 if(BUILD_MATCH_OUTCOME_TEST)
     add_executable(MatchOutcomeTest
-        src/Game/Regression/MatchOutcomeTest.cpp
+        tests/Regression/MatchOutcomeTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1179,7 +1179,7 @@ endif()
 option(BUILD_OGG_VORBIS_DECODE_TEST "Build Ogg/Vorbis decode regression test" ON)
 if(BUILD_OGG_VORBIS_DECODE_TEST)
     add_executable(OggVorbisDecodeTest
-        src/Game/Regression/OggVorbisDecodeTest.cpp
+        tests/Regression/OggVorbisDecodeTest.cpp
     )
 
     target_include_directories(OggVorbisDecodeTest PRIVATE
@@ -1198,7 +1198,7 @@ endif()
 option(BUILD_TRANSPORT_SYSTEM_TEST "Build transport system regression test" ON)
 if(BUILD_TRANSPORT_SYSTEM_TEST)
     add_executable(TransportSystemTest
-        src/Game/Regression/TransportSystemTest.cpp
+        tests/Regression/TransportSystemTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1239,8 +1239,8 @@ endif()
 
 option(BUILD_MANUAL_WEBM_VIDEO_DECODE_TEST "Build manual WebM/VPx decode regression targets" OFF)
 if(BUILD_MANUAL_WEBM_VIDEO_DECODE_TEST AND HAS_LIBVPX)
-    set(_WEBM_VIDEO_DECODE_TEST_SRC "${CMAKE_SOURCE_DIR}/src/Game/Regression/WebmVideoDecodeTest.cpp")
-    set(_WEBM_ASSET_COVERAGE_TEST_SRC "${CMAKE_SOURCE_DIR}/src/Game/Regression/WebmAssetCoverageTest.cpp")
+    set(_WEBM_VIDEO_DECODE_TEST_SRC "${CMAKE_SOURCE_DIR}/tests/Regression/WebmVideoDecodeTest.cpp")
+    set(_WEBM_ASSET_COVERAGE_TEST_SRC "${CMAKE_SOURCE_DIR}/tests/Regression/WebmAssetCoverageTest.cpp")
     if(EXISTS "${_WEBM_VIDEO_DECODE_TEST_SRC}" AND EXISTS "${_WEBM_ASSET_COVERAGE_TEST_SRC}")
         add_executable(WebmVideoDecodeTest
             ${_WEBM_VIDEO_DECODE_TEST_SRC}
@@ -1338,7 +1338,7 @@ endif()
 option(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST "Build all-campaign catalog runtime regression test" ON)
 if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
     add_executable(CampaignCatalogRuntimeTest
-        src/Game/Regression/CampaignCatalogRuntimeTest.cpp
+        tests/Regression/CampaignCatalogRuntimeTest.cpp
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Core/Utils/Logger.cpp
@@ -1396,6 +1396,7 @@ foreach(_StarCraftRegressionTest IN ITEMS
     MovementCommandTest
     NavigationPathfindingTest
     NavigationDeterminismTest
+    NavigationStressTest
     CommandSystemOrderTest
     CombatRulesTest
     SpellVisualStateTest
@@ -1429,6 +1430,10 @@ foreach(_StarCraftRegressionTest IN ITEMS
         if("${_StarCraftRegressionTest}" STREQUAL "CampaignCatalogRuntimeTest")
             set_tests_properties(CampaignCatalogRuntimeTest PROPERTIES
                 ENVIRONMENT "STARCRAFT_CAMPAIGN_LONG_AUDIT_SECONDS=0")
+        endif()
+        if("${_StarCraftRegressionTest}" STREQUAL "NavigationStressTest")
+            set_tests_properties(NavigationStressTest PROPERTIES
+                LABELS "stress" TIMEOUT 600)
         endif()
     endif()
 endforeach()
