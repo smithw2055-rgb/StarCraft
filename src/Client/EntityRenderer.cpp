@@ -133,7 +133,13 @@ namespace
         const float Height = 5.0f;
         const float X0 = CenterX - Width * 0.5f;
         const Render::Color Border(0, 0, 0, 235);
+        Draw.SetSortContext(Render::RenderLayer2D::StatusBars,
+                            Render::RenderSubBand2D::StatusBarBorder,
+                            0u);
         Draw.DrawRect(X0 - 1.0f, Y - 1.0f, Width + 2.0f, Height + 2.0f, Border);
+        Draw.SetSortContext(Render::RenderLayer2D::StatusBars,
+                            Render::RenderSubBand2D::StatusBarFill,
+                            0u);
         Draw.DrawHealthBar(X0, Y, Width, Height, Frac, Fill);
     }
 
@@ -186,7 +192,7 @@ namespace
         return {F.CenterX, F.CenterY, F.RadiusX, F.RadiusY};
     }
 
-    float UnitFallbackRadius(UnitSize Size)
+    [[maybe_unused]] float UnitFallbackRadius(UnitSize Size)
     {
         switch (Size)
         {
@@ -378,7 +384,7 @@ namespace
         }
     }
 
-    FootprintVisual UnitFootprint(float X,
+    [[maybe_unused]] FootprintVisual UnitFootprint(float X,
                                   float Y,
                                   Game::Components::UnitSize Size,
                                   float FrameHalfW,
@@ -461,6 +467,17 @@ namespace
         if (IsAirEntity(Entities, EntityId))
             return 2;
         return 1;
+    }
+
+    Render::RenderLayer2D MapBandToRenderLayer(int Band)
+    {
+        if (Band <= 0)
+            return Render::RenderLayer2D::GroundEffect;
+        if (Band == 1)
+            return Render::RenderLayer2D::GroundEntities;
+        if (Band == 2)
+            return Render::RenderLayer2D::AirEntities;
+        return Render::RenderLayer2D::TopEffects;
     }
 
     struct SpriteVisualEffect
@@ -1310,6 +1327,11 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     });
 
     auto& Draw = Render::g_Draw2D;
+    if (mUseRenderQueue)
+    {
+        mRenderServer.BeginWorldFrame(mCameraX, mCameraY, mViewW, mViewH, mZoom, 128.0f);
+        Draw.SetActiveQueue(&mRenderServer.GetWorldQueue());
+    }
     static int DebugEntityFrames = 8;
     int DebugSpriteCount = 0;
     int DebugFallbackCount = 0;
@@ -1352,6 +1374,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     // Draw selected Pylon power fields as a ground overlay before any entity
     // sprites. A world-space circle projects to this 2:1 isometric ellipse,
     // while buildings and units remain fully in front of it.
+    Draw.SetSortContext(Render::RenderLayer2D::GroundPowerField,
+                        Render::RenderSubBand2D::RootSprite,
+                        0u);
     for (int EntityId : SelectedIds)
     {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
@@ -1367,6 +1392,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         }
     }
 
+    Draw.SetSortContext(Render::RenderLayer2D::SelectionOverlay,
+                        Render::RenderSubBand2D::RootSprite,
+                        0u);
     for (const auto& Item : SortedItems)
     {
         if (!IsEntitySelected(Item.EntityId))
@@ -1381,6 +1409,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         DrawSelectionVisual(Draw, GetSelectionVisual(Item.EntityId, *Trans, *Unit, IsBuilding));
     }
 
+    Draw.SetSortContext(Render::RenderLayer2D::RallyOverlay,
+                        Render::RenderSubBand2D::RootSprite,
+                        0u);
     for (int EntityId : SelectedIds)
     {
         if (Entities.IsAlive(EntityId))
@@ -1405,13 +1436,21 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         const float FlightBodyOffsetY = BuildingFlightBodyOffsetY(Building);
         const SpriteVisualEffect VisualEffect = ResolveSpriteVisualEffect(
             Entities, EntityId, mDataAssets, mSpriteAssets, RenderComp->ImageID);
+        const Render::RenderLayer2D EntityLayer = MapBandToRenderLayer(Item.Band);
+        const uint16_t DepthKey = Render::SortKey2D::EncodeDepthKey(Item.Y, Item.ZOrder);
 
+        Draw.SetSortContext(EntityLayer, Render::RenderSubBand2D::UnderNode, DepthKey);
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
             for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
                 if (Tree->Nodes[NodeIndex].ParentIndex < 0 && !Tree->Nodes[NodeIndex].DrawAbove)
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
+        Draw.SetSortContext(EntityLayer,
+                            (VisualEffect.Shadow > 0.0f)
+                                ? Render::RenderSubBand2D::Shadow
+                                : Render::RenderSubBand2D::RootSprite,
+                            DepthKey);
 
         const auto* Frames = mSpriteAssets.HasCache() ?
             mSpriteAssets.GetDatImageFrames(RenderComp->ImageID) :
@@ -1463,12 +1502,14 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             }
         }
 
+        Draw.SetSortContext(EntityLayer, Render::RenderSubBand2D::OverNode, DepthKey);
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
             for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
                 if (Tree->Nodes[NodeIndex].ParentIndex < 0 && Tree->Nodes[NodeIndex].DrawAbove)
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
+        Draw.SetSortContext(EntityLayer, Render::RenderSubBand2D::RootSprite, DepthKey);
 
         if (!DrewSprite && RenderComp->Visible)
         {
@@ -1541,6 +1582,11 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             continue;
         }
 
+        const uint16_t BulletDepth =
+            Render::SortKey2D::EncodeDepthKey(VisualPos.Y, RenderComp->ZOrder);
+        Draw.SetSortContext(Render::RenderLayer2D::Projectiles,
+                            Render::RenderSubBand2D::UnderNode,
+                            BulletDepth);
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
             for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
@@ -1548,6 +1594,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
                     DrawImageNodeTree(Entities, EntityId, Tree->Nodes, (int)NodeIndex);
         }
 
+        Draw.SetSortContext(Render::RenderLayer2D::Projectiles,
+                            Render::RenderSubBand2D::RootSprite,
+                            BulletDepth);
         const auto* Frames = mSpriteAssets.GetDatImageFrames(RenderComp->ImageID);
         if (Frames && !Frames->empty())
         {
@@ -1571,6 +1620,9 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             }
         }
 
+        Draw.SetSortContext(Render::RenderLayer2D::Projectiles,
+                            Render::RenderSubBand2D::OverNode,
+                            BulletDepth);
         if (auto* Tree = Entities.GetComponent<Game::Components::ImageTreeComponent>(EntityId))
         {
             for (size_t NodeIndex = 0; NodeIndex < Tree->Nodes.size(); ++NodeIndex)
@@ -1600,6 +1652,12 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             Unit->HitPoints, Unit->MaxHitPoints,
             Unit->ShieldPoints, Unit->MaxShieldPoints,
             Unit->EnergyPoints, Unit->MaxEnergyPoints);
+    }
+
+    if (mUseRenderQueue)
+    {
+        Draw.SetActiveQueue(nullptr);
+        mRenderServer.FlushWorldFrame(Draw);
     }
 
     if (DebugEntityRenderEnabled() && DebugEntityFrames > 0)

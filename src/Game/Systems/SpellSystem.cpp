@@ -1125,9 +1125,9 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
                     if (TargetUnit->SupplyCost > 0)
                     {
-                        HarvestSystem::GetResources(OldPlayerID).SupplyUsed =
-                            std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyUsed - TargetUnit->SupplyCost);
-                        HarvestSystem::GetResources(NewPlayerID).SupplyUsed += TargetUnit->SupplyCost;
+                        HarvestSystem::GetResources(EM, OldPlayerID).SupplyUsed =
+                            std::max(0, HarvestSystem::GetResources(EM, OldPlayerID).SupplyUsed - TargetUnit->SupplyCost);
+                        HarvestSystem::GetResources(EM, NewPlayerID).SupplyUsed += TargetUnit->SupplyCost;
                     }
 
                     const int DefID = Game::Races::GetUnitDefIDByChkUnitID(TargetUnit->ChkUnitID);
@@ -1136,10 +1136,10 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                         const int ProvidedSupply = Game::Races::GetSupplyProvidedByDefID(DefID);
                         if (ProvidedSupply > 0)
                         {
-                            HarvestSystem::GetResources(OldPlayerID).SupplyMax =
-                                std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyMax - ProvidedSupply);
-                            HarvestSystem::GetResources(NewPlayerID).SupplyMax =
-                                std::min(200, HarvestSystem::GetResources(NewPlayerID).SupplyMax + ProvidedSupply);
+                            HarvestSystem::GetResources(EM, OldPlayerID).SupplyMax =
+                                std::max(0, HarvestSystem::GetResources(EM, OldPlayerID).SupplyMax - ProvidedSupply);
+                            HarvestSystem::GetResources(EM, NewPlayerID).SupplyMax =
+                                std::min(200, HarvestSystem::GetResources(EM, NewPlayerID).SupplyMax + ProvidedSupply);
                         }
                     }
                 }
@@ -1175,8 +1175,8 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
                     if (OldPlayerID >= 0 && OldPlayerID < kPlayerResourceSlots)
                     {
-                        HarvestSystem::GetResources(OldPlayerID).SupplyMax =
-                            std::max(0, HarvestSystem::GetResources(OldPlayerID).SupplyMax - 10);
+                        HarvestSystem::GetResources(EM, OldPlayerID).SupplyMax =
+                            std::max(0, HarvestSystem::GetResources(EM, OldPlayerID).SupplyMax - 10);
                     }
 
                     constexpr int InfestedCommandCenterChkUnitID = 130;

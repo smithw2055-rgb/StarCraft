@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "Core/Scene/SceneManager.h"
 
 namespace Game::Client::GameLoop
 {
@@ -31,6 +32,7 @@ struct AppRuntime
     std::string AssetRoot;
     bool CampaignRuntimeEnabled = true;
     GameState State = GameState::MainMenu;
+    Core::Scene::SceneManager Scenes;
 };
 
 } // namespace Game::Client::GameLoop

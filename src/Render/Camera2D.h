@@ -1,6 +1,36 @@
 #pragma once
 
+#if __has_include("third_party/HandmadeMath.h")
 #include "third_party/HandmadeMath.h"
+#else
+struct HMM_Mat4
+{
+    float Elements[4][4] = {};
+};
+
+inline HMM_Mat4 HMM_M4D(float Diagonal)
+{
+    HMM_Mat4 Result{};
+    Result.Elements[0][0] = Diagonal;
+    Result.Elements[1][1] = Diagonal;
+    Result.Elements[2][2] = Diagonal;
+    Result.Elements[3][3] = Diagonal;
+    return Result;
+}
+
+inline HMM_Mat4 HMM_Orthographic_RH_NO(float Left, float Right, float Bottom, float Top, float Near, float Far)
+{
+    HMM_Mat4 Result{};
+    Result.Elements[0][0] = 2.0f / (Right - Left);
+    Result.Elements[1][1] = 2.0f / (Top - Bottom);
+    Result.Elements[2][2] = 2.0f / (Near - Far);
+    Result.Elements[3][3] = 1.0f;
+    Result.Elements[3][0] = (Left + Right) / (Left - Right);
+    Result.Elements[3][1] = (Bottom + Top) / (Bottom - Top);
+    Result.Elements[3][2] = (Near + Far) / (Near - Far);
+    return Result;
+}
+#endif
 
 namespace Render
 {

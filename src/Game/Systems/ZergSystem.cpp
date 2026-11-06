@@ -804,7 +804,7 @@ bool ZergSystem::CanMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < BldgDef.MineralCost || Res.VespeneGas < BldgDef.GasCost)
     {
         if (OutReason) *OutReason = "not enough resources";
@@ -903,7 +903,7 @@ bool ZergSystem::CanMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < UnitDef.MineralCost || Res.VespeneGas < UnitDef.GasCost)
     {
         if (OutReason) *OutReason = "not enough resources";
@@ -945,7 +945,7 @@ bool ZergSystem::StartMorphLarvaIntoUnit(Core::ECS::EntityManager& EM,
     const auto& UnitDef = Game::Races::GetUnitDefByID(UnitDefID);
 
     // Deduct costs
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals -= UnitDef.MineralCost;
     Res.VespeneGas -= UnitDef.GasCost;
     Res.SupplyUsed += UnitDef.SupplyCost;
@@ -1061,7 +1061,7 @@ bool ZergSystem::CanMorphHydraliskIntoLurker(
     const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
     const auto& LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < LurkerDef.MineralCost ||
         Res.VespeneGas < LurkerDef.GasCost)
     {
@@ -1103,7 +1103,7 @@ bool ZergSystem::StartMorphHydraliskIntoLurker(
     const int LurkerDefID = Game::Races::GetUnitDefID("Lurker");
     const auto& LurkerDef = Game::Races::GetUnitDefByID(LurkerDefID);
 
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals -= LurkerDef.MineralCost;
     Res.VespeneGas -= LurkerDef.GasCost;
     Res.SupplyUsed +=
@@ -1214,7 +1214,7 @@ bool ZergSystem::CanMorphMutaliskIntoGuardian(
     const int GuardianDefID = Game::Races::GetUnitDefID("Guardian");
     const auto& GuardianDef = Game::Races::GetUnitDefByID(GuardianDefID);
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < GuardianDef.MineralCost ||
         Res.VespeneGas < GuardianDef.GasCost)
     {
@@ -1256,7 +1256,7 @@ bool ZergSystem::StartMorphMutaliskIntoGuardian(
     const int GuardianDefID = Game::Races::GetUnitDefID("Guardian");
     const auto& GuardianDef = Game::Races::GetUnitDefByID(GuardianDefID);
 
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals -= GuardianDef.MineralCost;
     Res.VespeneGas -= GuardianDef.GasCost;
     Res.SupplyUsed +=
@@ -1367,7 +1367,7 @@ bool ZergSystem::CanMorphMutaliskIntoDevourer(
     const int DevourerDefID = Game::Races::GetUnitDefID("Devourer");
     const auto& DevourerDef = Game::Races::GetUnitDefByID(DevourerDefID);
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < DevourerDef.MineralCost ||
         Res.VespeneGas < DevourerDef.GasCost)
     {
@@ -1409,7 +1409,7 @@ bool ZergSystem::StartMorphMutaliskIntoDevourer(
     const int DevourerDefID = Game::Races::GetUnitDefID("Devourer");
     const auto& DevourerDef = Game::Races::GetUnitDefByID(DevourerDefID);
 
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals -= DevourerDef.MineralCost;
     Res.VespeneGas -= DevourerDef.GasCost;
     Res.SupplyUsed +=
@@ -1517,7 +1517,7 @@ bool ZergSystem::CanMorphBuilding(Core::ECS::EntityManager& EM,
         return false;
     }
 
-    auto& Res = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (Res.Minerals < TargetDef.MineralCost || Res.VespeneGas < TargetDef.GasCost)
     {
         if (OutReason) *OutReason = "not enough resources";
@@ -1542,7 +1542,7 @@ bool ZergSystem::StartMorphBuilding(Core::ECS::EntityManager& EM,
 
     const auto& TargetDef = Game::Races::GetUnitDefByID(TargetDefID);
 
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals -= TargetDef.MineralCost;
     Res.VespeneGas -= TargetDef.GasCost;
 
@@ -1669,7 +1669,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         }
         if (Player && Morph->SourceUnitID != MorphEntityID)
         {
-            HarvestSystem::GetResources(Player->PlayerID).SupplyMax +=
+            HarvestSystem::GetResources(EM, Player->PlayerID).SupplyMax +=
                 Game::Races::GetSupplyProvidedByDefID(TargetDefID);
         }
         if (auto* Path = EM.GetComponent<PathfindingComponent>(MorphEntityID))
@@ -1762,7 +1762,7 @@ void ZergSystem::CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID)
         NRender.ImageID = ResolveImageID(NUnit.ChkUnitID);
         UpgradeSystem::RefreshUnitEnergyCap(EM, NewUnitID);
 
-        HarvestSystem::GetResources(PlayerID).SupplyMax +=
+        HarvestSystem::GetResources(EM, PlayerID).SupplyMax +=
             Game::Races::GetSupplyProvidedByDefID(TargetDefID);
 
         NCmd.CurrentCommand = CommandType::Stop;

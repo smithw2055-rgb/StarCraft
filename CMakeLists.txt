@@ -1293,6 +1293,7 @@ if(BUILD_TRIGGER_RUNTIME_TEST)
         src/Core/Utils/Logger.cpp
         src/Game/Campaign/CampaignController.cpp
         src/Game/Trigger/TriggerVM.cpp
+        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/IScriptVM.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/HarvestSystem.cpp
@@ -1345,6 +1346,7 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Game/Campaign/CampaignController.cpp
         src/Game/Campaign/CampaignMissionCatalog.cpp
         src/Game/Trigger/TriggerVM.cpp
+        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/IScriptVM.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/HarvestSystem.cpp
@@ -1388,7 +1390,65 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
     endif()
 endif()
 
+
+option(BUILD_ECS_FOUNDATION_MODERNIZATION_TEST "Build ECS foundation modernization regression test" ON)
+if(BUILD_ECS_FOUNDATION_MODERNIZATION_TEST)
+    add_executable(EcsFoundationModernizationTest
+        tests/Regression/EcsFoundationModernizationTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+    )
+
+    target_include_directories(EcsFoundationModernizationTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(EcsFoundationModernizationTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(EcsFoundationModernizationTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+endif()
+
+
+option(BUILD_PHASE2_ENGINE_MODERNIZATION_TEST "Build Phase 2 engine modernization regression test" ON)
+if(BUILD_PHASE2_ENGINE_MODERNIZATION_TEST)
+    add_executable(Phase2EngineModernizationTest
+        tests/Regression/Phase2EngineModernizationTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/IScriptVM.cpp
+    )
+
+    target_include_directories(Phase2EngineModernizationTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(Phase2EngineModernizationTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(Phase2EngineModernizationTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+endif()
+
 foreach(_StarCraftRegressionTest IN ITEMS
+    Phase2EngineModernizationTest
+    EcsFoundationModernizationTest
     IScriptAngelScriptExportTest
     IScriptAngelScriptCompileTest
     AnimationStateTest
@@ -1501,6 +1561,10 @@ if(BUILD_GAME_CLIENT)
         src/Client/Selection.cpp
         src/Client/SelectionOverlayPresentation.cpp
         src/Client/ProjectileSystem.cpp
+        src/Resource/ModernAssetRegistry.cpp
+        src/Game/Systems/DeclarativeAnimationPlayer.cpp
+        src/Render/EnvironmentAndTerrainPipeline.cpp
+        src/Render/SokolPBRDispatcher.cpp
         "src/UI/GlueCampaignData.cpp"
         "src/UI/Hud.cpp"
         "src/UI/HudCommandActions.cpp"
@@ -1556,6 +1620,7 @@ if(BUILD_GAME_CLIENT)
         src/Game/Campaign/CampaignMissionCatalog.cpp
         src/Game/Campaign/CampaignProgressStore.cpp
         src/Game/Trigger/TriggerVM.cpp
+        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Game/Systems/ProtossSystem.cpp
@@ -1723,6 +1788,106 @@ if(BUILD_GAME_CLIENT)
     endif()
 endif()
 
+
+option(BUILD_PHASE3_RENDER_PIPELINE_TEST "Build Phase 3 64-bit SortKey RenderQueue2D regression test" ON)
+if(BUILD_PHASE3_RENDER_PIPELINE_TEST)
+    add_executable(Phase3RenderPipelineTest
+        tests/Regression/Phase3RenderPipelineTest.cpp
+        src/Client/EntityRenderer.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/Utils/Logger.cpp
+    )
+
+    target_include_directories(Phase3RenderPipelineTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(Phase3RenderPipelineTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(Phase3RenderPipelineTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(Phase3RenderPipelineTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME Phase3RenderPipelineTest COMMAND Phase3RenderPipelineTest)
+endif()
+
+
+option(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST "Build Phase 5 JobSystem and CSR SpatialGrid regression test" ON)
+if(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST)
+    add_executable(Phase5JobSystemParallelTest
+        tests/Regression/Phase5JobSystemParallelTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+    )
+
+    target_include_directories(Phase5JobSystemParallelTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(Phase5JobSystemParallelTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(Phase5JobSystemParallelTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(Phase5JobSystemParallelTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(Phase5JobSystemParallelTest PRIVATE -pthread)
+    endif()
+
+    add_test(NAME Phase5JobSystemParallelTest COMMAND Phase5JobSystemParallelTest)
+endif()
+
+
+option(BUILD_PHASE4_HUD_MVVM_BINDING_TEST "Build Phase 4 HUD MVVM reactive data-binding regression test" ON)
+if(BUILD_PHASE4_HUD_MVVM_BINDING_TEST)
+    add_executable(Phase4HudMvvmBindingTest
+        tests/Regression/Phase4HudMvvmBindingTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+        src/UI/HudCommandActions.cpp
+        src/UI/HudCommandButtons.cpp
+        src/UI/HudCommandPanel.cpp
+        src/UI/HudContext.cpp
+        src/UI/HudInfoPanelState.cpp
+    )
+
+    target_include_directories(Phase4HudMvvmBindingTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(Phase4HudMvvmBindingTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(Phase4HudMvvmBindingTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(Phase4HudMvvmBindingTest PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME Phase4HudMvvmBindingTest COMMAND Phase4HudMvvmBindingTest)
+endif()
+
 # Config Summary
 message(STATUS "")
 message(STATUS "================ Build Configuration ================")
@@ -1734,3 +1899,68 @@ message(STATUS "  Generator: ${CMAKE_GENERATOR}")
 message(STATUS "  C++:       ${CMAKE_CXX_STANDARD}")
 message(STATUS "=====================================================")
 message(STATUS "")
+
+option(BUILD_MODERN_ENGINE_VERIFICATION_TEST "Build modern engine & cloud assets verification test" ON)
+if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
+    add_executable(ModernEngineVerificationTest
+        tests/Regression/ModernEngineVerificationTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/IScriptVM.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/AI/AIBrain.cpp
+        src/Game/AI/BehaviorTreeRuntime.cpp
+        src/Game/Trigger/TriggerVM.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/DeclarativeAnimationPlayer.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+        src/Resource/GameDataLoader.cpp
+        src/Resource/IArchiveReader.cpp
+        src/Resource/FileSystemArchive.cpp
+        src/Resource/DatDecoder.cpp
+        src/Resource/PalDecoder.cpp
+        src/Resource/TblDecoder.cpp
+        src/Resource/Cv5Decoder.cpp
+        src/Resource/Vf4Decoder.cpp
+        src/Resource/RgbaImageFileDecoder.cpp
+        src/Resource/ModernAssetRegistry.cpp
+        src/Render/Draw2D.cpp
+        src/Render/Shader2D.cpp
+        src/Render/BitmapFont.cpp
+        src/Render/EnvironmentAndTerrainPipeline.cpp
+        src/Render/SokolPBRDispatcher.cpp
+    )
+    target_include_directories(ModernEngineVerificationTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party
+    )
+    target_compile_definitions(ModernEngineVerificationTest PRIVATE
+        SOKOL_DUMMY_BACKEND
+        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    if(MSVC)
+        target_compile_options(ModernEngineVerificationTest PRIVATE /utf-8 /permissive-)
+        target_link_libraries(ModernEngineVerificationTest PRIVATE windowscodecs ole32)
+    endif()
+    add_test(NAME ModernEngineVerificationTest COMMAND ModernEngineVerificationTest)
+    set_tests_properties(ModernEngineVerificationTest PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()

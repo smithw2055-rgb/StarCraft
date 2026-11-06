@@ -40,8 +40,29 @@ namespace
 void Hud::UpdateContext(Core::ECS::EntityManager& Entities,
                         const std::vector<int>& SelectedIds)
 {
-    ResetButtons();
-    ResetInfoPanel();
+    using ViewModel::HudDirtyFlags;
+    using ViewModel::HasDirtyFlag;
+
+    const HudDirtyFlags Dirty = mViewModel.SyncWithWorld(
+        Entities,
+        SelectedIds,
+        mState.CommandPanel.PanelPage,
+        mState.ActiveCommand);
+
+    const bool NeedCommandRebuild =
+        !mUseReactiveBinding ||
+        HasDirtyFlag(Dirty, HudDirtyFlags::Selection | HudDirtyFlags::CommandCard);
+    const bool NeedInfoRebuild =
+        !mUseReactiveBinding ||
+        HasDirtyFlag(Dirty, HudDirtyFlags::Selection | HudDirtyFlags::InfoPanel);
+
+    if (!NeedCommandRebuild && !NeedInfoRebuild)
+    {
+        mViewModel.RecordCommandCardSkip();
+        mViewModel.RecordInfoPanelSkip();
+        return;
+    }
+
     mState.Selection.SelectedCount = (int)SelectedIds.size();
 
     if (SelectedIds != mState.Selection.LastSelectedIds)
@@ -55,12 +76,34 @@ void Hud::UpdateContext(Core::ECS::EntityManager& Entities,
 
     if (SelectedEntityId < 0)
     {
-        mState.ActiveCommand = -1;
+        if (NeedCommandRebuild)
+        {
+            ResetButtons();
+            mState.ActiveCommand = -1;
+            mState.CommandPanel.PanelPage = PageNone;
+            mState.CommandPanel.PanelCategory = HudPanelCategory::None;
+            mViewModel.RecordCommandCardRebuild();
+        }
+        else
+        {
+            mViewModel.RecordCommandCardSkip();
+        }
+
+        if (NeedInfoRebuild)
+        {
+            ResetInfoPanel();
+            mViewModel.RecordInfoPanelRebuild();
+        }
+        else
+        {
+            mViewModel.RecordInfoPanelSkip();
+        }
+
         mState.Selection.SelectedEntityId = -1;
         mState.Selection.SelectedChkUnitId = -1;
         mState.Selection.SelectedTerranDefId = -1;
-        mState.CommandPanel.PanelPage = PageNone;
-        mState.CommandPanel.PanelCategory = HudPanelCategory::None;
+        mViewModel.ClearDirtyFlags(
+            HudDirtyFlags::Selection | HudDirtyFlags::CommandCard | HudDirtyFlags::InfoPanel);
         return;
     }
 
@@ -77,34 +120,56 @@ void Hud::UpdateContext(Core::ECS::EntityManager& Entities,
         mState.CommandPanel.PanelPage = (SelectedTerranDefId >= 0)
             ? GetDefaultTerranPageForDef(SelectedTerranDefId)
             : GetDefaultPageForSelection(SelectedChkUnitId);
+        mViewModel.CommandPanelPage.Set(mState.CommandPanel.PanelPage);
     }
 
-    if (SelectedTerranDefId >= 0)
+    if (NeedCommandRebuild)
     {
-        mState.CommandPanel.PanelCategory = HudPanelCategory::Terran;
-        BuildTerranPage(SelectedEntityId, SelectedTerranDefId, &Entities);
+        ResetButtons();
+        if (SelectedTerranDefId >= 0)
+        {
+            mState.CommandPanel.PanelCategory = HudPanelCategory::Terran;
+            BuildTerranPage(SelectedEntityId, SelectedTerranDefId, &Entities);
+        }
+        else
+        {
+            switch (FindSelectedRace(Entities, SelectedEntityId, SelectedChkUnitId))
+            {
+                case Game::Components::Race::Zerg:
+                    mState.CommandPanel.PanelCategory = HudPanelCategory::Zerg;
+                    BuildZergPage(SelectedEntityId, SelectedChkUnitId, &Entities);
+                    break;
+
+                case Game::Components::Race::Protoss:
+                    mState.CommandPanel.PanelCategory = HudPanelCategory::Protoss;
+                    BuildProtossPage(SelectedEntityId, SelectedChkUnitId, &Entities);
+                    break;
+
+                default:
+                    mState.CommandPanel.PanelCategory = HudPanelCategory::None;
+                    break;
+            }
+        }
+        mViewModel.RecordCommandCardRebuild();
+    }
+    else
+    {
+        mViewModel.RecordCommandCardSkip();
+    }
+
+    if (NeedInfoRebuild)
+    {
+        ResetInfoPanel();
         UpdateInfoPanel(Entities, SelectedEntityId, SelectedChkUnitId, SelectedTerranDefId, &Entities);
-        return;
+        mViewModel.RecordInfoPanelRebuild();
     }
-
-    switch (FindSelectedRace(Entities, SelectedEntityId, SelectedChkUnitId))
+    else
     {
-        case Game::Components::Race::Zerg:
-            mState.CommandPanel.PanelCategory = HudPanelCategory::Zerg;
-            BuildZergPage(SelectedEntityId, SelectedChkUnitId, &Entities);
-            break;
-
-        case Game::Components::Race::Protoss:
-            mState.CommandPanel.PanelCategory = HudPanelCategory::Protoss;
-            BuildProtossPage(SelectedEntityId, SelectedChkUnitId, &Entities);
-            break;
-
-        default:
-            mState.CommandPanel.PanelCategory = HudPanelCategory::None;
-            break;
+        mViewModel.RecordInfoPanelSkip();
     }
 
-    UpdateInfoPanel(Entities, SelectedEntityId, SelectedChkUnitId, SelectedTerranDefId, &Entities);
+    mViewModel.ClearDirtyFlags(
+        HudDirtyFlags::Selection | HudDirtyFlags::CommandCard | HudDirtyFlags::InfoPanel);
 }
 
 } // namespace Game::Client::UI

@@ -1,3 +1,4 @@
+#include "Game/AI/BehaviorTreeRuntime.h"
 #pragma once
 
 #include "Game/AI/AIDifficulty.h"
@@ -23,6 +24,12 @@ public:
             const FogOfWarSystem* Fog = nullptr);
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "AIBrain"; }
+
+    // Phase 2 BehaviorTree Integration: Bind a decompiled StarCraft/BroodWar AI Behavior Tree
+    bool BindBehaviorTree(const Game::AI::BehaviorTreeAsset* Asset);
+    bool HasBoundBehaviorTree() const { return mBTInstance != nullptr; }
+    const Game::AI::BehaviorTreeInstance* GetBehaviorTreeInstance() const { return mBTInstance.get(); }
+    int ResolveModernAssetUnitDefID(const std::string& ModernUnitName) const;
 
 private:
     struct BuildStep
@@ -54,6 +61,7 @@ private:
     void RunZergShowcase(Core::ECS::EntityManager& EM);
     void RunProtossAI(Core::ECS::EntityManager& EM);
     void RunProtossShowcase(Core::ECS::EntityManager& EM);
+    void RunBehaviorTreeStep(Core::ECS::EntityManager& EM, float DeltaSeconds);
 
     void ManageEconomy(Core::ECS::EntityManager& EM);
     void ManageMilitary(Core::ECS::EntityManager& EM);
@@ -170,6 +178,9 @@ private:
     std::vector<int> mActiveDefenseGroup;
     Core::Math::Vec2 mLastDefenseTarget;
     bool mHasDefenseTarget = false;
+    std::unique_ptr<Game::AI::BehaviorTreeInstance> mBTInstance;
+    size_t mSyncedBTBuildOrderCursor = 0;
+    uint32_t mSyncedBTAttackWaveCursor = 0;
 };
 
 } // namespace Game::Systems

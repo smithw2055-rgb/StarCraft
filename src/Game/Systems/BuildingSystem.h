@@ -69,6 +69,21 @@ struct BuildOrder
     std::vector<int> AssistantBuilderIDs;
 };
 
+struct UnreachableBuildSiteEntry
+{
+    int PlayerID = -1;
+    int BuildingDefID = -1;
+    Core::Math::Vec2 Position;
+    float RemainingSeconds = 0.0f;
+};
+
+// World-scoped Singleton Resource storing per-session pending build orders and site cooldowns.
+struct BuildingOrderStore
+{
+    std::vector<BuildOrder> PendingBuildOrders;
+    std::vector<UnreachableBuildSiteEntry> UnreachableBuildSites;
+};
+
 class BuildingSystem : public Core::ECS::ISystem
 {
 public:
@@ -106,6 +121,7 @@ public:
     }
 
     static void ResetPendingBuildOrders();
+    static void ResetPendingBuildOrders(Core::ECS::EntityManager& EM);
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetSubunitImageResolver(ImageIDResolver Resolver);
     static void SetConstructionImageResolver(ImageIDResolver Resolver);
@@ -239,8 +255,12 @@ public:
                            int BuildingDefID,
                            const BuildTarget& Target,
                            const std::vector<int>& AssistantBuilderIDs = {});
+    static int CountPendingBuilds(const Core::ECS::EntityManager& EM, int PlayerID, int BuildingDefID);
     static int CountPendingBuilds(int PlayerID, int BuildingDefID);
     static bool IsBuilderCommitted(Core::ECS::EntityManager& EM, int BuilderID);
+    static bool WasRecentlyUnreachable(const Core::ECS::EntityManager& EM,
+                                       int PlayerID, int BuildingDefID,
+                                       const Core::Math::Vec2& Position);
     static bool WasRecentlyUnreachable(int PlayerID, int BuildingDefID,
                                        const Core::Math::Vec2& Position);
     static bool HasPylonPowerAtPosition(const Core::ECS::EntityManager& EM,

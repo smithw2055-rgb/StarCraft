@@ -84,12 +84,12 @@ namespace
 
     int ResolveBuildingDefID(const Core::ECS::EntityManager& EM, int BuildingID)
     {
-        if (const auto* Building = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<BuildingComponent>(BuildingID))
+        if (const auto* Building = EM.GetComponent<BuildingComponent>(BuildingID))
         {
             if (Building->BuildingDefID >= 0)
                 return Building->BuildingDefID;
         }
-        if (const auto* Unit = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<UnitComponent>(BuildingID))
+        if (const auto* Unit = EM.GetComponent<UnitComponent>(BuildingID))
             return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
@@ -97,12 +97,11 @@ namespace
     bool IsCompletedBuildingDef(const Core::ECS::EntityManager& EM, int PlayerID, int RequiredDefID)
     {
         auto BuildingIds =
-            const_cast<Core::ECS::EntityManager&>(EM)
-                .GetEntitiesWith<BuildingComponent, PlayerComponent>();
+            EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
         for (int EntityID : BuildingIds)
         {
-            auto* Building = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<BuildingComponent>(EntityID);
-            auto* Player = const_cast<Core::ECS::EntityManager&>(EM).GetComponent<PlayerComponent>(EntityID);
+            const auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+            const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
             if (!Building || !Player || Player->PlayerID != PlayerID || Building->UnderConstruction)
                 continue;
 
@@ -138,7 +137,7 @@ namespace
         auto Def = Races::GetUnitDefByID(UnitDefID);
         auto* Player = EM.GetComponent<PlayerComponent>(ProducerID);
         const int PlayerID = Player ? Player->PlayerID : 0;
-        auto& Res = HarvestSystem::GetResources(PlayerID);
+        auto& Res = HarvestSystem::GetResources(EM, PlayerID);
         Res.Minerals += Def.MineralCost;
         Res.VespeneGas += Def.GasCost;
         Res.SupplyUsed = std::max(0, Res.SupplyUsed - Def.SupplyCost);
@@ -438,7 +437,7 @@ bool ProductionSystem::CanTrain(const Core::ECS::EntityManager& EM,
     }
 
     int PlayerID = Player ? Player->PlayerID : 0;
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     if (Res.Minerals < Def.MineralCost || Res.VespeneGas < Def.GasCost)
     {
         SetReason(OutReason, "not enough resources");
@@ -498,7 +497,7 @@ bool ProductionSystem::StartTrain(Core::ECS::EntityManager& EM,
     auto Def = Races::GetUnitDefByID(UnitDefID);
     auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
     int PlayerID = Player ? Player->PlayerID : 0;
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
 
     auto* Prod = EM.GetComponent<ProductionComponent>(BuildingID);
     if (!Prod)
@@ -540,7 +539,7 @@ bool ProductionSystem::CancelTrain(Core::ECS::EntityManager& EM,
     auto Def = Races::GetUnitDefByID(RefundUnitID);
     auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
     int PlayerID = Player ? Player->PlayerID : 0;
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.Minerals += Def.MineralCost;
     Res.VespeneGas += Def.GasCost;
     Res.SupplyUsed = std::max(0, Res.SupplyUsed - Def.SupplyCost);
@@ -635,13 +634,13 @@ void ProductionSystem::ProcessHangarProduction(Core::ECS::EntityManager& EM,
         // A trigger may fill the last slot while automatic construction is in
         // progress. Return the already-reserved payload cost in that case.
         if (Unit->HangarBuildInProgress)
-            HarvestSystem::GetResources(Player->PlayerID).Minerals += MineralCost;
+            HarvestSystem::GetResources(EM, Player->PlayerID).Minerals += MineralCost;
         Unit->HangarBuildProgress = 0.0f;
         Unit->HangarBuildInProgress = false;
         return;
     }
 
-    auto& Resources = HarvestSystem::GetResources(Player->PlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, Player->PlayerID);
     if (!Unit->HangarBuildInProgress)
     {
         if (Resources.Minerals < MineralCost)

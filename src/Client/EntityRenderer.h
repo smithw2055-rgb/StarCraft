@@ -3,6 +3,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
 #include "Client/Entity.h"
+#include "Render/RenderServer2D.h"
 #include "Resource/DataAssetCacheView.h"
 #include "Resource/SpriteAssetCacheView.h"
 #include <algorithm>
@@ -48,6 +49,16 @@ public:
         mInterpolationAlpha = Alpha;
     }
 
+    void SetUseRenderQueue(bool Enabled) { mUseRenderQueue = Enabled; }
+    bool GetUseRenderQueue() const { return mUseRenderQueue; }
+
+    Render::RenderServer2D& GetRenderServer() { return mRenderServer; }
+    const Render::RenderServer2D& GetRenderServer() const { return mRenderServer; }
+    const Render::RenderFrameStats2D& GetLastRenderStats() const
+    {
+        return mRenderServer.GetLastFrameStats();
+    }
+
 private:
     void DrawSelectionMarker(const Entity& E);
     void DrawSelectionMarker(Core::ECS::EntityManager& Entities, int EntityId);
@@ -82,6 +93,8 @@ private:
 
     Resource::Graphics::SpriteAssetCacheView mSpriteAssets;
     Resource::Graphics::DataAssetCacheView mDataAssets;
+    mutable Render::RenderServer2D mRenderServer;
+    bool mUseRenderQueue = true;
     float mCameraX = 0.0f, mCameraY = 0.0f;
     float mViewW = 1280.0f, mViewH = 720.0f;
     float mZoom = 1.0f;

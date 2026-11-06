@@ -12,6 +12,8 @@
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Races/UnitPrototypeRegistry.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/CommandSystem.h"
 
 namespace Game::Systems
@@ -21,15 +23,9 @@ using namespace Game::Components;
 
 namespace
 {
-    constexpr int TerranScvChkUnitID = 7;
-    constexpr int ZergDroneChkUnitID = 41;
-    constexpr int ProtossProbeChkUnitID = 64;
-
     bool IsWorkerChkUnitID(int ChkUnitID)
     {
-        return ChkUnitID == TerranScvChkUnitID ||
-               ChkUnitID == ZergDroneChkUnitID ||
-               ChkUnitID == ProtossProbeChkUnitID;
+        return Game::Races::IsWorkerChkUnitID(ChkUnitID);
     }
 
     void SetReason(std::string* OutReason, const std::string& Reason)
@@ -49,13 +45,12 @@ namespace
 
     int ResolveBuildingDefID(const Core::ECS::EntityManager& EM, int EntityID)
     {
-        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-        if (const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID))
+        if (const auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
         {
             if (Building->BuildingDefID >= 0)
                 return Building->BuildingDefID;
         }
-        if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
+        if (const auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
             return Game::Races::GetUnitDefIDByChkUnitID(Unit->ChkUnitID);
         return -1;
     }
@@ -2694,11 +2689,21 @@ void HarvestSystem::ProcessHarvester(Core::ECS::EntityManager& EM, int ID, float
             {
                 const ResourceType ReturnType = Harvest->CarryingType;
                 const int DeliveredDepotID = Harvest->ReturnBuildingID;
-                auto& Resources = GetResources(WorkerPlayerID);
+                auto& Resources = GetResources(EM, WorkerPlayerID);
+                int MinDelta = 0;
+                int GasDelta = 0;
                 if (Harvest->CarryingType == ResourceType::Minerals)
-                    Resources.Minerals += Harvest->CarryingAmount;
+                {
+                    MinDelta = Harvest->CarryingAmount;
+                    Resources.Minerals += MinDelta;
+                }
                 else if (Harvest->CarryingType == ResourceType::VespeneGas)
-                    Resources.VespeneGas += Harvest->CarryingAmount;
+                {
+                    GasDelta = Harvest->CarryingAmount;
+                    Resources.VespeneGas += GasDelta;
+                }
+                EM.Events().Emit(Game::Events::ResourceChangedEvent{
+                    WorkerPlayerID, MinDelta, GasDelta, Resources.Minerals, Resources.VespeneGas});
 
                 if (DebugHarvestEnabled())
                 {

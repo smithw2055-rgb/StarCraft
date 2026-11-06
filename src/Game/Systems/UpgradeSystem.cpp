@@ -6,6 +6,7 @@
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/HarvestSystem.h"
 
 namespace Game::Systems
@@ -35,9 +36,40 @@ namespace
 
     constexpr int kBroodWarLogicFramesPerSecond = 24;
 
-    PlayerUpgrades gUpgrades[kPlayerResourceSlots];
-    std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>,
-               kPlayerResourceSlots> gResearching{};
+    PlayerUpgradeStore gFallbackUpgradeStore;
+
+    int ClampPlayerSlot(int PlayerID)
+    {
+        if (PlayerID < 0)
+            return 0;
+        if (PlayerID >= kPlayerResourceSlots)
+            return kPlayerResourceSlots - 1;
+        return PlayerID;
+    }
+
+    PlayerUpgradeStore& ResolveUpgradeStore(Core::ECS::EntityManager& EM)
+    {
+        if (auto* Store = EM.GetResource<PlayerUpgradeStore>())
+            return *Store;
+        return gFallbackUpgradeStore;
+    }
+
+    const PlayerUpgradeStore& ResolveUpgradeStore(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* Store = EM.GetResource<PlayerUpgradeStore>())
+            return *Store;
+        return gFallbackUpgradeStore;
+    }
+
+    PlayerUpgradeStore& ResolveActiveOrFallbackUpgradeStore()
+    {
+        if (auto* ActiveWorld = Core::ECS::EntityManager::GetActiveWorld())
+        {
+            if (auto* Store = ActiveWorld->GetResource<PlayerUpgradeStore>())
+                return *Store;
+        }
+        return gFallbackUpgradeStore;
+    }
 
     constexpr ResearchDef kResearchDefs[] =
     {
@@ -143,13 +175,12 @@ namespace
 
     int ResolveDefID(const Core::ECS::EntityManager& EM, int EntityID)
     {
-        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-        if (const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID))
+        if (const auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
         {
             if (Building->BuildingDefID >= 0)
                 return Building->BuildingDefID;
         }
-        if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID))
+        if (const auto* Unit = EM.GetComponent<UnitComponent>(EntityID))
         {
             // Siege mode is a separate units.dat entry but shares the tank's
             // vehicle weapon/armor upgrade family in Brood War.
@@ -164,17 +195,16 @@ namespace
                                     int PlayerID,
                                     const char* RequiredName)
     {
-        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
         const int RequiredDefID = Game::Races::GetUnitDefID(RequiredName);
         if (RequiredDefID < 0)
             return false;
 
-        return MutableEM.AnyEntityWith<BuildingComponent, UnitComponent, PlayerComponent>(
+        return EM.AnyEntityWith<BuildingComponent, UnitComponent, PlayerComponent>(
             [&](int EntityID)
             {
-                const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-                const auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
-                const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+                const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+                const auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
+                const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
                 if (!Player || Player->PlayerID != PlayerID || !Building ||
                     Building->UnderConstruction || !Unit || Unit->HitPoints <= 0)
                 {
@@ -190,17 +220,16 @@ namespace
                                 int PlayerID,
                                 const char* RequiredName)
     {
-        auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
         const int RequiredDefID = Game::Races::GetUnitDefID(RequiredName);
         if (RequiredDefID < 0)
             return false;
 
-        for (int EntityID : MutableEM.GetEntitiesWith<BuildingComponent,
-                                                       UnitComponent,
-                                                       PlayerComponent>())
+        for (int EntityID : EM.GetEntitiesWith<BuildingComponent,
+                                               UnitComponent,
+                                               PlayerComponent>())
         {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+            const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+            const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
             if (Player && Player->PlayerID == PlayerID && Unit &&
                 Unit->HitPoints > 0 && ResolveDefID(EM, EntityID) == RequiredDefID)
             {
@@ -398,11 +427,25 @@ UpgradeSystem::UpgradeSystem(Core::ECS::SystemManager& SysMgr)
     Logger::Info("UpgradeSystem", "Initialized (Terran + Zerg + Protoss)");
 }
 
+PlayerUpgrades& UpgradeSystem::GetUpgrades(Core::ECS::EntityManager& EM, int PlayerID)
+{
+    return ResolveUpgradeStore(EM).Upgrades[(size_t)ClampPlayerSlot(PlayerID)];
+}
+
+const PlayerUpgrades& UpgradeSystem::GetUpgrades(const Core::ECS::EntityManager& EM, int PlayerID)
+{
+    return ResolveUpgradeStore(EM).Upgrades[(size_t)ClampPlayerSlot(PlayerID)];
+}
+
 PlayerUpgrades& UpgradeSystem::GetUpgrades(int PlayerID)
 {
-    if (PlayerID < 0) PlayerID = 0;
-    if (PlayerID >= kPlayerResourceSlots) PlayerID = kPlayerResourceSlots - 1;
-    return gUpgrades[PlayerID];
+    return ResolveActiveOrFallbackUpgradeStore().Upgrades[(size_t)ClampPlayerSlot(PlayerID)];
+}
+
+void UpgradeSystem::ResetUpgrades(Core::ECS::EntityManager& EM)
+{
+    EM.SetResource<PlayerUpgradeStore>();
+    EM.ActivateWorld();
 }
 
 void UpgradeSystem::Update(float DeltaTime)
@@ -410,6 +453,7 @@ void UpgradeSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
 
     auto& EM = mSystemMgr.GetEntityManager();
+    auto& Store = ResolveUpgradeStore(EM);
     auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
     for (auto ID : Buildings)
     {
@@ -429,16 +473,23 @@ void UpgradeSystem::Update(float DeltaTime)
             int Rid = Bldg->ResearchingID;
             if (Rid >= 0 && PlayerID >= 0)
             {
-                int CurrentLevel = GetResearchLevel(PlayerID, static_cast<ResearchId>(Rid));
-                auto& Upgrades = GetUpgrades(PlayerID);
+                int CurrentLevel = GetResearchLevel(EM, PlayerID, static_cast<ResearchId>(Rid));
+                auto& Upgrades = GetUpgrades(EM, PlayerID);
+                const int NewLevel = CurrentLevel + 1;
                 Upgrades.Levels[static_cast<size_t>(Rid)] =
-                    static_cast<uint8_t>(CurrentLevel + 1);
+                    static_cast<uint8_t>(NewLevel);
 
                 const ResearchDef* Research = FindResearchDef(static_cast<ResearchId>(Rid));
                 Logger::Info("UpgradeSystem",
                     "Player " + std::to_string(PlayerID) + " completed " +
                     (Research ? std::string(Research->Name) : "research") + " level " +
-                    std::to_string(CurrentLevel + 1));
+                    std::to_string(NewLevel));
+
+                EM.Events().Emit(Game::Events::ResearchCompletedEvent{
+                    PlayerID,
+                    ID,
+                    static_cast<uint8_t>(Rid),
+                    NewLevel});
 
                 if (IsEnergyCapUpgrade(static_cast<ResearchId>(Rid)))
                 {
@@ -453,7 +504,7 @@ void UpgradeSystem::Update(float DeltaTime)
                 if (PlayerID < kPlayerResourceSlots &&
                     Rid < static_cast<int>(ResearchId::Count))
                 {
-                    gResearching[(size_t)PlayerID][(size_t)Rid] = false;
+                    Store.Researching[(size_t)PlayerID][(size_t)Rid] = false;
                 }
             }
 
@@ -476,8 +527,7 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
         return false;
     }
 
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Building = MutableEM.GetComponent<BuildingComponent>(BuildingID);
+    const auto* Building = EM.GetComponent<BuildingComponent>(BuildingID);
     if (!Building)
     {
         SetReason(OutReason, "research producer is not a building");
@@ -498,13 +548,13 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
         SetReason(OutReason, "building is already researching");
         return false;
     }
-    auto* ProducerUnit = MutableEM.GetComponent<UnitComponent>(BuildingID);
+    const auto* ProducerUnit = EM.GetComponent<UnitComponent>(BuildingID);
     if (!ProducerUnit || ProducerUnit->HitPoints <= 0)
     {
         SetReason(OutReason, "research producer is not operational");
         return false;
     }
-    if (!MutableEM.GetComponent<Game::Components::TransformComponent>(BuildingID))
+    if (!EM.GetComponent<Game::Components::TransformComponent>(BuildingID))
     {
         SetReason(OutReason, "research producer missing transform");
         return false;
@@ -519,9 +569,9 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
         return false;
     }
 
-    const auto* Player = MutableEM.GetComponent<PlayerComponent>(BuildingID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
     const int PlayerID = Player ? Player->PlayerID : 0;
-    const int CurrentLevel = GetResearchLevel(PlayerID, ResearchId);
+    const int CurrentLevel = GetResearchLevel(EM, PlayerID, ResearchId);
     if (CurrentLevel >= Research->MaxLevel)
     {
         SetReason(OutReason, "research already maxed");
@@ -548,8 +598,9 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
             return false;
         }
     }
+    const auto& Store = ResolveUpgradeStore(EM);
     if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots &&
-        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)])
+        Store.Researching[(size_t)PlayerID][static_cast<size_t>(ResearchId)])
     {
         SetReason(OutReason, "research already in progress for player");
         return false;
@@ -557,7 +608,7 @@ bool UpgradeSystem::CanStartResearch(const Core::ECS::EntityManager& EM,
 
     const int MineralCost = Research->MineralCost + CurrentLevel * Research->MineralStep;
     const int GasCost = Research->GasCost + CurrentLevel * Research->GasStep;
-    auto& Resources = HarvestSystem::GetResources(PlayerID);
+    const auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
     if (Resources.Minerals < MineralCost || Resources.VespeneGas < GasCost)
     {
         SetReason(OutReason, "not enough resources");
@@ -584,8 +635,8 @@ bool UpgradeSystem::StartResearch(Core::ECS::EntityManager& EM,
     if (!Research)
         return false;
 
-    const int CurrentLevel = GetResearchLevel(PlayerID, ResearchId);
-    auto& Resources = HarvestSystem::GetResources(PlayerID);
+    const int CurrentLevel = GetResearchLevel(EM, PlayerID, ResearchId);
+    auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
     Resources.Minerals -= Research->MineralCost + CurrentLevel * Research->MineralStep;
     Resources.VespeneGas -= Research->GasCost + CurrentLevel * Research->GasStep;
 
@@ -599,7 +650,7 @@ bool UpgradeSystem::StartResearch(Core::ECS::EntityManager& EM,
         Bldg->ResearchPlayer = PlayerID;
     }
     if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots)
-        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = true;
+        ResolveUpgradeStore(EM).Researching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = true;
 
     Logger::Info("UpgradeSystem",
         "Player " + std::to_string(PlayerID) + " started " +
@@ -622,9 +673,9 @@ bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM,
         : (Player ? Player->PlayerID : 0);
     int MineralCost = 0;
     int GasCost = 0;
-    if (GetResearchCost(ResearchId, PlayerID, MineralCost, GasCost))
+    if (GetResearchCost(EM, ResearchId, PlayerID, MineralCost, GasCost))
     {
-        auto& Resources = HarvestSystem::GetResources(PlayerID);
+        auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
         const int RefundNumerator = BuildingDestroyed ? 3 : 4;
         Resources.Minerals += MineralCost * RefundNumerator / 4;
         Resources.VespeneGas += GasCost * RefundNumerator / 4;
@@ -632,7 +683,7 @@ bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM,
     if (PlayerID >= 0 && PlayerID < kPlayerResourceSlots &&
         ResearchId > ResearchId::None && ResearchId < ResearchId::Count)
     {
-        gResearching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = false;
+        ResolveUpgradeStore(EM).Researching[(size_t)PlayerID][static_cast<size_t>(ResearchId)] = false;
     }
 
     Bldg->BuildTimeRemaining = 0.0f;
@@ -640,6 +691,18 @@ bool UpgradeSystem::CancelResearch(Core::ECS::EntityManager& EM,
     Bldg->ResearchingID = -1;
     Bldg->ResearchPlayer = -1;
     return true;
+}
+
+int UpgradeSystem::GetResearchLevel(const Core::ECS::EntityManager& EM, int PlayerID, ResearchId ResearchId)
+{
+    if (ResearchId == ResearchId::None)
+        return 0;
+    return GetUpgrades(EM, PlayerID).Levels[ToIndex(ResearchId)];
+}
+
+bool UpgradeSystem::HasResearch(const Core::ECS::EntityManager& EM, int PlayerID, ResearchId ResearchId)
+{
+    return GetResearchLevel(EM, PlayerID, ResearchId) > 0;
 }
 
 int UpgradeSystem::GetResearchLevel(int PlayerID, ResearchId ResearchId)
@@ -733,6 +796,26 @@ int UpgradeSystem::GetResearchTimeCost(ResearchId ResearchId, int PlayerID)
            kBroodWarLogicFramesPerSecond;
 }
 
+bool UpgradeSystem::GetResearchCost(const Core::ECS::EntityManager& EM,
+                                    ResearchId ResearchId,
+                                    int PlayerID,
+                                    int& OutMinerals,
+                                    int& OutGas)
+{
+    const ResearchDef* Research = FindResearchDef(ResearchId);
+    if (!Research)
+    {
+        OutMinerals = 0;
+        OutGas = 0;
+        return false;
+    }
+
+    const int CurrentLevel = GetResearchLevel(EM, PlayerID, ResearchId);
+    OutMinerals = Research->MineralCost + CurrentLevel * Research->MineralStep;
+    OutGas = Research->GasCost + CurrentLevel * Research->GasStep;
+    return true;
+}
+
 bool UpgradeSystem::GetResearchCost(ResearchId ResearchId,
                                     int PlayerID,
                                     int& OutMinerals,
@@ -761,14 +844,13 @@ int UpgradeSystem::GetWeaponBonusForTarget(const Core::ECS::EntityManager& EM,
                                            int EntityID,
                                            bool TargetIsAir)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
-    if (const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    if (const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
         Unit && Unit->ChkUnitID == 30 && !TargetIsAir)
     {
         return 5 * GetResearchLevel(
-            PlayerID, ResearchId::Terran_VehicleWeapons);
+            EM, PlayerID, ResearchId::Terran_VehicleWeapons);
     }
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0) return 0;
@@ -815,13 +897,12 @@ int UpgradeSystem::GetWeaponBonusForTarget(const Core::ECS::EntityManager& EM,
 
     if (WeaponUpgrade == ResearchId::None)
         return 0;
-    return DamageBonusPerLevel * GetResearchLevel(PlayerID, WeaponUpgrade);
+    return DamageBonusPerLevel * GetResearchLevel(EM, PlayerID, WeaponUpgrade);
 }
 
 int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0) return 0;
@@ -833,22 +914,22 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
     if (Def.RaceType == Race::Terran)
     {
         if (IsTerranInfantry(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_InfantryArmor);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Terran_InfantryArmor);
         if (IsTerranVehicle(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_VehicleArmor);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Terran_VehicleArmor);
         if (IsTerranShip(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Terran_ShipArmor);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Terran_ShipArmor);
     }
     else if (Def.RaceType == Race::Zerg)
     {
         if (IsZergFlyer(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Zerg_FlyerCarapace);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Zerg_FlyerCarapace);
 
         if (!IsZergGround(DefID))
             return 0;
-        int Bonus = GetResearchLevel(PlayerID, ResearchId::Zerg_Carapace);
+        int Bonus = GetResearchLevel(EM, PlayerID, ResearchId::Zerg_Carapace);
         if (Def.Name == "Ultralisk" &&
-            HasResearch(PlayerID, ResearchId::Zerg_ChitinousPlating))
+            HasResearch(EM, PlayerID, ResearchId::Zerg_ChitinousPlating))
         {
             Bonus += 2;
         }
@@ -857,9 +938,9 @@ int UpgradeSystem::GetArmorBonus(const Core::ECS::EntityManager& EM, int EntityI
     else if (Def.RaceType == Race::Protoss)
     {
         if (IsProtossGround(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Protoss_GroundArmor);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Protoss_GroundArmor);
         if (IsProtossAir(DefID))
-            return GetResearchLevel(PlayerID, ResearchId::Protoss_AirArmor);
+            return GetResearchLevel(EM, PlayerID, ResearchId::Protoss_AirArmor);
     }
     return 0;
 }
@@ -873,8 +954,7 @@ int UpgradeSystem::GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& 
                                                 int EntityID,
                                                 bool TargetIsAir)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0)
@@ -882,23 +962,23 @@ int UpgradeSystem::GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& 
 
     const auto& Def = Game::Races::GetUnitDefByID(DefID);
     if ((Def.Name == "Marine" || Def.Name == "JimRaynorMarine") &&
-        HasResearch(PlayerID, ResearchId::Terran_U238Shells))
+        HasResearch(EM, PlayerID, ResearchId::Terran_U238Shells))
     {
         return 32;
     }
     if (Def.Name == "Dragoon" &&
-        HasResearch(PlayerID, ResearchId::Protoss_SingularityCharge))
+        HasResearch(EM, PlayerID, ResearchId::Protoss_SingularityCharge))
     {
         return 64;
     }
     if (Def.Name == "Hydralisk" &&
-        HasResearch(PlayerID, ResearchId::Zerg_GroovedSpines))
+        HasResearch(EM, PlayerID, ResearchId::Zerg_GroovedSpines))
     {
         return 32;
     }
     if (TargetIsAir &&
         Def.Name == "Goliath" &&
-        HasResearch(PlayerID, ResearchId::Terran_CharonBoosters))
+        HasResearch(EM, PlayerID, ResearchId::Terran_CharonBoosters))
     {
         return 96;
     }
@@ -908,8 +988,7 @@ int UpgradeSystem::GetRangeBonusPixelsForTarget(const Core::ECS::EntityManager& 
 
 int UpgradeSystem::GetSightRangeBonusTiles(const Core::ECS::EntityManager& EM, int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0)
@@ -917,22 +996,22 @@ int UpgradeSystem::GetSightRangeBonusTiles(const Core::ECS::EntityManager& EM, i
 
     const auto& Def = Game::Races::GetUnitDefByID(DefID);
     if (Def.Name == "Ghost" &&
-        HasResearch(PlayerID, ResearchId::Terran_OcularImplants))
+        HasResearch(EM, PlayerID, ResearchId::Terran_OcularImplants))
     {
         return std::max(0, 11 - Def.SightRange);
     }
     if (Def.Name == "Overlord" &&
-        HasResearch(PlayerID, ResearchId::Zerg_Antennae))
+        HasResearch(EM, PlayerID, ResearchId::Zerg_Antennae))
     {
         return std::max(0, 11 - Def.SightRange);
     }
     if (Def.Name == "Observer" &&
-        HasResearch(PlayerID, ResearchId::Protoss_SensorArray))
+        HasResearch(EM, PlayerID, ResearchId::Protoss_SensorArray))
     {
         return std::max(0, 11 - Def.SightRange);
     }
     if (Def.Name == "Scout" &&
-        HasResearch(PlayerID, ResearchId::Protoss_ApialSensors))
+        HasResearch(EM, PlayerID, ResearchId::Protoss_ApialSensors))
     {
         return std::max(0, 11 - Def.SightRange);
     }
@@ -943,73 +1022,39 @@ int UpgradeSystem::GetSightRangeBonusTiles(const Core::ECS::EntityManager& EM, i
 float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& EM,
                                                 int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     if (!Unit)
         return 1.0f;
+
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
+    const int PlayerID = Player ? Player->PlayerID : 0;
 
     switch (Unit->ChkUnitID)
     {
         case 2:  // Vulture
         case 19: // JimRaynorVulture
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Terran_IonThrusters)
+            return HasResearch(EM, PlayerID, ResearchId::Terran_IonThrusters)
                 ? (2560.0f / 1707.0f) : 1.0f;
-        }
         case 37: // Zergling
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Zerg_MetabolicBoost) ? 1.5f : 1.0f;
-        }
+            return HasResearch(EM, PlayerID, ResearchId::Zerg_MetabolicBoost) ? 1.5f : 1.0f;
         case 38: // Hydralisk
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Zerg_MuscularAugments) ? 1.5f : 1.0f;
-        }
+            return HasResearch(EM, PlayerID, ResearchId::Zerg_MuscularAugments) ? 1.5f : 1.0f;
         case 39: // Ultralisk
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Zerg_AnabolicSynthesis) ? 1.5f : 1.0f;
-        }
+            return HasResearch(EM, PlayerID, ResearchId::Zerg_AnabolicSynthesis) ? 1.5f : 1.0f;
         case 42: // Overlord
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Zerg_PneumatizedCarapace)
+            return HasResearch(EM, PlayerID, ResearchId::Zerg_PneumatizedCarapace)
                 ? (853.0f / 213.0f) : 1.0f;
-        }
         case 65: // Zealot
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Protoss_ZealotSpeed) ? 1.5f : 1.0f;
-        }
+            return HasResearch(EM, PlayerID, ResearchId::Protoss_ZealotSpeed) ? 1.5f : 1.0f;
         case 69: // Shuttle
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Protoss_GraviticDrive)
+            return HasResearch(EM, PlayerID, ResearchId::Protoss_GraviticDrive)
                 ? (1699.0f / 1133.0f) : 1.0f;
-        }
         case 70: // Scout
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Protoss_GraviticThrusters)
+            return HasResearch(EM, PlayerID, ResearchId::Protoss_GraviticThrusters)
                 ? (1707.0f / 1280.0f) : 1.0f;
-        }
         case 84: // Observer
-        {
-            const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, ResearchId::Protoss_GraviticBoosters)
+            return HasResearch(EM, PlayerID, ResearchId::Protoss_GraviticBoosters)
                 ? (1279.0f / 853.0f) : 1.0f;
-        }
         default:
             return 1.0f;
     }
@@ -1018,22 +1063,20 @@ float UpgradeSystem::GetMovementSpeedMultiplier(const Core::ECS::EntityManager& 
 float UpgradeSystem::GetAttackCooldownMultiplier(const Core::ECS::EntityManager& EM,
                                                  int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    const auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
+    const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     if (!Unit || Unit->ChkUnitID != 37)
         return 1.0f;
 
-    const auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
-    return HasResearch(PlayerID, ResearchId::Zerg_AdrenalGlands) ? 0.5f : 1.0f;
+    return HasResearch(EM, PlayerID, ResearchId::Zerg_AdrenalGlands) ? 0.5f : 1.0f;
 }
 
 int UpgradeSystem::GetEffectiveMaxEnergyPoints(const Core::ECS::EntityManager& EM,
                                                int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     if (!Unit)
         return 0;
 
@@ -1046,7 +1089,7 @@ int UpgradeSystem::GetEffectiveMaxEnergyPoints(const Core::ECS::EntityManager& E
         if (EnergyUpgrade != ResearchId::None)
         {
             const int PlayerID = Player ? Player->PlayerID : 0;
-            return HasResearch(PlayerID, EnergyUpgrade) ? 250 : 200;
+            return HasResearch(EM, PlayerID, EnergyUpgrade) ? 250 : 200;
         }
         BaseCap = std::max(BaseCap, Def.EnergyPoints);
     }
@@ -1069,8 +1112,7 @@ void UpgradeSystem::RefreshUnitEnergyCap(Core::ECS::EntityManager& EM, int Entit
 
 int UpgradeSystem::GetMaxHangarCount(const Core::ECS::EntityManager& EM, int EntityID)
 {
-    auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-    auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
+    const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
     const int PlayerID = Player ? Player->PlayerID : 0;
     const int DefID = ResolveDefID(EM, EntityID);
     if (DefID < 0)
@@ -1079,11 +1121,11 @@ int UpgradeSystem::GetMaxHangarCount(const Core::ECS::EntityManager& EM, int Ent
     const auto& Def = Game::Races::GetUnitDefByID(DefID);
     if (Def.Name == "Carrier")
     {
-        return HasResearch(PlayerID, ResearchId::Protoss_CarrierCapacity) ? 8 : 4;
+        return HasResearch(EM, PlayerID, ResearchId::Protoss_CarrierCapacity) ? 8 : 4;
     }
     if (Def.Name == "Reaver")
     {
-        return HasResearch(PlayerID, ResearchId::Protoss_ReaverCapacity) ? 10 : 5;
+        return HasResearch(EM, PlayerID, ResearchId::Protoss_ReaverCapacity) ? 10 : 5;
     }
     return 0;
 }

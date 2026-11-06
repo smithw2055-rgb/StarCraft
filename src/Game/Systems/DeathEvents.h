@@ -7,6 +7,7 @@
 #include "Game/Components.h"
 #include "Game/IScriptVM.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 
@@ -140,7 +141,7 @@ inline void SettleSupplyForDeath(Core::ECS::EntityManager& EM,
         return;
     }
 
-    auto& Resources = HarvestSystem::GetResources(VictimPlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, VictimPlayerID);
     const int DefID = Game::Races::GetUnitDefIDByChkUnitID(VictimUnit.ChkUnitID);
     const auto Def = Game::Races::GetUnitDefByID(DefID);
     const auto* Building = EM.GetComponent<Game::Components::BuildingComponent>(VictimEntityID);
@@ -248,11 +249,14 @@ inline void RecordUnitDeath(Core::ECS::EntityManager& EM,
     if (Existing)
         return;
 
+    const int VictimPlayerID = VictimPlayer->PlayerID;
+    const int VictimChkUnitID = VictimUnit->ChkUnitID;
+
     const bool IsHallucination =
         (EM.GetComponent<Game::Components::StatusEffectComponent>(VictimEntityID) &&
          EM.GetComponent<Game::Components::StatusEffectComponent>(VictimEntityID)
              ->HasEffect(Game::Components::StatusEffect::Hallucination));
-    SettleSupplyForDeath(EM, VictimEntityID, *VictimUnit, VictimPlayer->PlayerID);
+    SettleSupplyForDeath(EM, VictimEntityID, *VictimUnit, VictimPlayerID);
     SpawnDeathVisual(EM, VictimEntityID, *VictimUnit);
 
     if (auto* VictimBuilding = EM.GetComponent<Game::Components::BuildingComponent>(VictimEntityID))
@@ -310,8 +314,8 @@ inline void RecordUnitDeath(Core::ECS::EntityManager& EM,
     }
 
     auto& Record = EM.AddComponent<Game::Components::DeathRecordComponent>(VictimEntityID);
-    Record.VictimPlayerID = VictimPlayer->PlayerID;
-    Record.VictimUnitID = VictimUnit->ChkUnitID;
+    Record.VictimPlayerID = VictimPlayerID;
+    Record.VictimUnitID = VictimChkUnitID;
     Record.KillerEntityID = KillerEntityID;
 
     if (KillerEntityID >= 0)
@@ -322,6 +326,14 @@ inline void RecordUnitDeath(Core::ECS::EntityManager& EM,
     Record.AwardKill = AwardKill && !IsHallucination &&
         Record.KillerPlayerID >= 0 &&
         Record.KillerPlayerID != Record.VictimPlayerID;
+
+    EM.Events().Emit(Game::Events::UnitDeathEvent{
+        VictimEntityID,
+        Record.VictimPlayerID,
+        Record.VictimUnitID,
+        Record.KillerEntityID,
+        Record.KillerPlayerID,
+        Record.AwardKill});
 }
 
 } // namespace Game::Systems

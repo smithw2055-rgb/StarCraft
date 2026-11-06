@@ -1,4 +1,5 @@
 #include "Game/Systems/AnimationSystem.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/BurrowState.h"
@@ -409,6 +410,8 @@ void AnimationSystem::UpdateScriptEffects(float DeltaTime)
         if (!Effect->SpawnSoundPlayed && Effect->SpawnSoundID >= 0)
         {
             Effect->SpawnSoundPlayed = true;
+            EM.Events().Emit(Game::Events::SoundRequestEvent{
+                Effect->SpawnSoundID, Trans->Position.X, Trans->Position.Y, 0});
             if (mAudio)
             {
                 mAudio->PlaySound(Effect->SpawnSoundID,
@@ -1614,6 +1617,11 @@ void AnimationSystem::ConsumeImageNodeEvents(int EntityID,
             case Game::IScriptEventType::PlaySound:
             case Game::IScriptEventType::PlayRandomSound:
             case Game::IScriptEventType::PlaySoundBetween:
+                if (Event.A >= 0)
+                {
+                    mSystemMgr.GetEntityManager().Events().Emit(Game::Events::SoundRequestEvent{
+                        Event.A, Trans.Position.X, Trans.Position.Y, 0});
+                }
                 if (mAudio && Event.A >= 0)
                 {
                     // IScript plays sounds at an image position, without a
@@ -2019,6 +2027,11 @@ void AnimationSystem::ConsumeIScriptEvents(int EntityID,
             case Game::IScriptEventType::PlaySound:
             case Game::IScriptEventType::PlayRandomSound:
             case Game::IScriptEventType::PlaySoundBetween:
+                if (Event.A >= 0)
+                {
+                    mSystemMgr.GetEntityManager().Events().Emit(Game::Events::SoundRequestEvent{
+                        Event.A, Trans.Position.X, Trans.Position.Y, 0});
+                }
                 if (mAudio && Event.A >= 0)
                 {
                     mAudio->PlaySound(Event.A, Trans.Position.X, Trans.Position.Y,

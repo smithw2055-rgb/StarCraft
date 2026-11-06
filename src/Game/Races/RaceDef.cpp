@@ -1,4 +1,6 @@
+#include "Resource/ModernAssetRegistry.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Races/UnitPrototypeRegistry.h"
 
 #include <array>
 #include <unordered_map>
@@ -779,27 +781,20 @@ const std::vector<UnitDef>& GetProtossDefs() { InitDefs(); return ProtossDefs; }
 UnitDef GetUnitDefByName(const std::string& Name)
 {
     InitDefs();
-    auto It = NameToID.find(Name);
-    assert(It != NameToID.end() && "UnitDef not found");
-    int ID = It->second;
-    if (ID < (int)TerranDefs.size()) return TerranDefs[ID];
-    ID -= (int)TerranDefs.size();
-    if (ID < (int)ZergDefs.size()) return ZergDefs[ID];
-    ID -= (int)ZergDefs.size();
-    return ProtossDefs[ID];
+    const int DefID = UnitPrototypeRegistry::Instance().FindDefIDByName(Name);
+    assert(DefID >= 0 && "UnitDef not found");
+    if (const UnitDef* Found = UnitPrototypeRegistry::Instance().FindByDefID(DefID))
+        return *Found;
+    UnitDef Empty;
+    Empty.Name = "Unknown";
+    return Empty;
 }
 
 UnitDef GetUnitDefByID(int ID)
 {
     InitDefs();
-    int TerranCount = (int)TerranDefs.size();
-    int ZergCount = (int)ZergDefs.size();
-    int ProtossCount = (int)ProtossDefs.size();
-    if (ID >= 0 && ID < TerranCount) return TerranDefs[ID];
-    ID -= TerranCount;
-    if (ID >= 0 && ID < ZergCount) return ZergDefs[ID];
-    ID -= ZergCount;
-    if (ID >= 0 && ID < ProtossCount) return ProtossDefs[ID];
+    if (const UnitDef* Found = UnitPrototypeRegistry::Instance().FindByDefID(ID))
+        return *Found;
     UnitDef Empty;
     Empty.Name = "Unknown";
     return Empty;
@@ -999,6 +994,52 @@ int GetUnitDefID(const std::string& Name)
     auto It = NameToID.find(Name);
     if (It != NameToID.end()) return It->second;
     return -1;
+}
+
+
+size_t SyncAndVerifyWithModernAssets(const Resource::ModernAssetRegistry& Registry, size_t* OutVerifiedWeapons)
+{
+    InitDefs();
+    size_t SyncedUnits = 0;
+    size_t SyncedWeapons = 0;
+
+    auto SyncRaceList = [&](std::vector<UnitDef>& DefList) {
+        for (auto& Def : DefList) {
+            if (Def.ChkUnitID < 0) continue;
+            const auto* ModUnit = Registry.FindUnitByID(static_cast<uint32_t>(Def.ChkUnitID));
+            if (!ModUnit) continue;
+
+            Def.HitPoints = static_cast<int>(ModUnit->MaxHP);
+            Def.ShieldPoints = ModUnit->ShieldsEnabled ? static_cast<int>(ModUnit->MaxShields) : 0;
+            ++SyncedUnits;
+
+            if (ModUnit->HasGroundWeapon) {
+                if (const auto* GW = Registry.FindWeaponByID(ModUnit->GroundWeaponID)) {
+                    Def.GroundDamage = static_cast<int>(GW->DamageAmount);
+                    Def.GroundDamageBonus = static_cast<int>(GW->DamageBonusPerUpgrade);
+                    Def.GroundAttackCooldown = static_cast<float>(GW->CooldownTicks) / 24.0f;
+                    ++SyncedWeapons;
+                }
+            }
+            if (ModUnit->HasAirWeapon) {
+                if (const auto* AW = Registry.FindWeaponByID(ModUnit->AirWeaponID)) {
+                    Def.AirDamage = static_cast<int>(AW->DamageAmount);
+                    Def.AirDamageBonus = static_cast<int>(AW->DamageBonusPerUpgrade);
+                    Def.AirAttackCooldown = static_cast<float>(AW->CooldownTicks) / 24.0f;
+                    ++SyncedWeapons;
+                }
+            }
+        }
+    };
+
+    SyncRaceList(TerranDefs);
+    SyncRaceList(ZergDefs);
+    SyncRaceList(ProtossDefs);
+
+    if (OutVerifiedWeapons) {
+        *OutVerifiedWeapons = SyncedWeapons;
+    }
+    return SyncedUnits;
 }
 
 } // namespace Game::Races

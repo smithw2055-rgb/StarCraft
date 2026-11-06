@@ -11,6 +11,7 @@
 #include "Resource/SpriteAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
 #include "UI/HudState.h"
+#include "UI/ViewModel/HudViewModel.h"
 
 namespace Game::Map { class GameMap; }
 namespace Game::Client { struct GameMap; }
@@ -98,7 +99,17 @@ public:
 
     const HudState& GetState() const { return mState; }
     const HudResourceState& GetResourceState() const { return mState.Resources; }
-    void SetResourceState(const HudResourceState& Resources) { mState.Resources = Resources; }
+    void SetResourceState(const HudResourceState& Resources)
+    {
+        mState.Resources = Resources;
+        mViewModel.SetResourceState(Resources);
+    }
+
+    ViewModel::HudViewModel& GetViewModel() { return mViewModel; }
+    const ViewModel::HudViewModel& GetViewModel() const { return mViewModel; }
+    void SetUseReactiveBinding(bool Enabled) { mUseReactiveBinding = Enabled; }
+    bool GetUseReactiveBinding() const { return mUseReactiveBinding; }
+
     std::string GetLegacyIconUri(int IconIndex) const;
     std::string GetButtonIconUri(const CmdButtonDef& Button) const;
     std::string GetUnitIconUriForChkUnitId(int ChkUnitId) const;
@@ -176,6 +187,8 @@ private:
                        const Resource::Graphics::GpuImage& AggIcons);
 
     HudState mState;
+    ViewModel::HudViewModel mViewModel;
+    bool mUseReactiveBinding = true;
     Resource::Graphics::UIAssetCacheView mUIAssets;
     Resource::Graphics::SpriteAssetCacheView mSpriteAssets;
 

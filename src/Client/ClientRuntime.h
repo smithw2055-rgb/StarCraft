@@ -15,7 +15,8 @@
 
 namespace Core::ECS { class EntityManager; }
 namespace Core::Audio { class AudioSystem; }
-namespace Render { class Camera2D; class Draw2D; }
+namespace Render { class Camera2D; class Draw2D; class SokolPBRDispatcher; class RenderQueue2D; }
+namespace Resource { class ModernAssetRegistry; }
 namespace Resource::Graphics { class ResourceCache; }
 namespace Game::Client::UI { class Hud; }
 namespace Game::Client::GameLoop { class CursorManager; }
@@ -92,6 +93,9 @@ struct ClientRuntime
                      Core::ECS::EntityManager& Entities,
                      bool MapLoaded,
                      float InterpAlpha = 1.0f);
+    // Phase 4: Direct Sokol GPU 3-Channel PBR Pipeline on ClientRuntime
+    size_t InitializeModernPBRPipeline(const Resource::ModernAssetRegistry& Registry);
+    void RenderModernPBRQueue(const Render::RenderQueue2D& Queue);
     void RenderWorldEffects(Render::Draw2D& Draw2D);
     void RenderSelectionDragOverlay();
     void RenderCursor(int MouseX,
@@ -114,6 +118,7 @@ private:
     std::unique_ptr<GameLoop::CursorManager> Cursor;
     std::unique_ptr<Render::Camera2D> Camera;
     std::unique_ptr<WorldEffects> Effects;
+    std::unique_ptr<Render::SokolPBRDispatcher> PBRDispatcher;
 };
 
 } // namespace Game::Client

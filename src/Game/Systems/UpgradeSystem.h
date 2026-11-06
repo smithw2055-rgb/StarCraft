@@ -111,6 +111,14 @@ struct PlayerUpgrades
     }
 };
 
+// World-scoped Singleton Resource storing per-player upgrade levels and active research flags.
+struct PlayerUpgradeStore
+{
+    static constexpr size_t kMaxPlayers = 12;
+    std::array<PlayerUpgrades, kMaxPlayers> Upgrades{};
+    std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>, kMaxPlayers> Researching{};
+};
+
 class UpgradeSystem : public Core::ECS::ISystem
 {
 public:
@@ -118,7 +126,11 @@ public:
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "UpgradeSystem"; }
 
+    static PlayerUpgrades& GetUpgrades(Core::ECS::EntityManager& EM, int PlayerID = 0);
+    static const PlayerUpgrades& GetUpgrades(const Core::ECS::EntityManager& EM, int PlayerID = 0);
     static PlayerUpgrades& GetUpgrades(int PlayerID = 0);
+
+    static void ResetUpgrades(Core::ECS::EntityManager& EM);
 
     static bool CanStartResearch(const Core::ECS::EntityManager& EM,
                                   int BuildingID,
@@ -133,12 +145,19 @@ public:
                                int BuildingID,
                                bool BuildingDestroyed = false);
 
+    static int GetResearchLevel(const Core::ECS::EntityManager& EM, int PlayerID, ResearchId ResearchId);
+    static bool HasResearch(const Core::ECS::EntityManager& EM, int PlayerID, ResearchId ResearchId);
     static int GetResearchLevel(int PlayerID, ResearchId ResearchId);
     static bool HasResearch(int PlayerID, ResearchId ResearchId);
     static bool IsUpgradeType(ResearchId ResearchId);
     static std::string_view GetResearchDisplayName(ResearchId ResearchId);
     static int GetResearchTimeCost(ResearchId ResearchId, int PlayerID);
     static bool GetResearchCost(ResearchId ResearchId,
+                                int PlayerID,
+                                int& OutMinerals,
+                                int& OutGas);
+    static bool GetResearchCost(const Core::ECS::EntityManager& EM,
+                                ResearchId ResearchId,
                                 int PlayerID,
                                 int& OutMinerals,
                                 int& OutGas);

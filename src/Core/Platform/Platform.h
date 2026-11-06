@@ -6,14 +6,22 @@ namespace Core::Platform
 {
     namespace KeyCode
     {
-        constexpr int Escape = 256;
+        constexpr int Minus = 45;
+        constexpr int Equal = 61;
         constexpr int Q = 81;
         constexpr int R = 82;
+        constexpr int Escape = 256;
+        constexpr int Right = 262;
+        constexpr int Left = 263;
+        constexpr int Down = 264;
+        constexpr int Up = 265;
         constexpr int F6 = 295;
         constexpr int F9 = 298;
+        constexpr int KpSubtract = 333;
+        constexpr int KpAdd = 334;
         constexpr int LeftShift = 340;
-        constexpr int RightShift = 344;
         constexpr int LeftControl = 341;
+        constexpr int RightShift = 344;
         constexpr int RightControl = 345;
     }
 

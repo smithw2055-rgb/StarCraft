@@ -24,13 +24,13 @@ tests/*
 # Resource extraction helpers
 *.bat
 *.py
+*.ps1
 
 # Temporary preview/debug artifacts
 tmp_*
 
 # Build/runtime binary artifacts
 *.exe
-StormLib.dll
-bz2.dll
-zlib1.dll
+*.dll 
 /artifacts/
+/design/

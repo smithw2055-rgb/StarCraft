@@ -16,6 +16,7 @@
 #include "Game/ProtossPower.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/HarvestSystem.h"
 
 namespace Game::Systems
@@ -32,15 +33,31 @@ namespace
     BuildingSystem::ImageIDResolver gConstructionImageResolver;
     BuildingSystem::CollisionBoundsResolver gCollisionBoundsResolver;
     BuildingSystem::AddonOffsetResolver gAddonOffsetResolver;
-    std::vector<BuildOrder> gPendingBuildOrders;
-    struct UnreachableBuildSite
+    BuildingOrderStore gFallbackBuildingOrders;
+
+    BuildingOrderStore& ResolveOrderStore(Core::ECS::EntityManager& EM)
     {
-        int PlayerID = -1;
-        int BuildingDefID = -1;
-        Core::Math::Vec2 Position;
-        float RemainingSeconds = 0.0f;
-    };
-    std::vector<UnreachableBuildSite> gUnreachableBuildSites;
+        if (auto* Store = EM.GetResource<BuildingOrderStore>())
+            return *Store;
+        return gFallbackBuildingOrders;
+    }
+
+    const BuildingOrderStore& ResolveOrderStore(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* Store = EM.GetResource<BuildingOrderStore>())
+            return *Store;
+        return gFallbackBuildingOrders;
+    }
+
+    BuildingOrderStore& ResolveActiveOrFallbackOrderStore()
+    {
+        if (auto* ActiveWorld = Core::ECS::EntityManager::GetActiveWorld())
+        {
+            if (auto* Store = ActiveWorld->GetResource<BuildingOrderStore>())
+                return *Store;
+        }
+        return gFallbackBuildingOrders;
+    }
     constexpr uint32_t ProtossWarpAnchorImageID = 211;
     constexpr int MaxPendingBuildApproachFailures = 8;
     constexpr float MaxPendingBuildApproachSeconds = 180.0f;
@@ -177,7 +194,7 @@ namespace
                                    const BuildTarget& Target,
                                    int IgnoreBuilderID = -1)
     {
-        for (const auto& Order : gPendingBuildOrders)
+        for (const auto& Order : ResolveActiveOrFallbackOrderStore().PendingBuildOrders)
         {
             if (!Order.Active || Order.BuilderID == IgnoreBuilderID)
                 continue;
@@ -603,7 +620,7 @@ namespace
 
     bool IsBuilderAssignedToActiveConstruction(Core::ECS::EntityManager& EM, int BuilderID)
     {
-        for (const auto& Order : gPendingBuildOrders)
+        for (const auto& Order : ResolveOrderStore(EM).PendingBuildOrders)
             if (Order.Active && Order.BuilderID == BuilderID)
                 return true;
         auto Buildings = EM.GetEntitiesWith<BuildingComponent, UnitComponent>();
@@ -1124,19 +1141,43 @@ void BuildingSystem::SetFogExploredChecker(FogExploredChecker Checker)
     gFogExploredChecker = std::move(Checker);
 }
 
+void BuildingSystem::ResetPendingBuildOrders(Core::ECS::EntityManager& EM)
+{
+    EM.SetResource<BuildingOrderStore>();
+    EM.ActivateWorld();
+}
+
 void BuildingSystem::ResetPendingBuildOrders()
 {
-    // Pending orders reference entity ids and resource ledgers owned by one
-    // game session. Never carry them into a newly bootstrapped EntityManager,
-    // where ids can be reused for unrelated units.
-    gPendingBuildOrders.clear();
-    gUnreachableBuildSites.clear();
+    gFallbackBuildingOrders.PendingBuildOrders.clear();
+    gFallbackBuildingOrders.UnreachableBuildSites.clear();
+    if (auto* ActiveWorld = Core::ECS::EntityManager::GetActiveWorld())
+    {
+        if (auto* Store = ActiveWorld->GetResource<BuildingOrderStore>())
+        {
+            Store->PendingBuildOrders.clear();
+            Store->UnreachableBuildSites.clear();
+        }
+    }
+}
+
+int BuildingSystem::CountPendingBuilds(const Core::ECS::EntityManager& EM, int PlayerID, int BuildingDefID)
+{
+    const auto& Orders = ResolveOrderStore(EM).PendingBuildOrders;
+    return (int)std::count_if(
+        Orders.begin(), Orders.end(),
+        [PlayerID, BuildingDefID](const BuildOrder& Order)
+        {
+            return Order.Active && Order.PlayerID == PlayerID &&
+                   Order.BuildingDefID == BuildingDefID;
+        });
 }
 
 int BuildingSystem::CountPendingBuilds(int PlayerID, int BuildingDefID)
 {
+    const auto& Orders = ResolveActiveOrFallbackOrderStore().PendingBuildOrders;
     return (int)std::count_if(
-        gPendingBuildOrders.begin(), gPendingBuildOrders.end(),
+        Orders.begin(), Orders.end(),
         [PlayerID, BuildingDefID](const BuildOrder& Order)
         {
             return Order.Active && Order.PlayerID == PlayerID &&
@@ -1145,12 +1186,29 @@ int BuildingSystem::CountPendingBuilds(int PlayerID, int BuildingDefID)
 }
 
 bool BuildingSystem::WasRecentlyUnreachable(
+    const Core::ECS::EntityManager& EM, int PlayerID, int BuildingDefID, const Core::Math::Vec2& Position)
+{
+    constexpr float SameSiteRadius = 48.0f;
+    const auto& Sites = ResolveOrderStore(EM).UnreachableBuildSites;
+    return std::any_of(
+        Sites.begin(), Sites.end(),
+        [PlayerID, BuildingDefID, &Position](const UnreachableBuildSiteEntry& Site)
+        {
+            return Site.RemainingSeconds > 0.0f &&
+                   Site.PlayerID == PlayerID &&
+                   Site.BuildingDefID == BuildingDefID &&
+                   Site.Position.DistanceTo(Position) <= SameSiteRadius;
+        });
+}
+
+bool BuildingSystem::WasRecentlyUnreachable(
     int PlayerID, int BuildingDefID, const Core::Math::Vec2& Position)
 {
     constexpr float SameSiteRadius = 48.0f;
+    const auto& Sites = ResolveActiveOrFallbackOrderStore().UnreachableBuildSites;
     return std::any_of(
-        gUnreachableBuildSites.begin(), gUnreachableBuildSites.end(),
-        [PlayerID, BuildingDefID, &Position](const UnreachableBuildSite& Site)
+        Sites.begin(), Sites.end(),
+        [PlayerID, BuildingDefID, &Position](const UnreachableBuildSiteEntry& Site)
         {
             return Site.RemainingSeconds > 0.0f &&
                    Site.PlayerID == PlayerID &&
@@ -1213,7 +1271,7 @@ bool BuildingSystem::IsPlacementValid(Core::ECS::EntityManager& EM,
     if (!Def.IsBuilding)
         return false;
 
-    auto& Resources = HarvestSystem::GetResources(BuilderPlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, BuilderPlayerID);
     if (Resources.Minerals < Def.MineralCost || Def.GasCost > Resources.VespeneGas)
         return false;
     if (Def.RequiresPylon && !InternalHasPylonPowerAtPosition(EM, Position, BuilderPlayerID))
@@ -1259,7 +1317,7 @@ bool BuildingSystem::CanBuild(const Core::ECS::EntityManager& EM,
     auto* BuilderPlayer =
         const_cast<Core::ECS::EntityManager&>(EM).GetComponent<PlayerComponent>(BuilderID);
     int PlayerID = BuilderPlayer ? BuilderPlayer->PlayerID : 0;
-    auto& Resources = HarvestSystem::GetResources(PlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
     if (Resources.Minerals < Def.MineralCost || Resources.VespeneGas < Def.GasCost)
     {
         SetReason(OutReason, "not enough resources");
@@ -1438,7 +1496,7 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
 
     auto* BuilderPlayer = EM.GetComponent<PlayerComponent>(BuilderID);
     int PlayerID = BuilderPlayer ? BuilderPlayer->PlayerID : 0;
-    auto& Resources = HarvestSystem::GetResources(PlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
     Resources.Minerals -= Def.MineralCost;
     Resources.VespeneGas -= Def.GasCost;
 
@@ -1452,7 +1510,7 @@ bool BuildingSystem::StartBuild(Core::ECS::EntityManager& EM,
         Order.Position = BuildPosition;
         Order.Target = Target;
         Order.AssistantBuilderIDs = AssistantBuilderIDs;
-        gPendingBuildOrders.push_back(Order);
+        ResolveOrderStore(EM).PendingBuildOrders.push_back(Order);
 
         const int TargetEntityID = Target.Type == BuildTargetType::TargetEntity
             ? Target.TargetEntityID : -1;
@@ -1589,18 +1647,18 @@ void BuildingSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f)
         return;
 
-    for (auto& Site : gUnreachableBuildSites)
+    auto& EM = mSystemMgr.GetEntityManager();
+    auto& UnreachableSites = ResolveOrderStore(EM).UnreachableBuildSites;
+    for (auto& Site : UnreachableSites)
         Site.RemainingSeconds -= DeltaTime;
-    gUnreachableBuildSites.erase(
+    UnreachableSites.erase(
         std::remove_if(
-            gUnreachableBuildSites.begin(), gUnreachableBuildSites.end(),
-            [](const UnreachableBuildSite& Site)
+            UnreachableSites.begin(), UnreachableSites.end(),
+            [](const UnreachableBuildSiteEntry& Site)
             {
                 return Site.RemainingSeconds <= 0.0f;
             }),
-        gUnreachableBuildSites.end());
-
-    auto& EM = mSystemMgr.GetEntityManager();
+        UnreachableSites.end());
     ProcessPendingBuildOrders(EM, DeltaTime);
     auto Entities = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
     for (auto ID : Entities)
@@ -1614,7 +1672,10 @@ void BuildingSystem::Update(float DeltaTime)
 void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                                                float DeltaTime)
 {
-    for (auto& Order : gPendingBuildOrders)
+    auto& OrderStore = ResolveOrderStore(EM);
+    auto& PendingOrders = OrderStore.PendingBuildOrders;
+    auto& UnreachableSites = OrderStore.UnreachableBuildSites;
+    for (auto& Order : PendingOrders)
     {
         if (!Order.Active)
             continue;
@@ -1624,7 +1685,7 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
         {
             if (Order.PlayerID >= 0)
             {
-                auto& Resources = HarvestSystem::GetResources(Order.PlayerID);
+                auto& Resources = HarvestSystem::GetResources(EM, Order.PlayerID);
                 Resources.Minerals += Def.MineralCost;
                 Resources.VespeneGas += Def.GasCost;
             }
@@ -1765,7 +1826,7 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
                     Order.TotalApproachSeconds >=
                         MaxPendingBuildApproachSeconds)
                 {
-                    gUnreachableBuildSites.push_back({
+                    UnreachableSites.push_back({
                         Order.PlayerID,
                         Order.BuildingDefID,
                         Order.Position,
@@ -1892,7 +1953,7 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
             // the autonomous morph.
             if (auto* Building = EM.GetComponent<BuildingComponent>(EntityID))
                 Building->BuilderUnitID = -1;
-            auto& Resources = HarvestSystem::GetResources(Order.PlayerID);
+            auto& Resources = HarvestSystem::GetResources(EM, Order.PlayerID);
             Resources.SupplyUsed = std::max(
                 0, Resources.SupplyUsed - std::max(0, BuilderUnit->SupplyCost));
             EM.DestroyEntity(Order.BuilderID);
@@ -1920,11 +1981,11 @@ void BuildingSystem::ProcessPendingBuildOrders(Core::ECS::EntityManager& EM,
             "," + std::to_string((int)Order.Position.Y) + ")");
     }
 
-    gPendingBuildOrders.erase(
+    PendingOrders.erase(
         std::remove_if(
-            gPendingBuildOrders.begin(), gPendingBuildOrders.end(),
+            PendingOrders.begin(), PendingOrders.end(),
             [](const BuildOrder& Order) { return !Order.Active; }),
-        gPendingBuildOrders.end());
+        PendingOrders.end());
 }
 
 void BuildingSystem::ProcessFlightTransition(Core::ECS::EntityManager& EM, int EntityID)
@@ -2540,8 +2601,10 @@ void BuildingSystem::ProcessConstruction(Core::ECS::EntityManager& EM, int Entit
     if (auto* Player = EM.GetComponent<PlayerComponent>(EntityID))
         PlayerID = Player->PlayerID;
 
-    HarvestSystem::GetResources(PlayerID).SupplyMax +=
+    HarvestSystem::GetResources(EM, PlayerID).SupplyMax +=
         Races::GetSupplyProvidedByDefID(Building->BuildingDefID);
+    EM.Events().Emit(Game::Events::BuildingCompletedEvent{
+        EntityID, PlayerID, Building->BuildingDefID});
 
     std::vector<int> CompletedBuilders{Building->BuilderUnitID};
     CompletedBuilders.insert(
@@ -2808,7 +2871,7 @@ static void SpawnCancelledZergDrone(Core::ECS::EntityManager& EM,
     auto& DBurrow = EM.AddComponent<BurrowComponent>(DroneID);
     DBurrow.CanBurrow = true;
     EM.AddComponent<HarvestComponent>(DroneID);
-    auto& Res = HarvestSystem::GetResources(PlayerID);
+    auto& Res = HarvestSystem::GetResources(EM, PlayerID);
     Res.SupplyUsed += DroneDef.SupplyCost;
 }
 
@@ -2821,7 +2884,7 @@ bool BuildingSystem::CancelConstruction(Core::ECS::EntityManager& EM, int Buildi
     auto* Player = EM.GetComponent<PlayerComponent>(BuildingID);
     const int PlayerID = Player ? Player->PlayerID : 0;
     const auto Def = Races::GetUnitDefByID(Building->BuildingDefID);
-    auto& Resources = HarvestSystem::GetResources(PlayerID);
+    auto& Resources = HarvestSystem::GetResources(EM, PlayerID);
 
     // If this was an add-on, detach from parent
     if (Building->IsAddon && Building->BuilderUnitID >= 0)

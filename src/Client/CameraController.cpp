@@ -1,7 +1,5 @@
 #include "Client/CameraController.h"
 
-#include "third_party/sokol/sokol_app.h"
-
 #include <algorithm>
 #include <cmath>
 
@@ -28,9 +26,11 @@ void CameraController::Update(float Dt)
         mCamera->ZoomAt(Core::Platform::GetMouseX(), Core::Platform::GetMouseY(), Wheel * 0.1f);
     }
 
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_EQUAL) || Core::Platform::IsKeyDown(SAPP_KEYCODE_KP_ADD))
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Equal) ||
+        Core::Platform::IsKeyDown(Core::Platform::KeyCode::KpAdd))
         mCamera->ZoomAt(Core::Platform::GetMouseX(), Core::Platform::GetMouseY(), 0.05f);
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_MINUS) || Core::Platform::IsKeyDown(SAPP_KEYCODE_KP_SUBTRACT))
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Minus) ||
+        Core::Platform::IsKeyDown(Core::Platform::KeyCode::KpSubtract))
         mCamera->ZoomAt(Core::Platform::GetMouseX(), Core::Platform::GetMouseY(), -0.05f);
 
     if (Core::Platform::IsMouseButtonDown(2)) // 0 = LMB, 1 = RMB, 2 = MMB
@@ -45,10 +45,10 @@ void CameraController::Update(float Dt)
     const float EffectiveZoom = Zoom > 0.1f ? Zoom : 1.0f;
 
     float KDX = 0.0f, KDY = 0.0f;
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_LEFT)) KDX -= 1.0f;
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_RIGHT)) KDX += 1.0f;
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_UP)) KDY -= 1.0f;
-    if (Core::Platform::IsKeyDown(SAPP_KEYCODE_DOWN)) KDY += 1.0f;
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Left)) KDX -= 1.0f;
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Right)) KDX += 1.0f;
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Up)) KDY -= 1.0f;
+    if (Core::Platform::IsKeyDown(Core::Platform::KeyCode::Down)) KDY += 1.0f;
     if (KDX != 0.0f || KDY != 0.0f)
     {
         const float KLen = std::sqrt(KDX * KDX + KDY * KDY);

@@ -2,6 +2,7 @@
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Map/Map.h"
 #include "Game/Components.h"
+#include "Core/Concurrency/JobSystem.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>
@@ -11,6 +12,19 @@ namespace Game::Systems
 {
 using Core::Utils::Logger;
 using namespace Game::Components;
+
+namespace
+{
+    struct VisionEmitterStamp
+    {
+        int TileX = 0;
+        int TileY = 0;
+        int SightRange = 1;
+        int DetectorRange = 0;
+        bool StampFog = true;
+        bool StampDetector = false;
+    };
+}
 
 FogOfWarSystem::FogOfWarSystem(Core::ECS::SystemManager& SysMgr, const Game::Map::GameMap* Map)
     : mSystemMgr(SysMgr), mMap(Map)
@@ -142,18 +156,25 @@ bool FogOfWarSystem::IsGameplayDetected(int TileX, int TileY, int PlayerID) cons
 
 void FogOfWarSystem::ResetVisibility()
 {
-    if (!mDetectorGrid.empty())
-        std::memset(mDetectorGrid.data(), 0, mDetectorGrid.size());
     const size_t SliceSize = (size_t)mMapWidth * (size_t)mMapHeight;
-    for (int P = 0; P < mMaxPlayers; P++)
-    {
-        size_t Base = (size_t)P * SliceSize;
-        for (size_t I = 0; I < SliceSize; I++)
+    if (SliceSize == 0)
+        return;
+
+    Core::Concurrency::JobSystem::Instance().ParallelFor(
+        static_cast<uint32_t>(mMaxPlayers),
+        1u,
+        [&](uint32_t P)
         {
-            if (mFogGrid[Base + I] == (uint8_t)FogState::Visible)
-                mFogGrid[Base + I] = (uint8_t)FogState::Explored;
-        }
-    }
+            const size_t Base = static_cast<size_t>(P) * SliceSize;
+            if (!mDetectorGrid.empty())
+                std::memset(mDetectorGrid.data() + Base, 0, SliceSize);
+            uint8_t* FogSlice = mFogGrid.data() + Base;
+            for (size_t I = 0; I < SliceSize; ++I)
+            {
+                if (FogSlice[I] == (uint8_t)FogState::Visible)
+                    FogSlice[I] = (uint8_t)FogState::Explored;
+            }
+        });
 }
 
 void FogOfWarSystem::RevealAround(int CX, int CY, int SightRange, uint8_t* Grid, uint8_t* DetGrid)
@@ -229,10 +250,13 @@ void FogOfWarSystem::Update(float DeltaTime)
     if (DeltaTime <= 0.0f) return;
 
     ++mRevision;
-    ResetVisibility();
 
     auto& EM = mSystemMgr.GetEntityManager();
     auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+
+    // Partition vision emitter stamps per player so each player's fog + detector
+    // grid slice can be decayed and rasterized in parallel with zero lock contention.
+    std::vector<std::vector<VisionEmitterStamp>> EmittersPerPlayer((size_t)mMaxPlayers);
 
     for (auto ID : Units)
     {
@@ -249,9 +273,6 @@ void FogOfWarSystem::Update(float DeltaTime)
         int TileX = (int)(Trans->Position.X / 32.0f);
         int TileY = (int)(Trans->Position.Y / 32.0f);
 
-        size_t SliceBase = (size_t)PlayerID * mMapWidth * mMapHeight;
-
-        // Check status effects that reduce sight
         int EffectiveRange =
             Unit->SightRange + UpgradeSystem::GetSightRangeBonusTiles(EM, ID);
         auto* Status = EM.GetComponent<Components::StatusEffectComponent>(ID);
@@ -274,20 +295,20 @@ void FogOfWarSystem::Update(float DeltaTime)
             }
         }
 
-        uint8_t* FogSlice = mFogGrid.data() + SliceBase;
         const bool CanDetect = Unit->IsDetector && !IsBlind && BuildingCanDetect;
         const bool IsDefenseDetector = (Unit->ChkUnitID == 102 || Unit->ChkUnitID == 144 || Unit->ChkUnitID == 162);
 
         if (CanDetect && IsDefenseDetector)
         {
-            // Defense structures (Missile Turret, Spore Colony, Photon Cannon) have fixed detector range 7
-            RevealAround(TileX, TileY, EffectiveRange, FogSlice, nullptr);
-            RevealAround(TileX, TileY, 7, nullptr, mDetectorGrid.data() + SliceBase);
+            EmittersPerPlayer[(size_t)PlayerID].push_back({
+                TileX, TileY, EffectiveRange, 7, true, true
+            });
         }
         else
         {
-            uint8_t* DetSlice = CanDetect ? (mDetectorGrid.data() + SliceBase) : nullptr;
-            RevealAround(TileX, TileY, EffectiveRange, FogSlice, DetSlice);
+            EmittersPerPlayer[(size_t)PlayerID].push_back({
+                TileX, TileY, EffectiveRange, EffectiveRange, true, CanDetect
+            });
         }
 
         if (Status)
@@ -306,10 +327,9 @@ void FogOfWarSystem::Update(float DeltaTime)
                 const int ParasitePlayerID = SourcePlayer->PlayerID;
                 if (ParasitePlayerID < 0 || ParasitePlayerID >= mMaxPlayers) continue;
 
-                size_t ParasiteSliceBase =
-                    (size_t)ParasitePlayerID * mMapWidth * mMapHeight;
-                uint8_t* ParasiteFogSlice = mFogGrid.data() + ParasiteSliceBase;
-                RevealAround(TileX, TileY, EffectiveRange, ParasiteFogSlice, nullptr);
+                EmittersPerPlayer[(size_t)ParasitePlayerID].push_back({
+                    TileX, TileY, EffectiveRange, 0, true, false
+                });
             }
         }
     }
@@ -332,16 +352,54 @@ void FogOfWarSystem::Update(float DeltaTime)
         {
             int TileX = (int)(Trans->Position.X / 32.0f);
             int TileY = (int)(Trans->Position.Y / 32.0f);
-            size_t SliceBase = (size_t)PlayerID * mMapWidth * mMapHeight;
-            uint8_t* FogSlice = mFogGrid.data() + SliceBase;
-            uint8_t* DetSlice = Reveal->ProvidesDetection ?
-                (mDetectorGrid.data() + SliceBase) : nullptr;
-            RevealAround(TileX, TileY, Reveal->SightRange, FogSlice, DetSlice);
+            EmittersPerPlayer[(size_t)PlayerID].push_back({
+                TileX, TileY, Reveal->SightRange, Reveal->SightRange, true, Reveal->ProvidesDetection
+            });
         }
 
         Reveal->DurationRemaining -= DeltaTime;
         if (Reveal->DurationRemaining <= 0.0f)
             EM.DestroyEntity(ID);
+    }
+
+    const size_t SliceSize = (size_t)mMapWidth * (size_t)mMapHeight;
+    if (SliceSize > 0)
+    {
+        Core::Concurrency::JobSystem::Instance().ParallelFor(
+            static_cast<uint32_t>(mMaxPlayers),
+            1u,
+            [&](uint32_t P)
+            {
+                const size_t SliceBase = static_cast<size_t>(P) * SliceSize;
+                uint8_t* FogSlice = mFogGrid.data() + SliceBase;
+                uint8_t* DetSlice = mDetectorGrid.empty() ? nullptr : (mDetectorGrid.data() + SliceBase);
+
+                if (DetSlice)
+                    std::memset(DetSlice, 0, SliceSize);
+                for (size_t I = 0; I < SliceSize; ++I)
+                {
+                    if (FogSlice[I] == (uint8_t)FogState::Visible)
+                        FogSlice[I] = (uint8_t)FogState::Explored;
+                }
+
+                for (const VisionEmitterStamp& Stamp : EmittersPerPlayer[P])
+                {
+                    if (Stamp.StampDetector && Stamp.DetectorRange != Stamp.SightRange)
+                    {
+                        RevealAround(Stamp.TileX, Stamp.TileY, Stamp.SightRange, FogSlice, nullptr);
+                        RevealAround(Stamp.TileX, Stamp.TileY, Stamp.DetectorRange, nullptr, DetSlice);
+                    }
+                    else
+                    {
+                        RevealAround(
+                            Stamp.TileX,
+                            Stamp.TileY,
+                            Stamp.SightRange,
+                            Stamp.StampFog ? FogSlice : nullptr,
+                            Stamp.StampDetector ? DetSlice : nullptr);
+                    }
+                }
+            });
     }
 
     UpdateLastSeen(EM, Units);

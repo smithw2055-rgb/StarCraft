@@ -6091,6 +6091,87 @@ void AIBrain::BuildOrTrain(Core::ECS::EntityManager& EM, int DefID, const Core::
     }
 }
 
+bool AIBrain::BindBehaviorTree(const Game::AI::BehaviorTreeAsset* Asset)
+{
+    if (!Asset) {
+        mBTInstance.reset();
+        return false;
+    }
+    mBTInstance = std::make_unique<Game::AI::BehaviorTreeInstance>(Asset);
+    mSyncedBTBuildOrderCursor = 0;
+    mSyncedBTAttackWaveCursor = 0;
+    return true;
+}
+
+int AIBrain::ResolveModernAssetUnitDefID(const std::string& ModernUnitName) const
+{
+    std::string Clean = ModernUnitName;
+    for (const char* Prefix : {"Terran_", "Zerg_", "Protoss_"}) {
+        const std::string P(Prefix);
+        if (Clean.rfind(P, 0) == 0) {
+            Clean = Clean.substr(P.size());
+            break;
+        }
+    }
+    // Try direct match first (e.g. "Marine", "Zergling", "Zealot")
+    int DefID = Game::Races::GetUnitDefID(Clean);
+    if (DefID >= 0) return DefID;
+
+    // Try replacing underscores with spaces (e.g. "Spawning_Pool" -> "Spawning Pool")
+    std::string WithSpaces = Clean;
+    for (char& Ch : WithSpaces) {
+        if (Ch == '_') Ch = ' ';
+    }
+    DefID = Game::Races::GetUnitDefID(WithSpaces);
+    if (DefID >= 0) return DefID;
+
+    // Try removing underscores (e.g. "Command_Center" -> "CommandCenter", "Siege_Tank_Tank_Mode" -> "SiegeTank")
+    std::string NoUnderscore;
+    for (char Ch : Clean) {
+        if (Ch != '_') NoUnderscore.push_back(Ch);
+    }
+    DefID = Game::Races::GetUnitDefID(NoUnderscore);
+    if (DefID >= 0) return DefID;
+
+    if (Clean.find("Siege_Tank") != std::string::npos) return Game::Races::GetUnitDefID("SiegeTank");
+    return -1;
+}
+
+void AIBrain::RunBehaviorTreeStep(Core::ECS::EntityManager& EM, float DeltaSeconds)
+{
+    if (!mBTInstance) return;
+    const uint32_t ElapsedTicks = std::max<uint32_t>(1, static_cast<uint32_t>(DeltaSeconds * 24.0f));
+    mBTInstance->Tick(ElapsedTicks);
+
+    const auto& BB = mBTInstance->GetBlackboard();
+    while (mSyncedBTBuildOrderCursor < BB.QueuedBuildOrders.size()) {
+        const auto& Step = BB.QueuedBuildOrders[mSyncedBTBuildOrderCursor++];
+        if (Step.Op == "build" || Step.Op == "train") {
+            const int DefID = ResolveModernAssetUnitDefID(Step.UnitOrTech);
+            if (DefID >= 0) {
+                const auto Def = Game::Races::GetUnitDefByID(DefID);
+                mBuildQueue.push_back({DefID, static_cast<int>(Step.Count), Def.IsBuilding});
+                BuildOrTrain(EM, DefID, mAiBasePos);
+            }
+        }
+    }
+
+    if (BB.AttackWavesLaunched > mSyncedBTAttackWaveCursor) {
+        mSyncedBTAttackWaveCursor = BB.AttackWavesLaunched;
+        int WaveTotal = 0;
+        for (const auto& W : BB.LastLaunchedWave) {
+            WaveTotal += static_cast<int>(W.Count);
+            const int DefID = ResolveModernAssetUnitDefID(W.UnitName);
+            if (DefID >= 0) {
+                TrainUnitsIfPossible(EM, DefID, static_cast<int>(W.Count));
+            }
+        }
+        if (WaveTotal > 0) {
+            SendAttackWave(EM, WaveTotal);
+        }
+    }
+}
+
 void AIBrain::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f) return;
@@ -6212,6 +6293,10 @@ void AIBrain::Update(float DeltaTime)
             std::to_string(RaceVal) + " player=" + std::to_string(mAIPlayerID) +
             " base=" + std::to_string((int)mAiBasePos.X) + "," +
             std::to_string((int)mAiBasePos.Y));
+    }
+    if (mBTInstance)
+    {
+        RunBehaviorTreeStep(EM, mDecisionInterval);
     }
     if (mShowcaseMode && RaceVal == (int)Race::Terran)
     {

@@ -4,6 +4,8 @@
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Races/UnitPrototypeRegistry.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Core/Utils/Logger.h"
 
@@ -18,6 +20,16 @@ using Core::Utils::Logger;
 namespace
 {
     const Game::Map::GameMap* gTransportMap = nullptr;
+
+    const Game::Map::GameMap* ResolveTransportMap(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* Ctx = Game::SimulationContext::TryGet(EM))
+        {
+            if (Ctx->Map)
+                return Ctx->Map;
+        }
+        return gTransportMap;
+    }
 
     bool IsValidUnloadLanding(const Game::Map::GameMap* Map, const Core::Math::Vec2& Pos)
     {
@@ -41,15 +53,14 @@ namespace
             Player = EM.GetComponent<PlayerComponent>(EntityID);
         if (!Unit)
             return false;
-        if (Unit->ChkUnitID == 11 ||  // Dropship
-            Unit->ChkUnitID == 69 ||  // Shuttle
-            Unit->ChkUnitID == 125)   // Bunker
-        {
+        if (Game::Races::IsBunkerChkUnitID(Unit->ChkUnitID))
             return true;
+        if (Game::Races::IsOverlordChkUnitID(Unit->ChkUnitID))
+        {
+            return Player && UpgradeSystem::HasResearch(
+                EM, Player->PlayerID, ResearchId::Zerg_VentralSacs);
         }
-        return Unit->ChkUnitID == 42 && Player && // Overlord
-            UpgradeSystem::HasResearch(
-                Player->PlayerID, ResearchId::Zerg_VentralSacs);
+        return Game::Races::IsTransportChkUnitID(Unit->ChkUnitID);
     }
 
     bool ValidateLoadTarget(Core::ECS::EntityManager& EM, int TransportID,
@@ -475,7 +486,7 @@ bool TransportSystem::CanUnload(Core::ECS::EntityManager& EM, int TransportID,
         return false;
     }
 
-    if (gTransportMap)
+    if (const auto* ActiveMap = ResolveTransportMap(EM))
     {
         auto* TT = EM.GetComponent<TransformComponent>(TransportID);
         if (TT)
@@ -483,7 +494,7 @@ bool TransportSystem::CanUnload(Core::ECS::EntityManager& EM, int TransportID,
             bool HasAnyWalkable = false;
             for (int i = 0; i < 8; ++i)
             {
-                if (IsValidUnloadLanding(gTransportMap, TT->Position + UnloadOffset(i)))
+                if (IsValidUnloadLanding(ActiveMap, TT->Position + UnloadOffset(i)))
                 {
                     HasAnyWalkable = true;
                     break;
@@ -512,13 +523,13 @@ bool TransportSystem::UnloadUnit(Core::ECS::EntityManager& EM, int TransportID,
     Core::Math::Vec2 TargetPos = Position.LengthSq() > 0 ? Position :
         Core::Math::Vec2(TT->Position.X + 48.0f, TT->Position.Y);
 
-    if (gTransportMap && !IsValidUnloadLanding(gTransportMap, TargetPos))
+    if (const auto* ActiveMap = ResolveTransportMap(EM); ActiveMap && !IsValidUnloadLanding(ActiveMap, TargetPos))
     {
         bool FoundWalkable = false;
         for (int i = 0; i < 8; ++i)
         {
             const Core::Math::Vec2 AltPos = TT->Position + UnloadOffset(i);
-            if (IsValidUnloadLanding(gTransportMap, AltPos))
+            if (IsValidUnloadLanding(ActiveMap, AltPos))
             {
                 TargetPos = AltPos;
                 FoundWalkable = true;

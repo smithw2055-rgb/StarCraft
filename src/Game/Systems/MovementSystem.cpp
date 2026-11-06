@@ -7,6 +7,7 @@
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/AStar.h"
 #include "Game/Pathfinding/NavigationSpatialHash.h"
+#include "Core/Concurrency/JobSystem.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/Logger.h"
 
@@ -2520,49 +2521,64 @@ const size_t RequiredSize = EM.GetEntityCapacity();
 if (Snapshots.size() < RequiredSize)
 Snapshots.resize(RequiredSize);
 
+Core::Concurrency::JobSystem::Instance().ParallelForRange(
+    static_cast<uint32_t>(UnitEntities.size()),
+    1024u,
+    [&](uint32_t BeginIdx, uint32_t EndIdx, uint32_t /*ThreadIdx*/)
+    {
+        for (uint32_t I = BeginIdx; I < EndIdx; ++I)
+        {
+            const auto ID = UnitEntities[I];
+            if (ID < 0 || (size_t)ID >= Snapshots.size())
+                continue;
+            auto& Snapshot = Snapshots[(size_t)ID];
+            Snapshot = {};
+            Snapshot.Transform = EM.GetComponent<TransformComponent>(ID);
+            Snapshot.Unit = EM.GetComponent<UnitComponent>(ID);
+            Snapshot.Path = EM.GetComponent<PathfindingComponent>(ID);
+            Snapshot.Command = EM.GetComponent<CommandComponent>(ID);
+            Snapshot.Player = EM.GetComponent<PlayerComponent>(ID);
+            Snapshot.Combat = EM.GetComponent<CombatComponent>(ID);
+            Snapshot.Harvest = EM.GetComponent<HarvestComponent>(ID);
+            Snapshot.Status = EM.GetComponent<StatusEffectComponent>(ID);
+            const auto* Building = EM.GetComponent<BuildingComponent>(ID);
+            const auto* Resource = EM.GetComponent<ResourceComponent>(ID);
+            const auto* Burrow = EM.GetComponent<BurrowComponent>(ID);
+            Snapshot.StaticGroundBlocker = Building
+                ? (!Building->IsLifted || Building->FlightPhase == BuildingFlightPhase::Landing)
+                : (Resource != nullptr);
+            Snapshot.ActiveHarvester =
+                Snapshot.Harvest && Snapshot.Harvest->State != HarvestState::Idle;
+            Snapshot.AssignedConstructionWorker = IsAssignedConstructionWorker(EM, ID);
+            Snapshot.CommandPriority = MovementCommandPriority(Snapshot.Command);
+            Snapshot.IsAir = (Building && Building->IsLifted) ||
+                (Snapshot.Unit && Game::Data::IsAirUnitType(Snapshot.Unit->ChkUnitID));
+            Snapshot.CanMove = Snapshot.Transform && Snapshot.Unit &&
+                Snapshot.Unit->HitPoints > 0 && !Resource &&
+                (!Building || (Building->IsLifted && Building->FlightPhase == BuildingFlightPhase::Airborne)) &&
+                !IsSiegedTankUnit(Snapshot.Unit->ChkUnitID) &&
+                (!Burrow || (!Burrow->IsBurrowed && Burrow->Phase == BurrowPhase::Surface)) &&
+                Snapshot.Unit->Speed > 0.0f;
+            if (Snapshot.Path)
+                Snapshot.CollisionRect = DynamicCollisionRectForPath(*Snapshot.Path);
+            Snapshot.Generation = SnapshotGeneration;
+        }
+    });
+
 for (const auto ID : UnitEntities)
 {
-if (ID < 0 || (size_t)ID >= Snapshots.size())
-continue;
-auto& Snapshot = Snapshots[(size_t)ID];
-Snapshot = {};
-Snapshot.Transform = EM.GetComponent<TransformComponent>(ID);
-Snapshot.Unit = EM.GetComponent<UnitComponent>(ID);
-Snapshot.Path = EM.GetComponent<PathfindingComponent>(ID);
-Snapshot.Command = EM.GetComponent<CommandComponent>(ID);
-Snapshot.Player = EM.GetComponent<PlayerComponent>(ID);
-Snapshot.Combat = EM.GetComponent<CombatComponent>(ID);
-Snapshot.Harvest = EM.GetComponent<HarvestComponent>(ID);
-Snapshot.Status = EM.GetComponent<StatusEffectComponent>(ID);
-const auto* Building = EM.GetComponent<BuildingComponent>(ID);
-const auto* Resource = EM.GetComponent<ResourceComponent>(ID);
-const auto* Burrow = EM.GetComponent<BurrowComponent>(ID);
-Snapshot.StaticGroundBlocker = Building
-? (!Building->IsLifted || Building->FlightPhase == BuildingFlightPhase::Landing)
-: (Resource != nullptr);
-Snapshot.ActiveHarvester =
-Snapshot.Harvest && Snapshot.Harvest->State != HarvestState::Idle;
-Snapshot.AssignedConstructionWorker = IsAssignedConstructionWorker(EM, ID);
-Snapshot.CommandPriority = MovementCommandPriority(Snapshot.Command);
-Snapshot.IsAir = (Building && Building->IsLifted) ||
-(Snapshot.Unit && Game::Data::IsAirUnitType(Snapshot.Unit->ChkUnitID));
-Snapshot.CanMove = Snapshot.Transform && Snapshot.Unit &&
-Snapshot.Unit->HitPoints > 0 && !Resource &&
-(!Building || (Building->IsLifted && Building->FlightPhase == BuildingFlightPhase::Airborne)) &&
-!IsSiegedTankUnit(Snapshot.Unit->ChkUnitID) &&
-(!Burrow || (!Burrow->IsBurrowed && Burrow->Phase == BurrowPhase::Surface)) &&
-Snapshot.Unit->Speed > 0.0f;
-if (Snapshot.Path)
-Snapshot.CollisionRect = DynamicCollisionRectForPath(*Snapshot.Path);
-Snapshot.Generation = SnapshotGeneration;
-
-if (!Snapshot.Transform)
-continue;
-if (Snapshot.StaticGroundBlocker)
-StaticSpatialHash.Insert(ID, Snapshot.Transform->Position);
-else
-SpatialHash.Insert(ID, Snapshot.Transform->Position);
+    if (ID < 0 || (size_t)ID >= Snapshots.size())
+        continue;
+    const auto& Snapshot = Snapshots[(size_t)ID];
+    if (!Snapshot.Transform)
+        continue;
+    if (Snapshot.StaticGroundBlocker)
+        StaticSpatialHash.Insert(ID, Snapshot.Transform->Position);
+    else
+        SpatialHash.Insert(ID, Snapshot.Transform->Position);
 }
+StaticSpatialHash.FinalizeCSR();
+SpatialHash.FinalizeCSR();
 
 struct SpatialHashScope
 {

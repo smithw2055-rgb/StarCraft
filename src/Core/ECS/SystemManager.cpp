@@ -13,11 +13,38 @@ namespace Core::ECS
 
 void SystemManager::RegisterSystem(std::unique_ptr<ISystem> System)
 {
-    mSystems.push_back(std::move(System));
+    if (!System)
+        return;
+    const SystemPhase Phase = System->GetPhase();
+    mSystems.push_back({Phase, std::move(System)});
+    std::stable_sort(mSystems.begin(), mSystems.end(), [](const RegisteredSystem& A, const RegisteredSystem& B) {
+        return static_cast<uint8_t>(A.Phase) < static_cast<uint8_t>(B.Phase);
+    });
+}
+
+void SystemManager::RegisterSystemInPhase(SystemPhase Phase, std::unique_ptr<ISystem> System)
+{
+    if (!System)
+        return;
+    mSystems.push_back({Phase, std::move(System)});
+    std::stable_sort(mSystems.begin(), mSystems.end(), [](const RegisteredSystem& A, const RegisteredSystem& B) {
+        return static_cast<uint8_t>(A.Phase) < static_cast<uint8_t>(B.Phase);
+    });
+}
+
+void SystemManager::UpdatePhase(SystemPhase Phase, float DeltaTime)
+{
+    for (auto& Entry : mSystems)
+    {
+        if (Entry.Phase != Phase || !Entry.Instance)
+            continue;
+        Entry.Instance->Update(DeltaTime);
+    }
 }
 
 void SystemManager::UpdateAll(float DeltaTime)
 {
+    mEntityMgr.ActivateWorld();
     const char* DebugPathing = std::getenv("STARCRAFT_DEBUG_PATHING");
     const char* ProfileSystems = std::getenv("STARCRAFT_PROFILE_SYSTEMS");
     const bool MeasureSystems =
@@ -35,23 +62,35 @@ void SystemManager::UpdateAll(float DeltaTime)
     static std::unordered_map<std::string, ProfileSample> Samples;
     static auto LastReport = std::chrono::steady_clock::now();
 
-    for (auto& Sys : mSystems)
+    mLastProfileEntries.clear();
+    mLastProfileEntries.reserve(mSystems.size());
+
+    for (auto& Entry : mSystems)
     {
-        if (!MeasureSystems)
-        {
-            Sys->Update(DeltaTime);
+        auto& Sys = Entry.Instance;
+        if (!Sys)
             continue;
-        }
+
         const auto Begin = std::chrono::steady_clock::now();
         Sys->Update(DeltaTime);
         const auto Microseconds =
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - Begin).count();
-        auto& Sample = Samples[std::string(Sys->GetName())];
-        ++Sample.Calls;
-        Sample.TotalMicroseconds += (uint64_t)Microseconds;
-        Sample.MaximumMicroseconds =
-            std::max(Sample.MaximumMicroseconds, (uint64_t)Microseconds);
+
+        mLastProfileEntries.push_back({
+            std::string(Sys->GetName()),
+            Entry.Phase,
+            static_cast<uint64_t>(std::max<int64_t>(0, Microseconds))
+        });
+
+        if (MeasureSystems)
+        {
+            auto& Sample = Samples[std::string(Sys->GetName())];
+            ++Sample.Calls;
+            Sample.TotalMicroseconds += (uint64_t)Microseconds;
+            Sample.MaximumMicroseconds =
+                std::max(Sample.MaximumMicroseconds, (uint64_t)Microseconds);
+        }
     }
 
     if (MeasureSystems)

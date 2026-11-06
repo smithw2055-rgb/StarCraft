@@ -382,13 +382,10 @@ void Hud::DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage&
         return X - 6;
     };
 
-    char MineralBuf[32];
-    char GasBuf[32];
-    char SupplyBuf[32];
-    std::snprintf(MineralBuf, sizeof(MineralBuf), "%d", mState.Resources.MineralCount);
-    std::snprintf(GasBuf, sizeof(GasBuf), "%d", mState.Resources.GasCount);
-    std::snprintf(SupplyBuf, sizeof(SupplyBuf), "%d/%d",
-                  mState.Resources.SupplyUsed, std::min(200, mState.Resources.SupplyMax));
+    mViewModel.SetResourceState(mState.Resources);
+    const char* MineralBuf = mViewModel.FormattedMineralText.Get().c_str();
+    const char* GasBuf = mViewModel.FormattedGasText.Get().c_str();
+    const char* SupplyBuf = mViewModel.FormattedSupplyText.Get().c_str();
 
     const auto* MineralIcon = GetLegacyIcon(0);
     const auto* GasIcon = GetLegacyIcon(2);

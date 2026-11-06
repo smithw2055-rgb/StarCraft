@@ -1,3 +1,4 @@
+#include "Game/AI/BehaviorTreeRuntime.h"
 #pragma once
 
 #include <array>
@@ -112,6 +113,9 @@ public:
     const std::array<int, 256>& GetUnsupportedConditionCounts() const { return mUnsupportedConditionCounts; }
     const std::array<int, 256>& GetUnsupportedActionCounts() const { return mUnsupportedActionCounts; }
     int GetActiveAIScriptCount() const;
+    void SetBehaviorTreeCatalog(const Game::AI::BehaviorTreeCatalog* Catalog) { mBTCatalog = Catalog; }
+    const Game::AI::BehaviorTreeInstance* GetPlayerBehaviorTree(int PlayerID) const;
+    static std::string DecodeScriptIDFourCC(uint32_t ScriptID);
 
 private:
     struct RunningTrigger
@@ -140,6 +144,8 @@ private:
         std::unordered_map<int, float> AssignedTolerances;
         float TickAccumulator = 0.0f;
         int WaveCount = 0;
+        std::string FourCC;
+        std::unique_ptr<Game::AI::BehaviorTreeInstance> BTInstance;
     };
 
     struct TrackedUnitInfo
@@ -214,6 +220,7 @@ private:
     bool mTimerPaused = false;
     bool mGamePaused = false;
     bool mDebugEnabled = false;
+    const Game::AI::BehaviorTreeCatalog* mBTCatalog = nullptr;
 };
 
 } // namespace Game::Trigger

@@ -262,6 +262,191 @@ float4 main(PSInput input) : SV_Target
 }
 )";
 
+static const char* kPBRSpriteFSGLSL = R"(
+#version 330 core
+in vec2 v_uv;
+in vec4 v_color;
+out vec4 frag_color;
+uniform sampler2D u_baseColorA;
+uniform sampler2D u_normalTeamAO;
+uniform sampler2D u_specEmissive;
+uniform vec4 u_teamColor;
+uniform vec4 u_lightDir;
+uniform vec4 u_pbrConfig;
+void main() {
+    float flip_x = u_lightDir.w < 0.0 ? -1.0 : 1.0;
+    vec2 uv = vec2(flip_x < 0.0 ? 1.0 - v_uv.x : v_uv.x, v_uv.y);
+    vec4 base_a = texture(u_baseColorA, uv) * v_color;
+    if (base_a.a < 0.01) discard;
+
+    // Shadow pass mode
+    if (u_pbrConfig.z > 1.5) {
+        frag_color = vec4(0.0, 0.0, 0.0, base_a.a * 0.45 * u_pbrConfig.w);
+        return;
+    }
+
+    vec4 nta = u_pbrConfig.x > 0.5 ? texture(u_normalTeamAO, uv) : vec4(0.5, 0.5, 0.0, 1.0);
+    vec4 se  = u_pbrConfig.y > 0.5 ? texture(u_specEmissive, uv) : vec4(0.0);
+
+    vec3 albedo = mix(base_a.rgb, base_a.rgb * u_teamColor.rgb, nta.b * u_teamColor.a);
+    vec2 nxy = (nta.rg * 2.0 - 1.0) * vec2(flip_x, 1.0);
+    float nz = sqrt(max(1.0 - dot(nxy, nxy), 0.1));
+    vec3 N = normalize(vec3(nxy, nz));
+
+    vec3 L = normalize(u_lightDir.xyz);
+    vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+    float lambert = clamp(dot(N, L), 0.15, 1.0);
+    float spec = pow(max(dot(N, H), 0.0), 16.0) * se.r;
+    float ao = nta.a * 0.75 + 0.25;
+
+    vec3 lit = (albedo * lambert + spec) * ao + se.gba;
+    frag_color = vec4(clamp(lit, 0.0, 1.0), base_a.a * u_pbrConfig.w);
+}
+)";
+
+static const char* kPBRSpriteFSHLSL = R"(
+Texture2D u_baseColorA : register(t0);
+Texture2D u_normalTeamAO : register(t1);
+Texture2D u_specEmissive : register(t2);
+SamplerState u_smp : register(s0);
+
+cbuffer PBRSpriteParams : register(b1)
+{
+    float4 u_teamColor;
+    float4 u_lightDir;
+    float4 u_pbrConfig;
+};
+
+struct PSInput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float4 color : COLOR0;
+};
+
+float4 main(PSInput input) : SV_Target
+{
+    float flip_x = u_lightDir.w < 0.0f ? -1.0f : 1.0f;
+    float2 uv = float2(flip_x < 0.0f ? 1.0f - input.uv.x : input.uv.x, input.uv.y);
+    float4 base_a = u_baseColorA.Sample(u_smp, uv) * input.color;
+    clip(base_a.a - 0.01f);
+
+    if (u_pbrConfig.z > 1.5f)
+    {
+        return float4(0.0f, 0.0f, 0.0f, base_a.a * 0.45f * u_pbrConfig.w);
+    }
+
+    float4 nta = u_pbrConfig.x > 0.5f ? u_normalTeamAO.Sample(u_smp, uv) : float4(0.5f, 0.5f, 0.0f, 1.0f);
+    float4 se  = u_pbrConfig.y > 0.5f ? u_specEmissive.Sample(u_smp, uv) : float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    float3 albedo = lerp(base_a.rgb, base_a.rgb * u_teamColor.rgb, nta.b * u_teamColor.a);
+    float2 nxy = (nta.rg * 2.0f - 1.0f) * float2(flip_x, 1.0f);
+    float nz = sqrt(max(1.0f - dot(nxy, nxy), 0.1f));
+    float3 N = normalize(float3(nxy, nz));
+
+    float3 L = normalize(u_lightDir.xyz);
+    float3 H = normalize(L + float3(0.0f, 0.0f, 1.0f));
+    float lambert = clamp(dot(N, L), 0.15f, 1.0f);
+    float spec = pow(saturate(dot(N, H)), 16.0f) * se.r;
+    float ao = nta.a * 0.75f + 0.25f;
+
+    float3 lit = (albedo * lambert + spec) * ao + se.gba;
+    return float4(saturate(lit), base_a.a * u_pbrConfig.w);
+}
+)";
+
+bool Shader2D::InitPBRSpriteShader()
+{
+    sg_shader_desc Desc = {};
+#if defined(SOKOL_D3D11)
+    Desc.vertex_func.source = kVSHLSL;
+    Desc.vertex_func.entry = "main";
+    Desc.vertex_func.d3d11_target = "vs_4_0";
+    Desc.fragment_func.source = kPBRSpriteFSHLSL;
+    Desc.fragment_func.entry = "main";
+    Desc.fragment_func.d3d11_target = "ps_4_0";
+#else
+    Desc.vertex_func.source = kVSGLSL;
+    Desc.vertex_func.entry = "main";
+    Desc.fragment_func.source = kPBRSpriteFSGLSL;
+    Desc.fragment_func.entry = "main";
+#endif
+
+    Desc.uniform_blocks[0].stage = SG_SHADERSTAGE_VERTEX;
+    Desc.uniform_blocks[0].size = 64;
+#if defined(SOKOL_D3D11)
+    Desc.uniform_blocks[0].hlsl_register_b_n = 0;
+#else
+    Desc.uniform_blocks[0].layout = SG_UNIFORMLAYOUT_STD140;
+    Desc.uniform_blocks[0].glsl_uniforms[0].type = SG_UNIFORMTYPE_MAT4;
+    Desc.uniform_blocks[0].glsl_uniforms[0].array_count = 1;
+    Desc.uniform_blocks[0].glsl_uniforms[0].glsl_name = "u_mvp";
+#endif
+
+    Desc.uniform_blocks[1].stage = SG_SHADERSTAGE_FRAGMENT;
+    Desc.uniform_blocks[1].size = sizeof(PBRSpriteShaderParams);
+#if defined(SOKOL_D3D11)
+    Desc.uniform_blocks[1].hlsl_register_b_n = 1;
+#else
+    Desc.uniform_blocks[1].layout = SG_UNIFORMLAYOUT_STD140;
+    Desc.uniform_blocks[1].glsl_uniforms[0].type = SG_UNIFORMTYPE_FLOAT4;
+    Desc.uniform_blocks[1].glsl_uniforms[0].array_count = 1;
+    Desc.uniform_blocks[1].glsl_uniforms[0].glsl_name = "u_teamColor";
+    Desc.uniform_blocks[1].glsl_uniforms[1].type = SG_UNIFORMTYPE_FLOAT4;
+    Desc.uniform_blocks[1].glsl_uniforms[1].array_count = 1;
+    Desc.uniform_blocks[1].glsl_uniforms[1].glsl_name = "u_lightDir";
+    Desc.uniform_blocks[1].glsl_uniforms[2].type = SG_UNIFORMTYPE_FLOAT4;
+    Desc.uniform_blocks[1].glsl_uniforms[2].array_count = 1;
+    Desc.uniform_blocks[1].glsl_uniforms[2].glsl_name = "u_pbrConfig";
+#endif
+
+    for (int Slot = 0; Slot < 3; ++Slot) {
+        Desc.views[Slot].texture.stage = SG_SHADERSTAGE_FRAGMENT;
+        Desc.views[Slot].texture.image_type = SG_IMAGETYPE_2D;
+        Desc.views[Slot].texture.sample_type = SG_IMAGESAMPLETYPE_FLOAT;
+        Desc.views[Slot].texture.multisampled = false;
+#if defined(SOKOL_D3D11)
+        Desc.views[Slot].texture.hlsl_register_t_n = Slot;
+#endif
+    }
+
+    Desc.samplers[0].stage = SG_SHADERSTAGE_FRAGMENT;
+    Desc.samplers[0].sampler_type = SG_SAMPLERTYPE_FILTERING;
+#if defined(SOKOL_D3D11)
+    Desc.samplers[0].hlsl_register_s_n = 0;
+#endif
+
+    const char* GlslSamplerNames[3] = { "u_baseColorA", "u_normalTeamAO", "u_specEmissive" };
+    for (int Slot = 0; Slot < 3; ++Slot) {
+        Desc.texture_sampler_pairs[Slot].stage = SG_SHADERSTAGE_FRAGMENT;
+        Desc.texture_sampler_pairs[Slot].view_slot = Slot;
+        Desc.texture_sampler_pairs[Slot].sampler_slot = 0;
+#if !defined(SOKOL_D3D11)
+        Desc.texture_sampler_pairs[Slot].glsl_name = GlslSamplerNames[Slot];
+#endif
+    }
+
+    Desc.attrs[0].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+    Desc.attrs[1].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+    Desc.attrs[2].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+#if defined(SOKOL_D3D11)
+    Desc.attrs[0].hlsl_sem_name = "POSITION";
+    Desc.attrs[1].hlsl_sem_name = "TEXCOORD";
+    Desc.attrs[2].hlsl_sem_name = "COLOR";
+#else
+    Desc.attrs[0].glsl_name = "a_position";
+    Desc.attrs[1].glsl_name = "a_texcoord0";
+    Desc.attrs[2].glsl_name = "a_color0";
+#endif
+
+    PBRSpriteShader.Shader = Render::FromSokol(sg_make_shader(&Desc));
+    if (!PBRSpriteShader.Valid()) {
+        Core::Utils::Logger::Error("Shader2D", "sg_make_shader failed for 3-channel PBR sprite shader");
+        return false;
+    }
+    return true;
+}
+
 bool Shader2D::InitTexturedShader()
 {
     sg_shader_desc Desc = {};
@@ -549,6 +734,7 @@ bool Shader2D::Init()
     if (!InitTexturedShader()) return false;
     if (!InitHealthBarShader()) return false;
     if (!InitSpriteEffectShader()) return false;
+    if (!InitPBRSpriteShader()) return false;
 
     sg_sampler_desc SDesc = {};
     SDesc.min_filter = SG_FILTER_LINEAR;
@@ -640,6 +826,11 @@ void Shader2D::RebuildPipeline(bool AlphaBlend, bool DepthEnabled)
     RebuildPipelineFor(Shader, Textured, AlphaBlend, DepthEnabled);
     RebuildPipelineFor(HealthBarShader, HealthBar, AlphaBlend, DepthEnabled);
     RebuildPipelineFor(SpriteEffectShader, SpriteEffect, AlphaBlend, DepthEnabled);
+    GpuPipelineHandle& PBRPipe = AlphaBlend ? PBRSpritePipeline : PBRSpritePipelineNoBlend;
+    RebuildPipelineFor(PBRSpriteShader, PBRPipe, AlphaBlend, DepthEnabled);
+    if (AlphaBlend) {
+        RebuildPipelineFor(PBRSpriteShader, PBRSpriteAdditivePipeline, true, DepthEnabled);
+    }
 }
 
 void Shader2D::BindPipeline(bool AlphaBlend)
@@ -666,6 +857,21 @@ void Shader2D::ApplyHealthBarParams(const HealthBarShaderParams& Params)
 }
 
 void Shader2D::ApplySpriteEffectParams(const SpriteEffectShaderParams& Params)
+{
+    sg_apply_uniforms(1, { &Params, sizeof(Params) });
+}
+
+void Shader2D::BindPBRSpritePipeline(bool AlphaBlend, bool AdditiveBlend)
+{
+    if (AdditiveBlend && PBRSpriteAdditivePipeline.Valid()) {
+        sg_apply_pipeline(Render::ToSokol(PBRSpriteAdditivePipeline.Pipeline));
+        return;
+    }
+    sg_apply_pipeline(Render::ToSokol(
+        (AlphaBlend ? PBRSpritePipeline : PBRSpritePipelineNoBlend).Pipeline));
+}
+
+void Shader2D::ApplyPBRSpriteParams(const PBRSpriteShaderParams& Params)
 {
     sg_apply_uniforms(1, { &Params, sizeof(Params) });
 }

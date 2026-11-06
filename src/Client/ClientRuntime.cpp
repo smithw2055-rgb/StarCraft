@@ -1,3 +1,4 @@
+#include "Render/SokolPBRDispatcher.h"
 #include "Client/ClientRuntime.h"
 
 #include "Client/CameraController.h"
@@ -111,6 +112,7 @@ ClientRuntime::ClientRuntime()
     , Cursor(std::make_unique<GameLoop::CursorManager>())
     , Camera(std::make_unique<Render::Camera2D>())
     , Effects(std::make_unique<WorldEffects>())
+    , PBRDispatcher(std::make_unique<Render::SokolPBRDispatcher>())
 {
     Core::Utils::Logger::Info(
         "ClientRuntime",
@@ -435,6 +437,20 @@ void ClientRuntime::RenderCursor(int MouseX,
 void ClientRuntime::EndWorldFrame()
 {
     Render::g_Draw2D.EndFrame();
+}
+
+size_t ClientRuntime::InitializeModernPBRPipeline(const Resource::ModernAssetRegistry& Registry)
+{
+    if (!PBRDispatcher) {
+        PBRDispatcher = std::make_unique<Render::SokolPBRDispatcher>();
+    }
+    return PBRDispatcher->UploadPBRPrefabsToGpu(Registry);
+}
+
+void ClientRuntime::RenderModernPBRQueue(const Render::RenderQueue2D& Queue)
+{
+    if (!PBRDispatcher || !Camera) return;
+    PBRDispatcher->FlushQueueToSokol(Queue, Render::g_Draw2D, *Camera);
 }
 
 } // namespace Game::Client

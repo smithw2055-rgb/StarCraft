@@ -137,7 +137,8 @@ void UploadPendingFontGlyphs()
         g_Font.UploadPendingGlyphs();
 }
 
-void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material){
+void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material)
+{
     if (mCurrentMaterial != Material)
     {
         Flush();
@@ -148,10 +149,15 @@ void Draw2D::SetPipeline(bool AlphaBlend, BatchMaterial Material){
         Flush();
         mCurrentAlphaBlend = AlphaBlend;
     }
+    if (!mCurrentVbuf.Valid() || !mCurrentIbuf.Valid())
+        return;
+
     if (Material == BatchMaterial::HealthBar)
         mShader.BindHealthBarPipeline(AlphaBlend);
     else if (Material == BatchMaterial::SpriteEffect)
         mShader.BindSpriteEffectPipeline(AlphaBlend);
+    else if (Material == BatchMaterial::PBRSprite)
+        mShader.BindPBRSpritePipeline(AlphaBlend, mPBRSpriteParams.PBRConfig[2] > 0.5f && mPBRSpriteParams.PBRConfig[2] < 1.5f);
     else
         mShader.BindPipeline(AlphaBlend);
 }
@@ -236,6 +242,7 @@ void Draw2D::BeginFrame(const Camera2D& Camera)
     mSpriteEffectParams = {};
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
+    mFlushCountInFrame = 0;
     mFrameWidth = Camera.GetViewportWidth();
     mFrameHeight = Camera.GetViewportHeight();
     mInScreenPass = false;
@@ -256,6 +263,7 @@ void Draw2D::BeginFrameScreen()
     mSpriteEffectParams = {};
     mVerticesInBatch = 0;
     mIndicesInBatch = 0;
+    mFlushCountInFrame = 0;
     mFrameWidth = Core::Platform::GetWindowWidth();
     mFrameHeight = Core::Platform::GetWindowHeight();
     mInScreenPass = true;
@@ -299,13 +307,9 @@ void Draw2D::AddQuad(float X, float Y, float W, float H,
 void Draw2D::Flush()
 {
     if (mVerticesInBatch == 0) return;
+    ++mFlushCountInFrame;
     if (!mCurrentVbuf.Valid() || !mCurrentIbuf.Valid())
     {
-        Core::Utils::Logger::Error("Draw2D",
-            std::string("Draw2D flush without valid buffers (screen=") +
-            std::string(mInScreenPass ? "true" : "false") +
-            ", verts=" + std::to_string(mVerticesInBatch) +
-            ", idx=" + std::to_string(mIndicesInBatch) + ")");
         mVerticesInBatch = 0;
         mIndicesInBatch = 0;
         return;
@@ -381,6 +385,10 @@ void Draw2D::Flush()
     {
         mShader.ApplySpriteEffectParams(mSpriteEffectParams);
     }
+    else if (mCurrentMaterial == BatchMaterial::PBRSprite)
+    {
+        mShader.ApplyPBRSpriteParams(mPBRSpriteParams);
+    }
 
     // Bind pipeline + resources
     sg_bindings B = {};
@@ -389,7 +397,8 @@ void Draw2D::Flush()
     B.index_buffer = Render::ToSokol(mCurrentIbuf.Buffer);
     B.index_buffer_offset = IndexOffset;
     if (mCurrentMaterial == BatchMaterial::Textured ||
-        mCurrentMaterial == BatchMaterial::SpriteEffect)
+        mCurrentMaterial == BatchMaterial::SpriteEffect ||
+        mCurrentMaterial == BatchMaterial::PBRSprite)
     {
         B.views[0] = Render::ToSokol(mCurrentTexture.View);
         B.samplers[0] = Render::ToSokol(mShader.GetSampler().Sampler);
@@ -397,6 +406,13 @@ void Draw2D::Flush()
         {
             B.views[1] = Render::ToSokol(
                 mCurrentTeamColorMask.Valid() ? mCurrentTeamColorMask.View : mWhiteTexture.View);
+        }
+        else if (mCurrentMaterial == BatchMaterial::PBRSprite)
+        {
+            B.views[1] = Render::ToSokol(
+                mCurrentNormalTeamAO.Valid() ? mCurrentNormalTeamAO.View : mWhiteTexture.View);
+            B.views[2] = Render::ToSokol(
+                mCurrentSpecEmissive.Valid() ? mCurrentSpecEmissive.View : mWhiteTexture.View);
         }
     }
     sg_apply_bindings(&B);
@@ -409,6 +425,12 @@ void Draw2D::Flush()
 
 void Draw2D::EndFrame()
 {
+    if (mActiveQueue)
+    {
+        RenderQueue2D* Queue = mActiveQueue;
+        mActiveQueue = nullptr;
+        Queue->Playback(*this);
+    }
     Flush();
 }
 
@@ -418,6 +440,11 @@ void Draw2D::DrawSprite(const GpuTextureHandle& Texture,
                         Color Tint, bool FlipX)
 {
     if (!Texture.Valid()) return;
+    if (mActiveQueue)
+    {
+        mActiveQueue->SubmitSprite(Texture, X, Y, W, H, U0, V0, U1, V1, Tint, FlipX);
+        return;
+    }
     if (mCurrentTexture.Image.id != Texture.Image.id ||
         mCurrentTexture.View.id != Texture.View.id ||
         mCurrentMaterial != BatchMaterial::Textured)
@@ -446,6 +473,14 @@ void Draw2D::DrawSpriteEffect(const GpuTextureHandle& Texture,
                               const GpuTextureHandle* EffectMask)
 {
     if (!Texture.Valid()) return;
+    if (mActiveQueue)
+    {
+        mActiveQueue->SubmitSpriteEffect(
+            Texture, X, Y, W, H, U0, V0, U1, V1, Tint, FlipX,
+            Hallucination, Cloaked, Brighten, Shadow, WarpTexture,
+            WarpScaleX, WarpScaleY, TeamColor, EffectMask);
+        return;
+    }
     const bool UseWarpTexture = WarpTexture > 0.0f && EffectMask && EffectMask->Valid();
     const bool UseTeamColor = !UseWarpTexture && EffectMask && EffectMask->Valid();
     if (mCurrentTexture.Image.id != Texture.Image.id ||
@@ -482,8 +517,62 @@ void Draw2D::DrawSpriteFromImage(const GpuTextureHandle& Texture,
     DrawSprite(Texture, X, Y, W, H, 0.0f, 0.0f, 1.0f, 1.0f, Tint, false);
 }
 
+void Draw2D::DrawPBRSprite(const GpuTextureHandle& BaseColorA,
+                           const GpuTextureHandle* NormalTeamAO,
+                           const GpuTextureHandle* SpecEmissive,
+                           float X, float Y, float W, float H,
+                           float U0, float V0, float U1, float V1,
+                           Color Tint,
+                           Color TeamColor,
+                           bool FlipX,
+                           int BlendMode)
+{
+    if (!BaseColorA.Valid()) return;
+    const bool HasNTA = NormalTeamAO && NormalTeamAO->Valid();
+    const bool HasSE  = SpecEmissive && SpecEmissive->Valid();
+
+    PBRSpriteShaderParams NewParams = {};
+    NewParams.TeamColor[0] = (float)TeamColor.R / 255.0f;
+    NewParams.TeamColor[1] = (float)TeamColor.G / 255.0f;
+    NewParams.TeamColor[2] = (float)TeamColor.B / 255.0f;
+    NewParams.TeamColor[3] = (float)TeamColor.A / 255.0f;
+    NewParams.LightDir[0] = 0.37f;
+    NewParams.LightDir[1] = 0.09f;
+    NewParams.LightDir[2] = 0.92f;
+    NewParams.LightDir[3] = FlipX ? -1.0f : 1.0f;
+    NewParams.PBRConfig[0] = HasNTA ? 1.0f : 0.0f;
+    NewParams.PBRConfig[1] = HasSE  ? 1.0f : 0.0f;
+    NewParams.PBRConfig[2] = (float)BlendMode;
+    NewParams.PBRConfig[3] = (float)Tint.A / 255.0f;
+
+    const GpuTextureHandle TargetNTA = HasNTA ? *NormalTeamAO : GpuTextureHandle{};
+    const GpuTextureHandle TargetSE  = HasSE  ? *SpecEmissive : GpuTextureHandle{};
+
+    if (mCurrentMaterial != BatchMaterial::PBRSprite ||
+        mCurrentTexture.Image.id != BaseColorA.Image.id ||
+        mCurrentNormalTeamAO.Image.id != TargetNTA.Image.id ||
+        mCurrentSpecEmissive.Image.id != TargetSE.Image.id ||
+        std::memcmp(&mPBRSpriteParams, &NewParams, sizeof(NewParams)) != 0)
+    {
+        Flush();
+        mCurrentTexture = BaseColorA;
+        mCurrentNormalTeamAO = TargetNTA;
+        mCurrentSpecEmissive = TargetSE;
+        mPBRSpriteParams = NewParams;
+    }
+
+    SetPipeline(true, BatchMaterial::PBRSprite);
+    AddQuad(X, Y, W, H, U0, V0, U1, V1, Tint, false);
+    if (mVerticesInBatch + 4 > kMaxBatchVerts) Flush();
+}
+
 void Draw2D::DrawRect(float X, float Y, float W, float H, Color C)
 {
+    if (mActiveQueue)
+    {
+        mActiveQueue->SubmitRect(X, Y, W, H, C);
+        return;
+    }
     if (mCurrentTexture.Image.id != mWhiteTexture.Image.id || !mCurrentAlphaBlend)
     {
         Flush();
@@ -496,6 +585,11 @@ void Draw2D::DrawRect(float X, float Y, float W, float H, Color C)
 
 void Draw2D::DrawHealthBar(float X, float Y, float W, float H, float Fraction, Color Fill)
 {
+    if (mActiveQueue)
+    {
+        mActiveQueue->SubmitHealthBar(X, Y, W, H, Fraction, Fill);
+        return;
+    }
     SetHealthBarParams(Fraction, Fill);
     SetPipeline(true, BatchMaterial::HealthBar);
     AddQuad(X, Y, W, H, 0.0f, 0.0f, 1.0f, 1.0f, Fill, false);
@@ -512,6 +606,11 @@ void Draw2D::DrawRectLines(float X, float Y, float W, float H, Color C, float Th
 void Draw2D::DrawText(const std::string& Text, float X, float Y, float Size, Color C)
 {
     if (Text.empty()) return;
+    if (mActiveQueue)
+    {
+        mActiveQueue->SubmitText(Text, X, Y, Size, C);
+        return;
+    }
 
     // Adapt font scale: values <= 4.0f (e.g. 1.0f, 1.15f, 1.9f) are treated as multipliers of base size 12px.
     float EffectiveSize = Size;

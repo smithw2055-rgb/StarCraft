@@ -10,6 +10,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif __has_include(<iconv.h>)
+#include <iconv.h>
+#include <vector>
 #endif
 
 namespace Game::Locale
@@ -38,11 +41,19 @@ inline bool IsUtf8Text(const std::string& Text)
         if (Ch < 0x80)
             Need = 1;
         else if ((Ch & 0xE0) == 0xC0)
+        {
+            if (Ch < 0xC2)
+                return false; // Overlong 2-byte sequence
             Need = 2;
+        }
         else if ((Ch & 0xF0) == 0xE0)
             Need = 3;
         else if ((Ch & 0xF8) == 0xF0)
+        {
+            if (Ch > 0xF4)
+                return false;
             Need = 4;
+        }
         else
             return false;
 
@@ -120,6 +131,28 @@ inline std::string LegacyGameTextToUtf8(const std::string& Text)
 
     std::string Utf8 = WideToUtf8(Wide.data(), WideLen);
     return Utf8.empty() ? Text : Utf8;
+#elif __has_include(<iconv.h>)
+    const char* Encodings[] = {"GB18030", "CP949", "WINDOWS-1252"};
+    for (const char* Encoding : Encodings)
+    {
+        iconv_t Cd = iconv_open("UTF-8", Encoding);
+        if (Cd == (iconv_t)-1)
+            continue;
+
+        std::vector<char> OutBuf(Text.size() * 4 + 4, '\0');
+        char* InPtr = const_cast<char*>(Text.data());
+        size_t InBytesLeft = Text.size();
+        char* OutPtr = OutBuf.data();
+        size_t OutBytesLeft = OutBuf.size();
+
+        const size_t Res = iconv(Cd, &InPtr, &InBytesLeft, &OutPtr, &OutBytesLeft);
+        iconv_close(Cd);
+        if (Res != (size_t)-1 && InBytesLeft == 0)
+        {
+            return std::string(OutBuf.data(), OutBuf.size() - OutBytesLeft);
+        }
+    }
+    return Text;
 #else
     return Text;
 #endif

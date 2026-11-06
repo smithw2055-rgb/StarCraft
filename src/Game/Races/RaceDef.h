@@ -6,6 +6,8 @@
 
 #include "Game/Components.h"
 
+namespace Resource { class ModernAssetRegistry; }
+
 namespace Game::Races
 {
 using Components::Race;
@@ -88,6 +90,9 @@ bool IsDetectorChkUnitID(int ChkUnitID);
 bool IsOrganicChkUnitID(int ChkUnitID);
 bool IsMechanicalChkUnitID(int ChkUnitID);
 bool BuildingDefSatisfiesRequirement(int ActualDefID, int RequiredDefID);
+
+// Phase 2 Data-Driven Bridge: Synchronize and verify all RaceDef entries against ModernAssetRegistry (assets-R)
+size_t SyncAndVerifyWithModernAssets(const Resource::ModernAssetRegistry& Registry, size_t* OutVerifiedWeapons = nullptr);
 
 inline void ApplyCombatDefinition(Components::CombatComponent& Combat,
                                   const UnitDef& Def,

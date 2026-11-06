@@ -431,6 +431,24 @@ TriggerOutcome TriggerVM::GetPlayerOutcome(int PlayerID) const
     return mOutcomes[(size_t)PlayerID];
 }
 
+std::string TriggerVM::DecodeScriptIDFourCC(uint32_t ScriptID)
+{
+    char Buf[5] = {
+        static_cast<char>(ScriptID & 0xFF),
+        static_cast<char>((ScriptID >> 8) & 0xFF),
+        static_cast<char>((ScriptID >> 16) & 0xFF),
+        static_cast<char>((ScriptID >> 24) & 0xFF),
+        0
+    };
+    return std::string(Buf);
+}
+
+const Game::AI::BehaviorTreeInstance* TriggerVM::GetPlayerBehaviorTree(int PlayerID) const
+{
+    if (PlayerID < 0 || PlayerID >= (int)mAIScripts.size()) return nullptr;
+    return mAIScripts[(size_t)PlayerID].BTInstance.get();
+}
+
 int TriggerVM::GetActiveAIScriptCount() const
 {
     int Count = 0;
@@ -1425,7 +1443,12 @@ void TriggerVM::StartAIScript(Core::ECS::EntityManager& EM, int Owner, uint32_t 
         return;
 
     auto& Script = mAIScripts[(size_t)Owner];
-    RunningAIScript TargetContext = Script;
+    RunningAIScript TargetContext;
+    TargetContext.Active = Script.Active;
+    TargetContext.PlayerID = Owner;
+    TargetContext.ScriptID = Script.ScriptID;
+    TargetContext.HasLocation = HasLocation;
+    TargetContext.Anchor = Script.Anchor;
     TargetContext.PlayerID = Owner;
     TargetContext.HasLocation = HasLocation;
     const TriggerLocation* Loc = HasLocation ? GetLocationById(LocationID) : nullptr;
@@ -1451,6 +1474,13 @@ void TriggerVM::StartAIScript(Core::ECS::EntityManager& EM, int Owner, uint32_t 
     Script.TickAccumulator = 0.0f;
     Script.WaveCount = 0;
     Script.Anchor = NewAnchor;
+    Script.FourCC = DecodeScriptIDFourCC(ScriptID);
+    if (mBTCatalog && !Script.FourCC.empty()) {
+        if (const auto* BTAsset = mBTCatalog->FindTree(Script.FourCC)) {
+            Script.BTInstance = std::make_unique<Game::AI::BehaviorTreeInstance>(BTAsset);
+            Script.BTInstance->Tick(1);
+        }
+    }
 
     const int Issued = IssueAIScriptOrders(EM, Script, Script.Anchor);
     Emit(HasLocation ? 16 : 15, Owner,
@@ -1471,6 +1501,9 @@ void TriggerVM::UpdateAIScripts(Core::ECS::EntityManager& EM, float DeltaTime)
         if (Script.TickAccumulator < kAIScriptOrderSeconds)
             continue;
         Script.TickAccumulator = 0.0f;
+        if (Script.BTInstance) {
+            Script.BTInstance->Tick(static_cast<uint32_t>(kAIScriptOrderSeconds * 24.0f));
+        }
 
         const Core::Math::Vec2 Target = ResolveAIScriptTarget(EM, Script);
         int Issued = IssueAIScriptOrders(EM, Script, Target);

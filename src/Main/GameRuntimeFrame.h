@@ -8,6 +8,7 @@
 #include "Main/GameInputRuntime.h"
 #include "Main/GameInteractionSmokeRuntime.h"
 #include "Main/GameRuntimeState.h"
+#include "Main/GameScenes.h"
 #include "Main/GameSimulationRuntime.h"
 #include "Main/GameUiPresentation.h"
 #include "Main/GameWorldPresentation.h"
@@ -62,6 +63,8 @@ inline void UpdateGameRuntimeFrame(
     if (!Runtime.App.Runtime.Initialized)
         return;
 
+    auto& Scenes = EnsureRuntimeScenesRegistered(Runtime);
+
     if (UpdateGuiPresentationForState(Runtime.App.Gui, Runtime.App.Runtime.State))
         return;
 
@@ -109,12 +112,7 @@ inline void UpdateGameRuntimeFrame(
                 std::to_string(SimulationScale) + "x");
         }
     }
-    // Observer acceleration is a tick-production control, not wall-clock
-    // catch-up.  Feeding a slow simulation frame back through a 16x scale
-    // creates an ever-growing accumulator ("spiral of death").  Normal
-    // gameplay retains the complete host delta; accelerated observation caps
-    // only its synthetic input to one 15 Hz host frame.  This still permits
-    // accelerated observation while bounding any single-frame catch-up batch.
+
     const float SimulationInputDt = HasObserverSpeedOverride
         ? std::min(Dt, 1.0f / 15.0f)
         : Dt;
@@ -128,39 +126,18 @@ inline void UpdateGameRuntimeFrame(
         Runtime.App.Gui,
         Runtime.Client.Hud);
 
-    // Authoritative simulation advances only in complete classic 24 Hz ticks.
-    // Host-frame residual time remains in the session accumulator so stable,
-    // alternating and accelerated render rates produce the same tick states.
-    constexpr double kSimulationTickSeconds = 1.0 / 24.0;
     const int kMaximumSimulationTicksPerHostFrame = HasObserverSpeedOverride
         ? std::min(32, (int)std::ceil(SimulationScale * 2.0f))
         : 2;
-    Runtime.Session.Game.SimulationAccumulatorSeconds +=
-        (double)SimulationDt;
-    int SimulationTicksThisHostFrame = 0;
-    while (Runtime.Session.Game.SimulationAccumulatorSeconds + 1.0e-12 >=
-               kSimulationTickSeconds &&
-           SimulationTicksThisHostFrame <
-               kMaximumSimulationTicksPerHostFrame)
-    {
-        Runtime.Session.Game.SaveTransformTickState();
-        UpdateCampaignAndSimulationRuntime(
-            Runtime.Session.Campaign,
-            Runtime.Session.Game,
-            Runtime.App.Audio,
-            Runtime.Client.Runtime,
-            Runtime.Client.Hud,
-            (float)kSimulationTickSeconds);
-        Runtime.Session.Game.SimulationAccumulatorSeconds -=
-            kSimulationTickSeconds;
-        ++Runtime.Session.Game.SimulationTick;
-        ++SimulationTicksThisHostFrame;
-    }
 
-    if (SimulationTicksThisHostFrame > 0 && Runtime.Session.Game.IsMapLoaded())
-    {
-        Runtime.Session.Game.SyncCreepPresentation();
-    }
+    // Synchronize SceneManager fixed-step state with GameSession accumulator/tick counters
+    // and step the active GameplayScene deterministically at 24Hz.
+    Scenes.SetAccumulatorSeconds(Runtime.Session.Game.SimulationAccumulatorSeconds);
+    Scenes.SetFixedTickCount(Runtime.Session.Game.SimulationTick);
+    Scenes.StepFrame(SimulationDt, 1.0f, kMaximumSimulationTicksPerHostFrame);
+    Runtime.Session.Game.SimulationAccumulatorSeconds = Scenes.GetAccumulatorSeconds();
+    Runtime.Session.Game.SimulationTick = Scenes.GetFixedTickCount();
+
     RefreshGui();
 }
 
@@ -173,37 +150,16 @@ inline void RenderGameRuntimeFrame(GameRuntimeState& Runtime)
         return;
     }
 
-    if (Runtime.App.Runtime.State == GameState::MainMenu)
-    {
-        RenderGlueMenuPresentationLayer(Runtime.App.Gui);
-        return;
-    }
-
-    constexpr double kSimulationTickSeconds = 1.0 / 24.0;
-    const float InterpAlpha = std::clamp(
-        static_cast<float>(Runtime.Session.Game.SimulationAccumulatorSeconds / kSimulationTickSeconds),
-        0.0f, 1.0f);
-    RenderGameplayWorldFrame(Runtime.Client.Runtime, Runtime.Session.Game, InterpAlpha);
-    RenderGameplayUiFrame(
-        Runtime.Client.Runtime,
-        Runtime.Session.Game,
-        Runtime.Session.Campaign,
-        Runtime.App.Menu,
-        Runtime.Client.Hud,
-#if ENABLE_GUI_UI
-        !(Runtime.App.Gui.UseGui && Runtime.App.Gui.MainGui.IsActive())
-#else
-        true
-#endif
-    );
-    RenderGuiPresentationLayer(Runtime.App.Gui);
-    Runtime.App.Runtime.UpdateFrameStats();
+    auto& Scenes = EnsureRuntimeScenesRegistered(Runtime);
+    Scenes.SetAccumulatorSeconds(Runtime.Session.Game.SimulationAccumulatorSeconds);
+    Scenes.RenderActiveScene();
 }
 
 inline void HandleGameRuntimeFrameEvent(GameRuntimeState& Runtime, const void* Event)
 {
     Core::Platform::HandleEvent(Event);
-    HandleGuiPresentationEventForState(Runtime.App.Gui, Runtime.App.Runtime.State, Event);
+    auto& Scenes = EnsureRuntimeScenesRegistered(Runtime);
+    Scenes.DispatchEvent(Event);
 }
 
 } // namespace Game::Client::GameLoop

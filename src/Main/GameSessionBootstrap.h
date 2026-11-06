@@ -14,7 +14,9 @@
 #include "Game/AI/AIDifficulty.h"
 #include "Game/AI/AIBrain.h"
 #include "Game/Components.h"
+#include "Game/SimulationContext.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/Races/UnitPrototypeRegistry.h"
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/BulletSystem.h"
@@ -391,7 +393,7 @@ public:
             std::string Snapshot = "status simulated_seconds=" + std::to_string((int)mElapsed);
             for (int PlayerID : mParticipants)
             {
-                const auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerID);
+                const auto& Resources = Game::Systems::HarvestSystem::GetResources(EM, PlayerID);
                 Snapshot += " p" + std::to_string(PlayerID) + "{units=" +
                     std::to_string(UnitCounts[(size_t)PlayerID]) + ",buildings=" +
                     std::to_string(BuildingCounts[(size_t)PlayerID]) + ",combat=" +
@@ -455,6 +457,12 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::SpellSystem>(SysMgr));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::AnimationSystem>(SysMgr, &Audio, BulletSysRaw));
     SysMgr.RegisterSystem(std::make_unique<Game::Systems::TransportSystem>(SysMgr));
+
+    auto& SimCtx = Game::SimulationContext::Get(Session.Entities());
+    SimCtx.Map = &Session.GetEcsMap();
+    SimCtx.MutableMap = &Session.MutableEcsMap();
+    SimCtx.FogOfWar = Session.GetFogSystem();
+    SimCtx.LocalPlayerID = Session.GetLocalPlayerID();
 
     Game::Systems::CommandSystem::SetMap(&Session.MutableEcsMap());
     Game::Systems::BuildingSystem::ResetPendingBuildOrders();
@@ -556,11 +564,11 @@ inline void EnsurePlayableStart(GameSession& Session,
         {
             ++WorkerCount;
         }
-        if (Owner == PlayerId && Unit->ChkUnitID == 42)
+        if (Owner == PlayerId && Game::Races::IsOverlordChkUnitID(Unit->ChkUnitID))
         {
             ++OverlordCount;
         }
-        if (Owner == PlayerId && Unit->ChkUnitID == 35)
+        if (Owner == PlayerId && Game::Races::IsLarvaChkUnitID(Unit->ChkUnitID))
         {
             ++LarvaCount;
         }
@@ -665,7 +673,7 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
 
     for (int PlayerId = 0; PlayerId < 8; ++PlayerId)
     {
-        auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerId);
+        auto& Resources = Game::Systems::HarvestSystem::GetResources(EM, PlayerId);
         Resources.SupplyUsed = 0;
         Resources.SupplyMax = 0;
     }
@@ -684,7 +692,7 @@ inline void RebuildPlayerSupplyAndRegisterAi(GameSession& Session,
         if (UnitDefID >= 0 && Player->PlayerID >= 0 && Player->PlayerID < 8)
         {
             const auto Def = Game::Races::GetUnitDefByID(UnitDefID);
-            auto& Resources = Game::Systems::HarvestSystem::GetResources(Player->PlayerID);
+            auto& Resources = Game::Systems::HarvestSystem::GetResources(EM, Player->PlayerID);
             const int SupplyProvided = Game::Races::GetSupplyProvidedByDefID(UnitDefID);
             if (SupplyProvided > 0)
                 Resources.SupplyMax += SupplyProvided;
