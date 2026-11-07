@@ -11,10 +11,16 @@
 #include "Game/Systems/NukeAndSpiderMineSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/SpellSystem.h"
+#include "Game/Systems/SystemAssetBridge.h"
 #include "Game/Systems/ZergSystem.h"
 
 namespace Game::Client::GameLoop
 {
+
+inline void ConfigureModernAssetRegistryResolvers(const Resource::ModernAssetRegistry& Registry)
+{
+    Game::Systems::SystemAssetBridge::BindModernAssetRegistry(Registry);
+}
 
 inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int)> Resolver)
 {
@@ -29,12 +35,7 @@ inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int
 inline void ConfigureBuildAndProductionImageResolvers(std::function<uint32_t(int)> Resolver,
                                                       std::function<uint32_t(int)> ConstructionResolver)
 {
-    Game::Systems::ProductionSystem::SetImageResolver(Resolver);
-    Game::Systems::BuildingSystem::SetImageResolver(Resolver);
-    Game::Systems::CommandSystem::SetImageResolver(Resolver);
-    Game::Systems::NukeAndSpiderMineSystem::SetImageResolver(Resolver);
-    Game::Systems::SpellSystem::SetImageResolver(Resolver);
-    Game::Systems::ZergSystem::SetImageResolver(Resolver);
+    ConfigureBuildAndProductionImageResolvers( std::move(Resolver) );
     Game::Systems::BuildingSystem::SetConstructionImageResolver(std::move(ConstructionResolver));
 }
 

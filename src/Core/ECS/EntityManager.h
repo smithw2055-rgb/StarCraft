@@ -5,11 +5,13 @@
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -69,6 +71,21 @@ public:
     virtual size_t Size() const = 0;
     virtual const std::vector<EntityID>& GetDenseEntities() const = 0;
     virtual void Clear() = 0;
+
+    // General-Purpose Engine Foundation: Type-Erased Snapshot & Cloning API
+    virtual size_t GetComponentByteSize() const = 0;
+    virtual bool IsTriviallyCopyable() const = 0;
+    virtual std::unique_ptr<IComponentPool> CreateEmptyPool() const = 0;
+    virtual void CapturePoolBinary(std::vector<EntityID>& OutEntities,
+                                   std::vector<uint8_t>& OutBytes) const = 0;
+    virtual void RestorePoolBinary(EntityManager& Owner,
+                                   uint8_t ComponentTypeSlot,
+                                   const std::vector<EntityID>& Entities,
+                                   const std::vector<uint8_t>& Bytes) = 0;
+    virtual std::unique_ptr<IComponentPool> ClonePoolState() const = 0;
+    virtual void RestoreFromClonedPool(EntityManager& Owner,
+                                       uint8_t ComponentTypeSlot,
+                                       const IComponentPool& ClonedPool) = 0;
 };
 
 // Paged Sparse-Set ComponentPool:
@@ -78,6 +95,7 @@ public:
 // - Maintains a compact Sparse-Set (mSparseToDense + mDenseEntities) for O(1)
 //   membership checks, O(1) removal (swap-and-pop), and cache-friendly dense iteration.
 // - Supports EnTT / Godot style reactive lifecycle signals (OnConstruct / OnRemove).
+// - Supports game-agnostic type-erased binary snapshotting & cloning.
 template <typename T>
 class ComponentPool final : public IComponentPool
 {
@@ -202,6 +220,67 @@ public:
         mPages.clear();
     }
 
+    size_t GetComponentByteSize() const override
+    {
+        return sizeof(T);
+    }
+
+    bool IsTriviallyCopyable() const override
+    {
+        return std::is_trivially_copyable_v<T>;
+    }
+
+    std::unique_ptr<IComponentPool> CreateEmptyPool() const override
+    {
+        return std::make_unique<ComponentPool<T>>();
+    }
+
+    void CapturePoolBinary(std::vector<EntityID>& OutEntities,
+                           std::vector<uint8_t>& OutBytes) const override
+    {
+        OutEntities.clear();
+        OutBytes.clear();
+        if constexpr (std::is_trivially_copyable_v<T>)
+        {
+            OutEntities = mDenseEntities;
+            std::sort(OutEntities.begin(), OutEntities.end());
+            OutBytes.resize(OutEntities.size() * sizeof(T));
+            for (size_t i = 0; i < OutEntities.size(); ++i)
+            {
+                const T* Comp = GetComponent(OutEntities[i]);
+                if (Comp)
+                    std::memcpy(OutBytes.data() + i * sizeof(T), Comp, sizeof(T));
+            }
+        }
+    }
+
+    void RestorePoolBinary(EntityManager& Owner,
+                           uint8_t ComponentTypeSlot,
+                           const std::vector<EntityID>& Entities,
+                           const std::vector<uint8_t>& Bytes) override;
+
+    std::unique_ptr<IComponentPool> ClonePoolState() const override
+    {
+        auto Clone = std::make_unique<ComponentPool<T>>();
+        if constexpr (std::is_copy_assignable_v<T>)
+        {
+            std::vector<EntityID> Sorted = mDenseEntities;
+            std::sort(Sorted.begin(), Sorted.end());
+            for (EntityID Id : Sorted)
+            {
+                if (const T* Comp = GetComponent(Id))
+                {
+                    Clone->AddComponent(Id) = *Comp;
+                }
+            }
+        }
+        return Clone;
+    }
+
+    void RestoreFromClonedPool(EntityManager& Owner,
+                               uint8_t ComponentTypeSlot,
+                               const IComponentPool& ClonedPool) override;
+
 private:
     using PageBlock = std::array<T, kPageSize>;
 
@@ -262,6 +341,7 @@ public:
     EntityID CreateEntityWithID(EntityID Id, uint32_t Generation = 0);
     void DestroyEntity(EntityID Id);
     bool DestroyEntity(EntityHandle Handle);
+    void ClearAllEntitiesAndPools();
 
     bool IsAlive(EntityID Id) const;
     bool IsAlive(EntityHandle Handle) const;
@@ -274,6 +354,42 @@ public:
     size_t GetEntityCapacity() const { return mAlive.size(); }
     const std::vector<EntityID>& GetActiveEntities() const { return mActiveEntities; }
     const std::vector<EntityID>& GetAliveEntities() const { return mActiveEntities; }
+
+    // Type-erased ComponentPool slot introspection for GenericWorldSnapshot
+    const IComponentPool* GetPoolBySlot(uint8_t Slot) const
+    {
+        return Slot < MaxComponents ? mPools[Slot].get() : nullptr;
+    }
+
+    IComponentPool* GetMutablePoolBySlot(uint8_t Slot)
+    {
+        return Slot < MaxComponents ? mPools[Slot].get() : nullptr;
+    }
+
+    IComponentPool* EnsurePoolSlot(uint8_t Slot, const IComponentPool& PrototypePool)
+    {
+        if (Slot >= MaxComponents)
+            return nullptr;
+        if (!mPools[Slot])
+            mPools[Slot] = PrototypePool.CreateEmptyPool();
+        return mPools[Slot].get();
+    }
+
+    EntityID GetLastEntityId() const { return mLastEntityId; }
+    const std::vector<uint32_t>& GetGenerationTable() const { return mGenerations; }
+    const std::deque<EntityID>& GetFreeIdQueue() const { return mFreeIds; }
+    void RestoreEntityAllocatorState(EntityID LastEntityId,
+                                     const std::vector<uint32_t>& Generations,
+                                     const std::deque<EntityID>& FreeIds);
+
+    void SetEntityComponentBitInternal(EntityID Id, uint8_t Slot)
+    {
+        if (Id > 0 && (size_t)Id < mMasks.size() && Slot < MaxComponents)
+        {
+            mMasks[(size_t)Id].set(Slot);
+            ++mMaskMutationVersion;
+        }
+    }
 
     template <typename T>
     T& AddComponent(EntityID Id)
@@ -352,7 +468,6 @@ public:
             return nullptr;
         return static_cast<const ComponentPool<T>*>(mPools[ID].get())->GetComponent(Id);
     }
-
 
     // Generational EntityHandle safe component accessors (Unity DOTS / Godot RID style):
     // Automatically verifies generation to prevent ABA slot-recycling bugs.
@@ -852,6 +967,56 @@ private:
     mutable size_t mQueryScratchDepth = 0;
     mutable ECSQueryTelemetry mQueryTelemetry{};
 };
+
+template <typename T>
+void ComponentPool<T>::RestorePoolBinary(EntityManager& Owner,
+                                         uint8_t ComponentTypeSlot,
+                                         const std::vector<EntityID>& Entities,
+                                         const std::vector<uint8_t>& Bytes)
+{
+    Clear();
+    if constexpr (std::is_trivially_copyable_v<T>)
+    {
+        if (Entities.empty() || Bytes.size() < Entities.size() * sizeof(T))
+            return;
+        for (size_t i = 0; i < Entities.size(); ++i)
+        {
+            const EntityID Id = Entities[i];
+            if (!Owner.IsAlive(Id))
+                continue;
+            T& Slot = AddComponent(Id);
+            std::memcpy(&Slot, Bytes.data() + i * sizeof(T), sizeof(T));
+            Owner.SetEntityComponentBitInternal(Id, ComponentTypeSlot);
+            NotifyConstructed(Owner, Id, Slot);
+        }
+    }
+}
+
+template <typename T>
+void ComponentPool<T>::RestoreFromClonedPool(EntityManager& Owner,
+                                             uint8_t ComponentTypeSlot,
+                                             const IComponentPool& ClonedPool)
+{
+    Clear();
+    if constexpr (std::is_copy_assignable_v<T>)
+    {
+        const auto& TypedClone = static_cast<const ComponentPool<T>&>(ClonedPool);
+        std::vector<EntityID> Sorted = TypedClone.GetDenseEntities();
+        std::sort(Sorted.begin(), Sorted.end());
+        for (EntityID Id : Sorted)
+        {
+            if (!Owner.IsAlive(Id))
+                continue;
+            if (const T* SrcComp = TypedClone.GetComponent(Id))
+            {
+                T& Slot = AddComponent(Id);
+                Slot = *SrcComp;
+                Owner.SetEntityComponentBitInternal(Id, ComponentTypeSlot);
+                NotifyConstructed(Owner, Id, Slot);
+            }
+        }
+    }
+}
 
 inline void EntityCommandBuffer::DestroyEntity(EntityID Id)
 {

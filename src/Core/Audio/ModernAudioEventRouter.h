@@ -8,6 +8,7 @@
 #include "Core/Audio/AudioSystem.h"
 #include "Core/ECS/SystemManager.h"
 #include "Game/Events/GameEvents.h"
+#include "Game/SimulationContext.h"
 #include "Resource/ModernAssetRegistry.h"
 
 namespace Core::Audio {
@@ -23,8 +24,9 @@ struct DispatchedAudioEventRecord {
     Core::Math::Vec2 WorldPos{0.0f, 0.0f};
 };
 
-// Phase 3 & Phase 13 Event-Driven Audio & SFX Catalog Router (Godot AudioServer / Unity AudioMixer)
-// Subscribes to AnimAudioNotifyEvent on the ECS EventBus, resolves the 1,144 SFX catalog
+// Phase 3, Phase 13 & Phase 32 Event-Driven Audio & SFX Catalog Router (Godot AudioServer / Unity AudioMixer)
+// Subscribes to both AnimAudioNotifyEvent (declarative animation clips) and SoundRequestEvent
+// (simulation / AnimationSystem events) on the ECS EventBus, resolves the 1,144 SFX catalog
 // entries from ModernAssetRegistry (Sound_Catalog_1144_SFX.json), applies AudioBusMixer
 // hierarchical bus gain, sidechain ducking, and same-frame spatial coalescing, and dispatches
 // positional 2D audio playback.
@@ -42,6 +44,9 @@ public:
     ~ModernAudioEventRouterSystem() override {
         if (mSubscriptionID != 0) {
             mSystemMgr.GetEventBus().Unsubscribe<Game::Events::AnimAudioNotifyEvent>(mSubscriptionID);
+        }
+        if (mSoundReqSubscriptionID != 0) {
+            mSystemMgr.GetEventBus().Unsubscribe<Game::Events::SoundRequestEvent>(mSoundReqSubscriptionID);
         }
     }
 
@@ -93,6 +98,16 @@ private:
             [this](const Game::Events::AnimAudioNotifyEvent& Ev) {
                 OnAnimAudioNotify(Ev);
             });
+        mSoundReqSubscriptionID = mSystemMgr.GetEventBus().Subscribe<Game::Events::SoundRequestEvent>(
+            [this](const Game::Events::SoundRequestEvent& Ev) {
+                if (Ev.SoundID <= 0)
+                    return;
+                Game::Events::AnimAudioNotifyEvent Mapped{};
+                Mapped.SourceEntity = Core::ECS::InvalidEntity;
+                Mapped.SoundID = static_cast<uint32_t>(Ev.SoundID);
+                Mapped.WorldPos = Core::Math::Vec2{Ev.WorldX, Ev.WorldY};
+                OnAnimAudioNotify(Mapped);
+            });
     }
 
     void OnAnimAudioNotify(const Game::Events::AnimAudioNotifyEvent& Ev) {
@@ -142,6 +157,7 @@ private:
     AudioSystem* mAudioBackend = nullptr;
     AudioBusMixer mBusMixer;
     Core::ECS::EventBus::SubscriptionID mSubscriptionID = 0;
+    Core::ECS::EventBus::SubscriptionID mSoundReqSubscriptionID = 0;
     std::vector<DispatchedAudioEventRecord> mDispatchedHistory;
 };
 

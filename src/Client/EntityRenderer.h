@@ -33,10 +33,7 @@ public:
         mDataAssets = DataAssets;
     }
 
-    void ResolveFrames(EntityManager& Entities);
-    void Render(const EntityManager& Entities, const std::vector<int>& SelectedIds);
     void Render(Core::ECS::EntityManager& Entities, const std::vector<int>& SelectedIds);
-    void UpdateAnimation(EntityManager& Entities, float DeltaSeconds);
 
     void SetCamera(float CamX, float CamY, float ViewW, float ViewH, float Zoom)
     {
@@ -66,16 +63,8 @@ public:
     size_t GetRetainedStaticCount() const { return mRetainedStaticItems.size(); }
 
 private:
-    void DrawSelectionMarker(const Entity& E);
     void DrawSelectionMarker(Core::ECS::EntityManager& Entities, int EntityId);
     void DrawRallyIndicator(Render::Draw2D& Draw, Core::ECS::EntityManager& Entities, int BuildingEntityId) const;
-    void DrawImageNode(const Entity& E, const EntityImageNode& Node, float OffsetX, float OffsetY) const;
-    void DrawImageNodeTree(const Entity& E,
-                           const std::vector<EntityImageNode>& Nodes,
-                           int NodeIndex,
-                           float ParentOffsetX = 0.0f,
-                           float ParentOffsetY = 0.0f,
-                           int Depth = 0) const;
     void DrawImageNode(Core::ECS::EntityManager& Entities,
                        int EntityId,
                        const Game::Components::ImageSubnode& Node,

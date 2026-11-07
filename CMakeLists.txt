@@ -349,6 +349,38 @@ if(BUILD_MAP_RESOURCE_ANALYZER)
     endif()
 endif()
 
+# ============================================================================
+# Shared Engine Core Object Library & Common Target Configuration Helper
+# ============================================================================
+add_library(StarCraftCoreObj OBJECT
+    src/Core/ECS/EntityManager.cpp
+    src/Core/ECS/SystemManager.cpp
+    src/Core/Utils/Logger.cpp
+)
+target_include_directories(StarCraftCoreObj PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+)
+if(MSVC)
+    target_compile_options(StarCraftCoreObj PRIVATE /W4 /utf-8 /permissive-)
+    target_compile_definitions(StarCraftCoreObj PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(StarCraftCoreObj PRIVATE -Wall -Wextra -Wpedantic -pthread)
+endif()
+
+function(starcraft_configure_test_target TARGET_NAME)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(${TARGET_NAME} PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(${TARGET_NAME} PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(${TARGET_NAME} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
 option(BUILD_ISCRIPT_ANGELSCRIPT_TOOL "Build IScript to AngelScript source exporter" ON)
 if(BUILD_ISCRIPT_ANGELSCRIPT_TOOL)
     add_executable(IScriptToAngelScript
@@ -415,9 +447,7 @@ option(BUILD_COMBAT_RULES_TEST "Build combat rule regression test" ON)
 if(BUILD_COMBAT_RULES_TEST)
     add_executable(CombatRulesTest
         tests/Regression/CombatRulesTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
@@ -427,42 +457,20 @@ if(BUILD_COMBAT_RULES_TEST)
         src/Game/Systems/UpgradeSystem.cpp
     )
 
-    target_include_directories(CombatRulesTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(CombatRulesTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(CombatRulesTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(CombatRulesTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(CombatRulesTest)
 endif()
 
 option(BUILD_SPELL_VISUAL_STATE_TEST "Build spell visual state regression test" ON)
 if(BUILD_SPELL_VISUAL_STATE_TEST)
     add_executable(SpellVisualStateTest
         tests/Regression/SpellVisualStateTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/SpellSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
     )
 
-    target_include_directories(SpellVisualStateTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(SpellVisualStateTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(SpellVisualStateTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(SpellVisualStateTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(SpellVisualStateTest)
 endif()
 
 option(BUILD_ANIMATION_STATE_TEST "Build animation state regression test" ON)
@@ -471,43 +479,21 @@ if(BUILD_ANIMATION_STATE_TEST)
         tests/Regression/AnimationStateTest.cpp
     )
 
-    target_include_directories(AnimationStateTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(AnimationStateTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(AnimationStateTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(AnimationStateTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(AnimationStateTest)
 endif()
 
 option(BUILD_ANIMATION_RUNTIME_DIRECTION_TEST "Build animation runtime direction regression test" ON)
 if(BUILD_ANIMATION_RUNTIME_DIRECTION_TEST)
     add_executable(AnimationRuntimeDirectionTest
         tests/Regression/AnimationRuntimeDirectionTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
         src/Game/Systems/AnimationSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Races/RaceDef.cpp
     )
 
-    target_include_directories(AnimationRuntimeDirectionTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(AnimationRuntimeDirectionTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(AnimationRuntimeDirectionTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(AnimationRuntimeDirectionTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(AnimationRuntimeDirectionTest)
 endif()
 
 option(BUILD_ISCRIPT_OVERLAY_TEST "Build iscript overlay regression test" ON)
@@ -518,17 +504,7 @@ if(BUILD_ISCRIPT_OVERLAY_TEST)
         src/Game/IScriptVM.cpp
     )
 
-    target_include_directories(IScriptOverlayTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(IScriptOverlayTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(IScriptOverlayTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(IScriptOverlayTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(IScriptOverlayTest)
 endif()
 
 option(BUILD_SPRITE_IMAGE_DATA_TEST "Build sprite/image data mapping regression test" ON)
@@ -549,40 +525,18 @@ if(BUILD_SPRITE_IMAGE_DATA_TEST)
         src/Resource/TblDecoder.cpp
     )
 
-    target_include_directories(SpriteImageDataTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(SpriteImageDataTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(SpriteImageDataTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(SpriteImageDataTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(SpriteImageDataTest)
 endif()
 
 option(BUILD_RACE_DEFINITION_MAPPING_TEST "Build race definition mapping regression test" ON)
 if(BUILD_RACE_DEFINITION_MAPPING_TEST)
     add_executable(RaceDefinitionMappingTest
         tests/Regression/RaceDefinitionMappingTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Races/RaceDef.cpp
     )
 
-    target_include_directories(RaceDefinitionMappingTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(RaceDefinitionMappingTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(RaceDefinitionMappingTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(RaceDefinitionMappingTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(RaceDefinitionMappingTest)
 endif()
 
 option(BUILD_AI_BRAIN_STRATEGY_TEST "Build AI difficulty strategy regression test" ON)
@@ -591,26 +545,14 @@ if(BUILD_AI_BRAIN_STRATEGY_TEST)
         tests/Regression/AIBrainStrategyTest.cpp
     )
 
-    target_include_directories(AIBrainStrategyTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(AIBrainStrategyTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(AIBrainStrategyTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(AIBrainStrategyTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(AIBrainStrategyTest)
 endif()
 
 option(BUILD_COMMAND_SYSTEM_ORDER_TEST "Build command system order legality regression test" ON)
 if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
     add_executable(CommandSystemOrderTest
         tests/Regression/CommandSystemOrderTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -622,17 +564,7 @@ if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
         src/Main/GameLoop/InputHandler.cpp
     )
 
-    target_include_directories(CommandSystemOrderTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(CommandSystemOrderTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(CommandSystemOrderTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(CommandSystemOrderTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(CommandSystemOrderTest)
 endif()
 
 option(BUILD_HUD_MINIMAP_GEOMETRY_TEST "Build HUD minimap geometry regression test" ON)
@@ -641,52 +573,28 @@ if(BUILD_HUD_MINIMAP_GEOMETRY_TEST)
         tests/Regression/HudMinimapGeometryTest.cpp
     )
 
-    target_include_directories(HudMinimapGeometryTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(HudMinimapGeometryTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(HudMinimapGeometryTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(HudMinimapGeometryTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(HudMinimapGeometryTest)
 endif()
 
 option(BUILD_FOG_OF_WAR_STATUS_TEST "Build fog of war status regression test" ON)
 if(BUILD_FOG_OF_WAR_STATUS_TEST)
     add_executable(FogOfWarStatusTest
         tests/Regression/FogOfWarStatusTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/FogOfWarSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
     )
 
-    target_include_directories(FogOfWarStatusTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(FogOfWarStatusTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(FogOfWarStatusTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(FogOfWarStatusTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(FogOfWarStatusTest)
 endif()
 
 option(BUILD_HUD_COMMAND_METADATA_TEST "Build HUD command metadata regression test" ON)
 if(BUILD_HUD_COMMAND_METADATA_TEST)
     add_executable(HudCommandMetadataTest
         tests/Regression/HudCommandMetadataTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -710,17 +618,7 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
         src/UI/HudInfoPanelState.cpp
     )
 
-    target_include_directories(HudCommandMetadataTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(HudCommandMetadataTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(HudCommandMetadataTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(HudCommandMetadataTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(HudCommandMetadataTest)
 endif()
 
 option(BUILD_CHK_STRING_ENCODING_TEST "Build CHK string encoding regression test" ON)
@@ -730,26 +628,14 @@ if(BUILD_CHK_STRING_ENCODING_TEST)
         src/Game/Map/ChkParser.cpp
     )
 
-    target_include_directories(ChkStringEncodingTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(ChkStringEncodingTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(ChkStringEncodingTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(ChkStringEncodingTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(ChkStringEncodingTest)
 endif()
 
 option(BUILD_SMART_CLICK_COMMAND_TEST "Build smart-click command dispatch regression test" ON)
 if(BUILD_SMART_CLICK_COMMAND_TEST)
     add_executable(SmartClickCommandTest
         tests/Regression/SmartClickCommandTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -772,17 +658,7 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
         src/UI/HudInfoPanelState.cpp
     )
 
-    target_include_directories(SmartClickCommandTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(SmartClickCommandTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(SmartClickCommandTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(SmartClickCommandTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(SmartClickCommandTest)
 endif()
 
 option(BUILD_SELECTION_INTERACTION_TEST "Build selection interaction regression test" ON)
@@ -793,17 +669,7 @@ if(BUILD_SELECTION_INTERACTION_TEST)
         src/Core/ECS/EntityManager.cpp
     )
 
-    target_include_directories(SelectionInteractionTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(SelectionInteractionTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(SelectionInteractionTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(SelectionInteractionTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(SelectionInteractionTest)
 endif()
 
 option(BUILD_SELECTION_FOOTPRINT_TEST "Build selection footprint regression test" ON)
@@ -812,17 +678,7 @@ if(BUILD_SELECTION_FOOTPRINT_TEST)
         tests/Regression/SelectionFootprintTest.cpp
     )
 
-    target_include_directories(SelectionFootprintTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(SelectionFootprintTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(SelectionFootprintTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(SelectionFootprintTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(SelectionFootprintTest)
 endif()
 
 option(BUILD_MOUSE_COORDINATE_TEST "Build mouse coordinate regression test" ON)
@@ -831,17 +687,7 @@ if(BUILD_MOUSE_COORDINATE_TEST)
         tests/Regression/MouseCoordinateTest.cpp
     )
 
-    target_include_directories(MouseCoordinateTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(MouseCoordinateTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MouseCoordinateTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MouseCoordinateTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(MouseCoordinateTest)
 endif()
 
 option(BUILD_CAMERA_EDGE_SCROLL_TEST "Build camera edge-scroll regression test" ON)
@@ -851,26 +697,14 @@ if(BUILD_CAMERA_EDGE_SCROLL_TEST)
         src/Client/CameraController.cpp
     )
 
-    target_include_directories(CameraEdgeScrollTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(CameraEdgeScrollTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(CameraEdgeScrollTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(CameraEdgeScrollTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(CameraEdgeScrollTest)
 endif()
 
 option(BUILD_MOVEMENT_COMMAND_TEST "Build movement command regression test" ON)
 if(BUILD_MOVEMENT_COMMAND_TEST)
     add_executable(MovementCommandTest
         tests/Regression/MovementCommandTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -879,17 +713,7 @@ if(BUILD_MOVEMENT_COMMAND_TEST)
         src/Game/Systems/UpgradeSystem.cpp
     )
 
-    target_include_directories(MovementCommandTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(MovementCommandTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MovementCommandTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MovementCommandTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(MovementCommandTest)
 endif()
 
 option(BUILD_NAVIGATION_PATHFINDING_TEST
@@ -898,19 +722,7 @@ if(BUILD_NAVIGATION_PATHFINDING_TEST)
     add_executable(NavigationPathfindingTest
         tests/Regression/NavigationPathfindingTest.cpp)
 
-    target_include_directories(NavigationPathfindingTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(NavigationPathfindingTest PRIVATE
-            /W4 /utf-8 /permissive-)
-        target_compile_definitions(NavigationPathfindingTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(NavigationPathfindingTest PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(NavigationPathfindingTest)
 endif()
 
 option(BUILD_NAVIGATION_DETERMINISM_TEST
@@ -918,9 +730,7 @@ option(BUILD_NAVIGATION_DETERMINISM_TEST
 if(BUILD_NAVIGATION_DETERMINISM_TEST)
     add_executable(NavigationDeterminismTest
         tests/Regression/NavigationDeterminismTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -928,19 +738,7 @@ if(BUILD_NAVIGATION_DETERMINISM_TEST)
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp)
 
-    target_include_directories(NavigationDeterminismTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(NavigationDeterminismTest PRIVATE
-            /W4 /utf-8 /permissive-)
-        target_compile_definitions(NavigationDeterminismTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(NavigationDeterminismTest PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(NavigationDeterminismTest)
 endif()
 
 option(BUILD_NAVIGATION_STRESS_TEST
@@ -948,9 +746,7 @@ option(BUILD_NAVIGATION_STRESS_TEST
 if(BUILD_NAVIGATION_STRESS_TEST)
     add_executable(NavigationStressTest
         tests/Regression/NavigationStressTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -958,28 +754,14 @@ if(BUILD_NAVIGATION_STRESS_TEST)
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp)
 
-    target_include_directories(NavigationStressTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(NavigationStressTest PRIVATE
-            /W4 /utf-8 /permissive-)
-        target_compile_definitions(NavigationStressTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(NavigationStressTest PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(NavigationStressTest)
 endif()
 
 option(BUILD_PRODUCTION_ECONOMY_TEST "Build production economy regression test" ON)
 if(BUILD_PRODUCTION_ECONOMY_TEST)
     add_executable(ProductionEconomyTest
         tests/Regression/ProductionEconomyTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -994,26 +776,14 @@ if(BUILD_PRODUCTION_ECONOMY_TEST)
         src/Game/Systems/ZergSystem.cpp
     )
 
-    target_include_directories(ProductionEconomyTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(ProductionEconomyTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(ProductionEconomyTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(ProductionEconomyTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(ProductionEconomyTest)
 endif()
 
 option(BUILD_ZERG_CREEP_REGRESSION_TEST "Build Zerg creep regression test" ON)
 if(BUILD_ZERG_CREEP_REGRESSION_TEST)
     add_executable(ZergCreepRegressionTest
         tests/Regression/ZergCreepRegressionTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1027,17 +797,7 @@ if(BUILD_ZERG_CREEP_REGRESSION_TEST)
         src/Game/Systems/ZergSystem.cpp
     )
 
-    target_include_directories(ZergCreepRegressionTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(ZergCreepRegressionTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(ZergCreepRegressionTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(ZergCreepRegressionTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(ZergCreepRegressionTest)
 endif()
 
 option(BUILD_CURSOR_TARGETING_TEST "Build cursor targeting regression test" ON)
@@ -1049,26 +809,14 @@ if(BUILD_CURSOR_TARGETING_TEST)
         src/Main/GameLoop/CursorTypes.cpp
     )
 
-    target_include_directories(CursorTargetingTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(CursorTargetingTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(CursorTargetingTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(CursorTargetingTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(CursorTargetingTest)
 endif()
 
 option(BUILD_HARVEST_SYSTEM_COMMAND_TEST "Build harvest command regression test" ON)
 if(BUILD_HARVEST_SYSTEM_COMMAND_TEST)
     add_executable(HarvestSystemCommandTest
         tests/Regression/HarvestSystemCommandTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1078,26 +826,14 @@ if(BUILD_HARVEST_SYSTEM_COMMAND_TEST)
         src/Game/Races/RaceDef.cpp
     )
 
-    target_include_directories(HarvestSystemCommandTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(HarvestSystemCommandTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(HarvestSystemCommandTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(HarvestSystemCommandTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(HarvestSystemCommandTest)
 endif()
 
 option(BUILD_BUILDING_PLACEMENT_TEST "Build building placement regression test" ON)
 if(BUILD_BUILDING_PLACEMENT_TEST)
     add_executable(BuildingPlacementTest
         tests/Regression/BuildingPlacementTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
@@ -1106,26 +842,14 @@ if(BUILD_BUILDING_PLACEMENT_TEST)
         src/Game/Systems/UpgradeSystem.cpp
     )
 
-    target_include_directories(BuildingPlacementTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(BuildingPlacementTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(BuildingPlacementTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(BuildingPlacementTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(BuildingPlacementTest)
 endif()
 
 option(BUILD_MATCH_OUTCOME_TEST "Build match outcome regression test" ON)
 if(BUILD_MATCH_OUTCOME_TEST)
     add_executable(MatchOutcomeTest
         tests/Regression/MatchOutcomeTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/FogOfWarSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
@@ -1134,17 +858,7 @@ if(BUILD_MATCH_OUTCOME_TEST)
         src/Game/Map/ChkParser.cpp
     )
 
-    target_include_directories(MatchOutcomeTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(MatchOutcomeTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MatchOutcomeTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MatchOutcomeTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(MatchOutcomeTest)
 endif()
 
 option(BUILD_RESOURCE_EXTRACTOR "Build resource extraction tool" OFF)
@@ -1182,26 +896,14 @@ if(BUILD_OGG_VORBIS_DECODE_TEST)
         tests/Regression/OggVorbisDecodeTest.cpp
     )
 
-    target_include_directories(OggVorbisDecodeTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(OggVorbisDecodeTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(OggVorbisDecodeTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(OggVorbisDecodeTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(OggVorbisDecodeTest)
 endif()
 
 option(BUILD_TRANSPORT_SYSTEM_TEST "Build transport system regression test" ON)
 if(BUILD_TRANSPORT_SYSTEM_TEST)
     add_executable(TransportSystemTest
         tests/Regression/TransportSystemTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
@@ -1224,17 +926,7 @@ if(BUILD_TRANSPORT_SYSTEM_TEST)
         src/Game/Systems/ZergSystem.cpp
     )
 
-    target_include_directories(TransportSystemTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(TransportSystemTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(TransportSystemTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(TransportSystemTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(TransportSystemTest)
 endif()
 
 option(BUILD_MANUAL_WEBM_VIDEO_DECODE_TEST "Build manual WebM/VPx decode regression targets" OFF)
@@ -1288,9 +980,7 @@ option(BUILD_TRIGGER_RUNTIME_TEST "Build trigger parser/runtime regression test"
 if(BUILD_TRIGGER_RUNTIME_TEST)
     add_executable(TriggerRuntimeTest
         tests/TriggerRuntimeTest/TriggerRuntimeTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Campaign/CampaignController.cpp
         src/Game/Trigger/TriggerVM.cpp
         src/Game/AI/BehaviorTreeRuntime.cpp
@@ -1340,9 +1030,7 @@ option(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST "Build all-campaign catalog runtime r
 if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
     add_executable(CampaignCatalogRuntimeTest
         tests/Regression/CampaignCatalogRuntimeTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Campaign/CampaignController.cpp
         src/Game/Campaign/CampaignMissionCatalog.cpp
         src/Game/Trigger/TriggerVM.cpp
@@ -1395,9 +1083,7 @@ option(BUILD_ECS_FOUNDATION_MODERNIZATION_TEST "Build ECS foundation modernizati
 if(BUILD_ECS_FOUNDATION_MODERNIZATION_TEST)
     add_executable(EcsFoundationModernizationTest
         tests/Regression/EcsFoundationModernizationTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/UpgradeSystem.cpp
     )
@@ -1417,9 +1103,7 @@ option(BUILD_PHASE2_ENGINE_MODERNIZATION_TEST "Build Phase 2 engine modernizatio
 if(BUILD_PHASE2_ENGINE_MODERNIZATION_TEST)
     add_executable(Phase2EngineModernizationTest
         tests/Regression/Phase2EngineModernizationTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1527,14 +1211,9 @@ if(BUILD_GAME_CLIENT)
         src/Resource/ResourceCacheUIConsole.cpp
         src/Resource/ResourceCacheUIAssets.cpp
         src/Resource/ResourceCacheInitialize.cpp
-        src/Resource/ResourceCacheData.cpp
         src/Resource/ResourceCacheSprites.cpp
-        src/Resource/ResourceCacheTilesetData.cpp
         src/Resource/ResourceCacheTilesetImages.cpp
-        src/Resource/ResourceCacheUIAccess.cpp
-        src/Resource/ResourceCacheViews.cpp
         src/Resource/ResourceCachePortrait.cpp
-        src/Resource/ResourceCacheLifecycle.cpp
         src/Resource/ResourceCacheSources.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
@@ -1550,7 +1229,6 @@ if(BUILD_GAME_CLIENT)
         src/Resource/PalDecoder.cpp
         src/Resource/TblDecoder.cpp
         src/Game/Map/ChkParser.cpp
-        src/Client/Entity.cpp
         src/Client/MapLoader.cpp
         src/Client/ClientRuntime.cpp
         src/Client/WorldEffects.cpp
@@ -1589,11 +1267,7 @@ if(BUILD_GAME_CLIENT)
         "src/Main/CampaignPresentation.cpp"
         "src/Main/CampaignText.cpp"
         "src/Main/GameMenuPresentation.cpp"
-        "src/Main/GameControllerAppApi.cpp"
-        "src/Main/GameControllerFrame.cpp"
-        "src/Main/GameControllerLifecycle.cpp"
-        "src/Main/GameControllerSessionApi.cpp"
-        "src/Main/GameControllerStartup.cpp"
+        "src/Main/GameController.cpp"
         "src/Main/GameGuiPresentation.cpp"
         "src/Main/GameGuiBootstrap.cpp"
         "src/Main/GameLoop/CursorTypes.cpp"
@@ -1798,17 +1472,7 @@ if(BUILD_PHASE3_RENDER_PIPELINE_TEST)
         src/Core/Utils/Logger.cpp
     )
 
-    target_include_directories(Phase3RenderPipelineTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(Phase3RenderPipelineTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(Phase3RenderPipelineTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(Phase3RenderPipelineTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(Phase3RenderPipelineTest)
 
     add_test(NAME Phase3RenderPipelineTest COMMAND Phase3RenderPipelineTest)
 endif()
@@ -1820,9 +1484,7 @@ option(BUILD_PHASE10_TO_13_ENGINE_MODERNIZATION_TEST "Build Phase 10-13 Godot/Un
 if(BUILD_PHASE10_TO_13_ENGINE_MODERNIZATION_TEST)
     add_executable(Phase10To13EngineModernizationTest
         tests/Regression/Phase10To13EngineModernizationTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1860,9 +1522,7 @@ option(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST "Build Phase 6 Godot/Unity
 if(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST)
     add_executable(Phase6EngineArchitectureRefactorTest
         tests/Regression/Phase6EngineArchitectureRefactorTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1891,9 +1551,7 @@ option(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST "Build Phase 5 JobSystem and CSR Sp
 if(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST)
     add_executable(Phase5JobSystemParallelTest
         tests/Regression/Phase5JobSystemParallelTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
@@ -1922,9 +1580,7 @@ option(BUILD_PHASE4_HUD_MVVM_BINDING_TEST "Build Phase 4 HUD MVVM reactive data-
 if(BUILD_PHASE4_HUD_MVVM_BINDING_TEST)
     add_executable(Phase4HudMvvmBindingTest
         tests/Regression/Phase4HudMvvmBindingTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
@@ -1946,17 +1602,7 @@ if(BUILD_PHASE4_HUD_MVVM_BINDING_TEST)
         src/UI/HudInfoPanelState.cpp
     )
 
-    target_include_directories(Phase4HudMvvmBindingTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(Phase4HudMvvmBindingTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(Phase4HudMvvmBindingTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(Phase4HudMvvmBindingTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    starcraft_configure_test_target(Phase4HudMvvmBindingTest)
 
     add_test(NAME Phase4HudMvvmBindingTest COMMAND Phase4HudMvvmBindingTest)
 endif()
@@ -1977,9 +1623,7 @@ option(BUILD_MODERN_ENGINE_VERIFICATION_TEST "Build modern engine & cloud assets
 if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
     add_executable(ModernEngineVerificationTest
         tests/Regression/ModernEngineVerificationTest.cpp
-        src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
-        src/Core/Utils/Logger.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
@@ -2039,271 +1683,114 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
 endif()
 
 # ============================================================================
-# Modular Engine Object Library (Task 1: Eliminate Redundant Compilation)
+# Modular Engine & Simulation Object Libraries (Eliminate Redundant Compilation)
 # ============================================================================
-add_library(StarCraftCoreObj OBJECT
-    src/Core/ECS/EntityManager.cpp
-    src/Core/ECS/SystemManager.cpp
-    src/Core/Utils/Logger.cpp
+
+add_library(StarCraftSimulationObj OBJECT
+    src/Game/AI/BehaviorTreeRuntime.cpp
+    src/Game/IScriptVM.cpp
+    src/Game/Map/ChkParser.cpp
+    src/Game/Map/Map.cpp
+    src/Game/Pathfinding/AStar.cpp
+    src/Game/Races/RaceDef.cpp
+    src/Game/Systems/AnimationSystem.cpp
+    src/Game/Systems/BuildingSystem.cpp
+    src/Game/Systems/BulletSystem.cpp
+    src/Game/Systems/CombatSystem.cpp
+    src/Game/Systems/CommandSystem.cpp
+    src/Game/Systems/DeclarativeAnimationPlayer.cpp
+    src/Game/Systems/FogOfWarSystem.cpp
+    src/Game/Systems/HarvestSystem.cpp
+    src/Game/Systems/MovementSystem.cpp
+    src/Game/Systems/NukeAndSpiderMineSystem.cpp
+    src/Game/Systems/ProductionSystem.cpp
+    src/Game/Systems/ProtossSystem.cpp
+    src/Game/Systems/SpellSystem.cpp
+    src/Game/Systems/TransportSystem.cpp
+    src/Game/Systems/UpgradeSystem.cpp
+    src/Game/Systems/ZergSystem.cpp
+    src/Resource/ModernAssetRegistry.cpp
 )
-target_include_directories(StarCraftCoreObj PUBLIC
+target_include_directories(StarCraftSimulationObj PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party
+)
+target_compile_definitions(StarCraftSimulationObj PRIVATE
+    SOKOL_DUMMY_BACKEND
+    _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
 )
 if(MSVC)
-    target_compile_options(StarCraftCoreObj PRIVATE /W4 /utf-8 /permissive-)
-    target_compile_definitions(StarCraftCoreObj PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(StarCraftSimulationObj PRIVATE /W4 /utf-8 /permissive-)
 else()
-    target_compile_options(StarCraftCoreObj PRIVATE -Wall -Wextra -Wpedantic -pthread)
+    target_compile_options(StarCraftSimulationObj PRIVATE -Wall -Wextra -Wpedantic -pthread)
 endif()
+
+function(starcraft_add_modern_phase_test TARGET_NAME TEST_SOURCE)
+    add_executable(${TARGET_NAME}
+        ${TEST_SOURCE}
+        $<TARGET_OBJECTS:StarCraftCoreObj>
+        $<TARGET_OBJECTS:StarCraftSimulationObj>
+        ${ARGN}
+    )
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party
+    )
+    target_compile_definitions(${TARGET_NAME} PRIVATE
+        SOKOL_DUMMY_BACKEND
+        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    if(MSVC)
+        target_compile_options(${TARGET_NAME} PRIVATE /W4 /utf-8 /permissive-)
+    else()
+        target_compile_options(${TARGET_NAME} PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(${TARGET_NAME} PRIVATE -pthread)
+    endif()
+    add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+    set_tests_properties(${TARGET_NAME} PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endfunction()
 
 option(BUILD_PHASE14_FULL_STACK_ENGINE_REFACTOR_TEST "Build Phase 14 full-stack engine modernization & rollback verification test" ON)
 if(BUILD_PHASE14_FULL_STACK_ENGINE_REFACTOR_TEST)
-    add_executable(Phase14FullStackEngineRefactorTest
-        tests/Regression/Phase14FullStackEngineRefactorTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/BuildingSystem.cpp
-        src/Game/Systems/BulletSystem.cpp
-        src/Game/Systems/CombatSystem.cpp
-        src/Game/Systems/CommandSystem.cpp
-        src/Game/Systems/FogOfWarSystem.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/NukeAndSpiderMineSystem.cpp
-        src/Game/Systems/ProductionSystem.cpp
-        src/Game/Systems/ProtossSystem.cpp
-        src/Game/Systems/SpellSystem.cpp
-        src/Game/Systems/TransportSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Systems/ZergSystem.cpp
-    )
-
-    target_include_directories(Phase14FullStackEngineRefactorTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party
-    )
-
-    target_compile_definitions(Phase14FullStackEngineRefactorTest PRIVATE
-        SOKOL_DUMMY_BACKEND
-        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-
-    if(MSVC)
-        target_compile_options(Phase14FullStackEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
-    else()
-        target_compile_options(Phase14FullStackEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
-        target_link_options(Phase14FullStackEngineRefactorTest PRIVATE -pthread)
-    endif()
-
-    add_test(NAME Phase14FullStackEngineRefactorTest COMMAND Phase14FullStackEngineRefactorTest)
+    starcraft_add_modern_phase_test(Phase14FullStackEngineRefactorTest
+        tests/Regression/Phase14FullStackEngineRefactorTest.cpp)
 endif()
-
 
 option(BUILD_PHASE15_TO_18_MODERN_ENGINE_REFACTOR_TEST "Build Phase 15-18 shared spatial broadphase, multi-world Protoss/Zerg, and generational Selection regression test" ON)
 if(BUILD_PHASE15_TO_18_MODERN_ENGINE_REFACTOR_TEST)
-    add_executable(Phase15To18ModernEngineRefactorTest
+    starcraft_add_modern_phase_test(Phase15To18ModernEngineRefactorTest
         tests/Regression/Phase15To18ModernEngineRefactorTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Client/Selection.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/BuildingSystem.cpp
-        src/Game/Systems/BulletSystem.cpp
-        src/Game/Systems/CombatSystem.cpp
-        src/Game/Systems/CommandSystem.cpp
-        src/Game/Systems/FogOfWarSystem.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/NukeAndSpiderMineSystem.cpp
-        src/Game/Systems/ProductionSystem.cpp
-        src/Game/Systems/ProtossSystem.cpp
-        src/Game/Systems/SpellSystem.cpp
-        src/Game/Systems/TransportSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Systems/ZergSystem.cpp
-    )
-
-    target_include_directories(Phase15To18ModernEngineRefactorTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party
-    )
-
-    target_compile_definitions(Phase15To18ModernEngineRefactorTest PRIVATE
-        SOKOL_DUMMY_BACKEND
-        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-
-    if(MSVC)
-        target_compile_options(Phase15To18ModernEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
-    else()
-        target_compile_options(Phase15To18ModernEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
-        target_link_options(Phase15To18ModernEngineRefactorTest PRIVATE -pthread)
-    endif()
-
-    add_test(NAME Phase15To18ModernEngineRefactorTest COMMAND Phase15To18ModernEngineRefactorTest)
+        src/Client/Selection.cpp)
 endif()
-
 
 option(BUILD_PHASE19_TO_22_MODERN_ENGINE_REFACTOR_TEST "Build Phase 19-22 CommandSystem/SpellSystem spatial broadphase, EntityRenderer retained CanvasItemRIDs, and cached queries regression test" ON)
 if(BUILD_PHASE19_TO_22_MODERN_ENGINE_REFACTOR_TEST)
-    add_executable(Phase19To22ModernEngineRefactorTest
+    starcraft_add_modern_phase_test(Phase19To22ModernEngineRefactorTest
         tests/Regression/Phase19To22ModernEngineRefactorTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Client/EntityRenderer.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/BuildingSystem.cpp
-        src/Game/Systems/BulletSystem.cpp
-        src/Game/Systems/CombatSystem.cpp
-        src/Game/Systems/CommandSystem.cpp
-        src/Game/Systems/FogOfWarSystem.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/NukeAndSpiderMineSystem.cpp
-        src/Game/Systems/ProductionSystem.cpp
-        src/Game/Systems/ProtossSystem.cpp
-        src/Game/Systems/SpellSystem.cpp
-        src/Game/Systems/TransportSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Systems/ZergSystem.cpp
-    )
-
-    target_include_directories(Phase19To22ModernEngineRefactorTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party
-    )
-
-    target_compile_definitions(Phase19To22ModernEngineRefactorTest PRIVATE
-        SOKOL_DUMMY_BACKEND
-        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-
-    if(MSVC)
-        target_compile_options(Phase19To22ModernEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
-    else()
-        target_compile_options(Phase19To22ModernEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
-        target_link_options(Phase19To22ModernEngineRefactorTest PRIVATE -pthread)
-    endif()
-
-    add_test(NAME Phase19To22ModernEngineRefactorTest COMMAND Phase19To22ModernEngineRefactorTest)
+        src/Client/EntityRenderer.cpp)
 endif()
-
 
 option(BUILD_PHASE23_TO_26_MODERN_ENGINE_REFACTOR_TEST "Build Phase 23-26 TriggerVM spatial broadphase, authoritative ECS save/load, and declarative animation bridge regression test" ON)
 if(BUILD_PHASE23_TO_26_MODERN_ENGINE_REFACTOR_TEST)
-    add_executable(Phase23To26ModernEngineRefactorTest
+    starcraft_add_modern_phase_test(Phase23To26ModernEngineRefactorTest
         tests/Regression/Phase23To26ModernEngineRefactorTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/AI/BehaviorTreeRuntime.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/BuildingSystem.cpp
-        src/Game/Systems/BulletSystem.cpp
-        src/Game/Systems/CombatSystem.cpp
-        src/Game/Systems/CommandSystem.cpp
-        src/Game/Systems/FogOfWarSystem.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/NukeAndSpiderMineSystem.cpp
-        src/Game/Systems/ProductionSystem.cpp
-        src/Game/Systems/ProtossSystem.cpp
-        src/Game/Systems/SpellSystem.cpp
-        src/Game/Systems/TransportSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Systems/ZergSystem.cpp
         src/Game/Trigger/TriggerVM.cpp
-        src/Main/GameLoop/GameSaveState.cpp
-    )
-
-    target_include_directories(Phase23To26ModernEngineRefactorTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party
-    )
-
-    target_compile_definitions(Phase23To26ModernEngineRefactorTest PRIVATE
-        SOKOL_DUMMY_BACKEND
-        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-
-    if(MSVC)
-        target_compile_options(Phase23To26ModernEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
-    else()
-        target_compile_options(Phase23To26ModernEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
-        target_link_options(Phase23To26ModernEngineRefactorTest PRIVATE -pthread)
-    endif()
-
-    add_test(NAME Phase23To26ModernEngineRefactorTest COMMAND Phase23To26ModernEngineRefactorTest)
+        src/Main/GameLoop/GameSaveState.cpp)
 endif()
 
 option(BUILD_PHASE27_TO_30_MODERN_ENGINE_REFACTOR_TEST "Build Phase 27-30 Movement, Harvest, Production, Selection, CursorManager, and Transport/Upgrade spatial & cached queries regression test" ON)
 if(BUILD_PHASE27_TO_30_MODERN_ENGINE_REFACTOR_TEST)
-    add_executable(Phase27To30ModernEngineRefactorTest
+    starcraft_add_modern_phase_test(Phase27To30ModernEngineRefactorTest
         tests/Regression/Phase27To30ModernEngineRefactorTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Client/Selection.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/BuildingSystem.cpp
-        src/Game/Systems/BulletSystem.cpp
-        src/Game/Systems/CombatSystem.cpp
-        src/Game/Systems/CommandSystem.cpp
-        src/Game/Systems/FogOfWarSystem.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/NukeAndSpiderMineSystem.cpp
-        src/Game/Systems/ProductionSystem.cpp
-        src/Game/Systems/ProtossSystem.cpp
-        src/Game/Systems/SpellSystem.cpp
-        src/Game/Systems/TransportSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorManager.cpp
-        src/Main/GameLoop/CursorTypes.cpp
-    )
+        src/Main/GameLoop/CursorTypes.cpp)
+endif()
 
-    target_include_directories(Phase27To30ModernEngineRefactorTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/third_party
-    )
-
-    target_compile_definitions(Phase27To30ModernEngineRefactorTest PRIVATE
-        SOKOL_DUMMY_BACKEND
-        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
-    )
-
-    if(MSVC)
-        target_compile_options(Phase27To30ModernEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
-    else()
-        target_compile_options(Phase27To30ModernEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
-        target_link_options(Phase27To30ModernEngineRefactorTest PRIVATE -pthread)
-    endif()
-
-    add_test(NAME Phase27To30ModernEngineRefactorTest COMMAND Phase27To30ModernEngineRefactorTest)
+option(BUILD_PHASE31_TO_36_ENGINE_FOUNDATION_TEST "Build Phase 31-36 general-purpose Engine Foundation, GenericWorldSnapshot, EngineApp, and cloud SystemAssetBridge test" ON)
+if(BUILD_PHASE31_TO_36_ENGINE_FOUNDATION_TEST)
+    starcraft_add_modern_phase_test(Phase31To36EngineFoundationAndSimplificationTest
+        tests/Regression/Phase31To36EngineFoundationAndSimplificationTest.cpp)
 endif()

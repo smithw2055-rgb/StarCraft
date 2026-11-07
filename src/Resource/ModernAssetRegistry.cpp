@@ -478,9 +478,16 @@ AssetCrossVerificationReport ModernAssetRegistry::CrossVerifyWithBinaryAssets(
 {
     AssetCrossVerificationReport Report;
 
+    const auto& BinUnits = BinaryLoader.GetUnits();
+    const auto& BinFlingies = BinaryLoader.GetFlingy();
+    const auto& BinSprites = BinaryLoader.GetSprites();
+    const auto& BinWeapons = BinaryLoader.GetWeapons();
+    const auto& BinImages = BinaryLoader.GetImages();
+    const auto& BinRelations = BinaryLoader.GetImageRelations();
+
     // 1. Cross-verify all 228 Units (units.dat + flingy.dat + sprites.dat + images.dat)
     for (const auto& ModUnit : mUnits) {
-        const UnitEntry* BinUnit = BinaryLoader.FindUnitByID(ModUnit.UnitID);
+        const UnitEntry* BinUnit = ModUnit.UnitID < BinUnits.size() ? &BinUnits[ModUnit.UnitID] : nullptr;
         if (!BinUnit) {
             ++Report.UnitMismatches;
             Report.Diagnostics.push_back("Missing binary unit ID " + std::to_string(ModUnit.UnitID));
@@ -494,13 +501,13 @@ AssetCrossVerificationReport ModernAssetRegistry::CrossVerifyWithBinaryAssets(
             Report.Diagnostics.push_back("Unit stat/flingy mismatch on ID " + std::to_string(ModUnit.UnitID));
         }
 
-        const FlingyEntry* BinFlingy = BinaryLoader.FindFlingyByID(ModUnit.FlingyID);
+        const FlingyEntry* BinFlingy = ModUnit.FlingyID < BinFlingies.size() ? &BinFlingies[ModUnit.FlingyID] : nullptr;
         if (BinFlingy && BinFlingy->SpriteID != ModUnit.SpriteID) {
             ++Report.UnitMismatches;
             Report.Diagnostics.push_back("Flingy->Sprite mismatch on Unit ID " + std::to_string(ModUnit.UnitID));
         }
 
-        const SpriteEntry* BinSprite = BinaryLoader.FindSpriteByID(ModUnit.SpriteID);
+        const SpriteEntry* BinSprite = ModUnit.SpriteID < BinSprites.size() ? &BinSprites[ModUnit.SpriteID] : nullptr;
         if (BinSprite && BinSprite->ImageID != ModUnit.ImageID) {
             ++Report.UnitMismatches;
             Report.Diagnostics.push_back("Sprite->Image mismatch on Unit ID " + std::to_string(ModUnit.UnitID));
@@ -509,7 +516,7 @@ AssetCrossVerificationReport ModernAssetRegistry::CrossVerifyWithBinaryAssets(
 
     // 2. Cross-verify all 130 Weapons (weapons.dat)
     for (const auto& ModWeapon : mWeapons) {
-        const WeaponEntry* BinWeapon = BinaryLoader.FindWeaponByID(ModWeapon.WeaponID);
+        const WeaponEntry* BinWeapon = ModWeapon.WeaponID < BinWeapons.size() ? &BinWeapons[ModWeapon.WeaponID] : nullptr;
         if (!BinWeapon) {
             ++Report.WeaponMismatches;
             continue;
@@ -527,7 +534,7 @@ AssetCrossVerificationReport ModernAssetRegistry::CrossVerifyWithBinaryAssets(
 
     // 3. Cross-verify all 999 HD Images (images.dat + images.tbl + images.rel)
     for (const auto& ModImg : mHDImages) {
-        const ImageEntry* BinImg = BinaryLoader.FindImageByID(ModImg.ImageID);
+        const ImageEntry* BinImg = ModImg.ImageID < BinImages.size() ? &BinImages[ModImg.ImageID] : nullptr;
         if (!BinImg) {
             ++Report.ImageMismatches;
             continue;
@@ -540,7 +547,7 @@ AssetCrossVerificationReport ModernAssetRegistry::CrossVerifyWithBinaryAssets(
             Report.Diagnostics.push_back("Image mismatch on ID " + std::to_string(ModImg.ImageID));
         }
 
-        const ImageRelationEntry* BinRel = BinaryLoader.FindImageRelationByID(ModImg.ImageID);
+        const ImageRelationEntry* BinRel = ModImg.ImageID < BinRelations.size() ? &BinRelations[ModImg.ImageID] : nullptr;
         if (BinRel) {
             ++Report.ImageRelationsChecked;
             if (BinRel->Kind != ModImg.RoleFlags || BinRel->ParentImageID != ModImg.ParentImageID) {

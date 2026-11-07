@@ -31,6 +31,18 @@ namespace
     CombatSystem::AllianceChecker gAllianceChecker;
     static const Game::Pathfinding::NavigationSpatialHash* sActiveCombatSpatialHash = nullptr;
     static Game::Map::GameMap* sCombatMap = nullptr;
+
+    const Game::Map::GameMap* ResolveCombatMap(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* SimCtx = Game::SimulationContext::TryGet(EM))
+        {
+            if (SimCtx->Map)
+                return SimCtx->Map;
+            if (SimCtx->MutableMap)
+                return SimCtx->MutableMap;
+        }
+        return sCombatMap;
+    }
     constexpr float kAutoTargetLockSeconds = 2.5f;
     constexpr float kInvalidDirectAttackAutoAcquireDelay = 0.35f;
     constexpr int kSubPointsPerPoint = 256;
@@ -682,10 +694,10 @@ static bool MovesInAir(Core::ECS::EntityManager& EM, int EntityID)
     Core::Math::Vec2 Offset = Forward * (-StandOff) + Lateral * LateralOffset;
     const Core::Math::Vec2 CandidatePos = TargetTrans->Position + Offset;
 
-    if (sCombatMap)
+    if (const auto* ActiveMap = ResolveCombatMap(EM))
     {
-        const int TargetHeight = sCombatMap->GetGroundHeightAtWorld(TargetTrans->Position);
-        const int CandidateHeight = sCombatMap->GetGroundHeightAtWorld(CandidatePos);
+        const int TargetHeight = ActiveMap->GetGroundHeightAtWorld(TargetTrans->Position);
+        const int CandidateHeight = ActiveMap->GetGroundHeightAtWorld(CandidatePos);
         if (TargetHeight != CandidateHeight)
             return TargetTrans->Position;
 
@@ -703,7 +715,7 @@ static bool MovesInAir(Core::ECS::EntityManager& EM, int EntityID)
             const int R = (int)SelfRadius;
             Footprint = {R, R, R, R};
         }
-        if (!sCombatMap->GetNavigationGrid().HasLineOfSightWorld(
+        if (!ActiveMap->GetNavigationGrid().HasLineOfSightWorld(
                 TargetTrans->Position, CandidatePos, Footprint, TargetID, -1))
         {
             return TargetTrans->Position;
@@ -1555,10 +1567,11 @@ int CombatSystem::FindNearestEnemy(Core::ECS::EntityManager& EM, int EntityID, f
         const float WeaponRangePixels = MyCombat
             ? EffectiveAttackRangePixels(EM, EntityID, *MyCombat, ID)
             : 0.0f;
+        const auto* ActiveMap = ResolveCombatMap(EM);
         if (Dist > WeaponRangePixels &&
-            sCombatMap &&
+            ActiveMap &&
             !MovesInAir(EM, DistOriginID) &&
-            !sCombatMap->GetNavigationGrid().AreWorldPositionsTerrainConnected(
+            !ActiveMap->GetNavigationGrid().AreWorldPositionsTerrainConnected(
                 MyTrans->Position, TargetTrans->Position))
         {
             continue;
@@ -2305,7 +2318,7 @@ void CombatSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr.GetEntityManager();
 
     // Brood War restores 7/256 shield points per logic frame (24 Hz).
-    auto ShieldUnits = EM.GetEntitiesWith<UnitComponent>();
+    const auto& ShieldUnits = EM.GetEntitiesWithCached<UnitComponent>();
     for (int ID : ShieldUnits)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);

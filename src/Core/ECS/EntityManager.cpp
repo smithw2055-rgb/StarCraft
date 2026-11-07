@@ -11,6 +11,51 @@ EntityManager::~EntityManager()
         sActiveWorld = nullptr;
 }
 
+void EntityManager::ClearAllEntitiesAndPools()
+{
+    for (size_t CompID = 0; CompID < MaxComponents; ++CompID)
+    {
+        if (mPools[CompID])
+            mPools[CompID]->Clear();
+    }
+    mActiveEntities.clear();
+    mActiveEntityIndices.clear();
+    mAlive.clear();
+    mGenerations.clear();
+    mMasks.clear();
+    mFreeIds.clear();
+    mQueryCache.clear();
+    mLivingEntityCount = 0;
+    mLastEntityId = 0;
+    ++mMaskMutationVersion;
+}
+
+void EntityManager::RestoreEntityAllocatorState(EntityID LastEntityId,
+                                                const std::vector<uint32_t>& Generations,
+                                                const std::deque<EntityID>& FreeIds)
+{
+    if (LastEntityId > mLastEntityId)
+        mLastEntityId = LastEntityId;
+
+    const size_t TargetSize = std::max({mGenerations.size(), Generations.size(), static_cast<size_t>(mLastEntityId) + 1});
+    if (mMasks.size() < TargetSize)
+        mMasks.resize(TargetSize);
+    if (mAlive.size() < TargetSize)
+        mAlive.resize(TargetSize, false);
+    if (mGenerations.size() < TargetSize)
+        mGenerations.resize(TargetSize, 0);
+    if (mActiveEntityIndices.size() < TargetSize)
+        mActiveEntityIndices.resize(TargetSize, SIZE_MAX);
+
+    for (size_t i = 0; i < Generations.size(); ++i)
+    {
+        if (Generations[i] != 0)
+            mGenerations[i] = Generations[i];
+    }
+
+    mFreeIds = FreeIds;
+}
+
 EntityID EntityManager::CreateEntity()
 {
     constexpr size_t FreeIdReuseThreshold = 1024;

@@ -25,7 +25,10 @@ namespace
 {
     static thread_local Game::Pathfinding::NavigationSpatialHash sBulletSpatialHash;
     static const Game::Pathfinding::NavigationSpatialHash* sActiveBulletSpatialHash = nullptr;
-    static int sActiveHaloRockets = 0;
+    struct BulletWorldStateResource
+    {
+        int ActiveHaloRockets = 0;
+    };
 
     template<typename Fn>
     static void ForNearbyUnits(Core::ECS::EntityManager& EM,
@@ -522,12 +525,13 @@ int BulletSystem::SpawnBullet(Core::ECS::EntityManager& EM,
     }
     if (Visual && Visual->ImageID == kValkyrieHaloRocketImageID)
     {
-        if (sActiveHaloRockets >= kMaxActiveHaloRockets)
+        auto& BulletState = EM.Context().GetOrCreateResource<BulletWorldStateResource>();
+        if (BulletState.ActiveHaloRockets >= kMaxActiveHaloRockets)
         {
             EM.DestroyEntity(BulletID);
             return -1;
         }
-        ++sActiveHaloRockets;
+        ++BulletState.ActiveHaloRockets;
     }
     if (Visual)
     {
@@ -804,13 +808,18 @@ void BulletSystem::Update(float DeltaTime)
         ~BulletSpatialScope() { sActiveBulletSpatialHash = nullptr; }
     } Scope;
 
-    sActiveHaloRockets = 0;
-    auto Bullets = EM.GetEntitiesWith<TransformComponent, BulletComponent>();
-    for (int ID : Bullets)
+    auto& BulletState = EM.Context().GetOrCreateResource<BulletWorldStateResource>();
+    BulletState.ActiveHaloRockets = 0;
+    static thread_local std::vector<int> sBulletsScratch;
+    const auto& CachedBullets = EM.GetEntitiesWithCached<TransformComponent, BulletComponent>();
+    sBulletsScratch.assign(CachedBullets.begin(), CachedBullets.end());
+    for (int ID : sBulletsScratch)
     {
+        if (!EM.IsAlive(ID))
+            continue;
         const auto* Render = EM.GetComponent<RenderComponent>(ID);
         if (Render && Render->ImageID == kValkyrieHaloRocketImageID)
-            ++sActiveHaloRockets;
+            ++BulletState.ActiveHaloRockets;
         UpdateBullet(EM, ID, DeltaTime);
     }
 
