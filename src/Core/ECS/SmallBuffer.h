@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -101,6 +102,7 @@ struct SmallBuffer
     template <typename... Args>
     constexpr T& emplace_back(Args&&... InArgs) noexcept
     {
+        assert(mCount < N && "SmallBuffer::emplace_back capacity overflow");
         if (mCount < N)
         {
             mElements[mCount] = T{std::forward<Args>(InArgs)...};

@@ -1,4 +1,5 @@
 #include "Game/Systems/BulletSystem.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/IScriptVM.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/DeathEvents.h"
@@ -796,15 +797,8 @@ void BulletSystem::Update(float DeltaTime)
 
     auto& EM = mSystemMgr.GetEntityManager();
 
-    sBulletSpatialHash.Clear();
-    auto UnitEntities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-    for (int UID : UnitEntities)
-    {
-        if (auto* T = EM.GetComponent<TransformComponent>(UID))
-            sBulletSpatialHash.Insert(UID, T->Position);
-    }
-    sBulletSpatialHash.FinalizeCSR();
-    sActiveBulletSpatialHash = &sBulletSpatialHash;
+    auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    sActiveBulletSpatialHash = &SharedSpatial.AllUnitsHash;
     struct BulletSpatialScope
     {
         ~BulletSpatialScope() { sActiveBulletSpatialHash = nullptr; }

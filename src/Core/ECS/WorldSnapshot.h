@@ -74,6 +74,18 @@ struct EntityStateRecord {
 
     bool HasMorph = false;
     Game::Components::MorphComponent Morph{};
+
+    bool HasSiegeTransition = false;
+    Game::Components::SiegeTransitionComponent SiegeTransition{};
+
+    bool HasSpiderMine = false;
+    Game::Components::SpiderMineComponent SpiderMine{};
+
+    bool HasNuke = false;
+    Game::Components::NukeComponent Nuke{};
+
+    bool HasArchonWarp = false;
+    Game::Components::ArchonWarpComponent ArchonWarp{};
 };
 
 struct WorldDeterministicSnapshot {
@@ -97,6 +109,10 @@ public:
                 Hash *= 16777619u;
             }
         };
+        auto MixFloat = [&](float Value) {
+            const float Canonical = (Value == 0.0f) ? 0.0f : Value;
+            MixBytes(&Canonical, sizeof(float));
+        };
 
         MixBytes(&FrameNumber, sizeof(FrameNumber));
 
@@ -118,9 +134,9 @@ public:
             MixBytes(&Gen, sizeof(Gen));
 
             if (const auto* T = EM.GetComponent<Game::Components::TransformComponent>(Id)) {
-                MixBytes(&T->Position.X, sizeof(float));
-                MixBytes(&T->Position.Y, sizeof(float));
-                MixBytes(&T->Rotation, sizeof(float));
+                MixFloat(T->Position.X);
+                MixFloat(T->Position.Y);
+                MixFloat(T->Rotation);
             }
             if (const auto* U = EM.GetComponent<Game::Components::UnitComponent>(Id)) {
                 MixBytes(&U->ChkUnitID, sizeof(int));
@@ -134,16 +150,23 @@ public:
             }
             if (const auto* C = EM.GetComponent<Game::Components::CombatComponent>(Id)) {
                 MixBytes(&C->TargetEntityID, sizeof(int));
-                MixBytes(&C->CooldownRemaining, sizeof(float));
+                MixFloat(C->CooldownRemaining);
             }
             if (const auto* Cmd = EM.GetComponent<Game::Components::CommandComponent>(Id)) {
                 MixBytes(&Cmd->CurrentCommand, sizeof(Cmd->CurrentCommand));
-                MixBytes(&Cmd->TargetPosition.X, sizeof(float));
-                MixBytes(&Cmd->TargetPosition.Y, sizeof(float));
+                MixFloat(Cmd->TargetPosition.X);
+                MixFloat(Cmd->TargetPosition.Y);
                 MixBytes(&Cmd->TargetEntityID, sizeof(int));
                 MixBytes(&Cmd->CurrentOrderIndex, sizeof(int));
                 const uint32_t OrderCount = static_cast<uint32_t>(Cmd->Orders.size());
                 MixBytes(&OrderCount, sizeof(OrderCount));
+                for (const auto& Ord : Cmd->Orders) {
+                    MixBytes(&Ord.Type, sizeof(Ord.Type));
+                    MixFloat(Ord.TargetPosition.X);
+                    MixFloat(Ord.TargetPosition.Y);
+                    MixBytes(&Ord.TargetEntityID, sizeof(int));
+                    MixBytes(&Ord.AbilityID, sizeof(int));
+                }
             }
             if (const auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(Id)) {
                 MixBytes(&Path->HasFixedPosition, sizeof(bool));
@@ -156,10 +179,14 @@ public:
                 MixBytes(&Path->PathIndex, sizeof(int));
                 const uint32_t WaypointCount = static_cast<uint32_t>(Path->Path.size());
                 MixBytes(&WaypointCount, sizeof(WaypointCount));
+                for (const auto& Wp : Path->Path) {
+                    MixFloat(Wp.X);
+                    MixFloat(Wp.Y);
+                }
             }
             if (const auto* B = EM.GetComponent<Game::Components::BuildingComponent>(Id)) {
                 MixBytes(&B->BuildingDefID, sizeof(int));
-                MixBytes(&B->BuildProgress, sizeof(float));
+                MixFloat(B->BuildProgress);
                 MixBytes(&B->UnderConstruction, sizeof(bool));
                 MixBytes(&B->IsLifted, sizeof(bool));
                 MixBytes(&B->LarvaCount, sizeof(int));
@@ -179,7 +206,7 @@ public:
                 MixBytes(&H->ReturnBuildingID, sizeof(int));
             }
             if (const auto* Prod = EM.GetComponent<Game::Components::ProductionComponent>(Id)) {
-                MixBytes(&Prod->TrainingProgress, sizeof(float));
+                MixFloat(Prod->TrainingProgress);
                 MixBytes(&Prod->CurrentTrainingUnitDefID, sizeof(int));
                 const uint16_t QSize = static_cast<uint16_t>(Prod->Queue.size());
                 MixBytes(&QSize, sizeof(QSize));
@@ -192,12 +219,14 @@ public:
                 MixBytes(&Bul->SourceEntityID, sizeof(int));
                 MixBytes(&Bul->TargetEntityID, sizeof(int));
                 MixBytes(&Bul->BaseDamage, sizeof(int));
-                MixBytes(&Bul->LifetimeRemaining, sizeof(float));
+                MixFloat(Bul->LifetimeRemaining);
                 MixBytes(&Bul->HasHit, sizeof(bool));
             }
             if (const auto* Status = EM.GetComponent<Game::Components::StatusEffectComponent>(Id)) {
                 MixBytes(Status->ActiveEffects, sizeof(Status->ActiveEffects));
-                MixBytes(Status->EffectTimers, sizeof(Status->EffectTimers));
+                for (int i = 0; i < Game::Components::StatusEffectComponent::kMaxEffects; ++i) {
+                    MixFloat(Status->EffectTimers[i]);
+                }
             }
             if (const auto* Cloak = EM.GetComponent<Game::Components::CloakComponent>(Id)) {
                 MixBytes(&Cloak->IsCloaked, sizeof(bool));
@@ -217,8 +246,31 @@ public:
             }
             if (const auto* Morph = EM.GetComponent<Game::Components::MorphComponent>(Id)) {
                 MixBytes(&Morph->MorphTargetDefID, sizeof(int));
-                MixBytes(&Morph->MorphTimer, sizeof(float));
+                MixFloat(Morph->MorphTimer);
                 MixBytes(&Morph->IsMorphing, sizeof(bool));
+            }
+            if (const auto* Siege = EM.GetComponent<Game::Components::SiegeTransitionComponent>(Id)) {
+                MixBytes(&Siege->Active, sizeof(bool));
+                MixBytes(&Siege->TargetSieged, sizeof(bool));
+                MixBytes(&Siege->Stage, sizeof(int));
+                MixFloat(Siege->Elapsed);
+            }
+            if (const auto* Mine = EM.GetComponent<Game::Components::SpiderMineComponent>(Id)) {
+                MixBytes(&Mine->IsPlaced, sizeof(bool));
+                MixBytes(&Mine->IsBurrowed, sizeof(bool));
+                MixBytes(&Mine->IsTriggered, sizeof(bool));
+                MixBytes(&Mine->ChasingEntityID, sizeof(int));
+            }
+            if (const auto* Nuke = EM.GetComponent<Game::Components::NukeComponent>(Id)) {
+                MixBytes(&Nuke->Armed, sizeof(bool));
+                MixBytes(&Nuke->Launched, sizeof(bool));
+                MixFloat(Nuke->FlightTimer);
+            }
+            if (const auto* Warp = EM.GetComponent<Game::Components::ArchonWarpComponent>(Id)) {
+                MixBytes(&Warp->PartnerEntityID, sizeof(int));
+                MixBytes(&Warp->IsDarkArchon, sizeof(bool));
+                MixFloat(Warp->WarpTimer);
+                MixBytes(&Warp->IsWarping, sizeof(bool));
             }
         }
         return Hash;
@@ -312,6 +364,22 @@ public:
                 Rec.HasMorph = true;
                 Rec.Morph = *Morph;
             }
+            if (const auto* Siege = EM.GetComponent<Game::Components::SiegeTransitionComponent>(Id)) {
+                Rec.HasSiegeTransition = true;
+                Rec.SiegeTransition = *Siege;
+            }
+            if (const auto* Mine = EM.GetComponent<Game::Components::SpiderMineComponent>(Id)) {
+                Rec.HasSpiderMine = true;
+                Rec.SpiderMine = *Mine;
+            }
+            if (const auto* Nuke = EM.GetComponent<Game::Components::NukeComponent>(Id)) {
+                Rec.HasNuke = true;
+                Rec.Nuke = *Nuke;
+            }
+            if (const auto* Warp = EM.GetComponent<Game::Components::ArchonWarpComponent>(Id)) {
+                Rec.HasArchonWarp = true;
+                Rec.ArchonWarp = *Warp;
+            }
             Snap.Entities.push_back(std::move(Rec));
         }
 
@@ -389,6 +457,18 @@ public:
             }
             if (Rec.HasMorph) {
                 EM.AddComponent<Game::Components::MorphComponent>(NewId) = Rec.Morph;
+            }
+            if (Rec.HasSiegeTransition) {
+                EM.AddComponent<Game::Components::SiegeTransitionComponent>(NewId) = Rec.SiegeTransition;
+            }
+            if (Rec.HasSpiderMine) {
+                EM.AddComponent<Game::Components::SpiderMineComponent>(NewId) = Rec.SpiderMine;
+            }
+            if (Rec.HasNuke) {
+                EM.AddComponent<Game::Components::NukeComponent>(NewId) = Rec.Nuke;
+            }
+            if (Rec.HasArchonWarp) {
+                EM.AddComponent<Game::Components::ArchonWarpComponent>(NewId) = Rec.ArchonWarp;
             }
         }
     }

@@ -252,7 +252,7 @@ void FogOfWarSystem::Update(float DeltaTime)
     ++mRevision;
 
     auto& EM = mSystemMgr.GetEntityManager();
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    const auto& Units = EM.GetEntitiesWithCached<TransformComponent, UnitComponent>();
 
     // Partition vision emitter stamps per player so each player's fog + detector
     // grid slice can be decayed and rasterized in parallel with zero lock contention.
@@ -334,7 +334,7 @@ void FogOfWarSystem::Update(float DeltaTime)
         }
     }
 
-    auto RevealAreas = EM.GetEntitiesWith<TransformComponent, RevealAreaComponent>();
+    const auto& RevealAreas = EM.GetEntitiesWithCached<TransformComponent, RevealAreaComponent>();
     for (auto ID : RevealAreas)
     {
         auto* Trans = EM.GetComponent<TransformComponent>(ID);

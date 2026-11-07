@@ -1,8 +1,10 @@
 #include "Game/Systems/ProtossSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/ProtossPower.h"
 #include "Game/Races/RaceDef.h"
+#include "Game/SimulationContext.h"
 #include "Game/Systems/ProductionSystem.h"
 #include "Core/Utils/Logger.h"
 
@@ -16,6 +18,7 @@ Game::Map::GameMap* ProtossSystem::sMap = nullptr;
 
 ProtossSystem::ProtossSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map)
     : mSystemMgr(SysMgr)
+    , mInstanceMap(Map)
 {
     sMap = Map;
 }
@@ -25,14 +28,40 @@ void ProtossSystem::SetMap(Game::Map::GameMap* Map)
     sMap = Map;
 }
 
-bool ProtossSystem::HasPower(int TileX, int TileY)
+const Game::Map::GameMap* ProtossSystem::ResolveMap(const Core::ECS::EntityManager& EM) const
 {
-    if (!sMap) return false;
-    if (TileX < 0 || TileX >= sMap->GetWidth() ||
-        TileY < 0 || TileY >= sMap->GetHeight())
+    if (const auto* Ctx = Game::SimulationContext::TryGet(EM))
+    {
+        if (Ctx->Map)
+            return Ctx->Map;
+        if (Ctx->MutableMap)
+            return Ctx->MutableMap;
+    }
+    if (mInstanceMap)
+        return mInstanceMap;
+    return sMap;
+}
+
+bool ProtossSystem::HasPower(const Core::ECS::EntityManager& EM, int TileX, int TileY)
+{
+    if (const auto* PowerRes = EM.GetResource<ProtossPowerGridResource>())
+        return PowerRes->HasPower(TileX, TileY);
+    return false;
+}
+
+bool ProtossSystem::HasPower(int TileX, int TileY) const
+{
+    const auto& EM = mSystemMgr.GetEntityManager();
+    if (const auto* PowerRes = EM.GetResource<ProtossPowerGridResource>())
+        return PowerRes->HasPower(TileX, TileY);
+
+    const auto* EffectiveMap = ResolveMap(EM);
+    if (!EffectiveMap)
+        return false;
+    if (TileX < 0 || TileX >= EffectiveMap->GetWidth() ||
+        TileY < 0 || TileY >= EffectiveMap->GetHeight())
         return false;
 
-    // Check the power grid cache
     if (TileX >= 0 && TileX < mPowerGridW && TileY >= 0 && TileY < mPowerGridH)
         return mPowerGrid[TileY * mPowerGridW + TileX];
 
@@ -43,6 +72,7 @@ void ProtossSystem::Update(float DeltaTime)
 {
     if (DeltaTime <= 0.0f) return;
     auto& EM = mSystemMgr.GetEntityManager();
+    EM.ActivateWorld();
     UpdatePowerGrid(EM);
     RechargeShields(EM, DeltaTime);
     UpdateArchonWarps(EM, DeltaTime);
@@ -50,7 +80,7 @@ void ProtossSystem::Update(float DeltaTime)
 
 void ProtossSystem::CheckPowerStatus(Core::ECS::EntityManager& EM)
 {
-    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent, UnitComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<TransformComponent, BuildingComponent, UnitComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
@@ -62,17 +92,17 @@ void ProtossSystem::CheckPowerStatus(Core::ECS::EntityManager& EM)
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-        B->HasPylonPower = HasPower(TX, TY);
+        B->HasPylonPower = HasPower(EM, TX, TY);
     }
 }
 
 void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
 {
-    if (!sMap) return;
-    int W = sMap->GetWidth();
-    int H = sMap->GetHeight();
+    const auto* EffectiveMap = ResolveMap(EM);
+    if (!EffectiveMap) return;
+    int W = EffectiveMap->GetWidth();
+    int H = EffectiveMap->GetHeight();
 
-    // Initialize/reinit power grid cache
     if ((int)mPowerGrid.size() != W * H)
     {
         mPowerGrid.resize(W * H, false);
@@ -82,9 +112,19 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
 
     std::fill(mPowerGrid.begin(), mPowerGrid.end(), false);
 
+    auto& PowerRes = EM.GetOrCreateResource<ProtossPowerGridResource>();
+    if (PowerRes.Width != W || PowerRes.Height != H ||
+        PowerRes.PowerGrid.size() != static_cast<size_t>(W * H))
+    {
+        PowerRes.Width = W;
+        PowerRes.Height = H;
+        PowerRes.PowerGrid.resize(static_cast<size_t>(W * H), 0u);
+    }
+    std::fill(PowerRes.PowerGrid.begin(), PowerRes.PowerGrid.end(), static_cast<uint8_t>(0));
+
     // Pylon power is a four-tile circle around its center.
     constexpr int kPylonChkID = 156;
-    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
@@ -109,7 +149,10 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
                     continue;
                 int X = TX + DX, Y = TY + DY;
                 if (X >= 0 && X < W && Y >= 0 && Y < H)
+                {
                     mPowerGrid[Y * W + X] = true;
+                    PowerRes.PowerGrid[static_cast<size_t>(Y * W + X)] = 1u;
+                }
             }
         }
     }
@@ -123,19 +166,18 @@ void ProtossSystem::UpdatePowerGrid(Core::ECS::EntityManager& EM)
 
         int TX = (int)(T->Position.X / 32.0f);
         int TY = (int)(T->Position.Y / 32.0f);
-        B->HasPylonPower = HasPower(TX, TY);
+        B->HasPylonPower = PowerRes.HasPower(TX, TY);
     }
 }
 
 void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTime)
 {
-    // Shield Battery: consume energy to recharge nearby units
-    auto Batteries = EM.GetEntitiesWith<TransformComponent, UnitComponent, BuildingComponent>();
+    const auto& Batteries = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, BuildingComponent>();
     if (Batteries.empty())
         return;
 
-    std::vector<int> AllUnits;
-    bool QueriedUnits = false;
+    const Game::Pathfinding::SpatialIndexResource* SpatialRes = nullptr;
+    static thread_local std::vector<int> sNearbyUnits;
 
     for (int Bid : Batteries)
     {
@@ -147,21 +189,25 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
         if (BU->EnergyPoints <= 0) continue;
         if (BB->UnderConstruction || (BB->RequiresPylon && !BB->HasPylonPower)) continue;
 
-        // Find nearby friendly units that need shield recharge
-        float RechargeRate = 26.6f * DeltaTime; // ~26.6 shield per second
-        float EnergyDrain = 10.0f * DeltaTime;  // energy cost per second
+        float RechargeRate = 26.6f * DeltaTime;
+        float EnergyDrain = 10.0f * DeltaTime;
 
         auto PlayerComp = EM.GetComponent<PlayerComponent>(Bid);
         int BatteryOwner = PlayerComp ? PlayerComp->PlayerID : -1;
         if (BatteryOwner < 0) continue;
 
-        if (!QueriedUnits)
-        {
-            AllUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-            QueriedUnits = true;
-        }
+        if (!SpatialRes)
+            SpatialRes = &Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
 
-        for (int Uid : AllUnits)
+        constexpr float kRechargeRadius = 128.0f;
+        SpatialRes->AllUnitsHash.QueryInto(
+            BT->Position.X - kRechargeRadius,
+            BT->Position.Y - kRechargeRadius,
+            BT->Position.X + kRechargeRadius,
+            BT->Position.Y + kRechargeRadius,
+            sNearbyUnits);
+
+        for (int Uid : sNearbyUnits)
         {
             if (Uid == Bid) continue;
             if (BU->EnergyPoints <= 0) break;
@@ -175,9 +221,8 @@ void ProtossSystem::RechargeShields(Core::ECS::EntityManager& EM, float DeltaTim
             if (TU->MaxShieldPoints <= 0) continue;
 
             float Dist = BT->Position.DistanceTo(TT->Position);
-            if (Dist > 128.0f) continue; // ~4 tile range
+            if (Dist > kRechargeRadius) continue;
 
-            // Recharge shields
             int RechargeAmount = (int)std::min(RechargeRate, (float)(TU->MaxShieldPoints - TU->ShieldPoints));
             TU->ShieldPoints = std::min(TU->MaxShieldPoints, TU->ShieldPoints + RechargeAmount);
             BU->EnergyPoints = std::max(0, BU->EnergyPoints - (int)EnergyDrain);
@@ -270,7 +315,6 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     {
         if (auto* ArchonUnit = EM.GetComponent<UnitComponent>(ArchonID))
         {
-            // In Brood War, newly morphed Archons start with low shields (10) and charge up
             ArchonUnit->ShieldPoints = 10;
             ArchonUnit->ShieldSubDamage = 0;
             ArchonUnit->ShieldRegenAccumulator = 0.0f;
@@ -280,7 +324,6 @@ bool ProtossSystem::MorphArchon(Core::ECS::EntityManager& EM,
     EM.RemoveComponent<ArchonWarpComponent>(TemplarAID);
     EM.RemoveComponent<ArchonWarpComponent>(TemplarBID);
 
-    // Consume the source units only after the replacement entity is complete.
     EM.DestroyEntity(TemplarAID);
     EM.DestroyEntity(TemplarBID);
 

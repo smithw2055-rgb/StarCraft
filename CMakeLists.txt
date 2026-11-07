@@ -2104,3 +2104,53 @@ if(BUILD_PHASE14_FULL_STACK_ENGINE_REFACTOR_TEST)
 
     add_test(NAME Phase14FullStackEngineRefactorTest COMMAND Phase14FullStackEngineRefactorTest)
 endif()
+
+
+option(BUILD_PHASE15_TO_18_MODERN_ENGINE_REFACTOR_TEST "Build Phase 15-18 shared spatial broadphase, multi-world Protoss/Zerg, and generational Selection regression test" ON)
+if(BUILD_PHASE15_TO_18_MODERN_ENGINE_REFACTOR_TEST)
+    add_executable(Phase15To18ModernEngineRefactorTest
+        tests/Regression/Phase15To18ModernEngineRefactorTest.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
+        src/Client/Selection.cpp
+        src/Game/IScriptVM.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+    )
+
+    target_include_directories(Phase15To18ModernEngineRefactorTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party
+    )
+
+    target_compile_definitions(Phase15To18ModernEngineRefactorTest PRIVATE
+        SOKOL_DUMMY_BACKEND
+        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+
+    if(MSVC)
+        target_compile_options(Phase15To18ModernEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
+    else()
+        target_compile_options(Phase15To18ModernEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(Phase15To18ModernEngineRefactorTest PRIVATE -pthread)
+    endif()
+
+    add_test(NAME Phase15To18ModernEngineRefactorTest COMMAND Phase15To18ModernEngineRefactorTest)
+endif()

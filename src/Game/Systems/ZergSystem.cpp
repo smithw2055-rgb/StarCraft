@@ -6,6 +6,7 @@
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
+#include "Game/SimulationContext.h"
 #include "Game/Races/RaceDef.h"
 #include "Core/Utils/Logger.h"
 
@@ -163,6 +164,7 @@ namespace
 
 ZergSystem::ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map)
     : mSystemMgr(SysMgr)
+    , mInstanceMap(Map)
 {
     sMap = Map;
     if (Map)
@@ -170,6 +172,20 @@ ZergSystem::ZergSystem(Core::ECS::SystemManager& SysMgr, Game::Map::GameMap* Map
         mMapWidth = Map->GetWidth();
         mMapHeight = Map->GetHeight();
     }
+}
+
+Game::Map::GameMap* ZergSystem::ResolveMutableMap(Core::ECS::EntityManager& EM) const
+{
+    if (auto* Ctx = EM.GetResource<Game::SimulationContext>())
+    {
+        if (Ctx->MutableMap)
+            return Ctx->MutableMap;
+        if (Ctx->Map)
+            return const_cast<Game::Map::GameMap*>(Ctx->Map);
+    }
+    if (mInstanceMap)
+        return mInstanceMap;
+    return sMap;
 }
 
 void ZergSystem::SetMap(Game::Map::GameMap* Map)
@@ -215,8 +231,39 @@ bool ZergSystem::CanUnitBurrow(int ChkUnitID, uint32_t ImageID)
     }
 }
 
+bool ZergSystem::HasCreep(const Core::ECS::EntityManager& EM, int TileX, int TileY)
+{
+    const Game::Map::GameMap* EffectiveMap = nullptr;
+    if (const auto* Ctx = Game::SimulationContext::TryGet(EM))
+    {
+        EffectiveMap = Ctx->Map ? Ctx->Map : Ctx->MutableMap;
+    }
+    if (!EffectiveMap)
+        EffectiveMap = sMap;
+    if (!EffectiveMap)
+        return false;
+    if (TileX < 0 || TileX >= EffectiveMap->GetWidth() ||
+        TileY < 0 || TileY >= EffectiveMap->GetHeight())
+        return false;
+    return EffectiveMap->GetTile(TileX, TileY).HasCreep;
+}
+
 bool ZergSystem::HasCreep(int TileX, int TileY)
 {
+    if (const auto* ActiveWorld = Core::ECS::EntityManager::GetActiveWorld())
+    {
+        if (const auto* Ctx = Game::SimulationContext::TryGet(*ActiveWorld))
+        {
+            const auto* EffectiveMap = Ctx->Map ? Ctx->Map : Ctx->MutableMap;
+            if (EffectiveMap)
+            {
+                if (TileX < 0 || TileX >= EffectiveMap->GetWidth() ||
+                    TileY < 0 || TileY >= EffectiveMap->GetHeight())
+                    return false;
+                return EffectiveMap->GetTile(TileX, TileY).HasCreep;
+            }
+        }
+    }
     if (!sMap) return false;
     if (TileX < 0 || TileX >= sMap->GetWidth() ||
         TileY < 0 || TileY >= sMap->GetHeight())
@@ -250,20 +297,23 @@ void ZergSystem::Update(float DeltaTime)
         }
     }
 
-    if (!mGridInitialized && sMap)
+    EM.ActivateWorld();
+    Game::Map::GameMap* EffectiveMap = ResolveMutableMap(EM);
+
+    if (!mGridInitialized && EffectiveMap)
     {
-        mMapWidth = sMap->GetWidth();
-        mMapHeight = sMap->GetHeight();
+        mMapWidth = EffectiveMap->GetWidth();
+        mMapHeight = EffectiveMap->GetHeight();
         mCreepGrid.resize(mMapWidth * mMapHeight, 0);
         mCreepRecedingGrid.resize(mCreepGrid.size(), 0);
         for (int Y = 0; Y < mMapHeight; ++Y)
             for (int X = 0; X < mMapWidth; ++X)
                 mCreepGrid[(size_t)Y * (size_t)mMapWidth + (size_t)X] =
-                    sMap->GetTile(X, Y).HasCreep ? 1u : 0u;
+                    EffectiveMap->GetTile(X, Y).HasCreep ? 1u : 0u;
         mGridInitialized = true;
     }
 
-    if (!sMap || mCreepGrid.empty())
+    if (!EffectiveMap || mCreepGrid.empty())
     {
         ProcessLarvae(EM, DeltaTime);
         ProcessZergRegeneration(EM, DeltaTime);
@@ -324,9 +374,9 @@ void ZergSystem::Update(float DeltaTime)
     const auto CanHaveCreep = [&](int X, int Y)
     {
         if (!InBounds(X, Y)) return false;
-        const auto& Tile = sMap->GetTile(X, Y);
+        const auto& Tile = EffectiveMap->GetTile(X, Y);
         if (!Tile.Buildable) return false;
-        if (Y + 1 < mMapHeight && !sMap->GetTile(X, Y + 1).Buildable)
+        if (Y + 1 < mMapHeight && !EffectiveMap->GetTile(X, Y + 1).Buildable)
             return false;
         return true;
     };
@@ -625,11 +675,11 @@ void ZergSystem::Update(float DeltaTime)
         {
             const bool HasCreepNow =
                 mCreepGrid[(size_t)Y * (size_t)mMapWidth + (size_t)X] != 0;
-            auto Tile = sMap->GetTile(X, Y);
+            auto Tile = EffectiveMap->GetTile(X, Y);
             if (Tile.HasCreep != HasCreepNow)
             {
                 Tile.HasCreep = HasCreepNow;
-                sMap->SetTile(X, Y, Tile);
+                EffectiveMap->SetTile(X, Y, Tile);
             }
         }
 
@@ -834,6 +884,7 @@ bool ZergSystem::StartMorphDroneIntoBuilding(Core::ECS::EntityManager& EM,
 
     // Keep the rule at the actual morph boundary as well as in placement
     // preview/AI search, so direct commands cannot bypass creep validation.
+    EM.ActivateWorld();
     if (BldgDef.RequiresCreep &&
         !HasCreepAcrossBuildingFootprint(BldgDef.ChkUnitID, Position))
     {

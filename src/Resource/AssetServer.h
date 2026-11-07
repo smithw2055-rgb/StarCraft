@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <typeindex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -100,6 +101,7 @@ public:
     template <typename AssetT>
     AssetHandle<AssetT> RegisterOrAcquire(std::string_view LogicalUri, AssetT Value)
     {
+        std::lock_guard<std::mutex> Lock(mMutex);
         const std::string Key(LogicalUri);
         auto& Pool = GetTypedPool<AssetT>();
 
@@ -147,6 +149,7 @@ public:
     template <typename AssetT>
     const AssetT* Resolve(AssetHandle<AssetT> Handle) const
     {
+        std::lock_guard<std::mutex> Lock(mMutex);
         const auto& Pool = GetTypedPool<AssetT>();
         if (Handle.Index >= Pool.Slots.size())
             return nullptr;
@@ -159,6 +162,7 @@ public:
     template <typename AssetT>
     bool Release(AssetHandle<AssetT> Handle)
     {
+        std::lock_guard<std::mutex> Lock(mMutex);
         auto& Pool = GetTypedPool<AssetT>();
         if (Handle.Index >= Pool.Slots.size())
             return false;
@@ -201,6 +205,7 @@ public:
                 ProducedTasks[Index] = DecodeFn(Items[Index]);
             });
 
+        std::lock_guard<std::mutex> Lock(mMutex);
         mTelemetry.AsyncDecodeJobsDispatched += Count;
         for (auto& Task : ProducedTasks)
         {
@@ -213,42 +218,60 @@ public:
     {
         if (!UploadCallback)
             return;
+        std::lock_guard<std::mutex> Lock(mMutex);
         mPendingGpuUploads.push_back({std::move(LogicalUri), ByteSize, std::move(UploadCallback)});
     }
 
     // Flushes queued GPU uploads within the frame byte budget (prevents frame-time spikes)
     size_t FlushPendingGpuUploads(uint32_t MaxUploadBudgetBytesPerFrame = 8u * 1024u * 1024u)
     {
-        if (mPendingGpuUploads.empty())
-            return 0;
-
-        uint32_t BytesUploadedThisFrame = 0;
-        size_t FlushedCount = 0;
-
-        while (!mPendingGpuUploads.empty())
+        std::vector<PendingGpuUploadTask> TasksToRun;
         {
-            const auto& Next = mPendingGpuUploads.front();
-            // Always allow at least 1 upload per frame even if a single texture exceeds budget
-            if (FlushedCount > 0 && BytesUploadedThisFrame + Next.ByteSize > MaxUploadBudgetBytesPerFrame)
-                break;
+            std::lock_guard<std::mutex> Lock(mMutex);
+            if (mPendingGpuUploads.empty())
+                return 0;
 
-            PendingGpuUploadTask Task = std::move(mPendingGpuUploads.front());
-            mPendingGpuUploads.erase(mPendingGpuUploads.begin());
+            uint32_t BytesUploadedThisFrame = 0;
+            while (!mPendingGpuUploads.empty())
+            {
+                const auto& Next = mPendingGpuUploads.front();
+                // Always allow at least 1 upload per frame even if a single texture exceeds budget
+                if (!TasksToRun.empty() && BytesUploadedThisFrame + Next.ByteSize > MaxUploadBudgetBytesPerFrame)
+                    break;
 
+                PendingGpuUploadTask Task = std::move(mPendingGpuUploads.front());
+                mPendingGpuUploads.erase(mPendingGpuUploads.begin());
+
+                BytesUploadedThisFrame += Task.ByteSize;
+                ++mTelemetry.MainThreadGpuUploadsFlushed;
+                mTelemetry.MainThreadBytesUploaded += Task.ByteSize;
+                TasksToRun.push_back(std::move(Task));
+            }
+        }
+
+        for (auto& Task : TasksToRun)
+        {
             if (Task.UploadCallback)
                 Task.UploadCallback();
-
-            BytesUploadedThisFrame += Task.ByteSize;
-            ++FlushedCount;
-            ++mTelemetry.MainThreadGpuUploadsFlushed;
-            mTelemetry.MainThreadBytesUploaded += Task.ByteSize;
         }
-        return FlushedCount;
+        return TasksToRun.size();
     }
 
-    size_t GetPendingGpuUploadCount() const { return mPendingGpuUploads.size(); }
+    size_t GetPendingGpuUploadCount() const
+    {
+        std::lock_guard<std::mutex> Lock(mMutex);
+        return mPendingGpuUploads.size();
+    }
+
     const AssetServerTelemetry& GetTelemetry() const { return mTelemetry; }
-    void ResetTelemetry() { mTelemetry = {}; }
+
+    void ResetTelemetry()
+    {
+        std::lock_guard<std::mutex> Lock(mMutex);
+        mTelemetry = {};
+        mPendingGpuUploads.clear();
+        mTypedPools.clear();
+    }
 
 private:
     struct MountedArchiveEntry
@@ -279,10 +302,18 @@ private:
     template <typename AssetT>
     TypedAssetPool<AssetT>& GetTypedPool() const
     {
-        static TypedAssetPool<AssetT> sPool;
-        return sPool;
+        const std::type_index TypeKey(typeid(AssetT));
+        auto It = mTypedPools.find(TypeKey);
+        if (It == mTypedPools.end())
+        {
+            auto NewPool = std::make_shared<TypedAssetPool<AssetT>>();
+            It = mTypedPools.emplace(TypeKey, NewPool).first;
+        }
+        return *static_cast<TypedAssetPool<AssetT>*>(It->second.get());
     }
 
+    mutable std::mutex mMutex;
+    mutable std::unordered_map<std::type_index, std::shared_ptr<void>> mTypedPools;
     const ModernAssetRegistry* mModernRegistry = nullptr;
     std::vector<MountedArchiveEntry> mMountedArchives;
     std::vector<PendingGpuUploadTask> mPendingGpuUploads;

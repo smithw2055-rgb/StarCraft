@@ -26,6 +26,7 @@ public:
     std::string_view GetName() const override { return "ZergSystem"; }
 
     static bool HasCreep(int TileX, int TileY);
+    static bool HasCreep(const Core::ECS::EntityManager& EM, int TileX, int TileY);
     static void SetMap(Game::Map::GameMap* Map);
     static void SetImageResolver(ImageIDResolver Resolver);
     static void SetCollisionBoundsResolver(CollisionBoundsResolver Resolver);
@@ -79,6 +80,8 @@ private:
     void CompleteMorph(Core::ECS::EntityManager& EM, int MorphEntityID);
 
     Core::ECS::SystemManager& mSystemMgr;
+    Game::Map::GameMap* ResolveMutableMap(Core::ECS::EntityManager& EM) const;
+    Game::Map::GameMap* mInstanceMap = nullptr;
     static Game::Map::GameMap* sMap;
 
     std::vector<uint8_t> mCreepGrid;

@@ -2052,7 +2052,7 @@ int HarvestSystem::FindNearestDepot(Core::ECS::EntityManager& EM,
     // Real CHK maps and synthesized starts do not always carry identical
     // building metadata. Enumerate owned unit entities, then identify town
     // halls from their canonical unit definition in IsValidDepotForReturn.
-    auto Depots = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+    const auto& Depots = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>();
     for (int DepotID : Depots)
     {
         if (DepotID == ExcludedDepotID)

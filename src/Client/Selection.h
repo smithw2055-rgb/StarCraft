@@ -47,7 +47,9 @@ public:
     int Count() const;
     int Get(int Index) const;
     const std::vector<int>& GetSelected() const { return mSelected; }
+    const std::vector<Core::ECS::EntityHandle>& GetSelectedHandles() const { return mSelectedHandles; }
     void SetSelectedForDebug(std::vector<int> Selected);
+    void SetSelectedWithHandles(const Core::ECS::EntityManager& Entities, std::vector<int> Selected);
 
     // Control groups
     void SaveControlGroup(int GroupIndex, Core::ECS::EntityManager& Entities);
@@ -63,11 +65,24 @@ private:
     int mStartX = 0, mStartY = 0;
     int mEndX = 0, mEndY = 0;
     std::vector<int> mSelected;
+    std::vector<Core::ECS::EntityHandle> mSelectedHandles;
     int mLocalPlayerId = 0;
     Resource::Graphics::DataAssetCacheView mDataAssets;
 
-    // Control groups: 10 groups of up to 12 entity IDs each
+    // Control groups: 10 groups of up to 12 entity IDs + generational EntityHandles
     std::array<std::vector<int>, kNumControlGroups> mControlGroups;
+    std::array<std::vector<Core::ECS::EntityHandle>, kNumControlGroups> mControlGroupHandles;
+
+    // Encapsulated per-instance click & double-click tracking state
+    int mConsecutiveClickCount = 0;
+    int mLastClickedEntity = -1;
+    double mLastEntityClickTime = 0.0;
+    double mLastClickTime = 0.0;
+    int mLastClickId = -1;
+    int mLastClickX = 0;
+    int mLastClickY = 0;
+
+    void SyncSelectedHandles(const Core::ECS::EntityManager& Entities);
 
     float PickRadiusForSize(Game::Components::UnitSize Size) const;
     bool EntityHitTest(Core::ECS::EntityManager& Entities, int EntityId, float WX, float WY, float& OutScore) const;

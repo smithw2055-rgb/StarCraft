@@ -594,7 +594,7 @@ struct CombatComponent
 
     Core::ECS::EntityID ResolveValidTargetId(const Core::ECS::EntityManager& EM)
     {
-        if (TargetHandle.IsValid())
+        if (TargetHandle.IsValid() && TargetHandle.Id == static_cast<Core::ECS::EntityID>(TargetEntityID))
         {
             if (!EM.IsAlive(TargetHandle))
             {
@@ -604,6 +604,7 @@ struct CombatComponent
             }
             return TargetHandle.Id;
         }
+        TargetHandle = {};
         if (TargetEntityID > 0 && !EM.IsAlive(TargetEntityID))
         {
             TargetEntityID = -1;
@@ -1099,7 +1100,7 @@ struct LoadedUnitsComponent
 
     void PruneInvalidPassengers(const Core::ECS::EntityManager& EM)
     {
-        if (PassengerHandles.empty())
+        if (PassengerHandles.empty() || PassengerHandles.size() != PassengerIDs.size())
             return;
         Core::ECS::SmallBuffer<int, 16> ValidIds;
         Core::ECS::SmallBuffer<Core::ECS::EntityHandle, 16> ValidHandles;

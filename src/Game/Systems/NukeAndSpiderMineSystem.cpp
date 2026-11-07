@@ -1,4 +1,5 @@
 #include "Game/Systems/NukeAndSpiderMineSystem.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
@@ -476,11 +477,15 @@ void NukeAndSpiderMineSystem::UpdateSpiderMines(float DeltaTime)
                         }
 
                         const float RadiusSquared = kSpiderMineExplosionRadius * kSpiderMineExplosionRadius;
-                        const auto Targets = EM.GetEntitiesWith<
-                            Components::TransformComponent,
-                            Components::UnitComponent,
-                            Components::PlayerComponent>();
-                        for (int TargetID : Targets)
+                        auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+                        static thread_local std::vector<int> sMineExplosionTargets;
+                        SharedSpatial.AllUnitsHash.QueryInto(
+                            ExplosionPosition.X - kSpiderMineExplosionRadius,
+                            ExplosionPosition.Y - kSpiderMineExplosionRadius,
+                            ExplosionPosition.X + kSpiderMineExplosionRadius,
+                            ExplosionPosition.Y + kSpiderMineExplosionRadius,
+                            sMineExplosionTargets);
+                        for (int TargetID : sMineExplosionTargets)
                         {
                             if (TargetID == MineEntityID)
                                 continue;
@@ -527,15 +532,20 @@ bool NukeAndSpiderMineSystem::CheckSpiderMineTrigger(int MineEntityID)
 
     const int MinePlayerID = minePlayer ? minePlayer->PlayerID : -1;
 
-    auto entities = EM.GetEntitiesWith<
-        Components::TransformComponent,
-        Components::UnitComponent,
-        Components::PlayerComponent>();
+    auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    static thread_local std::vector<int> sTriggerCandidates;
+    const float R = spiderComp->TriggerRange;
+    SharedSpatial.AllUnitsHash.QueryInto(
+        mineTrans->Position.X - R,
+        mineTrans->Position.Y - R,
+        mineTrans->Position.X + R,
+        mineTrans->Position.Y + R,
+        sTriggerCandidates);
 
     int BestTargetID = -1;
     float BestDist = spiderComp->TriggerRange;
 
-    for (int entityID : entities)
+    for (int entityID : sTriggerCandidates)
     {
         if (!IsValidSpiderMineTriggerTarget(EM, entityID, MinePlayerID))
             continue;

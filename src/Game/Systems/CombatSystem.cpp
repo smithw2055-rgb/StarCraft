@@ -1,4 +1,5 @@
 #include "Game/Systems/CombatSystem.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/BulletSystem.h"
@@ -2200,17 +2201,30 @@ void CombatSystem::UpdateStatusEffects(Core::ECS::EntityManager& EM, float Delta
                     }
                     else
                     {
-                        for (int VictimID : EM.GetEntitiesWith<UnitComponent>())
+                        const auto* SourceTrans = EM.GetComponent<TransformComponent>(ID);
+                        if (SourceTrans)
                         {
-                            if (!EM.IsAlive(VictimID))
-                                continue;
-                            auto* Victim = EM.GetComponent<UnitComponent>(VictimID);
-                            if (!Victim || !CanTakeIrradiateDamage(*Victim))
-                                continue;
-                            if (VictimID != ID && IsEntityBurrowed(EM, VictimID))
-                                continue;
-                            if (CombatEdgeDistance(EM, ID, VictimID) <= 32.0f)
-                                Victims.push_back(VictimID);
+                            auto& IrrSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+                            static thread_local std::vector<int> sIrradiateCandidates;
+                            constexpr float kIrradiateQueryPad = 96.0f;
+                            IrrSpatial.AllUnitsHash.QueryInto(
+                                SourceTrans->Position.X - kIrradiateQueryPad,
+                                SourceTrans->Position.Y - kIrradiateQueryPad,
+                                SourceTrans->Position.X + kIrradiateQueryPad,
+                                SourceTrans->Position.Y + kIrradiateQueryPad,
+                                sIrradiateCandidates);
+                            for (int VictimID : sIrradiateCandidates)
+                            {
+                                if (!EM.IsAlive(VictimID))
+                                    continue;
+                                auto* Victim = EM.GetComponent<UnitComponent>(VictimID);
+                                if (!Victim || !CanTakeIrradiateDamage(*Victim))
+                                    continue;
+                                if (VictimID != ID && IsEntityBurrowed(EM, VictimID))
+                                    continue;
+                                if (CombatEdgeDistance(EM, ID, VictimID) <= 32.0f)
+                                    Victims.push_back(VictimID);
+                            }
                         }
                     }
 
@@ -2391,17 +2405,9 @@ void CombatSystem::Update(float DeltaTime)
         }
     }
 
-    // Combat processing with Spatial Hash acceleration
-    static thread_local Game::Pathfinding::NavigationSpatialHash CombatSpatialHash;
-    CombatSpatialHash.Clear();
-    auto UnitEntities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
-    for (int UID : UnitEntities)
-    {
-        if (auto* T = EM.GetComponent<TransformComponent>(UID))
-            CombatSpatialHash.Insert(UID, T->Position);
-    }
-    CombatSpatialHash.FinalizeCSR();
-    sActiveCombatSpatialHash = &CombatSpatialHash;
+    // Combat processing with shared WorldContext SpatialIndexResource CSR broadphase
+    auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    sActiveCombatSpatialHash = &SharedSpatial.AllUnitsHash;
     struct CombatSpatialScope
     {
         ~CombatSpatialScope() { sActiveCombatSpatialHash = nullptr; }

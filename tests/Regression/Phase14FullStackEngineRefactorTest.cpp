@@ -183,11 +183,23 @@ void TestTask3FullComponentWorldSnapshotAndRollback()
     Burrow.IsBurrowed = true;
     Burrow.Phase = Game::Components::BurrowPhase::Burrowed;
 
+    auto& Siege = EM.AddComponent<Game::Components::SiegeTransitionComponent>(Worker);
+    Siege.Active = true;
+    Siege.TargetSieged = true;
+    Siege.Stage = 1;
+    Siege.Elapsed = 0.75f;
+
     // Capture full deterministic snapshot at frame 42
     const auto Snap42 = Core::ECS::WorldSnapshotSerializer::CaptureSnapshot(EM, 42);
     Require(Snap42.StateHashFNV1a != 0, "Captured non-zero FNV-1a hash for full-component world");
 
-    // Mutate deep gameplay components (Harvest, Production Queue, Building Progress, Economy, FixedPosition)
+    // Mutate only queued Order target position (same Orders.size()) to verify deep order hashing
+    Cmd.Orders[0].TargetPosition = {999.0f, 999.0f};
+    Require(Core::ECS::WorldSnapshotSerializer::ComputeWorldHashFNV1a(EM, 42) != Snap42.StateHashFNV1a,
+            "Mutating queued Order element inside CommandComponent changes FNV-1a world hash");
+    Cmd.Orders[0].TargetPosition = {64.0f, 64.0f};
+
+    // Mutate deep gameplay components (Harvest, Production Queue, Building Progress, Economy, FixedPosition, SiegeTransition)
     Econ.Players[0].Minerals = 50;
     Harv.CarryingAmount = 0;
     Harv.State = Game::Components::HarvestState::Idle;
@@ -196,6 +208,7 @@ void TestTask3FullComponentWorldSnapshotAndRollback()
     Path.FixedPosition = Core::Math::FixedVec2(512.0f, 512.0f);
     Status.RemoveEffect(Game::Components::StatusEffect::Stim);
     Burrow.IsBurrowed = false;
+    Siege.Active = false;
 
     const uint32_t MutatedHash = Core::ECS::WorldSnapshotSerializer::ComputeWorldHashFNV1a(EM, 42);
     Require(MutatedHash != Snap42.StateHashFNV1a,

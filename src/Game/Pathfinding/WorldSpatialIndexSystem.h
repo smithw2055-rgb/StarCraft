@@ -16,17 +16,36 @@ namespace Game::Pathfinding {
 struct SpatialIndexResource {
     NavigationSpatialHash SpatialHash;
     NavigationSpatialHash AllUnitsHash;
+    NavigationSpatialHash BuildingsHash;
+    NavigationSpatialHash ResourcesHash;
     uint64_t RebuildCount = 0;
+    uint64_t SharedQueryReuses = 0;
+    uint64_t LastBuiltMaskVersion = 0;
     size_t IndexedEntityCount = 0;
+    bool PositionsDirty = true;
+
+    void MarkPositionsDirty() noexcept {
+        PositionsDirty = true;
+    }
 
     void RebuildFromECS(const Core::ECS::EntityManager& EM) {
         SpatialHash.Clear();
         AllUnitsHash.Clear();
+        BuildingsHash.Clear();
+        ResourcesHash.Clear();
         IndexedEntityCount = 0;
         ++RebuildCount;
+        LastBuiltMaskVersion = EM.GetMaskMutationVersion();
+        PositionsDirty = false;
 
         EM.ForEachComponent<Game::Components::TransformComponent>(
             [&](Core::ECS::EntityID Id, const Game::Components::TransformComponent& Trans) {
+                if (EM.HasComponent<Game::Components::ResourceComponent>(Id)) {
+                    ResourcesHash.Insert(Id, Trans.Position);
+                }
+                if (EM.HasComponent<Game::Components::BuildingComponent>(Id)) {
+                    BuildingsHash.Insert(Id, Trans.Position);
+                }
                 const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Id);
                 if (Unit) {
                     AllUnitsHash.Insert(Id, Trans.Position);
@@ -39,6 +58,23 @@ struct SpatialIndexResource {
         // Finalize CSR contiguous cell slices so all subsequent QueryInto calls copy cache lines directly
         SpatialHash.FinalizeCSR();
         AllUnitsHash.FinalizeCSR();
+        BuildingsHash.FinalizeCSR();
+        ResourcesHash.FinalizeCSR();
+    }
+
+    // Acquires an up-to-date CSR-finalized SpatialIndexResource for EM, rebuilding only if
+    // entity masks mutated, positions were marked dirty, or the index was never built.
+    static SpatialIndexResource& AcquireUpToDate(Core::ECS::EntityManager& EM) {
+        auto& Res = EM.Context().GetOrCreateResource<SpatialIndexResource>();
+        if (Res.RebuildCount == 0 ||
+            Res.PositionsDirty ||
+            Res.LastBuiltMaskVersion != EM.GetMaskMutationVersion())
+        {
+            Res.RebuildFromECS(EM);
+        } else {
+            ++Res.SharedQueryReuses;
+        }
+        return Res;
     }
 
     // Rebuilds and returns the CSR-finalized spatial hash of all (TransformComponent, UnitComponent) entities
@@ -114,8 +150,9 @@ struct SpatialIndexResource {
     }
 };
 
-// Phase 3 Spatial Index System: Automatically rebuilds WorldContext SpatialIndexResource
-// during FixedSimulation so CombatSystem, Splash damage, and AI target acquisition run in O(1) cell lookups.
+// Phase 3 & Phase 15 Spatial Index System: Automatically rebuilds WorldContext SpatialIndexResource
+// during FixedSimulation so CombatSystem, BulletSystem, ProtossSystem, NukeAndSpiderMineSystem,
+// and AI target acquisition share O(1) CSR cell lookups without redundant per-system rebuilds.
 class WorldSpatialIndexSystem final : public Core::ECS::ISystem {
 public:
     explicit WorldSpatialIndexSystem(Core::ECS::SystemManager& SysMgr)

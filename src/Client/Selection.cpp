@@ -15,13 +15,6 @@ namespace
     constexpr size_t kMaxSelectionSize = 12;
 
     Selection::UnitClickSoundCallback sUnitClickSoundCallback;
-    int sConsecutiveClickCount = 0;
-    int sLastClickedEntity = -1;
-    double sLastEntityClickTime = 0.0;
-    double sLastClickTime = 0.0;
-    int sLastClickId = -1;
-    int sLastClickX = 0;
-    int sLastClickY = 0;
 
     bool IsShiftHeld()
     {
@@ -346,7 +339,27 @@ void Selection::SetSelectedForDebug(std::vector<int> Selected)
     if ((int)Selected.size() > kMaxSelection)
         Selected.resize(kMaxSelection);
     mSelected = std::move(Selected);
+    mSelectedHandles.clear();
     mPhase = Phase::Idle;
+}
+
+void Selection::SetSelectedWithHandles(const Core::ECS::EntityManager& Entities, std::vector<int> Selected)
+{
+    if ((int)Selected.size() > kMaxSelection)
+        Selected.resize(kMaxSelection);
+    mSelected = std::move(Selected);
+    SyncSelectedHandles(Entities);
+    mPhase = Phase::Idle;
+}
+
+void Selection::SyncSelectedHandles(const Core::ECS::EntityManager& Entities)
+{
+    mSelectedHandles.clear();
+    mSelectedHandles.reserve(mSelected.size());
+    for (int Id : mSelected)
+    {
+        mSelectedHandles.push_back(Entities.GetEntityHandle(Id));
+    }
 }
 
 int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float WorldX, float WorldY) const
@@ -429,13 +442,24 @@ std::vector<int> Selection::CollectRectSelection(Core::ECS::EntityManager& Entit
 void Selection::PruneAgainst(Core::ECS::EntityManager& Entities)
 {
     std::vector<int> Pruned;
+    std::vector<Core::ECS::EntityHandle> PrunedHandles;
     Pruned.reserve(mSelected.size());
-    for (int Id : mSelected)
+    PrunedHandles.reserve(mSelected.size());
+
+    const bool CheckHandles = (mSelectedHandles.size() == mSelected.size());
+    for (size_t i = 0; i < mSelected.size(); ++i)
     {
+        const int Id = mSelected[i];
+        if (CheckHandles && mSelectedHandles[i].IsValid() && !Entities.IsAlive(mSelectedHandles[i]))
+            continue;
         if (IsVisible(Entities, Id) && IsOwnedByLocalPlayer(Entities, Id))
+        {
             Pruned.push_back(Id);
+            PrunedHandles.push_back(Entities.GetEntityHandle(Id));
+        }
     }
     mSelected = std::move(Pruned);
+    mSelectedHandles = std::move(PrunedHandles);
 }
 
 void Selection::CancelPointerGesture()
@@ -498,8 +522,8 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
 
     if (MaxSX - MinSX < 6.0f && MaxSY - MinSY < 6.0f)
     {
-        const double ClickDelta = Now - sLastClickTime;
-        sLastClickTime = Now;
+        const double ClickDelta = Now - mLastClickTime;
+        mLastClickTime = Now;
 
         float WX = 0.0f;
         float WY = 0.0f;
@@ -508,11 +532,11 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
 
         if (Best != -1)
         {
-            const int ClickDx = MX - sLastClickX;
-            const int ClickDy = MY - sLastClickY;
+            const int ClickDx = MX - mLastClickX;
+            const int ClickDy = MY - mLastClickY;
             const bool DoubleClick =
                 ClickDelta < 0.3 &&
-                sLastClickId == Best &&
+                mLastClickId == Best &&
                 (ClickDx * ClickDx + ClickDy * ClickDy) <= 64;
 
             if (DoubleClick)
@@ -553,35 +577,39 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
             {
                 mSelected = {Best};
             }
+            SyncSelectedHandles(Entities);
 
-            if (Best == sLastClickedEntity && (Now - sLastEntityClickTime) < 1.5)
+            if (Best == mLastClickedEntity && (Now - mLastEntityClickTime) < 1.5)
             {
-                sConsecutiveClickCount++;
+                mConsecutiveClickCount++;
             }
             else
             {
-                sConsecutiveClickCount = 1;
-                sLastClickedEntity = Best;
+                mConsecutiveClickCount = 1;
+                mLastClickedEntity = Best;
             }
-            sLastEntityClickTime = Now;
+            mLastEntityClickTime = Now;
 
-            const bool IsPissed = (sConsecutiveClickCount >= 4);
+            const bool IsPissed = (mConsecutiveClickCount >= 4);
             if (sUnitClickSoundCallback)
             {
                 sUnitClickSoundCallback(Best, IsPissed);
             }
 
-            sLastClickId = Best;
-            sLastClickX = MX;
-            sLastClickY = MY;
+            mLastClickId = Best;
+            mLastClickX = MX;
+            mLastClickY = MY;
         }
         else
         {
             if (!IsShiftHeld())
+            {
                 mSelected.clear();
-            sLastClickId = -1;
-            sLastClickX = MX;
-            sLastClickY = MY;
+                mSelectedHandles.clear();
+            }
+            mLastClickId = -1;
+            mLastClickX = MX;
+            mLastClickY = MY;
         }
         return;
     }
@@ -609,10 +637,12 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
         {
             mSelected = std::move(Picked);
         }
+        SyncSelectedHandles(Entities);
     }
     else if (!IsShiftHeld())
     {
         mSelected.clear();
+        mSelectedHandles.clear();
     }
 }
 
@@ -621,11 +651,16 @@ void Selection::SaveControlGroup(int GroupIndex, Core::ECS::EntityManager& Entit
     if (GroupIndex < 0 || GroupIndex >= kNumControlGroups)
         return;
     auto& Group = mControlGroups[GroupIndex];
+    auto& GroupHandles = mControlGroupHandles[GroupIndex];
     Group.clear();
+    GroupHandles.clear();
     for (int EntityId : mSelected)
     {
         if (IsVisible(Entities, EntityId) && IsOwnedByLocalPlayer(Entities, EntityId))
+        {
             Group.push_back(EntityId);
+            GroupHandles.push_back(Entities.GetEntityHandle(EntityId));
+        }
         if ((int)Group.size() >= kMaxSelection)
             break;
     }
@@ -635,11 +670,33 @@ void Selection::RecallControlGroup(int GroupIndex, Core::ECS::EntityManager& Ent
 {
     if (GroupIndex < 0 || GroupIndex >= kNumControlGroups)
         return;
-    const auto& Group = mControlGroups[GroupIndex];
+    auto& Group = mControlGroups[GroupIndex];
+    auto& GroupHandles = mControlGroupHandles[GroupIndex];
     if (Group.empty())
         return;
 
+    // First prune any control group members whose generational EntityHandle has expired (ABA safety)
+    if (GroupHandles.size() == Group.size())
+    {
+        std::vector<int> ValidIds;
+        std::vector<Core::ECS::EntityHandle> ValidHandles;
+        for (size_t i = 0; i < Group.size(); ++i)
+        {
+            if (Entities.IsAlive(GroupHandles[i]))
+            {
+                ValidIds.push_back(Group[i]);
+                ValidHandles.push_back(GroupHandles[i]);
+            }
+        }
+        Group = std::move(ValidIds);
+        GroupHandles = std::move(ValidHandles);
+    }
+
     mSelected.clear();
+    mSelectedHandles.clear();
+    if (Group.empty())
+        return;
+
     const bool SingleBuildingGroup =
         Group.size() == 1 && IsBuilding(Entities, Group.front());
     for (int EntityId : Group)
@@ -656,6 +713,7 @@ void Selection::RecallControlGroup(int GroupIndex, Core::ECS::EntityManager& Ent
         if ((int)mSelected.size() >= kMaxSelection)
             break;
     }
+    SyncSelectedHandles(Entities);
 }
 
 void Selection::AppendControlGroup(int GroupIndex, Core::ECS::EntityManager& Entities)
@@ -663,6 +721,23 @@ void Selection::AppendControlGroup(int GroupIndex, Core::ECS::EntityManager& Ent
     if (GroupIndex < 0 || GroupIndex >= kNumControlGroups)
         return;
     auto& Group = mControlGroups[GroupIndex];
+    auto& GroupHandles = mControlGroupHandles[GroupIndex];
+    if (GroupHandles.size() == Group.size())
+    {
+        std::vector<int> ValidIds;
+        std::vector<Core::ECS::EntityHandle> ValidHandles;
+        for (size_t i = 0; i < Group.size(); ++i)
+        {
+            if (Entities.IsAlive(GroupHandles[i]))
+            {
+                ValidIds.push_back(Group[i]);
+                ValidHandles.push_back(GroupHandles[i]);
+            }
+        }
+        Group = std::move(ValidIds);
+        GroupHandles = std::move(ValidHandles);
+    }
+
     for (int EntityId : mSelected)
     {
         if (!IsVisible(Entities, EntityId) ||
@@ -676,6 +751,7 @@ void Selection::AppendControlGroup(int GroupIndex, Core::ECS::EntityManager& Ent
             continue;
 
         Group.push_back(EntityId);
+        GroupHandles.push_back(Entities.GetEntityHandle(EntityId));
         if ((int)Group.size() >= kMaxSelection)
             break;
     }
@@ -695,13 +771,13 @@ void Selection::SetUnitClickSoundCallback(UnitClickSoundCallback Callback)
 
 void Selection::ResetClickTracking()
 {
-    sLastClickTime = 0.0;
-    sLastClickId = -1;
-    sLastClickX = 0;
-    sLastClickY = 0;
-    sConsecutiveClickCount = 0;
-    sLastClickedEntity = -1;
-    sLastEntityClickTime = 0.0;
+    mLastClickTime = 0.0;
+    mLastClickId = -1;
+    mLastClickX = 0;
+    mLastClickY = 0;
+    mConsecutiveClickCount = 0;
+    mLastClickedEntity = -1;
+    mLastEntityClickTime = 0.0;
 }
 
 void Selection::ResetSessionState()
@@ -712,8 +788,11 @@ void Selection::ResetSessionState()
     mEndX = 0;
     mEndY = 0;
     mSelected.clear();
+    mSelectedHandles.clear();
     for (auto& Group : mControlGroups)
         Group.clear();
+    for (auto& GroupH : mControlGroupHandles)
+        GroupH.clear();
     ResetClickTracking();
 }
 

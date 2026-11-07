@@ -1,4 +1,5 @@
 #include "Game/Systems/MovementSystem.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/MovementTuning.h"
@@ -2491,6 +2492,8 @@ sElapsedSimulationTime += DeltaTime;
 MaybePrintStallTelemetryReport(sElapsedSimulationTime);
 
 auto& EM = mSystemMgr.GetEntityManager();
+if (auto* SpatialRes = EM.Context().GetResource<Game::Pathfinding::SpatialIndexResource>())
+    SpatialRes->MarkPositionsDirty();
 mLastNavigationStats = {};
 sActiveNavigationStats = &mLastNavigationStats;
 
