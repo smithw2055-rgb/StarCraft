@@ -1815,6 +1815,47 @@ endif()
 
 
 
+
+option(BUILD_PHASE10_TO_13_ENGINE_MODERNIZATION_TEST "Build Phase 10-13 Godot/Unity engine modernization regression test" ON)
+if(BUILD_PHASE10_TO_13_ENGINE_MODERNIZATION_TEST)
+    add_executable(Phase10To13EngineModernizationTest
+        tests/Regression/Phase10To13EngineModernizationTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/IScriptVM.cpp
+    )
+
+    target_include_directories(Phase10To13EngineModernizationTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src)
+
+    if(MSVC)
+        target_compile_options(Phase10To13EngineModernizationTest PRIVATE /W4 /utf-8 /permissive-)
+        target_compile_definitions(Phase10To13EngineModernizationTest PRIVATE
+            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(Phase10To13EngineModernizationTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(Phase10To13EngineModernizationTest PRIVATE -pthread)
+    endif()
+
+    add_test(NAME Phase10To13EngineModernizationTest COMMAND Phase10To13EngineModernizationTest)
+endif()
+
 option(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST "Build Phase 6 Godot/Unity engine architecture refactoring regression test" ON)
 if(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST)
     add_executable(Phase6EngineArchitectureRefactorTest

@@ -15,6 +15,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "Core/Input/InputActionMap.h"
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
 #include "Main/GameClientViewRuntime.h"
@@ -65,7 +66,7 @@ inline bool UpdateClientInputGates(
     int MouseY)
 {
 #if ENABLE_GUI_UI
-    if (Core::Platform::IsKeyPressed(Core::Platform::KeyCode::F9) && Gui.MainGui.IsActive())
+    if (Core::Input::InputActionMap::Instance().IsActionTriggered("System.ToggleGui") && Gui.MainGui.IsActive())
         Gui.UseGui = !Gui.UseGui;
 
     const bool InGui = Gui.UseGui && Gui.MainGui.IsPointInHud((float)MouseX, (float)MouseY);
@@ -165,7 +166,7 @@ inline void UpdateClientSelectionFromUiState(
         {
             BlockSelection = true;
         }
-        else if (Session.IsEcsInitialized() && Core::Platform::IsKeyDown(65))
+        else if (Session.IsEcsInitialized() && Core::Input::InputActionMap::Instance().IsActionTriggered("Command.AttackMoveModifier"))
         {
             BlockSelection = true;
         }
@@ -495,7 +496,7 @@ inline void HandleClientWorldClickCommands(
                 Hud.CancelPendingTarget();
             Client.CancelPointerGesture();
         }
-        else if (!ConsumedLeftClick && Session.IsEcsInitialized() && Core::Platform::IsKeyDown(65))
+        else if (!ConsumedLeftClick && Session.IsEcsInitialized() && Core::Input::InputActionMap::Instance().IsActionTriggered("Command.AttackMoveModifier"))
         {
             Core::Math::Vec2 Target = Client.ScreenToWorld((float)MouseX, (float)MouseY);
             if (Core::Utils::InputDebugEnabled())
@@ -611,21 +612,22 @@ inline void HandleClientKeyboardCommands(
 
         if (!HotkeyDispatched)
         {
+            const auto& ActionMap = Core::Input::InputActionMap::Instance();
             KeyboardCommandShortcut Shortcut = KeyboardCommandShortcut::None;
-            if (Core::Platform::IsKeyPressed(83))
+            if (ActionMap.IsActionTriggered("Command.Stop"))
                 Shortcut = KeyboardCommandShortcut::Stop;
-            else if (Core::Platform::IsKeyPressed(72))
+            else if (ActionMap.IsActionTriggered("Command.HoldPosition"))
                 Shortcut = KeyboardCommandShortcut::Hold;
-            else if (Core::Platform::IsKeyPressed(80))
+            else if (ActionMap.IsActionTriggered("Command.Patrol"))
                 Shortcut = KeyboardCommandShortcut::Patrol;
-            else if (Core::Platform::IsKeyPressed(70))
+            else if (ActionMap.IsActionTriggered("Command.Follow"))
                 Shortcut = KeyboardCommandShortcut::Follow;
 
             ExecuteKeyboardCommandShortcut(EM, EcsIds, Hud, Shortcut);
         }
     }
 
-    if (Core::Platform::IsKeyPressed(Core::Platform::KeyCode::F6))
+    if (Core::Input::InputActionMap::Instance().IsActionTriggered("Debug.SpawnAuditFormation"))
         GameEntitySpawnRuntime::SpawnTerranAuditFormationOnce(Session, Client.GetCameraPosition());
 }
 

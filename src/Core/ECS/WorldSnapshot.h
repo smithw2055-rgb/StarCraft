@@ -35,6 +35,7 @@ struct EntityStateRecord {
 struct WorldDeterministicSnapshot {
     uint32_t FrameNumber = 0;
     uint32_t StateHashFNV1a = 0;
+    bool HasUpgradesResource = false;
     WorldUpgradeResource Upgrades{};
     std::vector<EntityStateRecord> Entities;
 };
@@ -85,6 +86,7 @@ public:
         WorldDeterministicSnapshot Snap;
         Snap.FrameNumber = FrameNumber;
         if (const auto* Upg = EM.Context().GetResource<WorldUpgradeResource>()) {
+            Snap.HasUpgradesResource = true;
             Snap.Upgrades = *Upg;
         }
 
@@ -130,7 +132,11 @@ public:
             EM.DestroyEntity(Id);
         }
 
-        EM.Context().SetResource<WorldUpgradeResource>(Snap.Upgrades);
+        if (Snap.HasUpgradesResource) {
+            EM.Context().SetResource<WorldUpgradeResource>(Snap.Upgrades);
+        } else {
+            EM.Context().RemoveResource<WorldUpgradeResource>();
+        }
 
         for (const auto& Rec : Snap.Entities) {
             EntityID NewId = EM.CreateEntityWithID(Rec.Id, Rec.Generation);

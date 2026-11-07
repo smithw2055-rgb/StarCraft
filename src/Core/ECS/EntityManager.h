@@ -6,9 +6,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -25,6 +27,8 @@ constexpr size_t MaxComponents = 64;
 constexpr size_t MaxResources = 64;
 
 using ComponentMask = std::bitset<MaxComponents>;
+
+class EntityManager;
 
 // Generational EntityHandle (Unity DOTS / EnTT style) to prevent ABA dangling references
 // when an EntityID slot is recycled across frames.
@@ -50,6 +54,8 @@ struct ECSQueryTelemetry
     uint64_t EarlyOutEmptyPoolCount = 0;
     uint64_t PivotAcceleratedQueries = 0;
     uint64_t ScratchBufferReuses = 0;
+    uint64_t CachedQueryHits = 0;
+    uint64_t CachedQueryMisses = 0;
 };
 
 class IComponentPool
@@ -57,6 +63,7 @@ class IComponentPool
 public:
     virtual ~IComponentPool() = default;
     virtual void RemoveComponent(EntityID Id) = 0;
+    virtual void NotifyEntityDestroyed(EntityManager& Owner, EntityID Id) = 0;
     virtual bool HasComponent(EntityID Id) const = 0;
     virtual size_t Size() const = 0;
     virtual const std::vector<EntityID>& GetDenseEntities() const = 0;
@@ -69,12 +76,16 @@ public:
 //   stability across AddComponent/RemoveComponent calls.
 // - Maintains a compact Sparse-Set (mSparseToDense + mDenseEntities) for O(1)
 //   membership checks, O(1) removal (swap-and-pop), and cache-friendly dense iteration.
+// - Supports EnTT / Godot style reactive lifecycle signals (OnConstruct / OnRemove).
 template <typename T>
 class ComponentPool final : public IComponentPool
 {
 public:
     static constexpr size_t kPageSize = 256;
     static constexpr size_t kInvalidDenseIndex = std::numeric_limits<size_t>::max();
+
+    using ConstructCallback = std::function<void(EntityManager&, EntityID, T&)>;
+    using RemoveCallback = std::function<void(EntityManager&, EntityID)>;
 
     T& AddComponent(EntityID Id)
     {
@@ -94,6 +105,41 @@ public:
             mDenseEntities.push_back(Id);
         }
         return Slot;
+    }
+
+    void NotifyConstructed(EntityManager& Owner, EntityID Id, T& ComponentRef)
+    {
+        for (const auto& Cb : mOnConstructCallbacks)
+        {
+            if (Cb)
+                Cb(Owner, Id, ComponentRef);
+        }
+    }
+
+    void NotifyRemoved(EntityManager& Owner, EntityID Id)
+    {
+        for (const auto& Cb : mOnRemoveCallbacks)
+        {
+            if (Cb)
+                Cb(Owner, Id);
+        }
+    }
+
+    void NotifyEntityDestroyed(EntityManager& Owner, EntityID Id) override
+    {
+        NotifyRemoved(Owner, Id);
+    }
+
+    void AddOnConstructCallback(ConstructCallback Cb)
+    {
+        if (Cb)
+            mOnConstructCallbacks.push_back(std::move(Cb));
+    }
+
+    void AddOnRemoveCallback(RemoveCallback Cb)
+    {
+        if (Cb)
+            mOnRemoveCallbacks.push_back(std::move(Cb));
     }
 
     T* GetComponent(EntityID Id)
@@ -178,6 +224,8 @@ private:
     std::vector<std::unique_ptr<PageBlock>> mPages;
     std::vector<size_t> mSparseToDense;
     std::vector<EntityID> mDenseEntities;
+    std::vector<ConstructCallback> mOnConstructCallbacks;
+    std::vector<RemoveCallback> mOnRemoveCallbacks;
 };
 
 inline uint8_t NextComponentTypeID = 0;
@@ -220,6 +268,7 @@ public:
     EntityHandle GetEntityHandle(EntityID Id) const;
 
     ComponentMask GetMask(EntityID Id) const;
+    uint64_t GetMaskMutationVersion() const { return mMaskMutationVersion; }
     size_t GetEntityCount() const { return mLivingEntityCount; }
     size_t GetEntityCapacity() const { return mAlive.size(); }
     const std::vector<EntityID>& GetActiveEntities() const { return mActiveEntities; }
@@ -236,17 +285,40 @@ public:
             mGenerations.resize((size_t)Id + 1, 0);
         }
         mMasks[(size_t)Id].set(GetComponentTypeID<T>());
-        return Pool->AddComponent(Id);
+        ++mMaskMutationVersion;
+        T& CompRef = Pool->AddComponent(Id);
+        Pool->NotifyConstructed(*this, Id, CompRef);
+        return CompRef;
     }
 
     template <typename T>
     void RemoveComponent(EntityID Id)
     {
         const uint8_t ID = GetComponentTypeID<T>();
+        const bool HadBit = (Id > 0 && (size_t)Id < mMasks.size() && mMasks[(size_t)Id].test(ID));
         if (Id > 0 && (size_t)Id < mMasks.size())
             mMasks[(size_t)Id].reset(ID);
+        if (HadBit)
+            ++mMaskMutationVersion;
         if (mPools[ID])
+        {
+            if (HadBit)
+                static_cast<ComponentPool<T>*>(mPools[ID].get())->NotifyRemoved(*this, Id);
             mPools[ID]->RemoveComponent(Id);
+        }
+    }
+
+    // EnTT / Godot style reactive component lifecycle hooks
+    template <typename T>
+    void OnComponentConstructed(typename ComponentPool<T>::ConstructCallback Callback)
+    {
+        GetOrCreatePool<T>()->AddOnConstructCallback(std::move(Callback));
+    }
+
+    template <typename T>
+    void OnComponentRemoved(typename ComponentPool<T>::RemoveCallback Callback)
+    {
+        GetOrCreatePool<T>()->AddOnRemoveCallback(std::move(Callback));
     }
 
     template <typename T>
@@ -313,7 +385,7 @@ public:
 
         const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
         const size_t PivotSize = PivotPool->Size();
-        Result.reserve( std::min(PivotSize, mActiveEntities.size()) );
+        Result.reserve(std::min(PivotSize, mActiveEntities.size()));
 
         if (PivotSize * 2 <= mActiveEntities.size())
         {
@@ -332,6 +404,29 @@ public:
                 Result.push_back(Id);
         }
         return Result;
+    }
+
+    // Unity DOTS EntityQuery style version-cached query:
+    // Returns a const reference to a cached entity list in O(1) time with zero
+    // allocations when no structural component mask mutations occurred since the last call.
+    template <typename FirstComponent, typename... RestComponents>
+    const std::vector<EntityID>& GetEntitiesWithCached() const
+    {
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        const uint64_t MaskKey = RequiredMask.to_ullong();
+        auto& CacheEntry = mQueryCache[MaskKey];
+
+        if (CacheEntry.BuiltAtVersion == mMaskMutationVersion)
+        {
+            ++mQueryTelemetry.TotalQueries;
+            ++mQueryTelemetry.CachedQueryHits;
+            return CacheEntry.Entities;
+        }
+
+        ++mQueryTelemetry.CachedQueryMisses;
+        CacheEntry.Entities = GetEntitiesWith<FirstComponent, RestComponents...>();
+        CacheEntry.BuiltAtVersion = mMaskMutationVersion;
+        return CacheEntry.Entities;
     }
 
     template <typename FirstComponent, typename... RestComponents, typename Fn>
@@ -575,6 +670,12 @@ public:
     void ResetQueryTelemetry() { mQueryTelemetry = {}; }
 
 private:
+    struct CachedQueryEntry
+    {
+        uint64_t BuiltAtVersion = 0;
+        std::vector<EntityID> Entities;
+    };
+
     class ScopedScratchBuffer
     {
     public:
@@ -678,6 +779,7 @@ private:
 
     EntityID mLastEntityId = 0;
     size_t mLivingEntityCount = 0;
+    uint64_t mMaskMutationVersion = 1;
     std::vector<bool> mAlive;
     std::vector<uint32_t> mGenerations;
     std::vector<ComponentMask> mMasks;
@@ -689,6 +791,7 @@ private:
     EventBus mEventBus;
     EntityCommandBuffer mCommandBuffer;
 
+    mutable std::unordered_map<uint64_t, CachedQueryEntry> mQueryCache;
     mutable std::array<std::vector<EntityID>, kMaxScratchDepth> mQueryScratchBuffers;
     mutable size_t mQueryScratchDepth = 0;
     mutable ECSQueryTelemetry mQueryTelemetry{};

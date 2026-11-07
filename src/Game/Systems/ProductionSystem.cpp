@@ -7,6 +7,7 @@
 #include "Core/Utils/Logger.h"
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
+#include "Game/SimulationContext.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -23,6 +24,16 @@ namespace
     ProductionSystem::ImageIDResolver gSubunitImageResolver;
     ProductionSystem::CollisionBoundsResolver gCollisionBoundsResolver;
     const Game::Map::GameMap* gProductionMap = nullptr;
+
+    const Game::Map::GameMap* ResolveProductionMap(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* Ctx = Game::SimulationContext::TryGet(EM))
+        {
+            if (Ctx->Map)
+                return Ctx->Map;
+        }
+        return gProductionMap;
+    }
 
     void SetReason(std::string* OutReason, const std::string& Reason)
     {
@@ -216,12 +227,13 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
     {
         if (Candidate.X < 0.0f || Candidate.Y < 0.0f)
             return false;
-        if (gProductionMap)
+        const Game::Map::GameMap* ActiveMap = ResolveProductionMap(EM);
+        if (ActiveMap)
         {
             int TileX = 0;
             int TileY = 0;
-            gProductionMap->WorldToTile(Candidate, TileX, TileY);
-            if (!gProductionMap->IsInBounds(TileX, TileY))
+            ActiveMap->WorldToTile(Candidate, TileX, TileY);
+            if (!ActiveMap->IsInBounds(TileX, TileY))
                 return false;
             const Core::Math::Vec2 Samples[] = {
                 Candidate,
@@ -240,9 +252,9 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                     {
                         int X = 0;
                         int Y = 0;
-                        gProductionMap->WorldToTile(Sample, X, Y);
-                        return !gProductionMap->IsInBounds(X, Y) ||
-                               !gProductionMap->IsWalkable(X, Y);
+                        ActiveMap->WorldToTile(Sample, X, Y);
+                        return !ActiveMap->IsInBounds(X, Y) ||
+                               !ActiveMap->IsWalkable(X, Y);
                     }))
             {
                 return false;
@@ -254,9 +266,9 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                 // ring around the full unit footprint so freshly trained
                 // ground units have room to leave and form up.
                 const int CandidateHeight =
-                    gProductionMap->GetGroundHeightAtWorld(Candidate);
+                    ActiveMap->GetGroundHeightAtWorld(Candidate);
                 const int ProducerHeight =
-                    gProductionMap->GetGroundHeightAtWorld(
+                    ActiveMap->GetGroundHeightAtWorld(
                         ProducerTrans->Position);
                 if (CandidateHeight != ProducerHeight)
                     return false;
@@ -290,10 +302,10 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
                     }
                     int X = 0;
                     int Y = 0;
-                    gProductionMap->WorldToTile(Sample, X, Y);
-                    if (!gProductionMap->IsInBounds(X, Y) ||
-                        !gProductionMap->IsWalkable(X, Y) ||
-                        gProductionMap->GetGroundHeightAtWorld(Sample) !=
+                    ActiveMap->WorldToTile(Sample, X, Y);
+                    if (!ActiveMap->IsInBounds(X, Y) ||
+                        !ActiveMap->IsWalkable(X, Y) ||
+                        ActiveMap->GetGroundHeightAtWorld(Sample) !=
                             CandidateHeight)
                     {
                         return false;
@@ -773,11 +785,11 @@ static bool IsWorldPositionBlockedByBuildingOrUnit(Core::ECS::EntityManager& EM,
                                                     int ProducerBuildingID,
                                                     int NewUnitID = -1)
 {
-    if (gProductionMap)
+    if (const Game::Map::GameMap* ActiveMap = ResolveProductionMap(EM))
     {
         int TileX = 0, TileY = 0;
-        gProductionMap->WorldToTile(Pos, TileX, TileY);
-        if (!gProductionMap->IsInBounds(TileX, TileY) || !gProductionMap->IsWalkable(TileX, TileY))
+        ActiveMap->WorldToTile(Pos, TileX, TileY);
+        if (!ActiveMap->IsInBounds(TileX, TileY) || !ActiveMap->IsWalkable(TileX, TileY))
             return true;
     }
 

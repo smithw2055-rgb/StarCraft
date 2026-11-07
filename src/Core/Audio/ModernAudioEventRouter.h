@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "Core/Audio/AudioBusMixer.h"
 #include "Core/Audio/AudioSystem.h"
 #include "Core/ECS/SystemManager.h"
 #include "Game/Events/GameEvents.h"
@@ -18,13 +19,15 @@ struct DispatchedAudioEventRecord {
     uint8_t Priority = 0;
     uint8_t Flags = 0;
     uint16_t VolumePct = 0;
+    float EffectiveBusGain = 1.0f;
     Core::Math::Vec2 WorldPos{0.0f, 0.0f};
 };
 
-// Phase 3 Event-Driven Audio & SFX Catalog Router (Godot AudioStreamPlayer2D / Unity AudioMixer)
+// Phase 3 & Phase 13 Event-Driven Audio & SFX Catalog Router (Godot AudioServer / Unity AudioMixer)
 // Subscribes to AnimAudioNotifyEvent on the ECS EventBus, resolves the 1,144 SFX catalog
-// entries from ModernAssetRegistry (Sound_Catalog_1144_SFX.json), configures AudioSystem
-// metadata, and dispatches positional 2D audio playback.
+// entries from ModernAssetRegistry (Sound_Catalog_1144_SFX.json), applies AudioBusMixer
+// hierarchical bus gain, sidechain ducking, and same-frame spatial coalescing, and dispatches
+// positional 2D audio playback.
 class ModernAudioEventRouterSystem final : public Core::ECS::ISystem {
 public:
     ModernAudioEventRouterSystem(
@@ -55,6 +58,9 @@ public:
         SyncCatalogToAudioBackend();
     }
 
+    AudioBusMixer& GetBusMixer() { return mBusMixer; }
+    const AudioBusMixer& GetBusMixer() const { return mBusMixer; }
+
     size_t SyncCatalogToAudioBackend() {
         if (!mRegistry || !mAudioBackend) return 0;
         size_t Synced = 0;
@@ -72,6 +78,7 @@ public:
     }
 
     void Update(float DeltaTime) override {
+        mBusMixer.AdvanceFrame(DeltaTime);
         if (mAudioBackend) {
             mAudioBackend->Update(DeltaTime);
         }
@@ -89,11 +96,22 @@ private:
     }
 
     void OnAnimAudioNotify(const Game::Events::AnimAudioNotifyEvent& Ev) {
+        // Deduplicate same-frame identical SoundID requests within CoalesceRadiusPx
+        if (!mBusMixer.TryAcquireSpatialVoiceSlot(Ev.SoundID, Ev.WorldPos)) {
+            return;
+        }
+
+        const float BusGain = mBusMixer.ComputeEffectiveBusGain(AudioBusId::SFX);
+        if (BusGain <= 0.0f) {
+            return;
+        }
+
         DispatchedAudioEventRecord Rec;
         Rec.SourceEntity = Ev.SourceEntity;
         Rec.SoundID = Ev.SoundID;
         Rec.ResolvedWavPath = Ev.AudioClipPath;
         Rec.WorldPos = Ev.WorldPos;
+        Rec.EffectiveBusGain = BusGain;
 
         if (mRegistry) {
             if (const auto* SfxMeta = mRegistry->FindSoundByID(Ev.SoundID)) {
@@ -122,6 +140,7 @@ private:
     Core::ECS::SystemManager& mSystemMgr;
     const Resource::ModernAssetRegistry* mRegistry = nullptr;
     AudioSystem* mAudioBackend = nullptr;
+    AudioBusMixer mBusMixer;
     Core::ECS::EventBus::SubscriptionID mSubscriptionID = 0;
     std::vector<DispatchedAudioEventRecord> mDispatchedHistory;
 };

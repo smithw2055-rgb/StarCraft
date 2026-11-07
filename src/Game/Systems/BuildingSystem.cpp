@@ -645,46 +645,55 @@ namespace
                BuildingDefID == Game::Races::GetUnitDefID("Assimilator");
     }
 
+    const Game::Map::GameMap* ResolveBuildingMap(const Core::ECS::EntityManager& EM)
+    {
+        if (const auto* Ctx = Game::SimulationContext::TryGet(EM))
+        {
+            if (Ctx->Map)
+                return Ctx->Map;
+        }
+        return gMap;
+    }
+
     bool InternalHasPylonPowerAtPosition(const Core::ECS::EntityManager& EM,
                                          Core::Math::Vec2 Position,
                                          int PlayerID)
     {
-        if (!gMap)
+        const Game::Map::GameMap* ActiveMap = ResolveBuildingMap(EM);
+        if (!ActiveMap)
             return false;
 
         int TargetTileX = 0;
         int TargetTileY = 0;
-        gMap->WorldToTile(Position, TargetTileX, TargetTileY);
+        ActiveMap->WorldToTile(Position, TargetTileX, TargetTileY);
 
         const int PylonDefID = Game::Races::GetUnitDefID("Pylon");
         const int PylonChkID = Game::Races::GetUnitDefByID(PylonDefID).ChkUnitID;
-        auto Entities =
-            const_cast<Core::ECS::EntityManager&>(EM)
-                .GetEntitiesWith<TransformComponent, BuildingComponent, UnitComponent, PlayerComponent>();
-        for (int EntityID : Entities)
-        {
-            auto& MutableEM = const_cast<Core::ECS::EntityManager&>(EM);
-            auto* Transform = MutableEM.GetComponent<TransformComponent>(EntityID);
-            auto* Building = MutableEM.GetComponent<BuildingComponent>(EntityID);
-            auto* Unit = MutableEM.GetComponent<UnitComponent>(EntityID);
-            auto* Player = MutableEM.GetComponent<PlayerComponent>(EntityID);
-            if (!Transform || !Building || !Unit || !Player)
-                continue;
-            if (Player->PlayerID != PlayerID || Building->UnderConstruction || Unit->HitPoints <= 0)
-                continue;
-            if (Unit->ChkUnitID != PylonChkID)
-                continue;
+        bool Powered = false;
+        EM.ForEachComponent<TransformComponent, BuildingComponent, UnitComponent, PlayerComponent>(
+            [&](Core::ECS::EntityID,
+                const TransformComponent& Transform,
+                const BuildingComponent& Building,
+                const UnitComponent& Unit,
+                const PlayerComponent& Player)
+            {
+                if (Powered)
+                    return;
+                if (Player.PlayerID != PlayerID || Building.UnderConstruction || Unit.HitPoints <= 0)
+                    return;
+                if (Unit.ChkUnitID != PylonChkID)
+                    return;
 
-            int PylonTileX = 0;
-            int PylonTileY = 0;
-            gMap->WorldToTile(Transform->Position, PylonTileX, PylonTileY);
-            const int Dx = TargetTileX - PylonTileX;
-            const int Dy = TargetTileY - PylonTileY;
-            if (Game::ProtossPower::ContainsTileOffset(Dx, Dy))
-                return true;
-        }
+                int PylonTileX = 0;
+                int PylonTileY = 0;
+                ActiveMap->WorldToTile(Transform.Position, PylonTileX, PylonTileY);
+                const int Dx = TargetTileX - PylonTileX;
+                const int Dy = TargetTileY - PylonTileY;
+                if (Game::ProtossPower::ContainsTileOffset(Dx, Dy))
+                    Powered = true;
+            });
 
-        return false;
+        return Powered;
     }
 
     bool IsFootprintPlacementValid(Core::ECS::EntityManager& EM,

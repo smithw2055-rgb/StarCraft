@@ -53,6 +53,7 @@ EntityID EntityManager::CreateEntity()
         mGenerations[(size_t)Id] = 1;
     mMasks[(size_t)Id].reset();
     ++mLivingEntityCount;
+    ++mMaskMutationVersion;
 
     if (mActiveEntityIndices.size() <= (size_t)Id)
         mActiveEntityIndices.resize((size_t)Id + 1, SIZE_MAX);
@@ -92,6 +93,7 @@ EntityID EntityManager::CreateEntityWithID(EntityID Id, uint32_t Generation)
     mActiveEntityIndices[(size_t)Id] = mActiveEntities.size();
     mActiveEntities.push_back(Id);
     mLivingEntityCount++;
+    ++mMaskMutationVersion;
     return Id;
 }
 
@@ -99,6 +101,15 @@ void EntityManager::DestroyEntity(EntityID Id)
 {
     if (Id > 0 && (size_t)Id < mAlive.size() && mAlive[(size_t)Id])
     {
+        const ComponentMask PrevMask = mMasks[(size_t)Id];
+        for (size_t CompID = 0; CompID < MaxComponents; ++CompID)
+        {
+            if (PrevMask.test(CompID) && mPools[CompID])
+            {
+                mPools[CompID]->NotifyEntityDestroyed(*this, Id);
+            }
+        }
+
         mAlive[(size_t)Id] = false;
         ++mGenerations[(size_t)Id];
         if (mGenerations[(size_t)Id] == 0)
@@ -118,6 +129,7 @@ void EntityManager::DestroyEntity(EntityID Id)
         }
 
         mMasks[(size_t)Id].reset();
+        ++mMaskMutationVersion;
         mFreeIds.push_back(Id);
     }
 }
