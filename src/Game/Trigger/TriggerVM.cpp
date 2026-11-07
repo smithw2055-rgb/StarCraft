@@ -1,4 +1,5 @@
 #include "Game/Trigger/TriggerVM.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
@@ -254,12 +255,15 @@ void TriggerVM::Update(Core::ECS::EntityManager& EM, float DeltaTime)
         }
     }
 
+    // Phase 23: Always synchronize generational unit tracking and death events every frame
+    // so units spawned/destroyed or ABA-recycled between 1.0s trigger steps are never missed.
+    SyncDeathsFromEntityManager(EM);
+
     mTriggerAccumulator += DeltaTime;
     bool RunStep = mForceTriggerStep || mTriggerAccumulator >= kTriggerStepSeconds;
     mForceTriggerStep = false;
     if (RunStep)
     {
-        SyncDeathsFromEntityManager(EM);
         UpdateRescuePassiveUnits(EM);
     }
     int Steps = 0;
@@ -534,7 +538,36 @@ std::vector<int> TriggerVM::FindMatchingUnits(Core::ECS::EntityManager& EM,
 {
     std::vector<int> Matches;
     const TriggerLocation* Loc = GetLocationById(LocationID);
-    auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+
+    // Phase 23 Optimization: When querying a bounded TriggerLocation for living units,
+    // use SpatialIndexResource O(1) CSR broadphase instead of scanning all map entities!
+    if (Loc && !IncludeDead)
+    {
+        const float MinX = static_cast<float>(std::min(Loc->Left, Loc->Right));
+        const float MaxX = static_cast<float>(std::max(Loc->Left, Loc->Right));
+        const float MinY = static_cast<float>(std::min(Loc->Top, Loc->Bottom));
+        const float MaxY = static_cast<float>(std::max(Loc->Top, Loc->Bottom));
+
+        auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+        static thread_local std::vector<int> sLocCandidates;
+        SharedSpatial.AllUnitsHash.QueryInto(MinX, MinY, MaxX, MaxY, sLocCandidates);
+        std::sort(sLocCandidates.begin(), sLocCandidates.end());
+
+        for (int ID : sLocCandidates)
+        {
+            auto* Unit = EM.GetComponent<UnitComponent>(ID);
+            auto* Player = EM.GetComponent<PlayerComponent>(ID);
+            auto* Trans = EM.GetComponent<TransformComponent>(ID);
+            if (!Unit || !Player || !Trans || Unit->HitPoints <= 0) continue;
+            if (!MatchPlayerGroup(Owner, PlayerGroup, Player->PlayerID)) continue;
+            if (!MatchUnitGroup(Unit->ChkUnitID, UnitGroup)) continue;
+            if (!Loc->Contains(Trans->Position)) continue;
+            Matches.push_back(ID);
+        }
+        return Matches;
+    }
+
+    const auto& Units = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>();
     for (int ID : Units)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
@@ -860,13 +893,30 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                 if (Limit > 0 && Done >= Limit) break;
                 if (auto* Unit = EM.GetComponent<UnitComponent>(ID))
                 {
+                    if (Type == 22 || Type == 23)
+                    {
+                        if (auto* Player = EM.GetComponent<PlayerComponent>(ID))
+                        {
+                            mTrackedUnits[ID] = { Player->PlayerID, Unit->ChkUnitID, EM.GetGeneration(ID) };
+                        }
+                    }
+                    else
+                    {
+                        mTrackedUnits.erase(ID);
+                    }
                     Unit->HitPoints = 0;
                     if (Type == 22 || Type == 23)
                         Game::Systems::RecordUnitDeath(EM, ID, -1, false);
                 }
+                else
+                {
+                    mTrackedUnits.erase(ID);
+                }
                 EM.DestroyEntity(ID);
                 ++Done;
             }
+            if (Done > 0 && (Type == 22 || Type == 23))
+                SyncDeathsFromEntityManager(EM);
             return true;
         }
         case 26:
@@ -926,6 +976,11 @@ bool TriggerVM::ExecuteAction(Core::ECS::EntityManager& EM,
                     ClearUnitMotionAfterTeleport(EM, ID);
                 }
                 ++Done;
+            }
+            if (Done > 0)
+            {
+                if (auto* SpatialRes = EM.GetResource<Game::Pathfinding::SpatialIndexResource>())
+                    SpatialRes->MarkPositionsDirty();
             }
             return true;
         }
@@ -1281,20 +1336,13 @@ int TriggerVM::CreateUnit(Core::ECS::EntityManager& EM, int ChkUnitID, Core::Mat
 
 void TriggerVM::SyncDeathsFromEntityManager(Core::ECS::EntityManager& EM)
 {
-    auto AliveUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
-    for (int ID : AliveUnits)
-    {
-        auto* Unit = EM.GetComponent<UnitComponent>(ID);
-        auto* Player = EM.GetComponent<PlayerComponent>(ID);
-        if (!Unit || !Player || Unit->HitPoints <= 0)
-            continue;
-        mTrackedUnits[ID] = { Player->PlayerID, Unit->ChkUnitID };
-    }
-
+    // Phase 23: First check previously tracked units for death OR generational ABA slot reuse
+    // before refreshing mTrackedUnits, so same-frame slot recycling never hides a unit's death!
     for (auto It = mTrackedUnits.begin(); It != mTrackedUnits.end();)
     {
         const int EntityID = It->first;
-        if (EM.IsAlive(EntityID))
+        const uint32_t CurrentGen = EM.GetGeneration(EntityID);
+        if (EM.IsAlive(EntityID) && (It->second.Generation == 0 || CurrentGen == It->second.Generation))
         {
             ++It;
             continue;
@@ -1303,24 +1351,40 @@ void TriggerVM::SyncDeathsFromEntityManager(Core::ECS::EntityManager& EM)
         TrackedUnitInfo Info = It->second;
         int KillerPlayerID = -1;
         bool AwardKill = false;
-        if (auto* Record = EM.GetComponent<DeathRecordComponent>(EntityID))
+        const uint32_t ExpectedDeadGen =
+            (It->second.Generation + 1u == 0u) ? 1u : (It->second.Generation + 1u);
+        if (!EM.IsAlive(EntityID) &&
+            (It->second.Generation == 0u || CurrentGen == ExpectedDeadGen))
         {
-            if (Record->CountedByTriggers)
+            if (auto* Record = EM.GetComponent<DeathRecordComponent>(EntityID))
             {
-                It = mTrackedUnits.erase(It);
-                continue;
+                if (Record->CountedByTriggers)
+                {
+                    It = mTrackedUnits.erase(It);
+                    continue;
+                }
+                if (Record->VictimPlayerID >= 0)
+                    Info.PlayerID = Record->VictimPlayerID;
+                if (Record->VictimUnitID >= 0)
+                    Info.UnitID = Record->VictimUnitID;
+                KillerPlayerID = Record->KillerPlayerID;
+                AwardKill = Record->AwardKill;
+                Record->CountedByTriggers = true;
             }
-            if (Record->VictimPlayerID >= 0)
-                Info.PlayerID = Record->VictimPlayerID;
-            if (Record->VictimUnitID >= 0)
-                Info.UnitID = Record->VictimUnitID;
-            KillerPlayerID = Record->KillerPlayerID;
-            AwardKill = Record->AwardKill;
-            Record->CountedByTriggers = true;
         }
 
         RecordUnitDeath(Info.PlayerID, Info.UnitID, KillerPlayerID, AwardKill);
         It = mTrackedUnits.erase(It);
+    }
+
+    const auto& AliveUnits = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
+    for (int ID : AliveUnits)
+    {
+        auto* Unit = EM.GetComponent<UnitComponent>(ID);
+        auto* Player = EM.GetComponent<PlayerComponent>(ID);
+        if (!Unit || !Player || Unit->HitPoints <= 0)
+            continue;
+        mTrackedUnits[ID] = { Player->PlayerID, Unit->ChkUnitID, EM.GetGeneration(ID) };
     }
 }
 
@@ -1342,7 +1406,7 @@ void TriggerVM::UpdateRescuePassiveUnits(Core::ECS::EntityManager& EM)
         return;
 
     const float RescueRangeSq = kRescuePassiveRangePixels * kRescuePassiveRangePixels;
-    auto EntityIds = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+    const auto& EntityIds = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>();
 
     std::vector<int> RescueIDs;
     std::vector<int> RescuerIDs;
@@ -1522,7 +1586,7 @@ Core::Math::Vec2 TriggerVM::ResolveAIScriptTarget(Core::ECS::EntityManager& EM, 
     Core::Math::Vec2 Origin{};
     bool HasOrigin = false;
 
-    auto MyUnits = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+    const auto& MyUnits = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>();
     for (int ID : MyUnits)
     {
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
@@ -1537,7 +1601,7 @@ Core::Math::Vec2 TriggerVM::ResolveAIScriptTarget(Core::ECS::EntityManager& EM, 
         break;
     }
 
-    auto Targets = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+    const auto& Targets = EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>();
     for (int ID : Targets)
     {
         auto* Player = EM.GetComponent<PlayerComponent>(ID);
@@ -1562,7 +1626,7 @@ Core::Math::Vec2 TriggerVM::ResolveAIScriptTarget(Core::ECS::EntityManager& EM, 
 int TriggerVM::IssueAIScriptOrders(Core::ECS::EntityManager& EM, RunningAIScript& Script, const Core::Math::Vec2& Target)
 {
     std::vector<int> Attackers;
-    for (int ID : EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+    for (int ID : EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>())
     {
         auto* Unit = EM.GetComponent<UnitComponent>(ID);
         auto* Player = EM.GetComponent<PlayerComponent>(ID);

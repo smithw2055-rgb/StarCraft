@@ -53,12 +53,30 @@ inline bool SaveGame(const std::string& FilePath,
     return SaveCurrentGameToFile(FilePath, App, Menu, Hud);
 }
 
+inline bool SaveGame(const std::string& FilePath,
+                     const AppRuntime& App,
+                     const GameMenuRuntime& Menu,
+                     const UI::Hud& Hud,
+                     const GameSession& Session)
+{
+    return SaveCurrentGameToFile(FilePath, App, Menu, Hud, Session);
+}
+
 inline bool LoadGame(const std::string& FilePath,
                      const AppRuntime& App,
                      GameMenuRuntime& Menu,
                      UI::Hud& Hud)
 {
     return LoadCurrentGameFromFile(FilePath, App, Menu, Hud);
+}
+
+inline bool LoadGame(const std::string& FilePath,
+                     const AppRuntime& App,
+                     GameMenuRuntime& Menu,
+                     UI::Hud& Hud,
+                     GameSession& Session)
+{
+    return LoadCurrentGameFromFile(FilePath, App, Menu, Hud, Session);
 }
 
 inline bool SaveReplay(GameSession& Session, const std::string& FilePath)

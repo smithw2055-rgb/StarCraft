@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "Client/Entity.h"
+#include "Core/Concurrency/JobSystem.h"
 #include "Core/Platform/Platform.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
@@ -214,45 +215,51 @@ void Hud::UpdateMinimapTerrain(const Game::Map::GameMap* EcsMap,
     if (mMinimapPixels.size() != TileCount)
         mMinimapPixels.resize(TileCount);
 
-    for (int Y = 0; Y < MapH; ++Y)
-    {
-        for (int X = 0; X < MapW; ++X)
+    Core::Concurrency::JobSystem::Instance().ParallelForRange(
+        static_cast<uint32_t>(MapH),
+        32u,
+        [&](uint32_t BeginY, uint32_t EndY, uint32_t /*ThreadIdx*/)
         {
-            const size_t Idx = (size_t)Y * (size_t)MapW + (size_t)X;
-            uint32_t Color = mBaseTerrainColors[Idx];
+            for (uint32_t Y = BeginY; Y < EndY; ++Y)
+            {
+                for (int X = 0; X < MapW; ++X)
+                {
+                    const size_t Idx = (size_t)Y * (size_t)MapW + (size_t)X;
+                    uint32_t Color = mBaseTerrainColors[Idx];
 
-            const bool HasCreep = (EcsMap && EcsMap->IsInBounds(X, Y) && EcsMap->GetTile(X, Y).HasCreep) ||
-                                  (ClientMap && !ClientMap->Creep.empty() && Idx < ClientMap->Creep.size() && ClientMap->Creep[Idx]);
-            if (HasCreep)
-            {
-                Color = 0xFF80286Eu; // Creep purple
-            }
+                    const bool HasCreep = (EcsMap && EcsMap->IsInBounds(X, (int)Y) && EcsMap->GetTile(X, (int)Y).HasCreep) ||
+                                          (ClientMap && !ClientMap->Creep.empty() && Idx < ClientMap->Creep.size() && ClientMap->Creep[Idx]);
+                    if (HasCreep)
+                    {
+                        Color = 0xFF80286Eu; // Creep purple
+                    }
 
-            if (Fog)
-            {
-                const auto FogState = Fog->GetFog(X, Y, LocalPlayerID);
-                if (FogState == Game::Systems::FogState::Unexplored)
-                {
-                    mMinimapPixels[Idx] = 0xFF000000u; // Solid black
-                }
-                else if (FogState == Game::Systems::FogState::Explored)
-                {
-                    const uint8_t R = (uint8_t)(((Color) & 0xFF) * 42 / 100);
-                    const uint8_t G = (uint8_t)(((Color >> 8) & 0xFF) * 42 / 100);
-                    const uint8_t B = (uint8_t)(((Color >> 16) & 0xFF) * 42 / 100);
-                    mMinimapPixels[Idx] = 0xFF000000u | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
-                }
-                else
-                {
-                    mMinimapPixels[Idx] = Color;
+                    if (Fog)
+                    {
+                        const auto FogState = Fog->GetFog(X, (int)Y, LocalPlayerID);
+                        if (FogState == Game::Systems::FogState::Unexplored)
+                        {
+                            mMinimapPixels[Idx] = 0xFF000000u; // Solid black
+                        }
+                        else if (FogState == Game::Systems::FogState::Explored)
+                        {
+                            const uint8_t R = (uint8_t)(((Color) & 0xFF) * 42 / 100);
+                            const uint8_t G = (uint8_t)(((Color >> 8) & 0xFF) * 42 / 100);
+                            const uint8_t B = (uint8_t)(((Color >> 16) & 0xFF) * 42 / 100);
+                            mMinimapPixels[Idx] = 0xFF000000u | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
+                        }
+                        else
+                        {
+                            mMinimapPixels[Idx] = Color;
+                        }
+                    }
+                    else
+                    {
+                        mMinimapPixels[Idx] = Color;
+                    }
                 }
             }
-            else
-            {
-                mMinimapPixels[Idx] = Color;
-            }
-        }
-    }
+        });
 
     if (!sg_isvalid())
         return;

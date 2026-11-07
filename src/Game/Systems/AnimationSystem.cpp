@@ -1,4 +1,5 @@
 #include "Game/Systems/AnimationSystem.h"
+#include "Game/Systems/DeclarativeAnimationPlayer.h"
 #include "Game/SimulationContext.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
@@ -513,7 +514,7 @@ void AnimationSystem::UpdateImageTrees(float DeltaTime)
     auto& EM = mSystemMgr.GetEntityManager();
     // Carried resources are runtime sprite attachments. Ensure workers that
     // currently have no other overlays still receive an image tree.
-    for (int ID : EM.GetEntitiesWith<HarvestComponent>())
+    for (int ID : EM.GetEntitiesWithCached<HarvestComponent>())
     {
         const auto* Harvest = EM.GetComponent<HarvestComponent>(ID);
         if (Harvest && Harvest->CarryingAmount > 0 &&
@@ -3166,6 +3167,34 @@ void AnimationSystem::Update(float DeltaTime)
         AnimState State = GetAnimStateFromComponents(
             Cmd, Combat, Path, Unit, Bldg, Morph, Burrow, Status);
 
+        if (auto* DeclAnim = EM.GetComponent<DeclarativeAnimatorComponent>(Eid))
+        {
+            const char* TargetClip = "Init";
+            switch (State)
+            {
+                case AnimState::Walking:      TargetClip = "Walking";      break;
+                case AnimState::Attacking:    TargetClip = "GndAttkInit";  break;
+                case AnimState::Dying:        TargetClip = "Death";        break;
+                case AnimState::Constructing: TargetClip = "AlmostBuilt";  break;
+                case AnimState::Burrowing:
+                case AnimState::Burrowed:     TargetClip = "Burrow";       break;
+                case AnimState::Unburrowing:  TargetClip = "UnBurrow";     break;
+                case AnimState::LiftingOff:   TargetClip = "LiftOff";      break;
+                case AnimState::Landing:      TargetClip = "Landing";      break;
+                default:                      TargetClip = "Init";         break;
+            }
+            if ((!DeclAnim->NoBreakSectionActive || State == AnimState::Dying) &&
+                DeclAnim->CurrentClipName != TargetClip)
+            {
+                DeclAnim->CurrentClipName = TargetClip;
+                DeclAnim->CurrentTick = 0;
+                DeclAnim->TickAccumulator = 0.0f;
+                DeclAnim->NoBreakSectionActive = false;
+                DeclAnim->Playing = true;
+                DeclAnim->LoopsCompleted = 0;
+            }
+        }
+
         const bool UsedIScript = UpdateIScriptAnimation(
             Eid, DeltaTime, State, *Render, *Trans, Path, Player,
             Combat, Bldg, Status, Prod, Harvest, Bullet);
@@ -3295,8 +3324,8 @@ void AnimationSystem::Update(float DeltaTime)
     // replacing the unit image. Tank-mode turret SpecialState1 aligns first;
     // the sieged hull Init lowers the body and signals completion. Unsiege
     // keeps the sieged images until hull SpecialState2 raises them and signals.
-    for (int Eid : EM.GetEntitiesWith<SiegeTransitionComponent, UnitComponent,
-                                     RenderComponent>())
+    for (int Eid : EM.GetEntitiesWithCached<SiegeTransitionComponent, UnitComponent,
+                                            RenderComponent>())
     {
         auto* Siege = EM.GetComponent<SiegeTransitionComponent>(Eid);
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
@@ -3346,7 +3375,7 @@ void AnimationSystem::Update(float DeltaTime)
     // The original mineral GRPs contain four authored depletion frames. Keep
     // the displayed crystal size tied to the actual remaining resource after
     // iscript has advanced, and remove the whole sprite at zero resources.
-    for (int Eid : EM.GetEntitiesWith<ResourceComponent, RenderComponent>())
+    for (int Eid : EM.GetEntitiesWithCached<ResourceComponent, RenderComponent>())
     {
         auto* Resource = EM.GetComponent<ResourceComponent>(Eid);
         auto* Render = EM.GetComponent<RenderComponent>(Eid);

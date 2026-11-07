@@ -152,6 +152,7 @@ private:
     {
         int PlayerID = -1;
         int UnitID = -1;
+        uint32_t Generation = 0;
     };
 
     std::vector<int> ResolvePlayers(int Owner, uint32_t PlayerGroup) const;

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "AppRuntime.h"
+#include "Core/ECS/WorldSnapshot.h"
 #include "Core/Utils/Logger.h"
 #include "Main/GameLoop/HudResourceSync.h"
 #include "Main/GameLoop/GameSaveState.h"
@@ -25,12 +26,53 @@ inline GameSaveSnapshot CaptureGameSaveSnapshot(const AppRuntime& App,
     return Snapshot;
 }
 
+inline GameSaveSnapshot CaptureAuthoritativeGameSaveSnapshot(
+    const AppRuntime& App,
+    const GameMenuRuntime& Menu,
+    const UI::Hud& Hud,
+    const GameSession& Session)
+{
+    GameSaveSnapshot Snapshot = CaptureGameSaveSnapshot(App, Menu, Hud);
+    if (Session.IsEcsInitialized())
+    {
+        Snapshot.HasWorldSnapshot = true;
+        Snapshot.SimulationTick = Session.SimulationTick;
+        Snapshot.WorldSnapshot = Core::ECS::WorldSnapshotSerializer::CaptureSnapshot(
+            Session.EcsSysMgr.GetEntityManager(),
+            static_cast<uint32_t>(Session.SimulationTick));
+    }
+    return Snapshot;
+}
+
 inline void ApplyGameSaveSnapshot(const GameSaveSnapshot& Snapshot,
                                   GameMenuRuntime& Menu,
                                   UI::Hud& Hud)
 {
     RestorePlayerResourcesFromHudState(Hud, Snapshot.Resources);
     Menu.RestorePaused(Snapshot.Paused);
+}
+
+inline void ApplyAuthoritativeGameSaveSnapshot(
+    const GameSaveSnapshot& Snapshot,
+    GameMenuRuntime& Menu,
+    UI::Hud& Hud,
+    GameSession& Session)
+{
+    if (Snapshot.HasWorldSnapshot && Session.IsEcsInitialized())
+    {
+        Session.Entities().ActivateWorld();
+        Core::ECS::WorldSnapshotSerializer::RestoreSnapshot(
+            Session.Entities(), Snapshot.WorldSnapshot);
+        Session.SimulationTick = Snapshot.SimulationTick;
+        Session.KinematicsStream.ExtractFromECS(Session.Entities());
+        if (Snapshot.WorldSnapshot.HasEconomyResource)
+        {
+            SyncHudFromPlayerResources(Hud);
+            Menu.RestorePaused(Snapshot.Paused);
+            return;
+        }
+    }
+    ApplyGameSaveSnapshot(Snapshot, Menu, Hud);
 }
 
 inline bool SaveGameSnapshotToFile(const std::string& FilePath, const GameSaveSnapshot& Snapshot)
@@ -68,6 +110,20 @@ inline bool SaveCurrentGameToFile(const std::string& FilePath,
     return true;
 }
 
+inline bool SaveCurrentGameToFile(const std::string& FilePath,
+                                  const AppRuntime& App,
+                                  const GameMenuRuntime& Menu,
+                                  const UI::Hud& Hud,
+                                  const GameSession& Session)
+{
+    const GameSaveSnapshot Snapshot = CaptureAuthoritativeGameSaveSnapshot(App, Menu, Hud, Session);
+    if (!SaveGameSnapshotToFile(FilePath, Snapshot))
+        return false;
+
+    Core::Utils::Logger::Info("GameController", "Game saved to " + FilePath);
+    return true;
+}
+
 inline bool LoadCurrentGameFromFile(const std::string& FilePath,
                                     const AppRuntime& App,
                                     GameMenuRuntime& Menu,
@@ -78,6 +134,21 @@ inline bool LoadCurrentGameFromFile(const std::string& FilePath,
         return false;
 
     ApplyGameSaveSnapshot(Snapshot, Menu, Hud);
+    Core::Utils::Logger::Info("GameController", "Game loaded from " + FilePath);
+    return true;
+}
+
+inline bool LoadCurrentGameFromFile(const std::string& FilePath,
+                                    const AppRuntime& App,
+                                    GameMenuRuntime& Menu,
+                                    UI::Hud& Hud,
+                                    GameSession& Session)
+{
+    GameSaveSnapshot Snapshot = CaptureGameSaveSnapshot(App, Menu, Hud);
+    if (!LoadGameSnapshotFromFile(FilePath, Snapshot))
+        return false;
+
+    ApplyAuthoritativeGameSaveSnapshot(Snapshot, Menu, Hud, Session);
     Core::Utils::Logger::Info("GameController", "Game loaded from " + FilePath);
     return true;
 }

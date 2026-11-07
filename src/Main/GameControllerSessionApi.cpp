@@ -43,7 +43,8 @@ bool GameController::SaveGame(const std::string& FilePath)
         FilePath,
         mRuntime.App.Runtime,
         mRuntime.App.Menu,
-        mRuntime.Client.Hud);
+        mRuntime.Client.Hud,
+        mRuntime.Session.Game);
 }
 
 bool GameController::LoadGame(const std::string& FilePath)
@@ -52,7 +53,8 @@ bool GameController::LoadGame(const std::string& FilePath)
         FilePath,
         mRuntime.App.Runtime,
         mRuntime.App.Menu,
-        mRuntime.Client.Hud);
+        mRuntime.Client.Hud,
+        mRuntime.Session.Game);
 }
 
 bool GameController::SaveReplay(const std::string& FilePath)
