@@ -46,6 +46,18 @@ public:
     std::string_view GetName() const override { return mGroupName; }
     SystemPhase GetPhase() const override { return mPhase; }
 
+    size_t GetSubSystemCount() const override { return mSubSystems.size(); }
+
+    ISystem* GetSubSystemAt(size_t Index) override
+    {
+        return Index < mSubSystems.size() ? mSubSystems[Index].Instance.get() : nullptr;
+    }
+
+    const ISystem* GetSubSystemAt(size_t Index) const override
+    {
+        return Index < mSubSystems.size() ? mSubSystems[Index].Instance.get() : nullptr;
+    }
+
     void BindWorld(EntityManager* World) { mBoundWorld = World; }
 
     template <typename SubSystemT, typename... Args>
@@ -99,6 +111,11 @@ public:
         {
             if (auto* Casted = dynamic_cast<SubSystemT*>(Slot.Instance.get()))
                 return Casted;
+            if (auto* NestedGroup = dynamic_cast<SystemGroup*>(Slot.Instance.get()))
+            {
+                if (auto* Found = NestedGroup->FindSubSystem<SubSystemT>())
+                    return Found;
+            }
         }
         return nullptr;
     }
@@ -118,28 +135,28 @@ public:
                 continue;
             }
 
-            const auto Begin = std::chrono::steady_clock::now();
+            const auto Start = std::chrono::steady_clock::now();
             Slot.Instance->Update(DeltaTime);
             const auto ElapsedUs = static_cast<uint64_t>(
-                std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - Begin).count()));
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - Start)
+                    .count());
 
             ++Slot.TotalCalls;
-            Slot.LastDurationMicroseconds = ElapsedUs;
-
-            if (Slot.FlushBarrierAfter && World)
+            if (Slot.FlushBarrierAfter && World && !World->Commands().IsEmpty())
             {
                 World->FlushCommands();
-                ++mSubBarrierFlushCount;
+                ++mBarrierFlushes;
             }
 
             mProfiles.push_back({Slot.Name, true, ElapsedUs, Slot.TotalCalls});
         }
     }
 
-    size_t GetSubSystemCount() const { return mSubSystems.size(); }
-    uint64_t GetSubBarrierFlushCount() const { return mSubBarrierFlushCount; }
+    const std::vector<SubSystemProfileEntry>& GetLastSubSystemProfiles() const { return mProfiles; }
     const std::vector<SubSystemProfileEntry>& GetSubSystemProfiles() const { return mProfiles; }
+    uint64_t GetBarrierFlushCount() const { return mBarrierFlushes; }
+    uint64_t GetSubBarrierFlushCount() const { return mBarrierFlushes; }
 
 private:
     struct SubSystemSlot
@@ -147,7 +164,6 @@ private:
         std::string Name;
         bool Enabled = true;
         bool FlushBarrierAfter = false;
-        uint64_t LastDurationMicroseconds = 0;
         uint64_t TotalCalls = 0;
         std::unique_ptr<ISystem> Instance;
     };
@@ -157,7 +173,7 @@ private:
     EntityManager* mBoundWorld = nullptr;
     std::vector<SubSystemSlot> mSubSystems;
     std::vector<SubSystemProfileEntry> mProfiles;
-    uint64_t mSubBarrierFlushCount = 0;
+    uint64_t mBarrierFlushes = 0;
 };
 
 } // namespace Core::ECS

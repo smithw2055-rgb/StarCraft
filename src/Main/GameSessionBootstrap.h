@@ -10,6 +10,9 @@
 #include <vector>
 
 #include "Core/Audio/AudioSystem.h"
+#include "Core/Audio/ModernAudioEventRouter.h"
+#include "Core/ECS/SystemGroup.h"
+#include "Render/ModernRenderPipeline.h"
 #include "Core/Utils/Logger.h"
 #include "Game/AI/AIDifficulty.h"
 #include "Game/AI/AIBrain.h"
@@ -432,33 +435,79 @@ private:
 inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSystem& Audio)
 {
     auto& SysMgr = Session.Systems();
-    SysMgr.RegisterSystem(std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SysMgr));
+    auto& World = Session.Entities();
+
+    // Group 1: Spatial & Command Ingestion Group (FixedSimulation Phase)
+    auto SpatialAndCommandGroup = std::make_unique<Core::ECS::SystemGroup>(
+        "SpatialAndCommandGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
+    SpatialAndCommandGroup->AddSubSystemInstance(
+        std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SysMgr), false);
     auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
     CmdSys->Init(&SysMgr);
-    SysMgr.RegisterSystem(std::move(CmdSys));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::MovementSystem>(SysMgr, &Session.MutableEcsMap()));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::HarvestSystem>(SysMgr));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::BuildingSystem>(SysMgr));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::ProductionSystem>(SysMgr));
+    SpatialAndCommandGroup->AddSubSystemInstance(std::move(CmdSys), true);
+    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(SpatialAndCommandGroup));
 
+    // Group 2: Locomotion, Economy & Construction Group (FixedSimulation Phase)
+    auto LocomotionAndEconomyGroup = std::make_unique<Core::ECS::SystemGroup>(
+        "LocomotionAndEconomyGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
+    LocomotionAndEconomyGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::MovementSystem>(SysMgr, &Session.MutableEcsMap()), false);
+    LocomotionAndEconomyGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::HarvestSystem>(SysMgr), false);
+    LocomotionAndEconomyGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::BuildingSystem>(SysMgr), true);
+    LocomotionAndEconomyGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::ProductionSystem>(SysMgr), true);
+    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(LocomotionAndEconomyGroup));
+
+    // Group 3: Combat, Projectiles, FogOfWar & Race Mechanics Group (FixedSimulation Phase)
+    auto CombatAndRaceGroup = std::make_unique<Core::ECS::SystemGroup>(
+        "CombatAndRaceGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
     auto BulletSys = std::make_unique<Game::Systems::BulletSystem>(SysMgr);
     auto* BulletSysRaw = BulletSys.get();
-    SysMgr.RegisterSystem(std::move(BulletSys));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::CombatSystem>(
-        SysMgr, *BulletSysRaw, &Session.MutableEcsMap()));
-
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::UpgradeSystem>(SysMgr));
+    CombatAndRaceGroup->AddSubSystemInstance(std::move(BulletSys), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::CombatSystem>(SysMgr, *BulletSysRaw, &Session.MutableEcsMap()), true);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::UpgradeSystem>(SysMgr), false);
     auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, &Session.MutableEcsMap());
     FogSys->SetLocalPlayerID(Session.GetLocalPlayerID());
     FogSys->SetObserverRevealAll(Detail::IsAiObserverMatch());
     Session.SetFogSystem(FogSys.get());
-    SysMgr.RegisterSystem(std::move(FogSys));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::ZergSystem>(SysMgr, &Session.MutableEcsMap()));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::ProtossSystem>(SysMgr, &Session.MutableEcsMap()));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::NukeAndSpiderMineSystem>(SysMgr, *BulletSysRaw));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::SpellSystem>(SysMgr));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::AnimationSystem>(SysMgr, &Audio, BulletSysRaw));
-    SysMgr.RegisterSystem(std::make_unique<Game::Systems::TransportSystem>(SysMgr));
+    CombatAndRaceGroup->AddSubSystemInstance(std::move(FogSys), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::ZergSystem>(SysMgr, &Session.MutableEcsMap()), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::ProtossSystem>(SysMgr, &Session.MutableEcsMap()), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::NukeAndSpiderMineSystem>(SysMgr, *BulletSysRaw), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::SpellSystem>(SysMgr), true);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::AnimationSystem>(SysMgr, &Audio, BulletSysRaw), false);
+    CombatAndRaceGroup->AddSubSystemInstance(
+        std::make_unique<Game::Systems::TransportSystem>(SysMgr), true);
+    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(CombatAndRaceGroup));
+
+    // Group 4: Presentation & Audio Event Router Group (Presentation Phase)
+    auto PresentationGroup = std::make_unique<Core::ECS::SystemGroup>(
+        "PresentationAndAudioGroup", Core::ECS::SystemPhase::Presentation, &World);
+    PresentationGroup->AddSubSystemInstance(
+        std::make_unique<Core::Audio::ModernAudioEventRouterSystem>(SysMgr, nullptr, &Audio), false);
+    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::Presentation, std::move(PresentationGroup));
+
+    // Group 5: Modern Render Pipeline Extraction Group (RenderExtract Phase)
+    auto RenderExtractGroup = std::make_unique<Core::ECS::SystemGroup>(
+        "RenderExtractionGroup", Core::ECS::SystemPhase::RenderExtract, &World);
+    RenderExtractGroup->AddSubSystemInstance(
+        std::make_unique<Render::ModernRenderPipelineSystem>(SysMgr, nullptr), false);
+    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::RenderExtract, std::move(RenderExtractGroup));
+
+    // Bind LockstepSync deterministic FNV-1a world state hash callback
+    Session.NetSync.SetStateHashCallback([&Session]() {
+        return Core::ECS::WorldSnapshotSerializer::ComputeWorldHashFNV1a(
+            Session.Entities(), Session.NetSync.GetCurrentFrame());
+    });
 
     auto& SimCtx = Game::SimulationContext::Get(Session.Entities());
     SimCtx.Map = &Session.GetEcsMap();

@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "Client/MapLoader.h"
+#include "Core/ECS/SoAComponentStream.h"
 #include "Core/ECS/SystemManager.h"
+#include "Core/ECS/WorldSnapshot.h"
+#include "Game/Networking/RollbackStateManager.h"
 #include "Game/BWAPI/BWAPIInterface.h"
 #include "Game/IScriptVM.h"
 #include "Game/Map/Map.h"
@@ -47,11 +50,19 @@ struct GameSession
     void UpdateSystems(float DeltaSeconds)
     {
         EcsSysMgr.UpdateAll(DeltaSeconds);
+        KinematicsStream.ExtractFromECS(EcsSysMgr.GetEntityManager());
     }
 
     void UpdateSimulationStep(float DeltaSeconds)
     {
+        if (RollbackRecordingEnabled)
+        {
+            RollbackMgr.RecordFrame(
+                EcsSysMgr.GetEntityManager(),
+                static_cast<uint32_t>(SimulationTick));
+        }
         EcsSysMgr.UpdateSimulationStep(DeltaSeconds);
+        KinematicsStream.ExtractFromECS(EcsSysMgr.GetEntityManager());
     }
 
     void UpdatePresentationFrame(float DeltaSeconds)
@@ -79,21 +90,29 @@ struct GameSession
             });
     }
 
-    void SyncCreepPresentation()
+    size_t SyncCreepPresentation()
     {
         const size_t TileCount = (size_t)MapData.Width * (size_t)MapData.Height;
         if (MapData.Creep.size() != TileCount)
             MapData.Creep.resize(TileCount, 0);
 
+        size_t ChangedTiles = 0;
         for (int Y = 0; Y < MapData.Height; ++Y)
         {
             const size_t RowBase = (size_t)Y * (size_t)MapData.Width;
             for (int X = 0; X < MapData.Width; ++X)
             {
                 const uint8_t HasCreep = EcsMap.GetTile(X, Y).HasCreep ? 1 : 0;
-                MapData.Creep[RowBase + (size_t)X] = HasCreep;
+                uint8_t& Dest = MapData.Creep[RowBase + (size_t)X];
+                if (Dest != HasCreep)
+                {
+                    Dest = HasCreep;
+                    ++ChangedTiles;
+                }
             }
         }
+        LastCreepSyncChangedTiles = ChangedTiles;
+        return ChangedTiles;
     }
 
     Game::Map::GameMap& MutableEcsMap()
@@ -574,6 +593,10 @@ struct GameSession
     Game::Replay::ReplayWriter ReplayWriter;
     Game::Networking::LockstepSync NetSync;
     Game::Networking::SyncTransport NetTransport;
+    Game::Networking::RollbackStateManager RollbackMgr;
+    Core::ECS::KinematicsSoAStream KinematicsStream;
+    bool RollbackRecordingEnabled = false;
+    size_t LastCreepSyncChangedTiles = 0;
     Game::Systems::FogOfWarSystem* FogSystem = nullptr;
     uint32_t ReplayFrame = 0;
     uint64_t SimulationTick = 0;

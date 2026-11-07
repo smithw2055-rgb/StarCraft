@@ -166,6 +166,8 @@ struct FixedVec2
         return DX * DX + DY * DY;
     }
 
+    bool operator==(const FixedVec2& Other) const { return X == Other.X && Y == Other.Y; }
+    bool operator!=(const FixedVec2& Other) const { return !(*this == Other); }
     static FixedVec2 Zero() { return {fp8::Zero(), fp8::Zero()}; }
 };
 

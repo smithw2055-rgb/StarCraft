@@ -2037,3 +2037,70 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
     set_tests_properties(ModernEngineVerificationTest PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
+
+# ============================================================================
+# Modular Engine Object Library (Task 1: Eliminate Redundant Compilation)
+# ============================================================================
+add_library(StarCraftCoreObj OBJECT
+    src/Core/ECS/EntityManager.cpp
+    src/Core/ECS/SystemManager.cpp
+    src/Core/Utils/Logger.cpp
+)
+target_include_directories(StarCraftCoreObj PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+)
+if(MSVC)
+    target_compile_options(StarCraftCoreObj PRIVATE /W4 /utf-8 /permissive-)
+    target_compile_definitions(StarCraftCoreObj PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(StarCraftCoreObj PRIVATE -Wall -Wextra -Wpedantic -pthread)
+endif()
+
+option(BUILD_PHASE14_FULL_STACK_ENGINE_REFACTOR_TEST "Build Phase 14 full-stack engine modernization & rollback verification test" ON)
+if(BUILD_PHASE14_FULL_STACK_ENGINE_REFACTOR_TEST)
+    add_executable(Phase14FullStackEngineRefactorTest
+        tests/Regression/Phase14FullStackEngineRefactorTest.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
+        src/Game/IScriptVM.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+        src/Game/Races/RaceDef.cpp
+        src/Game/Systems/AnimationSystem.cpp
+        src/Game/Systems/BuildingSystem.cpp
+        src/Game/Systems/BulletSystem.cpp
+        src/Game/Systems/CombatSystem.cpp
+        src/Game/Systems/CommandSystem.cpp
+        src/Game/Systems/FogOfWarSystem.cpp
+        src/Game/Systems/HarvestSystem.cpp
+        src/Game/Systems/MovementSystem.cpp
+        src/Game/Systems/NukeAndSpiderMineSystem.cpp
+        src/Game/Systems/ProductionSystem.cpp
+        src/Game/Systems/ProtossSystem.cpp
+        src/Game/Systems/SpellSystem.cpp
+        src/Game/Systems/TransportSystem.cpp
+        src/Game/Systems/UpgradeSystem.cpp
+        src/Game/Systems/ZergSystem.cpp
+    )
+
+    target_include_directories(Phase14FullStackEngineRefactorTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party
+    )
+
+    target_compile_definitions(Phase14FullStackEngineRefactorTest PRIVATE
+        SOKOL_DUMMY_BACKEND
+        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+
+    if(MSVC)
+        target_compile_options(Phase14FullStackEngineRefactorTest PRIVATE /W4 /utf-8 /permissive-)
+    else()
+        target_compile_options(Phase14FullStackEngineRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(Phase14FullStackEngineRefactorTest PRIVATE -pthread)
+    endif()
+
+    add_test(NAME Phase14FullStackEngineRefactorTest COMMAND Phase14FullStackEngineRefactorTest)
+endif()

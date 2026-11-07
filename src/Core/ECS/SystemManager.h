@@ -39,6 +39,11 @@ public:
     virtual void Update(float DeltaTime) = 0;
     virtual std::string_view GetName() const = 0;
     virtual SystemPhase GetPhase() const { return SystemPhase::FixedSimulation; }
+
+    // Hierarchical introspection hooks for SystemGroup traversal
+    virtual size_t GetSubSystemCount() const { return 0; }
+    virtual ISystem* GetSubSystemAt(size_t /*Index*/) { return nullptr; }
+    virtual const ISystem* GetSubSystemAt(size_t /*Index*/) const { return nullptr; }
 };
 
 class SystemManager
@@ -65,8 +70,8 @@ public:
     {
         for (auto& Entry : mSystems)
         {
-            if (auto* Casted = dynamic_cast<SystemT*>(Entry.Instance.get()))
-                return Casted;
+            if (auto* Found = FindSystemRecursive<SystemT>(Entry.Instance.get()))
+                return Found;
         }
         return nullptr;
     }
@@ -76,8 +81,8 @@ public:
     {
         for (const auto& Entry : mSystems)
         {
-            if (const auto* Casted = dynamic_cast<const SystemT*>(Entry.Instance.get()))
-                return Casted;
+            if (const auto* Found = FindSystemRecursive<SystemT>(Entry.Instance.get()))
+                return Found;
         }
         return nullptr;
     }
@@ -96,6 +101,38 @@ public:
     const std::vector<SystemProfileEntry>& GetLastProfileEntries() const { return mLastProfileEntries; }
 
 private:
+    template <typename SystemT>
+    static SystemT* FindSystemRecursive(ISystem* Node)
+    {
+        if (!Node)
+            return nullptr;
+        if (auto* Casted = dynamic_cast<SystemT*>(Node))
+            return Casted;
+        const size_t SubCount = Node->GetSubSystemCount();
+        for (size_t i = 0; i < SubCount; ++i)
+        {
+            if (auto* Found = FindSystemRecursive<SystemT>(Node->GetSubSystemAt(i)))
+                return Found;
+        }
+        return nullptr;
+    }
+
+    template <typename SystemT>
+    static const SystemT* FindSystemRecursive(const ISystem* Node)
+    {
+        if (!Node)
+            return nullptr;
+        if (const auto* Casted = dynamic_cast<const SystemT*>(Node))
+            return Casted;
+        const size_t SubCount = Node->GetSubSystemCount();
+        for (size_t i = 0; i < SubCount; ++i)
+        {
+            if (const auto* Found = FindSystemRecursive<SystemT>(Node->GetSubSystemAt(i)))
+                return Found;
+        }
+        return nullptr;
+    }
+
     struct RegisteredSystem
     {
         SystemPhase Phase = SystemPhase::FixedSimulation;

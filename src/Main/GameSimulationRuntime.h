@@ -27,7 +27,14 @@ inline void UpdateGameplaySimulationRuntime(
         ExecuteNetworkAction(Session, Action);
     });
 
-    Session.UpdateSystems(Dt);
+    // Staged Dual-Phase Execution (Unity PlayerLoop / Godot SceneTree physics vs process split):
+    // 1. Advance deterministic simulation phases (Input -> NetworkLockstep -> FixedSimulation -> TransformPropagation)
+    //    and populate Session.KinematicsStream SoA buffers + optional RollbackStateManager ring buffer.
+    Session.UpdateSimulationStep(Dt);
+
+    // 2. Advance presentation & render extraction phases (Presentation -> RenderExtract)
+    Session.UpdatePresentationFrame(Dt);
+
     Audio.UpdateForClientView(Client, Dt);
 
     if (Session.IsReplayRecording())

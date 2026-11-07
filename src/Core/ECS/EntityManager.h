@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "Core/ECS/EntityCommandBuffer.h"
+#include "Core/ECS/SmallBuffer.h"
 #include "Core/ECS/EventBus.h"
 #include "Core/ECS/WorldContext.h"
 
@@ -350,6 +351,61 @@ public:
         if (!mPools[ID])
             return nullptr;
         return static_cast<const ComponentPool<T>*>(mPools[ID].get())->GetComponent(Id);
+    }
+
+
+    // Generational EntityHandle safe component accessors (Unity DOTS / Godot RID style):
+    // Automatically verifies generation to prevent ABA slot-recycling bugs.
+    EntityID ResolveAliveId(EntityHandle Handle) const
+    {
+        return IsAlive(Handle) ? Handle.Id : InvalidEntity;
+    }
+
+    template <typename T>
+    bool HasComponent(EntityHandle Handle) const
+    {
+        return IsAlive(Handle) && HasComponent<T>(Handle.Id);
+    }
+
+    template <typename T>
+    T* GetComponent(EntityHandle Handle)
+    {
+        return IsAlive(Handle) ? GetComponent<T>(Handle.Id) : nullptr;
+    }
+
+    template <typename T>
+    const T* GetComponent(EntityHandle Handle) const
+    {
+        return IsAlive(Handle) ? GetComponent<T>(Handle.Id) : nullptr;
+    }
+
+    template <typename T>
+    T* TryGetComponent(EntityHandle Handle)
+    {
+        return GetComponent<T>(Handle);
+    }
+
+    template <typename T>
+    const T* TryGetComponent(EntityHandle Handle) const
+    {
+        return GetComponent<T>(Handle);
+    }
+
+    template <typename T>
+    T* AddComponentIfAlive(EntityHandle Handle)
+    {
+        if (!IsAlive(Handle))
+            return nullptr;
+        return &AddComponent<T>(Handle.Id);
+    }
+
+    template <typename T>
+    bool RemoveComponentIfAlive(EntityHandle Handle)
+    {
+        if (!IsAlive(Handle) || !HasComponent<T>(Handle.Id))
+            return false;
+        RemoveComponent<T>(Handle.Id);
+        return true;
     }
 
     template <typename T>

@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "Core/Color.h"
+#include "Core/ECS/EntityManager.h"
+#include "Core/ECS/SmallBuffer.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Math/FixedPoint.h"
 #include "Game/DataEnums.h"
@@ -581,6 +583,34 @@ struct CombatComponent
     int LastDamagerEntityID = -1;
     float AutoTargetLockSeconds = 0.0f;
     bool SelfDestructOnAttack = false;
+    Core::ECS::EntityHandle TargetHandle{};
+    Core::ECS::EntityHandle AutoTargetHandle{};
+
+    void BindTargetHandle(const Core::ECS::EntityManager& EM, Core::ECS::EntityID TargetId)
+    {
+        TargetEntityID = TargetId;
+        TargetHandle = TargetId > 0 ? EM.GetEntityHandle(TargetId) : Core::ECS::EntityHandle{};
+    }
+
+    Core::ECS::EntityID ResolveValidTargetId(const Core::ECS::EntityManager& EM)
+    {
+        if (TargetHandle.IsValid())
+        {
+            if (!EM.IsAlive(TargetHandle))
+            {
+                TargetEntityID = -1;
+                TargetHandle = {};
+                return -1;
+            }
+            return TargetHandle.Id;
+        }
+        if (TargetEntityID > 0 && !EM.IsAlive(TargetEntityID))
+        {
+            TargetEntityID = -1;
+            return -1;
+        }
+        return TargetEntityID;
+    }
 };
 
 struct SiegeTransitionComponent
@@ -804,7 +834,7 @@ inline void ApplyCollisionBounds(PathfindingComponent& Path, const UnitCollision
 
 struct ProductionComponent
 {
-    std::vector<int> Queue;
+    Core::ECS::SmallBuffer<int, 16> Queue;
     float TrainingProgress = 0.0f;
     float TrainingTimePerUnit = 0.0f;
     int CurrentTrainingUnitDefID = -1;
@@ -845,7 +875,7 @@ struct ShieldImpactRequest
 
 struct ShieldImpactComponent
 {
-    std::vector<ShieldImpactRequest> Impacts;
+    Core::ECS::SmallBuffer<ShieldImpactRequest, 16> Impacts;
 };
 
 struct BulletComponent
@@ -1056,7 +1086,34 @@ struct SpellCooldown
 
 struct LoadedUnitsComponent
 {
-    std::vector<int> PassengerIDs;
+    Core::ECS::SmallBuffer<int, 16> PassengerIDs;
+    Core::ECS::SmallBuffer<Core::ECS::EntityHandle, 16> PassengerHandles;
+
+    void AddPassengerHandle(Core::ECS::EntityHandle Handle)
+    {
+        if (!Handle.IsValid())
+            return;
+        PassengerIDs.push_back(Handle.Id);
+        PassengerHandles.push_back(Handle);
+    }
+
+    void PruneInvalidPassengers(const Core::ECS::EntityManager& EM)
+    {
+        if (PassengerHandles.empty())
+            return;
+        Core::ECS::SmallBuffer<int, 16> ValidIds;
+        Core::ECS::SmallBuffer<Core::ECS::EntityHandle, 16> ValidHandles;
+        for (size_t i = 0; i < PassengerHandles.size(); ++i)
+        {
+            if (EM.IsAlive(PassengerHandles[i]))
+            {
+                ValidIds.push_back(PassengerHandles[i].Id);
+                ValidHandles.push_back(PassengerHandles[i]);
+            }
+        }
+        PassengerIDs = ValidIds;
+        PassengerHandles = ValidHandles;
+    }
 };
 
 struct PendingTransportLoadComponent
