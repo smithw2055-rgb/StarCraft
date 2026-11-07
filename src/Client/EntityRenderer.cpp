@@ -95,15 +95,16 @@ namespace
         const Render::Color Edge(92, 176, 255, 210);
         const float RadiusX = Game::ProtossPower::PylonRadiusWorld;
         const float RadiusY = RadiusX * 0.5f;
-        for (int Y = -(int)RadiusY; Y <= (int)RadiusY; Y += 4)
+        for (int Y = -(int)RadiusY; Y <= (int)RadiusY; Y += 8)
         {
             const float NormalizedY = (float)Y / RadiusY;
             const float HalfWidth = RadiusX * std::sqrt(
                 std::max(0.0f, 1.0f - NormalizedY * NormalizedY));
+            const float StripH = std::min(8.0f, std::max(1.0f, RadiusY - (float)Y));
             Draw.DrawRect(WorldX - HalfWidth, WorldY + (float)Y,
-                          HalfWidth * 2.0f, 4.0f, Fill);
+                          HalfWidth * 2.0f, StripH, Fill);
         }
-        constexpr int Segments = 64;
+        constexpr int Segments = 32;
         for (int I = 0; I < Segments; ++I)
         {
             const float Angle = ((float)I / (float)Segments) * kTwoPi;
@@ -1269,10 +1270,16 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         CullMaxY = mCameraY + HalfH + 128.0f;
     }
 
-    auto Order = Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                          Game::Components::RenderComponent,
-                                          Game::Components::UnitComponent>();
-    Order.erase(std::remove_if(Order.begin(), Order.end(), [&](int EntityId) {
+    const auto& Candidates = Entities.GetEntitiesWithCached<Game::Components::TransformComponent,
+                                                            Game::Components::RenderComponent,
+                                                            Game::Components::UnitComponent>();
+    auto& SortedItems = mSortedItemsScratch;
+    SortedItems.clear();
+    if (SortedItems.capacity() < Candidates.size())
+        SortedItems.reserve(Candidates.size());
+
+    for (int EntityId : Candidates)
+    {
         auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
         bool HasVisibleEffectChild = false;
@@ -1290,30 +1297,16 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
         }
         if (!Trans || !RenderComp ||
             (!RenderComp->Visible && !HasVisibleEffectChild))
-            return true;
+            continue;
         const auto VisualPos = Trans->GetInterpolatedPosition(mInterpolationAlpha);
-        return VisualPos.X < CullMinX || VisualPos.X > CullMaxX ||
-               VisualPos.Y < CullMinY || VisualPos.Y > CullMaxY;
-    }), Order.end());
+        if (VisualPos.X < CullMinX || VisualPos.X > CullMaxX ||
+            VisualPos.Y < CullMinY || VisualPos.Y > CullMaxY)
+            continue;
 
-    struct RenderSortItem
-    {
-        int EntityId = 0;
-        int Band = 0;
-        int ZOrder = 0;
-        float Y = 0.0f;
-    };
-    std::vector<RenderSortItem> SortedItems;
-    SortedItems.reserve(Order.size());
-    for (int EntityId : Order)
-    {
-        auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
-        auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
-        const auto VisualPos = Trans ? Trans->GetInterpolatedPosition(mInterpolationAlpha) : Core::Math::Vec2{};
         SortedItems.push_back({
             EntityId,
             RenderSortBand(Entities, EntityId),
-            RenderComp ? RenderComp->ZOrder : 0,
+            RenderComp->ZOrder,
             VisualPos.Y
         });
     }
@@ -1340,7 +1333,7 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
     {
         Core::Utils::Logger::Info(
             "EntityRenderer",
-            "visible entity candidates=" + std::to_string(Order.size()) +
+            "visible entity candidates=" + std::to_string(SortedItems.size()) +
                 " cam=" + std::to_string((int)mCameraX) + "," +
                 std::to_string((int)mCameraY) +
                 " zoom=" + std::to_string(mZoom));
@@ -1668,6 +1661,79 @@ void EntityRenderer::Render(Core::ECS::EntityManager& Entities, const std::vecto
             "draw summary sprites=" + std::to_string(DebugSpriteCount) +
                 " fallback=" + std::to_string(DebugFallbackCount));
     }
+}
+
+
+size_t EntityRenderer::SyncRetainedStaticEntities(Core::ECS::EntityManager& Entities)
+{
+    // 1. Prune destroyed or recycled ABA entities from retained CanvasItemRID map
+    for (auto It = mRetainedStaticItems.begin(); It != mRetainedStaticItems.end(); )
+    {
+        if (!Entities.IsAlive(It->second.Handle))
+        {
+            mRenderServer.CanvasItemFree(It->second.CanvasRID);
+            It = mRetainedStaticItems.erase(It);
+        }
+        else
+        {
+            ++It;
+        }
+    }
+
+    // 2. Register or update static Resource / Building entities in RenderServer2D
+    auto SyncEntityHandleSlot = [&](int EntityId) {
+        const auto* Trans = Entities.GetComponent<Game::Components::TransformComponent>(EntityId);
+        const auto* RenderComp = Entities.GetComponent<Game::Components::RenderComponent>(EntityId);
+        if (!Trans || !RenderComp)
+            return;
+
+        auto& Slot = mRetainedStaticItems[EntityId];
+        const Core::ECS::EntityHandle CurrentHandle = Entities.GetEntityHandle(EntityId);
+        if (!Slot.CanvasRID.IsValid() || Slot.Handle != CurrentHandle)
+        {
+            if (Slot.CanvasRID.IsValid())
+                mRenderServer.CanvasItemFree(Slot.CanvasRID);
+            Slot.Handle = CurrentHandle;
+            Slot.CanvasRID = mRenderServer.CanvasItemCreate();
+        }
+
+        mRenderServer.CanvasItemSetVisible(Slot.CanvasRID, RenderComp->Visible);
+        mRenderServer.CanvasItemSetTransform(
+            Slot.CanvasRID,
+            Trans->Position.X + RenderComp->VisualOffset.X,
+            Trans->Position.Y + RenderComp->VisualOffset.Y,
+            RenderComp->ZOrder);
+    };
+
+    const auto& StaticResources = Entities.GetEntitiesWithCached<
+        Game::Components::TransformComponent,
+        Game::Components::RenderComponent,
+        Game::Components::ResourceComponent>();
+    for (int EntityId : StaticResources)
+        SyncEntityHandleSlot(EntityId);
+
+    const auto& StaticBuildings = Entities.GetEntitiesWithCached<
+        Game::Components::TransformComponent,
+        Game::Components::RenderComponent,
+        Game::Components::BuildingComponent>();
+    for (int EntityId : StaticBuildings)
+    {
+        const auto* Bldg = Entities.GetComponent<Game::Components::BuildingComponent>(EntityId);
+        if (Bldg && !Bldg->IsLifted)
+            SyncEntityHandleSlot(EntityId);
+    }
+
+    return mRetainedStaticItems.size();
+}
+
+void EntityRenderer::ClearRetainedStaticEntities()
+{
+    for (const auto& [EntityId, Slot] : mRetainedStaticItems)
+    {
+        if (Slot.CanvasRID.IsValid())
+            mRenderServer.CanvasItemFree(Slot.CanvasRID);
+    }
+    mRetainedStaticItems.clear();
 }
 
 } // namespace Game::Client

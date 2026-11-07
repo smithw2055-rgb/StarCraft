@@ -1,4 +1,5 @@
 #include "Game/Systems/SpellSystem.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BulletSystem.h"
 #include "Game/Systems/DeathEvents.h"
@@ -479,8 +480,14 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             // 112 total over 8 ticks) in an area.
             constexpr float Radius = 96.0f;
             constexpr int kStormTickDamage = 14;
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> sStormTargets;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, sStormTargets);
+            std::sort(sStormTargets.begin(), sStormTargets.end());
+            bool AnyUnitDestroyed = false;
 
-            for (int TargetID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+            for (int TargetID : sStormTargets)
             {
                 if (!EM.IsAlive(TargetID)) continue;
                 if (EM.GetComponent<BuildingComponent>(TargetID) ||
@@ -522,6 +529,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                             TUnit->HitPoints = 0;
                             RecordUnitDeath(EM, TargetID, CasterID, true);
                             EM.DestroyEntity(TargetID);
+                            AnyUnitDestroyed = true;
                         }
                     }
                 }
@@ -534,6 +542,8 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
             Area.Radius = Radius;
             Area.DurationRemaining = 4.0f;
             Area.SourceEntityID = CasterID;
+            if (!AnyUnitDestroyed)
+                SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "Psionic Storm cast at (" +
                 std::to_string((int)Pos.X) + "," + std::to_string((int)Pos.Y) + ")");
             break;
@@ -592,7 +602,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
         case SpellType::EMPShockwave:
         {
             float Radius = 96.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
@@ -616,6 +630,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     Status->AddEffect(StatusEffect::EMP, 1.0f, CasterID);
                 }
             }
+            SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "EMP Shockwave detonated");
             break;
         }
@@ -638,7 +653,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
         case SpellType::StasisField:
         {
             float Radius = 64.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
@@ -659,6 +678,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     Status->AddEffect(StatusEffect::Stasis, 5.0f, CasterID);
                 }
             }
+            SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "Stasis Field cast");
             break;
         }
@@ -679,7 +699,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
 
             constexpr float Radius = 96.0f;
             int RecalledCount = 0;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 if (Uid == CasterID) continue;
@@ -704,6 +728,8 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 ++RecalledCount;
             }
 
+            if (RecalledCount > 0)
+                SharedSpatial.MarkPositionsDirty();
             Logger::Info("SpellSystem", "Recall cast, teleported " +
                 std::to_string(RecalledCount) + " units");
             break;
@@ -729,7 +755,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
         case SpellType::Plague:
         {
             constexpr float HalfExtent = 64.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - HalfExtent, Pos.Y - HalfExtent, Pos.X + HalfExtent, Pos.Y + HalfExtent, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);
@@ -756,6 +786,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                 Status->AddEffect(StatusEffect::Plague, 75.0f * 8.0f / 24.0f,
                                   CasterID);
             }
+            SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "Plague cast");
             break;
         }
@@ -763,7 +794,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
         case SpellType::Ensnare:
         {
             constexpr float Radius = 96.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 auto* TargetUnit = EM.GetComponent<UnitComponent>(Uid);
@@ -786,6 +821,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     Cloak->IsBurrowed = false;
                 }
             }
+            SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "Ensnare cast");
             break;
         }
@@ -1085,7 +1121,11 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
         case SpellType::Maelstrom:
         {
             constexpr float Radius = 64.0f;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            SharedSpatial.AllUnitsHash.QueryInto(
+                Pos.X - Radius, Pos.Y - Radius, Pos.X + Radius, Pos.Y + Radius, Units);
+            std::sort(Units.begin(), Units.end());
             for (int Uid : Units)
             {
                 auto* TargetUnit = EM.GetComponent<UnitComponent>(Uid);
@@ -1104,6 +1144,7 @@ bool SpellSystem::CastSpell(Core::ECS::EntityManager& EM, int CasterID, SpellTyp
                     Status = &EM.AddComponent<StatusEffectComponent>(Uid);
                 Status->AddEffect(StatusEffect::Maelstrom, 12.0f, CasterID);
             }
+            SharedSpatial.LastBuiltMaskVersion = EM.GetMaskMutationVersion();
             Logger::Info("SpellSystem", "Maelstrom cast");
             break;
         }
@@ -1278,7 +1319,21 @@ void SpellSystem::Update(float DeltaTime)
             // Shields absorb first, then HP. Ignores armor. Friendly fire applies.
             // Does not hit buildings or resources. Overlapping storms do NOT stack.
             constexpr int kStormTickDamage = 14;
-            auto Units = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+            auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+            static thread_local std::vector<int> Units;
+            static thread_local std::vector<int> StormBoxCandidates;
+            Units.clear();
+            for (const auto& Storm : ActiveStorms)
+            {
+                const float R = Storm.second.first;
+                SharedSpatial.AllUnitsHash.QueryInto(
+                    Storm.first.X - R, Storm.first.Y - R,
+                    Storm.first.X + R, Storm.first.Y + R,
+                    StormBoxCandidates);
+                Units.insert(Units.end(), StormBoxCandidates.begin(), StormBoxCandidates.end());
+            }
+            std::sort(Units.begin(), Units.end());
+            Units.erase(std::unique(Units.begin(), Units.end()), Units.end());
             for (int Uid : Units)
             {
                 auto* UUnit = EM.GetComponent<UnitComponent>(Uid);

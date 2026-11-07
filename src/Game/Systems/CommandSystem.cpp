@@ -5,6 +5,7 @@
 #include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Game/Pathfinding/RegionPathfinder.h"
 #include "Game/Pathfinding/NavigationWorldResource.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/SimulationContext.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/HarvestSystem.h"
@@ -451,11 +452,11 @@ BuildNavigationObstacles(Core::ECS::EntityManager& EM,
         Obstacles.push_back(Obstacle);
     };
 
-    for (const auto EntityID : EM.GetEntitiesWith<BuildingComponent, TransformComponent>())
+    for (const auto EntityID : EM.GetEntitiesWithCached<BuildingComponent, TransformComponent>())
     {
         AddObstacle(EntityID);
     }
-    for (const auto EntityID : EM.GetEntitiesWith<ResourceComponent, TransformComponent>())
+    for (const auto EntityID : EM.GetEntitiesWithCached<ResourceComponent, TransformComponent>())
     {
         AddObstacle(EntityID);
     }
@@ -574,7 +575,8 @@ static Core::ECS::EntityID FindExactStaticBlockerOnPath(
     if (Waypoints.empty())
         return -1;
 
-    const auto Entities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+    auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    static thread_local std::vector<int> sSegmentBlockers;
     Core::Math::Vec2 SegmentStart = Start;
     for (const auto& Waypoint : Waypoints)
     {
@@ -583,7 +585,9 @@ static Core::ECS::EntityID FindExactStaticBlockerOnPath(
         const float SegMinY = std::min(SegmentStart.Y, Waypoint.Y) - 128.0f;
         const float SegMaxY = std::max(SegmentStart.Y, Waypoint.Y) + 128.0f;
 
-        for (auto BlockerID : Entities)
+        SharedSpatial.AllUnitsHash.QueryInto(SegMinX, SegMinY, SegMaxX, SegMaxY, sSegmentBlockers);
+        std::sort(sSegmentBlockers.begin(), sSegmentBlockers.end());
+        for (int BlockerID : sSegmentBlockers)
         {
             if (BlockerID == MovingID || BlockerID == IgnoreEntityID)
                 continue;
@@ -1096,21 +1100,49 @@ void CommandSystem::Update(float DeltaTime)
     auto& EM = mSystemMgr->GetEntityManager();
     auto Units = EM.GetEntitiesWith<CommandComponent, TransformComponent>();
 
-    static thread_local Game::Pathfinding::NavigationSpatialHash sCommandSpatialHash;
+    auto& SharedSpatial = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    const auto& sCommandSpatialHash = SharedSpatial.AllUnitsHash;
     static thread_local std::vector<std::pair<int, int>> sActiveMedicHealTargets;
-    sCommandSpatialHash.Clear();
     sActiveMedicHealTargets.clear();
-    for (int Eid : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    for (int Eid : EM.GetEntitiesWithCached<TransformComponent, UnitComponent>())
     {
-        if (const auto* T = EM.GetComponent<TransformComponent>(Eid))
-            sCommandSpatialHash.Insert(Eid, T->Position);
         if (const auto* U = EM.GetComponent<UnitComponent>(Eid);
             U && U->HitPoints > 0 && U->HealTargetEntityID >= 0)
         {
             sActiveMedicHealTargets.emplace_back(Eid, U->HealTargetEntityID);
         }
     }
-    sCommandSpatialHash.FinalizeCSR();
+
+    auto IsTargetHealedByOtherMedic = [&](int MyMedicID, int TargetID) -> bool {
+        for (const auto& [OtherMedicID, HealTargetID] : sActiveMedicHealTargets)
+        {
+            if (OtherMedicID == MyMedicID || HealTargetID != TargetID)
+                continue;
+            const auto* OtherMedic = EM.GetComponent<UnitComponent>(OtherMedicID);
+            if (OtherMedic && OtherMedic->HitPoints > 0 &&
+                OtherMedic->HealTargetEntityID == TargetID)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto UpdateActiveMedicHealTarget = [&](int MedicID, int NewTargetID) {
+        for (auto It = sActiveMedicHealTargets.begin(); It != sActiveMedicHealTargets.end(); ++It)
+        {
+            if (It->first == MedicID)
+            {
+                if (NewTargetID >= 0)
+                    It->second = NewTargetID;
+                else
+                    sActiveMedicHealTargets.erase(It);
+                return;
+            }
+        }
+        if (NewTargetID >= 0)
+            sActiveMedicHealTargets.emplace_back(MedicID, NewTargetID);
+    };
 
     for (int ID : Units)
     {
@@ -1229,16 +1261,7 @@ void CommandSystem::Update(float DeltaTime)
                             if (EM.GetComponent<BuildingComponent>(Eid) != nullptr) continue;
                             if (ShouldMoveAsAir(EM, Eid)) continue;
                             if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
-                            bool AlreadyHealed = false;
-                            for (const auto& [OtherMedicID, TargetID] : sActiveMedicHealTargets)
-                            {
-                                if (OtherMedicID != ID && TargetID == Eid)
-                                {
-                                    AlreadyHealed = true;
-                                    break;
-                                }
-                            }
-                            if (AlreadyHealed) continue;
+                            if (IsTargetHealedByOtherMedic(ID, Eid)) continue;
 
                             float D = MyTrans->Position.DistanceTo(ETrans->Position);
                             if (D < BestDist)
@@ -1249,6 +1272,8 @@ void CommandSystem::Update(float DeltaTime)
                         }
                         if (BestTarget >= 0)
                         {
+                            MyUnit->HealTargetEntityID = BestTarget;
+                            UpdateActiveMedicHealTarget(ID, BestTarget);
                             Components::Order HealOrder;
                             HealOrder.Type = OrderType::Heal;
                             HealOrder.TargetEntityID = BestTarget;
@@ -1290,16 +1315,7 @@ void CommandSystem::Update(float DeltaTime)
                             if (EM.GetComponent<BuildingComponent>(Eid) != nullptr) continue;
                             if (ShouldMoveAsAir(EM, Eid)) continue;
                             if (!Game::Races::IsOrganicChkUnitID(EUnit->ChkUnitID)) continue;
-                            bool AlreadyHealed = false;
-                            for (const auto& [OtherMedicID, TargetID] : sActiveMedicHealTargets)
-                            {
-                                if (OtherMedicID != ID && TargetID == Eid)
-                                {
-                                    AlreadyHealed = true;
-                                    break;
-                                }
-                            }
-                            if (AlreadyHealed) continue;
+                            if (IsTargetHealedByOtherMedic(ID, Eid)) continue;
 
                             float D = MyTrans->Position.DistanceTo(ETrans->Position);
                             if (D < BestDist)
@@ -1310,6 +1326,8 @@ void CommandSystem::Update(float DeltaTime)
                         }
                         if (BestTarget >= 0)
                         {
+                            MyUnit->HealTargetEntityID = BestTarget;
+                            UpdateActiveMedicHealTarget(ID, BestTarget);
                             Components::Order HealOrder;
                             HealOrder.Type = OrderType::Heal;
                             HealOrder.TargetEntityID = BestTarget;
@@ -1583,19 +1601,7 @@ void CommandSystem::Update(float DeltaTime)
                         !ShouldMoveAsAir(EM, Order->TargetEntityID) &&
                         Game::Races::IsOrganicChkUnitID(TargetUnit->ChkUnitID))
                     {
-                        bool OtherMedicHealing = false;
-                        for (int OtherMedicID : EM.GetEntitiesWith<UnitComponent>())
-                        {
-                            if (OtherMedicID == ID) continue;
-                            const auto* OtherMedic = EM.GetComponent<UnitComponent>(OtherMedicID);
-                            if (OtherMedic && OtherMedic->HitPoints > 0 &&
-                                OtherMedic->HealTargetEntityID == Order->TargetEntityID)
-                            {
-                                OtherMedicHealing = true;
-                                break;
-                            }
-                        }
-                        if (!OtherMedicHealing)
+                        if (!IsTargetHealedByOtherMedic(ID, Order->TargetEntityID))
                             ContinueHeal = true;
                     }
                     if (ContinueHeal)
@@ -1604,6 +1610,7 @@ void CommandSystem::Update(float DeltaTime)
                         {
                             MyUnit->HealTargetEntityID = Order->TargetEntityID;
                             MyUnit->HealHitPointAccumulator = 0.0f;
+                            UpdateActiveMedicHealTarget(ID, Order->TargetEntityID);
                         }
 
                         const float Distance = MyTrans->Position.DistanceTo(TargetTrans->Position);
@@ -1670,6 +1677,7 @@ void CommandSystem::Update(float DeltaTime)
                         Medic->HealTargetEntityID = -1;
                         Medic->HealHitPointAccumulator = 0.0f;
                     }
+                    UpdateActiveMedicHealTarget(ID, -1);
                     AdvanceQueue(EM, ID);
                 }
                 break;

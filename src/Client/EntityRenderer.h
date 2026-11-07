@@ -7,6 +7,7 @@
 #include "Resource/DataAssetCacheView.h"
 #include "Resource/SpriteAssetCacheView.h"
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 namespace Render { class Draw2D; }
@@ -59,6 +60,11 @@ public:
         return mRenderServer.GetLastFrameStats();
     }
 
+    // Phase 21: Godot RenderingServer style retained CanvasItemRID synchronization for static/resource entities
+    size_t SyncRetainedStaticEntities(Core::ECS::EntityManager& Entities);
+    void ClearRetainedStaticEntities();
+    size_t GetRetainedStaticCount() const { return mRetainedStaticItems.size(); }
+
 private:
     void DrawSelectionMarker(const Entity& E);
     void DrawSelectionMarker(Core::ECS::EntityManager& Entities, int EntityId);
@@ -93,7 +99,21 @@ private:
 
     Resource::Graphics::SpriteAssetCacheView mSpriteAssets;
     Resource::Graphics::DataAssetCacheView mDataAssets;
+    struct RetainedEntitySlot
+    {
+        Core::ECS::EntityHandle Handle{};
+        Render::CanvasItemRID CanvasRID{};
+    };
+    struct RenderSortItem
+    {
+        int EntityId = 0;
+        int Band = 0;
+        int ZOrder = 0;
+        float Y = 0.0f;
+    };
     mutable Render::RenderServer2D mRenderServer;
+    mutable std::vector<RenderSortItem> mSortedItemsScratch;
+    std::unordered_map<int, RetainedEntitySlot> mRetainedStaticItems;
     bool mUseRenderQueue = true;
     float mCameraX = 0.0f, mCameraY = 0.0f;
     float mViewW = 1280.0f, mViewH = 720.0f;

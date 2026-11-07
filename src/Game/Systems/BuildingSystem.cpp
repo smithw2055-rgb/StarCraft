@@ -623,7 +623,7 @@ namespace
         for (const auto& Order : ResolveOrderStore(EM).PendingBuildOrders)
             if (Order.Active && Order.BuilderID == BuilderID)
                 return true;
-        auto Buildings = EM.GetEntitiesWith<BuildingComponent, UnitComponent>();
+        const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, UnitComponent>();
         for (int EntityID : Buildings)
         {
             auto* Building = EM.GetComponent<BuildingComponent>(EntityID);
@@ -864,7 +864,7 @@ namespace
     {
         int BestAddonID = -1;
         float BestDistanceSq = 16.0f * 16.0f;
-        for (int AddonID : EM.GetEntitiesWith<TransformComponent, BuildingComponent, PlayerComponent>())
+        for (int AddonID : EM.GetEntitiesWithCached<TransformComponent, BuildingComponent, PlayerComponent>())
         {
             if (AddonID == ParentBuildingID || !IsCompatibleAddon(EM, ParentBuildingID, AddonID))
                 continue;

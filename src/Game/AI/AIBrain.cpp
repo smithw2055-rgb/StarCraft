@@ -344,8 +344,8 @@ void AIBrain::BuildEnemySearchWaypoints(Core::ECS::EntityManager& EM)
         int Count = 0;
     };
     std::vector<ResourceCluster> ResourceClusters;
-    for (int EntityID : EM.GetEntitiesWith<ResourceComponent,
-                                             TransformComponent>())
+    for (int EntityID : EM.GetEntitiesWithCached<ResourceComponent,
+                                                   TransformComponent>())
     {
         const auto* Resource = EM.GetComponent<ResourceComponent>(EntityID);
         const auto* Position = EM.GetComponent<TransformComponent>(EntityID);
@@ -626,8 +626,8 @@ Core::Math::Vec2 AIBrain::FindExpansionLocation(Core::ECS::EntityManager& EM)
     float BestDistance = std::numeric_limits<float>::max();
     // Resource clusters are more useful than player start slots: on a melee
     // map the latter are usually occupied enemy mains, not natural expansions.
-    for (int MineralID : EM.GetEntitiesWith<TransformComponent,
-                                             ResourceComponent>())
+    for (int MineralID : EM.GetEntitiesWithCached<TransformComponent,
+                                                   ResourceComponent>())
     {
         auto* Resource = EM.GetComponent<ResourceComponent>(MineralID);
         auto* Position = EM.GetComponent<TransformComponent>(MineralID);
@@ -680,7 +680,7 @@ Core::Math::Vec2 AIBrain::FindExpansionLocation(Core::ECS::EntityManager& EM)
 int AIBrain::CountUnits(Core::ECS::EntityManager& EM, int PlayerID, int ChkUnitID)
 {
     int Count = 0;
-    auto Entities = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+    const auto& Entities = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
     for (int Eid : Entities)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);
@@ -894,7 +894,7 @@ bool AIBrain::TryStartResearch(Core::ECS::EntityManager& EM,
 
 int AIBrain::GetRace(Core::ECS::EntityManager& EM)
 {
-    auto Entities = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+    const auto& Entities = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
     for (int Eid : Entities)
     {
         auto* U = EM.GetComponent<UnitComponent>(Eid);
@@ -913,7 +913,7 @@ int AIBrain::FindProducerFor(Core::ECS::EntityManager& EM, int UnitDefID)
 
     int BestProducer = -1;
     size_t BestQueueSize = std::numeric_limits<size_t>::max();
-    auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent>();
     for (int Bid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Bid);
@@ -1063,7 +1063,7 @@ bool AIBrain::FindBuildPositionNear(Core::ECS::EntityManager& EM, int BuildingDe
     {
         if (mShowcaseMode || IsDepot)
             return true;
-        for (int ResID : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        for (int ResID : EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
         {
             const auto* Res = EM.GetComponent<ResourceComponent>(ResID);
             const auto* ResTrans = EM.GetComponent<TransformComponent>(ResID);
@@ -1223,7 +1223,7 @@ int AIBrain::TrainUnitsIfPossible(Core::ECS::EntityManager& EM, int UnitDefID, i
 
 int AIBrain::FindAvailableAddonParent(Core::ECS::EntityManager& EM, int ParentDefID)
 {
-    auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent>();
     for (int Bid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Bid);
@@ -1407,7 +1407,7 @@ bool AIBrain::StartGasBuilding(Core::ECS::EntityManager& EM, int BuilderID,
 
     int BestGeyser = -1;
     float BestDistance = 1e30f;
-    for (int Eid : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+    for (int Eid : EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
     {
         auto* T = EM.GetComponent<TransformComponent>(Eid);
         auto* R = EM.GetComponent<ResourceComponent>(Eid);
@@ -1450,7 +1450,7 @@ bool AIBrain::StartZergGasBuilding(Core::ECS::EntityManager& EM, int DroneID,
 
     int BestGeyser = -1;
     float BestDistance = 1e30f;
-    for (int Eid : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+    for (int Eid : EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
     {
         auto* Transform = EM.GetComponent<TransformComponent>(Eid);
         auto* Resource = EM.GetComponent<ResourceComponent>(Eid);
@@ -1651,7 +1651,7 @@ void AIBrain::UpdateSafeTerranRallyPoints(Core::ECS::EntityManager& EM)
 
     std::vector<Core::Math::Vec2> ActiveResourcePositions;
     for (int ResourceID :
-         EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+         EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
     {
         const auto* Resource =
             EM.GetComponent<ResourceComponent>(ResourceID);
@@ -3140,7 +3140,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
         // Morph Hatchery→Lair
         if (lairCount < 1 && hiveCount < 1 && hatcheryCount >= 1 && Res.Minerals >= 150 && Res.VespeneGas >= 100)
         {
-            auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+            const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent>();
             for (int Bid : Buildings)
             {
                 auto* B = EM.GetComponent<BuildingComponent>(Bid);
@@ -3253,7 +3253,7 @@ void AIBrain::RunZergAI(Core::ECS::EntityManager& EM)
             CountByDefID(EM, mAIPlayerID, QueensNestDefID) >= 1 &&
             Res.Minerals >= 200 && Res.VespeneGas >= 150)
         {
-            auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+            const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent>();
             for (int Bid : Buildings)
             {
                 auto* B = EM.GetComponent<BuildingComponent>(Bid);
@@ -3905,7 +3905,7 @@ void AIBrain::RunProtossAI(Core::ECS::EntityManager& EM)
 void AIBrain::ManageEconomy(Core::ECS::EntityManager& EM)
 {
     std::vector<int> ActiveMinerals;
-    auto Minerals = EM.GetEntitiesWith<TransformComponent, ResourceComponent>();
+    const auto& Minerals = EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>();
     for (int Mid : Minerals)
     {
         auto* Res = EM.GetComponent<ResourceComponent>(Mid);
