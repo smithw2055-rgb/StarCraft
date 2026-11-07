@@ -1,3 +1,4 @@
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/HarvestSystem.h"
 
 #include <algorithm>
@@ -487,7 +488,7 @@ namespace
         float BestDistance = std::numeric_limits<float>::max();
         const int PlayerID = WorkerOwner ? WorkerOwner->PlayerID : 0;
         for (int CandidateID :
-             EM.GetEntitiesWith<TransformComponent, UnitComponent, PlayerComponent>())
+             EM.GetEntitiesWithCached<TransformComponent, UnitComponent, PlayerComponent>())
         {
             const auto* CandidateTrans =
                 EM.GetComponent<TransformComponent>(CandidateID);
@@ -1362,7 +1363,7 @@ namespace
         size_t BestLoad = std::numeric_limits<size_t>::max();
         float BestDistance = std::numeric_limits<float>::max();
         for (int CandidateID :
-             EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+             EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
         {
             auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
             const auto* CandidateTrans =
@@ -1406,7 +1407,7 @@ namespace
         constexpr float ClusterRange = 32.0f * 8.0f;
         int BestID = -1;
         float BestDistance = std::numeric_limits<float>::max();
-        for (int CandidateID : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        for (int CandidateID : EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
         {
             if (CandidateID == CurrentResourceID ||
                 CandidateID == ExcludedResourceID)
@@ -1663,7 +1664,7 @@ namespace
 
         int BestID = -1;
         float BestDistance = std::numeric_limits<float>::max();
-        for (int CandidateID : EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+        for (int CandidateID : EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
         {
             auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
             auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
@@ -1723,7 +1724,7 @@ namespace
 
             std::vector<std::pair<float, int>> Candidates;
             for (int CandidateID :
-                 EM.GetEntitiesWith<TransformComponent, ResourceComponent>())
+                 EM.GetEntitiesWithCached<TransformComponent, ResourceComponent>())
             {
                 auto* Resource = EM.GetComponent<ResourceComponent>(CandidateID);
                 auto* CandidateTrans = EM.GetComponent<TransformComponent>(CandidateID);
@@ -2086,8 +2087,11 @@ int HarvestSystem::ResumeNearbyHarvestersForDepot(Core::ECS::EntityManager& EM,
 
     constexpr float kResumeRadiusPixels = 16.0f * 32.0f;
     int Resumed = 0;
-    for (int WorkerID : EM.GetEntitiesWith<TransformComponent, HarvestComponent,
-                                           PlayerComponent>())
+    static thread_local std::vector<int> sNearbyHarvesterCandidates;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    SpatialRes.AllUnitsHash.QueryInto(DepotTrans->Position.X - kResumeRadiusPixels, DepotTrans->Position.Y - kResumeRadiusPixels, DepotTrans->Position.X + kResumeRadiusPixels, DepotTrans->Position.Y + kResumeRadiusPixels, sNearbyHarvesterCandidates);
+    std::sort(sNearbyHarvesterCandidates.begin(), sNearbyHarvesterCandidates.end());
+    for (int WorkerID : sNearbyHarvesterCandidates)
     {
         const auto* WorkerTrans = EM.GetComponent<TransformComponent>(WorkerID);
         const auto* WorkerPlayer = EM.GetComponent<PlayerComponent>(WorkerID);

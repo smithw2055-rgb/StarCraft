@@ -1,3 +1,4 @@
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Client/Selection.h"
 #include "Client/SelectionFootprint.h"
 #include "Game/DataEnums.h"
@@ -367,10 +368,16 @@ int Selection::PickEntityAtWorld(Core::ECS::EntityManager& Entities, float World
     int Best = -1;
     int BestPriority = 100;
     float BestScore = 1e9f;
-    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                 Game::Components::RenderComponent,
-                                                 Game::Components::UnitComponent>())
+    static thread_local std::vector<int> sPointPickCandidates;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(Entities);
+    constexpr float kPickSearchRadius = 256.0f;
+    SpatialRes.AllUnitsHash.QueryInto(WorldX - kPickSearchRadius, WorldY - kPickSearchRadius, WorldX + kPickSearchRadius, WorldY + kPickSearchRadius, sPointPickCandidates);
+    std::sort(sPointPickCandidates.begin(), sPointPickCandidates.end());
+    for (int EntityId : sPointPickCandidates)
     {
+        if (!Entities.GetComponent<Game::Components::RenderComponent>(EntityId) ||
+            !Entities.GetComponent<Game::Components::UnitComponent>(EntityId))
+            continue;
         float Score = 0.0f;
         if (!EntityHitTest(Entities, EntityId, WorldX, WorldY, Score))
             continue;
@@ -399,10 +406,21 @@ std::vector<int> Selection::CollectRectSelection(Core::ECS::EntityManager& Entit
 {
     std::vector<int> PickedUnits;
     std::vector<int> PickedSingles;
-    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                 Game::Components::RenderComponent,
-                                                 Game::Components::UnitComponent>())
+    constexpr float kBoxCoarsePadding = 192.0f;
+    static thread_local std::vector<int> sBoxSelectCandidates;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(Entities);
+    SpatialRes.AllUnitsHash.QueryInto(
+        WorldX - kBoxCoarsePadding,
+        WorldY - kBoxCoarsePadding,
+        WorldX + WorldW + kBoxCoarsePadding,
+        WorldY + WorldH + kBoxCoarsePadding,
+        sBoxSelectCandidates);
+    std::sort(sBoxSelectCandidates.begin(), sBoxSelectCandidates.end());
+    for (int EntityId : sBoxSelectCandidates)
     {
+        if (!Entities.GetComponent<Game::Components::RenderComponent>(EntityId) ||
+            !Entities.GetComponent<Game::Components::UnitComponent>(EntityId))
+            continue;
         // Drag selection can touch thousands of campaign entities. Reject
         // non-owned and obviously distant candidates before DAT footprint
         // lookups, which are the expensive part of the exact hit test.
@@ -546,9 +564,9 @@ void Selection::Update(Core::ECS::EntityManager& Entities,
                 std::vector<int> SameType;
                 if (ClickedUnit && ClickedPlayer)
                 {
-                    for (int EntityId : Entities.GetEntitiesWith<Game::Components::TransformComponent,
-                                                                 Game::Components::RenderComponent,
-                                                                 Game::Components::UnitComponent>())
+                    for (int EntityId : Entities.GetEntitiesWithCached<Game::Components::TransformComponent,
+                                                                       Game::Components::RenderComponent,
+                                                                       Game::Components::UnitComponent>())
                     {
                         auto* Unit = Entities.GetComponent<Game::Components::UnitComponent>(EntityId);
                         auto* Player = Entities.GetComponent<Game::Components::PlayerComponent>(EntityId);

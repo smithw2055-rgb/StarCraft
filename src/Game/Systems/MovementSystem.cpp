@@ -153,7 +153,9 @@ if (sActiveNavigationStats)
 sActiveNavigationStats->NeighborPairs += Result.size();
 return Result;
 }
-Result = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+SpatialRes.AllUnitsHash.QueryInto(MinimumX, MinimumY, MaximumX, MaximumY, Result);
+std::sort(Result.begin(), Result.end());
 if (sActiveNavigationStats)
 sActiveNavigationStats->NeighborPairs += Result.size();
 return Result;
@@ -172,7 +174,15 @@ if (sActiveNavigationStats)
 sActiveNavigationStats->NeighborPairs += Result.size();
 return Result;
 }
-Result = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+SpatialRes.BuildingsHash.QueryInto(MinimumX, MinimumY, MaximumX, MaximumY, Result);
+static thread_local std::vector<Core::ECS::EntityID> ResTemp;
+SpatialRes.ResourcesHash.QueryInto(MinimumX, MinimumY, MaximumX, MaximumY, ResTemp);
+Result.insert(Result.end(), ResTemp.begin(), ResTemp.end());
+std::sort(Result.begin(), Result.end());
+Result.erase(std::unique(Result.begin(), Result.end()), Result.end());
+if (sActiveNavigationStats)
+sActiveNavigationStats->NeighborPairs += Result.size();
 return Result;
 }
 
@@ -2502,8 +2512,8 @@ if (const auto SyncNavigation = MovementSystem::GetNavigationSyncCallback())
 SyncNavigation(EM, mMap);
 }
 
-auto Entities = EM.GetEntitiesWith<TransformComponent, PathfindingComponent>();
-auto UnitEntities = EM.GetEntitiesWith<TransformComponent, UnitComponent>();
+const auto& Entities = EM.GetEntitiesWithCached<TransformComponent, PathfindingComponent>();
+const auto& UnitEntities = EM.GetEntitiesWithCached<TransformComponent, UnitComponent>();
 
 static thread_local Game::Pathfinding::NavigationSpatialHash SpatialHash;
 static thread_local Game::Pathfinding::NavigationSpatialHash StaticSpatialHash;

@@ -1,3 +1,4 @@
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/ProductionSystem.h"
 
 #include <algorithm>
@@ -203,7 +204,11 @@ Core::Math::Vec2 ProductionSystem::FindSpawnPosition(
         CollisionRect Bounds;
     };
     std::vector<NearbyCandidateUnit> NearbyUnits;
-    for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    static thread_local std::vector<int> sSpawnCandidateIDs;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    SpatialRes.AllUnitsHash.QueryInto(ProducerTrans->Position.X - 850.0f, ProducerTrans->Position.Y - 850.0f, ProducerTrans->Position.X + 850.0f, ProducerTrans->Position.Y + 850.0f, sSpawnCandidateIDs);
+    std::sort(sSpawnCandidateIDs.begin(), sSpawnCandidateIDs.end());
+    for (int EntityID : sSpawnCandidateIDs)
     {
         if (EntityID == IgnoreEntityID)
             continue;
@@ -584,7 +589,7 @@ void ProductionSystem::Update(float DeltaTime)
     // Carrier/Reaver that finishes in ProcessTraining below therefore remains
     // empty until the next simulation update instead of inheriting the whole
     // frame's elapsed time.
-    auto HangarEntities = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+    const auto& HangarEntities = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
     for (auto ID : HangarEntities)
         ProcessHangarProduction(EM, ID, DeltaTime);
 
@@ -793,7 +798,11 @@ static bool IsWorldPositionBlockedByBuildingOrUnit(Core::ECS::EntityManager& EM,
             return true;
     }
 
-    for (int EntityID : EM.GetEntitiesWith<TransformComponent, UnitComponent>())
+    static thread_local std::vector<int> sBlockedCandidateIDs;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    SpatialRes.AllUnitsHash.QueryInto(Pos.X - 192.0f, Pos.Y - 192.0f, Pos.X + 192.0f, Pos.Y + 192.0f, sBlockedCandidateIDs);
+    std::sort(sBlockedCandidateIDs.begin(), sBlockedCandidateIDs.end());
+    for (int EntityID : sBlockedCandidateIDs)
     {
         if (EntityID == ProducerBuildingID || EntityID == NewUnitID)
             continue;

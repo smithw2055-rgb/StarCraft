@@ -336,7 +336,7 @@ void ZergSystem::Update(float DeltaTime)
     };
     std::vector<CreepProvider> CreepProviders;
     std::vector<CreepProvider> CreepSources;
-    auto Buildings = EM.GetEntitiesWith<TransformComponent, BuildingComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<TransformComponent, BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
@@ -705,7 +705,7 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
         if (CollectedLarvaUnits)
             return;
         CollectedLarvaUnits = true;
-        auto AllUnits = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+        const auto& AllUnits = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
         for (int Uid : AllUnits)
         {
             auto* UU = EM.GetComponent<UnitComponent>(Uid);
@@ -714,7 +714,7 @@ void ZergSystem::ProcessLarvae(Core::ECS::EntityManager& EM, float DeltaTime)
         }
     };
 
-    auto Buildings = EM.GetEntitiesWith<BuildingComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent>();
     for (int Eid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Eid);
@@ -1936,7 +1936,7 @@ void ZergSystem::ProcessZergRegeneration(Core::ECS::EntityManager& EM, float Del
 {
     constexpr int HitPointSubPointsPerSecond = 4 * 24;
 
-    auto Units = EM.GetEntitiesWith<UnitComponent>();
+    const auto& Units = EM.GetEntitiesWithCached<UnitComponent>();
     for (int Eid : Units)
     {
         auto* Unit = EM.GetComponent<UnitComponent>(Eid);

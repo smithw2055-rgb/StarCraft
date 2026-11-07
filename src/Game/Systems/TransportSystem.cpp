@@ -1,3 +1,4 @@
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Systems/TransportSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Components.h"
@@ -448,7 +449,12 @@ bool TransportSystem::LoadUnit(Core::ECS::EntityManager& EM, int TransportID, in
 
     auto* CT = EM.GetComponent<TransformComponent>(TransportID);
     auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
-    if (PT && CT) PT->Position = CT->Position;
+    if (PT && CT)
+    {
+        PT->Position = CT->Position;
+        if (auto* SpatialRes = EM.Context().GetResource<Game::Pathfinding::SpatialIndexResource>())
+            SpatialRes->MarkPositionsDirty();
+    }
 
     auto* Render = EM.GetComponent<RenderComponent>(PassengerID);
     if (Render) Render->Visible = false;
@@ -544,11 +550,15 @@ bool TransportSystem::UnloadUnit(Core::ECS::EntityManager& EM, int TransportID,
 
     int PassengerID = Loaded->PassengerIDs[PassengerIndex];
     Loaded->PassengerIDs.erase(Loaded->PassengerIDs.begin() + PassengerIndex);
+    if (PassengerIndex < static_cast<int>(Loaded->PassengerHandles.size()))
+        Loaded->PassengerHandles.erase(Loaded->PassengerHandles.begin() + PassengerIndex);
 
     auto* PT = EM.GetComponent<TransformComponent>(PassengerID);
     if (PT)
     {
         PT->Position = TargetPos;
+        if (auto* SpatialRes = EM.Context().GetResource<Game::Pathfinding::SpatialIndexResource>())
+            SpatialRes->MarkPositionsDirty();
     }
 
     auto* Render = EM.GetComponent<RenderComponent>(PassengerID);
@@ -585,7 +595,7 @@ bool TransportSystem::IsNydusCanal(Core::ECS::EntityManager& EM, int EntityID)
 {
     auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
     auto* Bldg = EM.GetComponent<BuildingComponent>(EntityID);
-    return Unit && Bldg && !Bldg->UnderConstruction &&
+    return Unit && Unit->HitPoints > 0 && Bldg && !Bldg->UnderConstruction &&
            Unit->ChkUnitID == 0x86; // Nydus Canal (CHK 134)
 }
 
@@ -605,7 +615,7 @@ bool TransportSystem::EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, 
     if (Dist > 64.0f) return false;
 
     // Teleport to nearest exit
-    auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent, TransformComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent, TransformComponent>();
     for (int Bid : Buildings)
     {
         auto* B = EM.GetComponent<BuildingComponent>(Bid);
@@ -614,11 +624,13 @@ bool TransportSystem::EnterNydusCanal(Core::ECS::EntityManager& EM, int UnitID, 
         if (!B || !P || !T || Bid == NydusID) continue;
         if (P->PlayerID != NPlayer->PlayerID) continue;
         if (auto* BU = EM.GetComponent<UnitComponent>(Bid))
-            if (BU->ChkUnitID == 0x86 && !B->UnderConstruction)
+            if (BU->ChkUnitID == 0x86 && BU->HitPoints > 0 && !B->UnderConstruction)
             {
                 const Core::Math::Vec2 ExitPos(T->Position.X + 24.0f, T->Position.Y);
                 if (auto* UT = EM.GetComponent<TransformComponent>(UnitID))
                     UT->Position = ExitPos;
+                if (auto* SpatialRes = EM.Context().GetResource<Game::Pathfinding::SpatialIndexResource>())
+                    SpatialRes->MarkPositionsDirty();
                 ClearPassengerMotion(EM, UnitID);
                 Logger::Info("TransportSystem",
                     "Unit " + std::to_string(UnitID) + " entered Nydus Canal");

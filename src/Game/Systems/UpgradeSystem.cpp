@@ -224,9 +224,9 @@ namespace
         if (RequiredDefID < 0)
             return false;
 
-        for (int EntityID : EM.GetEntitiesWith<BuildingComponent,
-                                               UnitComponent,
-                                               PlayerComponent>())
+        for (int EntityID : EM.GetEntitiesWithCached<BuildingComponent,
+                                                     UnitComponent,
+                                                     PlayerComponent>())
         {
             const auto* Player = EM.GetComponent<PlayerComponent>(EntityID);
             const auto* Unit = EM.GetComponent<UnitComponent>(EntityID);
@@ -454,7 +454,7 @@ void UpgradeSystem::Update(float DeltaTime)
 
     auto& EM = mSystemMgr.GetEntityManager();
     auto& Store = ResolveUpgradeStore(EM);
-    auto Buildings = EM.GetEntitiesWith<BuildingComponent, PlayerComponent>();
+    const auto& Buildings = EM.GetEntitiesWithCached<BuildingComponent, PlayerComponent>();
     for (auto ID : Buildings)
     {
         auto* Bldg = EM.GetComponent<BuildingComponent>(ID);
@@ -493,7 +493,7 @@ void UpgradeSystem::Update(float DeltaTime)
 
                 if (IsEnergyCapUpgrade(static_cast<ResearchId>(Rid)))
                 {
-                    auto Units = EM.GetEntitiesWith<UnitComponent, PlayerComponent>();
+                    const auto& Units = EM.GetEntitiesWithCached<UnitComponent, PlayerComponent>();
                     for (int UnitID : Units)
                     {
                         auto* UnitPlayer = EM.GetComponent<PlayerComponent>(UnitID);

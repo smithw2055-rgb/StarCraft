@@ -1,3 +1,4 @@
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "CursorManager.h"
 #include "CursorTargeting.h"
 #include "EcsSync.h"
@@ -13,6 +14,7 @@
 #include "Game/Components.h"
 #include "Game/Systems/GeyserState.h"
 #include "Core/Math/Vec2.h"
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -95,7 +97,7 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
     }
 
     float BestResourceScore = 1.0f;
-    for (int EntityId : EM.GetEntitiesWith<
+    for (int EntityId : EM.GetEntitiesWithCached<
         Game::Components::TransformComponent,
         Game::Components::ResourceComponent>())
     {
@@ -124,10 +126,11 @@ ClickTargetContext CursorManager::ResolveClickTargetContext(
     }
 
     float BestEntityScore = std::numeric_limits<float>::max();
-    for (int EntityId : EM.GetEntitiesWith<
-        Game::Components::TransformComponent,
-        Game::Components::UnitComponent,
-        Game::Components::PlayerComponent>())
+    static thread_local std::vector<int> sCursorHoverCandidates;
+    auto& SpatialRes = Game::Pathfinding::SpatialIndexResource::AcquireUpToDate(EM);
+    SpatialRes.AllUnitsHash.QueryInto(WorldPosition.X - 256.0f, WorldPosition.Y - 256.0f, WorldPosition.X + 256.0f, WorldPosition.Y + 256.0f, sCursorHoverCandidates);
+    std::sort(sCursorHoverCandidates.begin(), sCursorHoverCandidates.end());
+    for (int EntityId : sCursorHoverCandidates)
     {
         auto* Transform = EM.GetComponent<Game::Components::TransformComponent>(EntityId);
         auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(EntityId);
