@@ -9,20 +9,6 @@ namespace Resource {
 using Core::Utils::JsonParser;
 using Core::Utils::JsonValue;
 
-bool ModernSocket2DTrack::SampleOffset(int32_t FrameSet, int32_t Direction17, int16_t& OutSDX, int16_t& OutSDY, int16_t& OutHDX, int16_t& OutHDY) const
-{
-    for (const auto& Entry : FrameSocketTable) {
-        if (Entry.FrameSet == FrameSet && Entry.DirectionIndex == Direction17) {
-            OutSDX = Entry.PixelOffsetSD[0];
-            OutSDY = Entry.PixelOffsetSD[1];
-            OutHDX = Entry.PixelOffsetHD4x[0];
-            OutHDY = Entry.PixelOffsetHD4x[1];
-            return true;
-        }
-    }
-    return false;
-}
-
 bool ModernAssetRegistry::LoadFromAssetsRDirectory(const std::string& AssetsRRootPath)
 {
     mUnits.clear();
@@ -36,6 +22,7 @@ bool ModernAssetRegistry::LoadFromAssetsRDirectory(const std::string& AssetsRRoo
     mWeaponIndexByID.clear();
     mSoundIndexByID.clear();
     mHDImageIndexByID.clear();
+    mShadowImageIDByParentID.clear();
     mSocketTrackIndexByName.clear();
     mIScriptIndexByID.clear();
     mPBRPrefabIndexByImageID.clear();
@@ -212,6 +199,13 @@ bool ModernAssetRegistry::LoadHDImagesJson(const std::string& Path)
         Img.RoleFlags = Rel["role_flags"].AsInt(1);
         Img.ParentImageID = Rel["parent_image_id"].AsInt(-1);
 
+        if (Img.ParentImageID >= 0 && Img.RoleFlags == 8) {
+            const uint32_t ParentID = static_cast<uint32_t>(Img.ParentImageID);
+            if (mShadowImageIDByParentID.find(ParentID) == mShadowImageIDByParentID.end()) {
+                mShadowImageIDByParentID[ParentID] = Img.ImageID;
+            }
+        }
+
         const auto& Overlays = Item["sockets_and_overlays"];
         Img.ShieldOverlay = Overlays["shield_overlay"].AsString();
         Img.AttackLoFile = Overlays["attack_lo_file"].AsString();
@@ -270,6 +264,7 @@ bool ModernAssetRegistry::LoadSocketsJson(const std::string& Path)
             Track.FrameSocketTable.push_back(Entry);
         }
 
+        Track.RebuildLookupIndex();
         mSocketTrackIndexByName[Track.SocketAssetName] = mSocketTracks.size();
         mSocketTracks.push_back(std::move(Track));
     }

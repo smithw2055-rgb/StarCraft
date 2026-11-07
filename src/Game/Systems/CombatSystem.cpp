@@ -2400,6 +2400,7 @@ void CombatSystem::Update(float DeltaTime)
         if (auto* T = EM.GetComponent<TransformComponent>(UID))
             CombatSpatialHash.Insert(UID, T->Position);
     }
+    CombatSpatialHash.FinalizeCSR();
     sActiveCombatSpatialHash = &CombatSpatialHash;
     struct CombatSpatialScope
     {

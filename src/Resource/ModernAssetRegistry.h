@@ -61,8 +61,46 @@ struct ModernSocket2DTrack {
     uint32_t NumSocketsPerFrame = 0;
     bool Directional17Way = true;
     std::vector<ModernSocketMountEntry> FrameSocketTable;
+    std::unordered_map<uint64_t, size_t> LookupIndexByFrameAndDir;
 
-    bool SampleOffset(int32_t FrameSet, int32_t Direction17, int16_t& OutSDX, int16_t& OutSDY, int16_t& OutHDX, int16_t& OutHDY) const;
+    static constexpr uint64_t MakeKey(int32_t FrameSet, int32_t Direction17) {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(FrameSet)) << 32) |
+               static_cast<uint64_t>(static_cast<uint32_t>(Direction17));
+    }
+
+    void RebuildLookupIndex() {
+        LookupIndexByFrameAndDir.clear();
+        LookupIndexByFrameAndDir.reserve(FrameSocketTable.size());
+        for (size_t i = 0; i < FrameSocketTable.size(); ++i) {
+            const auto& Entry = FrameSocketTable[i];
+            LookupIndexByFrameAndDir[MakeKey(Entry.FrameSet, Entry.DirectionIndex)] = i;
+        }
+    }
+
+    bool SampleOffset(int32_t FrameSet, int32_t Direction17, int16_t& OutSDX, int16_t& OutSDY, int16_t& OutHDX, int16_t& OutHDY) const {
+        if (!LookupIndexByFrameAndDir.empty()) {
+            auto It = LookupIndexByFrameAndDir.find(MakeKey(FrameSet, Direction17));
+            if (It != LookupIndexByFrameAndDir.end() && It->second < FrameSocketTable.size()) {
+                const auto& Entry = FrameSocketTable[It->second];
+                OutSDX = Entry.PixelOffsetSD[0];
+                OutSDY = Entry.PixelOffsetSD[1];
+                OutHDX = Entry.PixelOffsetHD4x[0];
+                OutHDY = Entry.PixelOffsetHD4x[1];
+                return true;
+            }
+            return false;
+        }
+        for (const auto& Entry : FrameSocketTable) {
+            if (Entry.FrameSet == FrameSet && Entry.DirectionIndex == Direction17) {
+                OutSDX = Entry.PixelOffsetSD[0];
+                OutSDY = Entry.PixelOffsetSD[1];
+                OutHDX = Entry.PixelOffsetHD4x[0];
+                OutHDY = Entry.PixelOffsetHD4x[1];
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 struct ModernHDImageAsset {
@@ -325,6 +363,19 @@ public:
     const ModernHDImageAsset* FindHDImageByID(uint32_t ImageID) const {
         return ResolveHDImage(GetHDImageHandle(ImageID));
     }
+    // O(1) lookup for shadow child ImageID associated with ParentImageID (RoleFlags == 8 in images.rel)
+    uint32_t FindShadowImageIDByParent(uint32_t ParentImageID) const {
+        auto It = mShadowImageIDByParentID.find(ParentImageID);
+        if (It != mShadowImageIDByParentID.end()) {
+            return It->second;
+        }
+        for (const auto& ImgEntry : mHDImages) {
+            if (ImgEntry.ParentImageID == static_cast<int32_t>(ParentImageID) && ImgEntry.RoleFlags == 8) {
+                return ImgEntry.ImageID;
+            }
+        }
+        return 0;
+    }
     const ModernSocket2DTrack* FindSocketTrack(const std::string& Name) const {
         auto It = mSocketTrackIndexByName.find(Name);
         return It != mSocketTrackIndexByName.end() ? &mSocketTracks[It->second] : nullptr;
@@ -375,6 +426,7 @@ private:
     std::unordered_map<uint32_t, size_t> mWeaponIndexByID;
     std::unordered_map<uint32_t, size_t> mSoundIndexByID;
     std::unordered_map<uint32_t, size_t> mHDImageIndexByID;
+    std::unordered_map<uint32_t, uint32_t> mShadowImageIDByParentID;
     std::unordered_map<std::string, size_t> mSocketTrackIndexByName;
     std::unordered_map<uint32_t, size_t> mIScriptIndexByID;
     std::unordered_map<uint32_t, size_t> mPBRPrefabIndexByImageID;

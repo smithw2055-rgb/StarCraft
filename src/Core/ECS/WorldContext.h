@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
@@ -12,17 +15,41 @@ namespace Core::ECS
 // WorldContext (Unity DOTS Singleton Component / Bevy World Resource Container)
 // Stores world-scoped state (Economy, Upgrades, Map pointer, FogOfWar, RNG seed)
 // per-World instead of relying on global static variables.
+//
+// Modern Engine Optimization:
+// Uses compile-time monotonic type slot IDs with an O(1) flat array fast-path
+// (kMaxFastResources = 128) and an overflow map fallback, eliminating per-lookup
+// std::type_index hashing and unordered_map bucket probing on hot paths.
 // ============================================================================
 class WorldContext
 {
 public:
+    static constexpr size_t kMaxFastResources = 128;
+
+    WorldContext() = default;
+    ~WorldContext() = default;
+
+    WorldContext(const WorldContext&) = delete;
+    WorldContext& operator=(const WorldContext&) = delete;
+    WorldContext(WorldContext&&) noexcept = default;
+    WorldContext& operator=(WorldContext&&) noexcept = default;
+
     template <typename ResourceT, typename... Args>
     ResourceT& EmplaceResource(Args&&... InArgs)
     {
-        const std::type_index Key(typeid(ResourceT));
+        const size_t Slot = GetFastResourceSlot<ResourceT>();
         auto Holder = std::make_unique<ResourceHolder<ResourceT>>(std::forward<Args>(InArgs)...);
         ResourceT& Ref = Holder->Data;
-        mResources[Key] = std::move(Holder);
+        if (Slot < kMaxFastResources)
+        {
+            if (!mFastSlots[Slot])
+                ++mFastSlotCount;
+            mFastSlots[Slot] = std::move(Holder);
+        }
+        else
+        {
+            mOverflowResources[std::type_index(typeid(ResourceT))] = std::move(Holder);
+        }
         return Ref;
     }
 
@@ -43,9 +70,14 @@ public:
     template <typename ResourceT>
     ResourceT* GetResource()
     {
-        const std::type_index Key(typeid(ResourceT));
-        auto It = mResources.find(Key);
-        if (It == mResources.end() || !It->second)
+        const size_t Slot = GetFastResourceSlot<ResourceT>();
+        if (Slot < kMaxFastResources)
+        {
+            auto& Ptr = mFastSlots[Slot];
+            return Ptr ? &static_cast<ResourceHolder<ResourceT>*>(Ptr.get())->Data : nullptr;
+        }
+        auto It = mOverflowResources.find(std::type_index(typeid(ResourceT)));
+        if (It == mOverflowResources.end() || !It->second)
             return nullptr;
         return &static_cast<ResourceHolder<ResourceT>*>(It->second.get())->Data;
     }
@@ -53,9 +85,14 @@ public:
     template <typename ResourceT>
     const ResourceT* GetResource() const
     {
-        const std::type_index Key(typeid(ResourceT));
-        auto It = mResources.find(Key);
-        if (It == mResources.end() || !It->second)
+        const size_t Slot = GetFastResourceSlot<ResourceT>();
+        if (Slot < kMaxFastResources)
+        {
+            const auto& Ptr = mFastSlots[Slot];
+            return Ptr ? &static_cast<const ResourceHolder<ResourceT>*>(Ptr.get())->Data : nullptr;
+        }
+        auto It = mOverflowResources.find(std::type_index(typeid(ResourceT)));
+        if (It == mOverflowResources.end() || !It->second)
             return nullptr;
         return &static_cast<const ResourceHolder<ResourceT>*>(It->second.get())->Data;
     }
@@ -69,17 +106,31 @@ public:
     template <typename ResourceT>
     void RemoveResource()
     {
-        mResources.erase(std::type_index(typeid(ResourceT)));
+        const size_t Slot = GetFastResourceSlot<ResourceT>();
+        if (Slot < kMaxFastResources)
+        {
+            if (mFastSlots[Slot])
+            {
+                mFastSlots[Slot].reset();
+                if (mFastSlotCount > 0)
+                    --mFastSlotCount;
+            }
+            return;
+        }
+        mOverflowResources.erase(std::type_index(typeid(ResourceT)));
     }
 
     void Clear()
     {
-        mResources.clear();
+        for (auto& Slot : mFastSlots)
+            Slot.reset();
+        mFastSlotCount = 0;
+        mOverflowResources.clear();
     }
 
     size_t GetResourceCount() const
     {
-        return mResources.size();
+        return mFastSlotCount + mOverflowResources.size();
     }
 
 private:
@@ -100,7 +151,18 @@ private:
         ResourceT Data;
     };
 
-    std::unordered_map<std::type_index, std::unique_ptr<IResourceHolder>> mResources;
+    inline static size_t sNextFastResourceSlot = 0;
+
+    template <typename ResourceT>
+    static size_t GetFastResourceSlot()
+    {
+        static const size_t sSlot = sNextFastResourceSlot++;
+        return sSlot;
+    }
+
+    std::array<std::unique_ptr<IResourceHolder>, kMaxFastResources> mFastSlots{};
+    size_t mFastSlotCount = 0;
+    std::unordered_map<std::type_index, std::unique_ptr<IResourceHolder>> mOverflowResources;
 };
 
 } // namespace Core::ECS

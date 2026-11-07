@@ -44,6 +44,14 @@ struct EntityHandle
     }
 };
 
+struct ECSQueryTelemetry
+{
+    uint64_t TotalQueries = 0;
+    uint64_t EarlyOutEmptyPoolCount = 0;
+    uint64_t PivotAcceleratedQueries = 0;
+    uint64_t ScratchBufferReuses = 0;
+};
+
 class IComponentPool
 {
 public:
@@ -181,37 +189,11 @@ uint8_t GetComponentTypeID()
     return ID;
 }
 
-class IWorldResource
-{
-public:
-    virtual ~IWorldResource() = default;
-};
-
-template <typename T>
-class WorldResourceHolder final : public IWorldResource
-{
-public:
-    template <typename... Args>
-    explicit WorldResourceHolder(Args&&... InArgs)
-        : Value(std::forward<Args>(InArgs)...)
-    {
-    }
-
-    T Value;
-};
-
-inline uint8_t NextResourceTypeID = 0;
-
-template <typename T>
-uint8_t GetResourceTypeID()
-{
-    static uint8_t ID = NextResourceTypeID++;
-    return ID;
-}
-
 class EntityManager
 {
 public:
+    static constexpr size_t kMaxScratchDepth = 8;
+
     EntityManager();
     ~EntityManager();
 
@@ -313,11 +295,37 @@ public:
         return GetComponentCount<T>() > 0;
     }
 
-    template <typename... Components>
+    // Pivot-accelerated multi-component query (EnTT / Unity DOTS style):
+    // - Early-outs in O(1) if any required component pool is null or empty
+    // - Uses the smallest component pool as pivot when sparse (<= 1/2 of active entities)
+    template <typename FirstComponent, typename... RestComponents>
     std::vector<EntityID> GetEntitiesWith() const
     {
+        ++mQueryTelemetry.TotalQueries;
         std::vector<EntityID> Result;
-        const ComponentMask RequiredMask = CreateMask<Components...>();
+
+        const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
+        if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
+            return Result;
+        }
+
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        const size_t PivotSize = PivotPool->Size();
+        Result.reserve( std::min(PivotSize, mActiveEntities.size()) );
+
+        if (PivotSize * 2 <= mActiveEntities.size())
+        {
+            ++mQueryTelemetry.PivotAcceleratedQueries;
+            for (EntityID Id : PivotPool->GetDenseEntities())
+            {
+                if (IsAlive(Id) && (mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
+                    Result.push_back(Id);
+            }
+            return Result;
+        }
+
         for (EntityID Id : mActiveEntities)
         {
             if ((mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
@@ -326,10 +334,30 @@ public:
         return Result;
     }
 
-    template <typename... Components, typename Fn>
+    template <typename FirstComponent, typename... RestComponents, typename Fn>
     void ForEachEntityWith(Fn&& Func)
     {
-        const ComponentMask RequiredMask = CreateMask<Components...>();
+        ++mQueryTelemetry.TotalQueries;
+        const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
+        if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
+            return;
+        }
+
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        if (PivotPool->Size() * 2 <= mActiveEntities.size())
+        {
+            ++mQueryTelemetry.PivotAcceleratedQueries;
+            ScopedScratchBuffer Scratch(*this, PivotPool->GetDenseEntities());
+            for (EntityID Id : Scratch.View())
+            {
+                if (IsAlive(Id) && (mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
+                    Func(Id);
+            }
+            return;
+        }
+
         for (size_t i = 0; i < mActiveEntities.size();)
         {
             const EntityID Id = mActiveEntities[i];
@@ -344,10 +372,29 @@ public:
         }
     }
 
-    template <typename... Components, typename Fn>
+    template <typename FirstComponent, typename... RestComponents, typename Fn>
     void ForEachEntityWith(Fn&& Func) const
     {
-        const ComponentMask RequiredMask = CreateMask<Components...>();
+        ++mQueryTelemetry.TotalQueries;
+        const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
+        if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
+            return;
+        }
+
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        if (PivotPool->Size() * 2 <= mActiveEntities.size())
+        {
+            ++mQueryTelemetry.PivotAcceleratedQueries;
+            for (EntityID Id : PivotPool->GetDenseEntities())
+            {
+                if (IsAlive(Id) && (mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
+                    Func(Id);
+            }
+            return;
+        }
+
         for (size_t i = 0; i < mActiveEntities.size(); ++i)
         {
             const EntityID Id = mActiveEntities[i];
@@ -358,17 +405,23 @@ public:
 
     // EnTT / Unity DOTS style View iteration: selects the smallest component pool
     // among Components... as the iteration pivot and invokes Func(EntityID, Components&...).
+    // Uses a reusable re-entrant scratch buffer to guarantee zero heap allocations
+    // after warmup while remaining 100% safe against structural mutations mid-loop.
     template <typename FirstComponent, typename... RestComponents, typename Fn>
     void ForEachComponent(Fn&& Func)
     {
+        ++mQueryTelemetry.TotalQueries;
         const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
         if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
             return;
+        }
 
+        ++mQueryTelemetry.PivotAcceleratedQueries;
         const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
-        // Copy dense entity list if small or iterate snapshot safely
-        const std::vector<EntityID> Candidates = PivotPool->GetDenseEntities();
-        for (EntityID Id : Candidates)
+        ScopedScratchBuffer Scratch(*this, PivotPool->GetDenseEntities());
+        for (EntityID Id : Scratch.View())
         {
             if (!IsAlive(Id) || (mMasks[(size_t)Id] & RequiredMask) != RequiredMask)
                 continue;
@@ -376,10 +429,53 @@ public:
         }
     }
 
-    template <typename... Components, typename Predicate>
+    template <typename FirstComponent, typename... RestComponents, typename Fn>
+    void ForEachComponent(Fn&& Func) const
+    {
+        ++mQueryTelemetry.TotalQueries;
+        const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
+        if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
+            return;
+        }
+
+        ++mQueryTelemetry.PivotAcceleratedQueries;
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        for (EntityID Id : PivotPool->GetDenseEntities())
+        {
+            if (!IsAlive(Id) || (mMasks[(size_t)Id] & RequiredMask) != RequiredMask)
+                continue;
+            Func(Id, *GetComponent<FirstComponent>(Id), *GetComponent<RestComponents>(Id)...);
+        }
+    }
+
+    template <typename FirstComponent, typename... RestComponents, typename Predicate>
     bool AnyEntityWith(Predicate&& Pred) const
     {
-        const ComponentMask RequiredMask = CreateMask<Components...>();
+        ++mQueryTelemetry.TotalQueries;
+        const IComponentPool* PivotPool = SelectSmallestPool<FirstComponent, RestComponents...>();
+        if (!PivotPool || PivotPool->Size() == 0)
+        {
+            ++mQueryTelemetry.EarlyOutEmptyPoolCount;
+            return false;
+        }
+
+        const ComponentMask RequiredMask = CreateMask<FirstComponent, RestComponents...>();
+        if (PivotPool->Size() * 2 <= mActiveEntities.size())
+        {
+            ++mQueryTelemetry.PivotAcceleratedQueries;
+            for (EntityID Id : PivotPool->GetDenseEntities())
+            {
+                if (IsAlive(Id) && (mMasks[(size_t)Id] & RequiredMask) == RequiredMask)
+                {
+                    if (Pred(Id))
+                        return true;
+                }
+            }
+            return false;
+        }
+
         const size_t Count = mActiveEntities.size();
         for (size_t i = 0; i < Count && i < mActiveEntities.size(); ++i)
         {
@@ -394,63 +490,50 @@ public:
     }
 
     // =========================================================================
-    // World Singleton Resources (Unity DOTS Singleton / Bevy Resource style)
+    // Unified World Singleton Resources (Unity DOTS Singleton / Bevy Res<T>)
+    // Delegates directly to mContext (WorldContext) so EM.GetResource<T>() and
+    // EM.Context().GetResource<T>() share a single O(1) flat-indexed store.
     // =========================================================================
     template <typename T, typename... Args>
     T& SetResource(Args&&... InArgs)
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        auto Holder = std::make_unique<WorldResourceHolder<T>>(std::forward<Args>(InArgs)...);
-        T& Ref = Holder->Value;
-        mResources[ID] = std::move(Holder);
-        return Ref;
+        return mContext.EmplaceResource<T>(std::forward<Args>(InArgs)...);
     }
 
     template <typename T>
     T& GetOrCreateResource()
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        if (!mResources[ID])
-            mResources[ID] = std::make_unique<WorldResourceHolder<T>>();
-        return static_cast<WorldResourceHolder<T>*>(mResources[ID].get())->Value;
+        return mContext.GetOrCreateResource<T>();
     }
 
     template <typename T>
     const T& GetOrCreateResource() const
     {
-        return const_cast<EntityManager*>(this)->GetOrCreateResource<T>();
+        return const_cast<EntityManager*>(this)->mContext.GetOrCreateResource<T>();
     }
 
     template <typename T>
     T* GetResource()
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        if (!mResources[ID])
-            return nullptr;
-        return &static_cast<WorldResourceHolder<T>*>(mResources[ID].get())->Value;
+        return mContext.GetResource<T>();
     }
 
     template <typename T>
     const T* GetResource() const
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        if (!mResources[ID])
-            return nullptr;
-        return &static_cast<const WorldResourceHolder<T>*>(mResources[ID].get())->Value;
+        return mContext.GetResource<T>();
     }
 
     template <typename T>
     bool HasResource() const
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        return mResources[ID] != nullptr;
+        return mContext.HasResource<T>();
     }
 
     template <typename T>
     void RemoveResource()
     {
-        const uint8_t ID = GetResourceTypeID<T>();
-        mResources[ID].reset();
+        mContext.RemoveResource<T>();
     }
 
     // =========================================================================
@@ -488,7 +571,48 @@ public:
         mCommandBuffer.Playback(*this);
     }
 
+    const ECSQueryTelemetry& GetQueryTelemetry() const { return mQueryTelemetry; }
+    void ResetQueryTelemetry() { mQueryTelemetry = {}; }
+
 private:
+    class ScopedScratchBuffer
+    {
+    public:
+        ScopedScratchBuffer(const EntityManager& Owner, const std::vector<EntityID>& Source)
+            : mOwner(Owner), mDepth(Owner.mQueryScratchDepth++)
+        {
+            if (mDepth < kMaxScratchDepth)
+            {
+                auto& Buf = mOwner.mQueryScratchBuffers[mDepth];
+                if (Buf.capacity() >= Source.size() && !Source.empty())
+                {
+                    ++mOwner.mQueryTelemetry.ScratchBufferReuses;
+                }
+                Buf.assign(Source.begin(), Source.end());
+                mView = &Buf;
+            }
+            else
+            {
+                mFallback = Source;
+                mView = &mFallback;
+            }
+        }
+
+        ~ScopedScratchBuffer()
+        {
+            if (mOwner.mQueryScratchDepth > 0)
+                --mOwner.mQueryScratchDepth;
+        }
+
+        const std::vector<EntityID>& View() const { return *mView; }
+
+    private:
+        const EntityManager& mOwner;
+        size_t mDepth = 0;
+        const std::vector<EntityID>* mView = nullptr;
+        std::vector<EntityID> mFallback;
+    };
+
     template <typename T>
     ComponentPool<T>* GetOrCreatePool()
     {
@@ -561,10 +685,13 @@ private:
     std::vector<EntityID> mActiveEntities;
     std::vector<size_t> mActiveEntityIndices;
     std::array<std::unique_ptr<IComponentPool>, MaxComponents> mPools;
-    std::array<std::unique_ptr<IWorldResource>, MaxResources> mResources;
     WorldContext mContext;
     EventBus mEventBus;
     EntityCommandBuffer mCommandBuffer;
+
+    mutable std::array<std::vector<EntityID>, kMaxScratchDepth> mQueryScratchBuffers;
+    mutable size_t mQueryScratchDepth = 0;
+    mutable ECSQueryTelemetry mQueryTelemetry{};
 };
 
 inline void EntityCommandBuffer::DestroyEntity(EntityID Id)

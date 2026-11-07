@@ -37,6 +37,7 @@ template <typename EventT>
 class EventChannel final : public IEventChannel
 {
 public:
+    static constexpr size_t kDefaultMaxBufferedEvents = 4096;
     using HandlerFn = std::function<void(const EventT&)>;
 
     struct SubscriberEntry
@@ -77,16 +78,19 @@ public:
 
     void Enqueue(const EventT& Event)
     {
+        TrimIfOverflowing();
         mQueue.push_back(Event);
     }
 
     void Enqueue(EventT&& Event)
     {
+        TrimIfOverflowing();
         mQueue.push_back(std::move(Event));
     }
 
     void PublishAndEnqueue(const EventT& Event)
     {
+        TrimIfOverflowing();
         mQueue.push_back(Event);
         PublishImmediate(mQueue.back());
     }
@@ -130,8 +134,23 @@ public:
         return mSubscribers.size();
     }
 
+    void SetMaxBufferedEvents(size_t MaxCap)
+    {
+        mMaxBufferedEvents = std::max<size_t>(16, MaxCap);
+    }
+
 private:
+    void TrimIfOverflowing()
+    {
+        if (mQueue.size() >= mMaxBufferedEvents)
+        {
+            const size_t KeepCount = mMaxBufferedEvents / 2;
+            mQueue.erase(mQueue.begin(), mQueue.begin() + static_cast<std::ptrdiff_t>(mQueue.size() - KeepCount));
+        }
+    }
+
     SubscriptionID mLastSubscriptionId = 0;
+    size_t mMaxBufferedEvents = kDefaultMaxBufferedEvents;
     std::vector<SubscriberEntry> mSubscribers;
     std::vector<EventT> mQueue;
 };

@@ -15,21 +15,43 @@ namespace Game::Pathfinding {
 
 struct SpatialIndexResource {
     NavigationSpatialHash SpatialHash;
+    NavigationSpatialHash AllUnitsHash;
     uint64_t RebuildCount = 0;
     size_t IndexedEntityCount = 0;
 
     void RebuildFromECS(const Core::ECS::EntityManager& EM) {
         SpatialHash.Clear();
+        AllUnitsHash.Clear();
         IndexedEntityCount = 0;
         ++RebuildCount;
 
-        for (Core::ECS::EntityID Id : EM.GetActiveEntities()) {
-            const auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(Id);
-            const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Id);
-            if (!Trans || (Unit && Unit->HitPoints <= 0)) continue;
-            SpatialHash.Insert(Id, Trans->Position);
-            ++IndexedEntityCount;
-        }
+        EM.ForEachComponent<Game::Components::TransformComponent>(
+            [&](Core::ECS::EntityID Id, const Game::Components::TransformComponent& Trans) {
+                const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Id);
+                if (Unit) {
+                    AllUnitsHash.Insert(Id, Trans.Position);
+                    if (Unit->HitPoints <= 0) return;
+                }
+                SpatialHash.Insert(Id, Trans.Position);
+                ++IndexedEntityCount;
+            });
+
+        // Finalize CSR contiguous cell slices so all subsequent QueryInto calls copy cache lines directly
+        SpatialHash.FinalizeCSR();
+        AllUnitsHash.FinalizeCSR();
+    }
+
+    // Rebuilds and returns the CSR-finalized spatial hash of all (TransformComponent, UnitComponent) entities
+    const NavigationSpatialHash& RebuildUnitsHash(const Core::ECS::EntityManager& EM) {
+        AllUnitsHash.Clear();
+        EM.ForEachComponent<Game::Components::TransformComponent, Game::Components::UnitComponent>(
+            [&](Core::ECS::EntityID Id,
+                const Game::Components::TransformComponent& Trans,
+                const Game::Components::UnitComponent&) {
+                AllUnitsHash.Insert(Id, Trans.Position);
+            });
+        AllUnitsHash.FinalizeCSR();
+        return AllUnitsHash;
     }
 
     void QueryRadius(
@@ -40,16 +62,16 @@ struct SpatialIndexResource {
         int FilterExcludePlayerID = -1) const
     {
         OutEntities.clear();
-        std::vector<int> Candidates;
+        static thread_local std::vector<int> sCandidates;
         SpatialHash.QueryInto(
             Center.X - Radius,
             Center.Y - Radius,
             Center.X + Radius,
             Center.Y + Radius,
-            Candidates);
+            sCandidates);
 
         const float RadiusSq = Radius * Radius;
-        for (int CandID : Candidates) {
+        for (int CandID : sCandidates) {
             if (!EM.IsAlive(CandID)) continue;
             if (FilterExcludePlayerID >= 0) {
                 const auto* P = EM.GetComponent<Game::Components::PlayerComponent>(CandID);
@@ -73,13 +95,13 @@ struct SpatialIndexResource {
         float MaxSearchRadius,
         int MyPlayerID) const
     {
-        std::vector<Core::ECS::EntityID> InRange;
-        QueryRadius(EM, Center, MaxSearchRadius, InRange, MyPlayerID);
+        static thread_local std::vector<Core::ECS::EntityID> sInRange;
+        QueryRadius(EM, Center, MaxSearchRadius, sInRange, MyPlayerID);
 
         Core::ECS::EntityID BestID = Core::ECS::InvalidEntity;
         float BestDistSq = std::numeric_limits<float>::max();
 
-        for (Core::ECS::EntityID Id : InRange) {
+        for (Core::ECS::EntityID Id : sInRange) {
             const auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(Id);
             if (!Trans) continue;
             const float DistSq = (Trans->Position - Center).LengthSq();

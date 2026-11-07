@@ -34,12 +34,37 @@ void SystemManager::RegisterSystemInPhase(SystemPhase Phase, std::unique_ptr<ISy
 
 void SystemManager::UpdatePhase(SystemPhase Phase, float DeltaTime)
 {
+    mEntityMgr.ActivateWorld();
+    bool ExecutedAny = false;
     for (auto& Entry : mSystems)
     {
         if (Entry.Phase != Phase || !Entry.Instance)
             continue;
         Entry.Instance->Update(DeltaTime);
+        ExecutedAny = true;
     }
+
+    // Unity DOTS EntityCommandBufferSystem / Godot SceneTree deferred barrier:
+    // Flush any structural commands queued during this phase.
+    if (ExecutedAny || !mEntityMgr.Commands().IsEmpty())
+    {
+        mEntityMgr.FlushCommands();
+        ++mCommandBarrierFlushCount;
+    }
+}
+
+void SystemManager::UpdateSimulationStep(float FixedDeltaTime)
+{
+    UpdatePhase(SystemPhase::Input, FixedDeltaTime);
+    UpdatePhase(SystemPhase::NetworkLockstep, FixedDeltaTime);
+    UpdatePhase(SystemPhase::FixedSimulation, FixedDeltaTime);
+    UpdatePhase(SystemPhase::TransformPropagation, FixedDeltaTime);
+}
+
+void SystemManager::UpdatePresentationFrame(float FrameDeltaTime)
+{
+    UpdatePhase(SystemPhase::Presentation, FrameDeltaTime);
+    UpdatePhase(SystemPhase::RenderExtract, FrameDeltaTime);
 }
 
 void SystemManager::UpdateAll(float DeltaTime)
@@ -65,11 +90,21 @@ void SystemManager::UpdateAll(float DeltaTime)
     mLastProfileEntries.clear();
     mLastProfileEntries.reserve(mSystems.size());
 
+    SystemPhase CurrentPhase = mSystems.empty() ? SystemPhase::FixedSimulation : mSystems.front().Phase;
+
     for (auto& Entry : mSystems)
     {
         auto& Sys = Entry.Instance;
         if (!Sys)
             continue;
+
+        // Phase transition barrier: flush deferred EntityCommandBuffer between phases
+        if (Entry.Phase != CurrentPhase)
+        {
+            mEntityMgr.FlushCommands();
+            ++mCommandBarrierFlushCount;
+            CurrentPhase = Entry.Phase;
+        }
 
         const auto Begin = std::chrono::steady_clock::now();
         Sys->Update(DeltaTime);
@@ -92,6 +127,10 @@ void SystemManager::UpdateAll(float DeltaTime)
                 std::max(Sample.MaximumMicroseconds, (uint64_t)Microseconds);
         }
     }
+
+    // Final end-of-schedule barrier flush
+    mEntityMgr.FlushCommands();
+    ++mCommandBarrierFlushCount;
 
     if (MeasureSystems)
     {

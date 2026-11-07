@@ -28,6 +28,38 @@ public:
         : mName(std::move(Name)), mRole(Role) {}
     virtual ~SceneNode2D() = default;
 
+    // Resets node state for object-pool reuse without freeing internal buffers
+    void Reset(std::string Name, SceneNodeRole Role) {
+        mName = std::move(Name);
+        mRole = Role;
+        mParent = nullptr;
+        mLocalPosition = {0.0f, 0.0f};
+        mWorldPosition = {0.0f, 0.0f};
+        mDirection32 = 0;
+        mDirection17 = 0;
+        mFlipHorizontal = false;
+        mFollowParentDirection = false;
+        mFrameSet = 0;
+        mImageID = 0;
+        mElevationSortLayer = 4;
+        mZIndexOffset = 0;
+        mVisible = true;
+        mBoundSocketTrack = nullptr;
+        mUseHD4xSocketScale = false;
+        mChildren.clear();
+    }
+
+    // Recursively returns child nodes to an object pool before clearing mChildren
+    void RecycleTreeToPool(std::vector<std::unique_ptr<SceneNode2D>>& Pool) {
+        for (auto& Child : mChildren) {
+            if (Child) {
+                Child->RecycleTreeToPool(Pool);
+                Pool.push_back(std::move(Child));
+            }
+        }
+        mChildren.clear();
+    }
+
     const std::string& GetName() const { return mName; }
     SceneNodeRole GetRole() const { return mRole; }
 

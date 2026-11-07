@@ -49,6 +49,16 @@ struct GameSession
         EcsSysMgr.UpdateAll(DeltaSeconds);
     }
 
+    void UpdateSimulationStep(float DeltaSeconds)
+    {
+        EcsSysMgr.UpdateSimulationStep(DeltaSeconds);
+    }
+
+    void UpdatePresentationFrame(float DeltaSeconds)
+    {
+        EcsSysMgr.UpdatePresentationFrame(DeltaSeconds);
+    }
+
     GameMap& MutableMapData()
     {
         return MapData;
@@ -61,14 +71,12 @@ struct GameSession
 
     void SaveTransformTickState()
     {
-        for (int EntityID : EcsSysMgr.GetEntityManager().GetEntitiesWith<Game::Components::TransformComponent>())
-        {
-            if (auto* Trans = EcsSysMgr.GetEntityManager().GetComponent<Game::Components::TransformComponent>(EntityID))
+        EcsSysMgr.GetEntityManager().ForEachComponent<Game::Components::TransformComponent>(
+            [](Core::ECS::EntityID, Game::Components::TransformComponent& Trans)
             {
-                Trans->PrevPosition = Trans->Position;
-                Trans->HasPrevPosition = true;
-            }
-        }
+                Trans.PrevPosition = Trans.Position;
+                Trans.HasPrevPosition = true;
+            });
     }
 
     void SyncCreepPresentation()

@@ -1814,6 +1814,38 @@ if(BUILD_PHASE3_RENDER_PIPELINE_TEST)
 endif()
 
 
+
+option(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST "Build Phase 6 Godot/Unity engine architecture refactoring regression test" ON)
+if(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST)
+    add_executable(Phase6EngineArchitectureRefactorTest
+        tests/Regression/Phase6EngineArchitectureRefactorTest.cpp
+        src/Core/ECS/EntityManager.cpp
+        src/Core/ECS/SystemManager.cpp
+        src/Core/Utils/Logger.cpp
+        src/Game/Map/ChkParser.cpp
+        src/Game/Map/Map.cpp
+        src/Game/Pathfinding/AStar.cpp
+    )
+
+    target_include_directories(Phase6EngineArchitectureRefactorTest PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/third_party)
+
+    target_compile_definitions(Phase6EngineArchitectureRefactorTest PRIVATE
+        SOKOL_DUMMY_BACKEND
+        _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+
+    if(MSVC)
+        target_compile_options(Phase6EngineArchitectureRefactorTest PRIVATE /W4 /utf-8 /permissive-)
+    else()
+        target_compile_options(Phase6EngineArchitectureRefactorTest PRIVATE -Wall -Wextra -Wpedantic -pthread)
+        target_link_options(Phase6EngineArchitectureRefactorTest PRIVATE -pthread)
+    endif()
+
+    add_test(NAME Phase6EngineArchitectureRefactorTest COMMAND Phase6EngineArchitectureRefactorTest)
+endif()
+
 option(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST "Build Phase 5 JobSystem and CSR SpatialGrid regression test" ON)
 if(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST)
     add_executable(Phase5JobSystemParallelTest

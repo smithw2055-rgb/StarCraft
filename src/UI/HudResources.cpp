@@ -90,6 +90,7 @@ void Hud::Shutdown()
     mMinimapTexWidth = 0;
     mMinimapTexHeight = 0;
     mMinimapTilesetName.clear();
+    mViewModel.UnbindFromWorld();
 }
 
 const Resource::Graphics::GpuImage* Hud::GetLegacyIcon(int IconIndex) const

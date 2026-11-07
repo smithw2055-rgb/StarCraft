@@ -14,6 +14,7 @@
 #include "Game/AI/AIDifficulty.h"
 #include "Game/AI/AIBrain.h"
 #include "Game/Components.h"
+#include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/SimulationContext.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Races/UnitPrototypeRegistry.h"
@@ -431,6 +432,7 @@ private:
 inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSystem& Audio)
 {
     auto& SysMgr = Session.Systems();
+    SysMgr.RegisterSystem(std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SysMgr));
     auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
     CmdSys->Init(&SysMgr);
     SysMgr.RegisterSystem(std::move(CmdSys));

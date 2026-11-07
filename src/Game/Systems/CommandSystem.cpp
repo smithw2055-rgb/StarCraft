@@ -4,6 +4,8 @@
 #include "Game/Pathfinding/NavigationService.h"
 #include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Game/Pathfinding/RegionPathfinder.h"
+#include "Game/Pathfinding/NavigationWorldResource.h"
+#include "Game/SimulationContext.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/CombatSystem.h"
@@ -62,12 +64,34 @@ static void RebuildRegionPathfinder(const Game::Map::GameMap* Map)
     sRegionPathfinder.BuildRegions(Ctx);
 }
 
+static const Game::Map::GameMap* ResolveCmdMap(
+    const Core::ECS::EntityManager& EM,
+    const Game::Map::GameMap* ExplicitMap = nullptr)
+{
+    if (ExplicitMap)
+        return ExplicitMap;
+    return Game::Pathfinding::NavigationWorldResource::ResolveMap(EM, gCmdMap);
+}
+
+static Game::Pathfinding::NavigationService& ResolveNavService(
+    Core::ECS::EntityManager& EM,
+    const Game::Map::GameMap* ExplicitMap = nullptr)
+{
+    const Game::Map::GameMap* EffectiveMap = ResolveCmdMap(EM, ExplicitMap);
+    auto& NavRes = Game::Pathfinding::NavigationWorldResource::GetOrSync(EM, EffectiveMap);
+    return NavRes.NavService;
+}
+
 void CommandSystem::SetMap(const Game::Map::GameMap* Map)
 {
     gCmdMap = Map;
     RebuildRegionPathfinder(Map);
     if (Map)
         sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
+    if (auto* ActiveEM = Core::ECS::EntityManager::GetActiveWorld())
+    {
+        Game::Pathfinding::NavigationWorldResource::GetOrSync(*ActiveEM, Map);
+    }
     MovementSystem::SetPathRequestCallback(&CommandSystem::RequestMovementPath);
     MovementSystem::SetNavigationSyncCallback(
         &CommandSystem::SyncNavigationState);
@@ -87,11 +111,21 @@ void CommandSystem::SetSubunitImageResolver(ImageIDResolver Resolver)
 const Game::Pathfinding::NavigationPerformanceStats&
 CommandSystem::GetNavigationStats()
 {
+    if (auto* ActiveEM = Core::ECS::EntityManager::GetActiveWorld())
+    {
+        if (const auto* NavRes = ActiveEM->GetResource<Game::Pathfinding::NavigationWorldResource>())
+            return NavRes->NavService.GetStats();
+    }
     return sNavigationService.GetStats();
 }
 
 void CommandSystem::ResetNavigationStats()
 {
+    if (auto* ActiveEM = Core::ECS::EntityManager::GetActiveWorld())
+    {
+        if (auto* NavRes = ActiveEM->GetResource<Game::Pathfinding::NavigationWorldResource>())
+            NavRes->NavService.ResetStats();
+    }
     sNavigationService.ResetStats();
 }
 
@@ -438,10 +472,12 @@ void CommandSystem::SyncNavigationState(
     Core::ECS::EntityManager& EM,
     const Game::Map::GameMap* Map)
 {
-    if (!Map)
+    const Game::Map::GameMap* EffectiveMap = ResolveCmdMap(EM, Map);
+    if (!EffectiveMap)
         return;
-    sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
-    sNavigationService.SyncStaticObstacles(
+    auto& NavSvc = ResolveNavService(EM, EffectiveMap);
+    NavSvc.SetBaseGrid(EffectiveMap->GetNavigationGrid());
+    NavSvc.SyncStaticObstacles(
         BuildNavigationObstacles(EM, -1));
 }
 
@@ -628,7 +664,8 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
         return true;
     }
 
-    sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
+    auto& NavSvc = ResolveNavService(EM, Map);
+    NavSvc.SetBaseGrid(Map->GetNavigationGrid());
     auto Obstacles = BuildNavigationObstacles(EM, EntityID, -1);
 
     Game::Pathfinding::NavigationPathQuery Query;
@@ -677,7 +714,7 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
         }
     }
 
-    sNavigationService.SyncStaticObstacles(std::move(Obstacles));
+    NavSvc.SyncStaticObstacles(std::move(Obstacles));
     if (AvoidDynamicEntityID >= 0 &&
         AvoidDynamicEntityID != EntityID &&
         !IsStaticGroundBlocker(EM, AvoidDynamicEntityID))
@@ -715,7 +752,7 @@ bool CommandSystem::RequestMovementPath(Core::ECS::EntityManager& EM,
         Query.Footprint.Down = Path->CollisionRadius;
     }
 
-    auto Result = sNavigationService.QueryPath(Query);
+    auto Result = NavSvc.QueryPath(Query);
     Path->RequestedAdditionalIgnoreEntityID =
         Result.AdditionalIgnoredOwnerEntityID;
     Path->LastPathStatus = Result.Status;
@@ -913,7 +950,7 @@ static void ConfigureMovementPathForOrder(Core::ECS::EntityManager& EM,
     CommandSystem::RequestMovementPath(
         EM,
         EntityID,
-        gCmdMap,
+        ResolveCmdMap(EM),
         InOrder.TargetPosition,
         InOrder.PathingIgnoreEntityID);
 }
@@ -1004,7 +1041,9 @@ bool CommandSystem::IsRepairableTarget(Core::ECS::EntityManager& EM, int TargetE
 
 void CommandSystem::Update(float DeltaTime)
 {
-    if (DeltaTime <= 0.0f || !gCmdMap) return;
+    if (!mSystemMgr) return;
+    const Game::Map::GameMap* ActiveMap = ResolveCmdMap(mSystemMgr->GetEntityManager());
+    if (DeltaTime <= 0.0f || !ActiveMap) return;
 
     const char* ProfileSystems = std::getenv("STARCRAFT_PROFILE_SYSTEMS");
     if (ProfileSystems && ProfileSystems[0] != '\0' &&
@@ -1016,7 +1055,7 @@ void CommandSystem::Update(float DeltaTime)
         const auto Now = std::chrono::steady_clock::now();
         if (Now - LastNavigationReport >= std::chrono::seconds(1))
         {
-            const auto& Current = sNavigationService.GetStats();
+            const auto& Current = ResolveNavService(mSystemMgr->GetEntityManager(), ActiveMap).GetStats();
             const auto Delta = [](uint64_t CurrentValue,
                                   uint64_t PreviousValue)
             {
@@ -1071,6 +1110,7 @@ void CommandSystem::Update(float DeltaTime)
             sActiveMedicHealTargets.emplace_back(Eid, U->HealTargetEntityID);
         }
     }
+    sCommandSpatialHash.FinalizeCSR();
 
     for (int ID : Units)
     {
@@ -1321,7 +1361,7 @@ void CommandSystem::Update(float DeltaTime)
 
                             if (TargetMoved || (PathEnded && Path->LastRepathTime >= 0.25f))
                             {
-                                RequestMovementPath(EM, ID, gCmdMap, TargetTrans->Position);
+                                RequestMovementPath(EM, ID, ActiveMap, TargetTrans->Position);
                                 Path->RequestedTargetEntityID = Order->TargetEntityID;
                                 Path->LastRepathTime = 0.0f;
                             }
@@ -1615,7 +1655,7 @@ void CommandSystem::Update(float DeltaTime)
 
                             if (TargetMoved || (PathEnded && Path->LastRepathTime >= 0.25f))
                             {
-                                RequestMovementPath(EM, ID, gCmdMap, TargetTrans->Position);
+                                RequestMovementPath(EM, ID, ActiveMap, TargetTrans->Position);
                                 Path->RequestedTargetEntityID = Order->TargetEntityID;
                                 Path->LastRepathTime = 0.0f;
                             }

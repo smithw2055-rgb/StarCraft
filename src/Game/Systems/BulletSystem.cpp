@@ -803,6 +803,7 @@ void BulletSystem::Update(float DeltaTime)
         if (auto* T = EM.GetComponent<TransformComponent>(UID))
             sBulletSpatialHash.Insert(UID, T->Position);
     }
+    sBulletSpatialHash.FinalizeCSR();
     sActiveBulletSpatialHash = &sBulletSpatialHash;
     struct BulletSpatialScope
     {

@@ -47,8 +47,40 @@ public:
     void RegisterSystem(std::unique_ptr<ISystem> System);
     void RegisterSystemInPhase(SystemPhase Phase, std::unique_ptr<ISystem> System);
 
+    // Executes all phases in deterministic order with EntityCommandBuffer sync barriers
     void UpdateAll(float DeltaTime);
+
+    // Executes a single SystemPhase and flushes the World EntityCommandBuffer barrier
     void UpdatePhase(SystemPhase Phase, float DeltaTime);
+
+    // Unity PlayerLoop / Godot physics_process vs process split:
+    // Advances deterministic simulation phases (Input -> NetworkLockstep -> FixedSimulation -> TransformPropagation)
+    void UpdateSimulationStep(float FixedDeltaTime);
+
+    // Advances variable-rate presentation & render extraction phases (Presentation -> RenderExtract)
+    void UpdatePresentationFrame(float FrameDeltaTime);
+
+    template <typename SystemT>
+    SystemT* FindSystem()
+    {
+        for (auto& Entry : mSystems)
+        {
+            if (auto* Casted = dynamic_cast<SystemT*>(Entry.Instance.get()))
+                return Casted;
+        }
+        return nullptr;
+    }
+
+    template <typename SystemT>
+    const SystemT* FindSystem() const
+    {
+        for (const auto& Entry : mSystems)
+        {
+            if (const auto* Casted = dynamic_cast<const SystemT*>(Entry.Instance.get()))
+                return Casted;
+        }
+        return nullptr;
+    }
 
     EntityManager& GetEntityManager() { return mEntityMgr; }
     const EntityManager& GetEntityManager() const { return mEntityMgr; }
@@ -60,6 +92,7 @@ public:
     const EventBus& GetEventBus() const { return mEntityMgr.Events(); }
 
     size_t GetSystemCount() const { return mSystems.size(); }
+    uint64_t GetCommandBarrierFlushCount() const { return mCommandBarrierFlushCount; }
     const std::vector<SystemProfileEntry>& GetLastProfileEntries() const { return mLastProfileEntries; }
 
 private:
@@ -72,6 +105,7 @@ private:
     EntityManager mEntityMgr;
     std::vector<RegisteredSystem> mSystems;
     std::vector<SystemProfileEntry> mLastProfileEntries;
+    uint64_t mCommandBarrierFlushCount = 0;
 };
 
 } // namespace Core::ECS
