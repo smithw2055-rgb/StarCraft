@@ -16,6 +16,7 @@ out*
 docs/
 tests/*
 !tests/Regression/
+!tests/Smoke/
 
 # Root project/config files to exclude
 *.json

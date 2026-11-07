@@ -1207,14 +1207,9 @@ if(BUILD_GAME_CLIENT)
         src/Resource/PcxToGpu.cpp
         src/Resource/ResourceCache.cpp
         src/Resource/ResourceCacheUI.cpp
-        src/Resource/ResourceCacheUIFrames.cpp
-        src/Resource/ResourceCacheUIConsole.cpp
-        src/Resource/ResourceCacheUIAssets.cpp
-        src/Resource/ResourceCacheInitialize.cpp
         src/Resource/ResourceCacheSprites.cpp
         src/Resource/ResourceCacheTilesetImages.cpp
         src/Resource/ResourceCachePortrait.cpp
-        src/Resource/ResourceCacheSources.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
         src/Resource/CascArchive.cpp
@@ -1252,29 +1247,19 @@ if(BUILD_GAME_CLIENT)
         "src/UI/HudConsole.cpp"
         "src/UI/HudContext.cpp"
         "src/UI/HudInfoPanel.cpp"
-        "src/UI/HudInfoPanelFrame.cpp"
-        "src/UI/HudInfoPanelPortrait.cpp"
-        "src/UI/HudInfoPanelScv.cpp"
-        "src/UI/HudInfoPanelStandard.cpp"
         "src/UI/HudInfoPanelState.cpp"
         "src/UI/HudInput.cpp"
         "src/UI/HudLayout.cpp"
         "src/UI/HudMinimap.cpp"
         "src/UI/HudResources.cpp"
         "src/Main/AppRuntime.cpp"
-        "src/Main/CampaignAudio.cpp"
-        "src/Main/CampaignPortrait.cpp"
         "src/Main/CampaignPresentation.cpp"
-        "src/Main/CampaignText.cpp"
         "src/Main/GameMenuPresentation.cpp"
         "src/Main/GameController.cpp"
         "src/Main/GameGuiPresentation.cpp"
-        "src/Main/GameGuiBootstrap.cpp"
         "src/Main/GameLoop/CursorTypes.cpp"
         "src/Main/GameLoop/CursorManager.cpp"
-        "src/Main/GameLoop/EcsSync.cpp"
         "src/Main/GameLoop/GameSaveState.cpp"
-        "src/Main/GameLoop/HudResourceSync.cpp"
         "src/Main/GameLoop/InputHandler.cpp"
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
@@ -1793,4 +1778,11 @@ option(BUILD_PHASE31_TO_36_ENGINE_FOUNDATION_TEST "Build Phase 31-36 general-pur
 if(BUILD_PHASE31_TO_36_ENGINE_FOUNDATION_TEST)
     starcraft_add_modern_phase_test(Phase31To36EngineFoundationAndSimplificationTest
         tests/Regression/Phase31To36EngineFoundationAndSimplificationTest.cpp)
+endif()
+
+option(BUILD_PHASE37_TO_42_ENGINE_EVOLUTION_TEST "Build Phase 37-42 Engine Evolution & Simplification test" ON)
+if(BUILD_PHASE37_TO_42_ENGINE_EVOLUTION_TEST)
+    starcraft_add_modern_phase_test(Phase37To42EngineEvolutionTest
+        tests/Regression/Phase37To42EngineEvolutionTest.cpp
+        src/Main/GameLoop/GameSaveState.cpp)
 endif()

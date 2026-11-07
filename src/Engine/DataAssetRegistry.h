@@ -13,6 +13,9 @@
 namespace Engine
 {
 
+template <typename AssetT>
+using AssetHandle = Resource::AssetHandle<AssetT>;
+
 // ============================================================================
 // DataAssetTable<AssetT>: Generic Data-Driven Asset Registry Table
 // Referenced from Unity ScriptableObject / Addressables & Godot ResourceDB:

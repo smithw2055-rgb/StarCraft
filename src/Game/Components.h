@@ -1145,3 +1145,5 @@ struct PendingTransportUnloadComponent
 };
 
 } // namespace Game::Components
+
+#include "Game/ComponentBinarySerializers.h"

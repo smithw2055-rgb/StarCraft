@@ -60,10 +60,7 @@ namespace Core::Platform
     void SetMouseCursorVisible(bool) {}
 }
 
-namespace Game::Client::GameLoop
-{
-    std::vector<int> CollectSelectedAliveEcsIds(Core::ECS::EntityManager&, const Game::Client::Selection&) { return {}; }
-}
+#include "Main/GameLoop/EcsSync.h"
 
 namespace Game::Client::UI
 {

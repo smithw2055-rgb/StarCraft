@@ -41,6 +41,8 @@ namespace Game
 // Demonstrates how StarCraft: Remastered acts as an experimental flagship module
 // hosted on top of the reusable Engine Foundation (Engine::EngineApp):
 // - Loads or binds cloud-converted ModernAssetRegistry (assets-R)
+// - Auto-populates Engine::Scene::PrefabRegistry (228 unit prefabs) and
+//   Engine::AI::BehaviorTreeServer (293 AI behavior trees)
 // - Synchronizes UnitPrototypeRegistry and SystemAssetBridge without legacy .dat files
 // - Registers WorldContext rollback resources (PlayerResourceStore, WorldUpgradeResource)
 // - Installs hierarchical SystemGroups across FixedSimulation, Presentation, and RenderExtract
@@ -49,20 +51,9 @@ class StarCraftEnginePlugin final : public Engine::IPlugin
 {
 public:
     explicit StarCraftEnginePlugin(std::string AssetsRPath = "assets-R",
-                                   Game::Map::GameMap* InitialMap = nullptr,
-                                   int LocalPlayerID = 0)
-        : mAssetsRPath(std::move(AssetsRPath))
-        , mMap(InitialMap)
-        , mLocalPlayerID(LocalPlayerID)
-    {
-    }
-
-    explicit StarCraftEnginePlugin(int LocalPlayerID,
-                                   std::string AssetsRPath = "assets-R",
                                    Game::Map::GameMap* InitialMap = nullptr)
         : mAssetsRPath(std::move(AssetsRPath))
         , mMap(InitialMap)
-        , mLocalPlayerID(LocalPlayerID)
     {
     }
 
@@ -87,26 +78,29 @@ public:
             {
                 mActiveRegistry = &mOwnedAssetRegistry;
             }
+            App.Context().BehaviorTrees().LoadFromAssetsRDirectory(mAssetsRPath);
         }
         if (mActiveRegistry && mActiveRegistry->IsLoaded())
         {
             App.Context().Assets().BindModernRegistry(mActiveRegistry);
+            App.Context().Prefabs().BuildUnitPrefabsFromModernRegistry(*mActiveRegistry);
             Game::Systems::SystemAssetBridge::BindModernAssetRegistry(*mActiveRegistry);
             SyncUnitPrototypesFromModernAssets(*mActiveRegistry);
         }
 
-        // 2. Initialize authoritative world-scoped resources
+        // 2. Initialize authoritative world-scoped resources & NavigationServer2D
         if (!mMap)
         {
             mOwnedFallbackMap = std::make_unique<Game::Map::GameMap>();
             mOwnedFallbackMap->Generate(128, 128);
             mMap = mOwnedFallbackMap.get();
         }
+        App.Context().Navigation2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
 
         auto& SimCtx = Game::SimulationContext::Get(EM);
         SimCtx.Map = mMap;
         SimCtx.MutableMap = mMap;
-        SimCtx.LocalPlayerID = mLocalPlayerID;
+        SimCtx.LocalPlayerID = 0;
 
         Game::Systems::HarvestSystem::ResetResources(EM);
         Game::Systems::UpgradeSystem::ResetUpgrades(EM);
@@ -176,15 +170,9 @@ public:
         SM.RegisterSystemInPhase(Core::ECS::SystemPhase::RenderExtract, std::move(RenderPipeline));
     }
 
-    void OnShutdown(Engine::EngineApp& App) override
+    void OnShutdown(Engine::EngineApp& /*App*/) override
     {
-        App.Context().Assets().BindModernRegistry(nullptr);
         Game::Systems::SystemAssetBridge::UnbindAll();
-        mSpatialGroup = nullptr;
-        mEconomyGroup = nullptr;
-        mCombatGroup = nullptr;
-        mAudioRouter = nullptr;
-        mRenderPipeline = nullptr;
     }
 
     static int SyncUnitPrototypesFromModernAssets(const Resource::ModernAssetRegistry& Registry)
@@ -241,7 +229,6 @@ private:
     const Resource::ModernAssetRegistry* mActiveRegistry = nullptr;
     std::unique_ptr<Game::Map::GameMap> mOwnedFallbackMap;
     Game::Map::GameMap* mMap = nullptr;
-    int mLocalPlayerID = 0;
 
     Core::ECS::SystemGroup* mSpatialGroup = nullptr;
     Core::ECS::SystemGroup* mEconomyGroup = nullptr;

@@ -48,13 +48,15 @@ struct Transform2D
 };
 
 // ============================================================================
-// Node2D: General-Purpose Hierarchical 2D Scene Graph Node
+// Node2D: General-Purpose Hierarchical 2D Scene Graph Node (Phase 35 & 38)
 // Referenced from Godot 4 Node2D & Unity GameObject/Transform:
 // - Supports dirty-flagged local-to-world transform propagation so subtrees
 //   only recompute world transforms when a parent or local transform changes.
 // - Supports named 2D Socket mount points (e.g. turret mounts, muzzle flashes,
 //   carried harvest payloads, exhaust trails).
-// - Designed for zero-allocation object pooling via SceneTree2D.
+// - Supports 32-direction RTS sprite orientation (with 17-way symmetry & flip)
+//   and elevation sort layer metadata so Render::SceneNode2D unifies directly
+//   onto Engine::Node2D without duplicate transform/hierarchy fields.
 // ============================================================================
 class Node2D
 {
@@ -66,7 +68,7 @@ public:
 
     virtual ~Node2D() = default;
 
-    void Reset(std::string Name = "Node2D", uint32_t Tag = 0)
+    void ResetNode2D(std::string Name = "Node2D", uint32_t Tag = 0)
     {
         mName = std::move(Name);
         mTag = Tag;
@@ -76,9 +78,22 @@ public:
         mWorldTransform = Transform2D{};
         mTransformDirty = true;
         mVisible = true;
+        mDirection32 = 0;
+        mDirection17 = 0;
+        mFlipHorizontal = false;
+        mFollowParentDirection = false;
+        mFrameSet = 0;
+        mImageID = 0;
+        mElevationSortLayer = 4;
+        mZIndexOffset = 0;
         mActiveSocketName.clear();
         mSockets.clear();
         mChildren.clear();
+    }
+
+    void Reset(std::string Name = "Node2D", uint32_t Tag = 0)
+    {
+        ResetNode2D(std::move(Name), Tag);
     }
 
     const std::string& GetName() const noexcept { return mName; }
@@ -90,13 +105,18 @@ public:
     int32_t GetBoundEntityId() const noexcept { return mBoundEntityId; }
     void SetBoundEntityId(int32_t EntityId) noexcept { mBoundEntityId = EntityId; }
 
-    void SetLocalPosition(Core::Math::Vec2 Pos) noexcept
+    void SetLocalPosition(const Core::Math::Vec2& Pos) noexcept
     {
         if (mLocalTransform.Position.X != Pos.X || mLocalTransform.Position.Y != Pos.Y)
         {
             mLocalTransform.Position = Pos;
             MarkTransformDirty();
         }
+    }
+
+    const Core::Math::Vec2& GetLocalPosition() const noexcept
+    {
+        return mLocalTransform.Position;
     }
 
     void SetLocalScale(Core::Math::Vec2 Scale) noexcept
@@ -136,7 +156,12 @@ public:
         return mWorldTransform;
     }
 
-    Core::Math::Vec2 GetWorldPosition()
+    const Core::Math::Vec2& GetWorldPosition() const noexcept
+    {
+        return mWorldTransform.Position;
+    }
+
+    Core::Math::Vec2 ResolveWorldPosition()
     {
         return GetWorldTransform().Position;
     }
@@ -154,6 +179,44 @@ public:
             return false;
         return mParent ? mParent->IsVisibleInTree() : true;
     }
+
+    // 32-direction RTS sprite orientation & layering API
+    void SetDirection32(int32_t Dir32) noexcept
+    {
+        mDirection32 = ((Dir32 % 32) + 32) % 32;
+        if (mDirection32 <= 16)
+        {
+            mDirection17 = mDirection32;
+            mFlipHorizontal = false;
+        }
+        else
+        {
+            mDirection17 = 32 - mDirection32;
+            mFlipHorizontal = true;
+        }
+    }
+    int32_t GetDirection32() const noexcept { return mDirection32; }
+    int32_t GetDirection17() const noexcept { return mDirection17; }
+    bool IsFlippedHorizontally() const noexcept { return mFlipHorizontal; }
+
+    void SetFollowParentDirection(bool Follow) noexcept { mFollowParentDirection = Follow; }
+    bool GetFollowParentDirection() const noexcept { return mFollowParentDirection; }
+
+    void SetFrameSet(int32_t FrameSet) noexcept { mFrameSet = FrameSet; }
+    int32_t GetFrameSet() const noexcept { return mFrameSet; }
+
+    void SetImageID(uint32_t ImageID) noexcept { mImageID = ImageID; }
+    uint32_t GetImageID() const noexcept { return mImageID; }
+
+    void SetElevationSortLayer(uint8_t Layer) noexcept { mElevationSortLayer = Layer; }
+    uint8_t GetElevationSortLayer() const noexcept { return mElevationSortLayer; }
+
+    void SetZIndexOffset(int16_t Offset) noexcept
+    {
+        mZIndexOffset = Offset;
+        SetLocalZIndex(Offset, true);
+    }
+    int16_t GetZIndexOffset() const noexcept { return mZIndexOffset; }
 
     // Named 2D Socket Mount API (Godot Marker2D / BoneAttachment2D pattern)
     void DefineSocket(std::string SocketName, Core::Math::Vec2 LocalOffset)
@@ -231,7 +294,11 @@ public:
         for (auto& Child : mChildren)
         {
             if (Child)
+            {
+                if (Child->mFollowParentDirection)
+                    Child->SetDirection32(mDirection32);
                 RecomputedCount += Child->PropagateTransforms(RecomputeSelf);
+            }
         }
         return RecomputedCount;
     }
@@ -252,6 +319,18 @@ public:
     Node2D* GetParent() const noexcept { return mParent; }
     const std::vector<std::unique_ptr<Node2D>>& GetChildren() const noexcept { return mChildren; }
     bool IsTransformDirty() const noexcept { return mTransformDirty; }
+
+protected:
+    void SetWorldPositionResolved(const Core::Math::Vec2& WorldPos) noexcept
+    {
+        mWorldTransform.Position = WorldPos;
+        mTransformDirty = false;
+    }
+
+    void ForceLocalPositionSilent(const Core::Math::Vec2& Pos) noexcept
+    {
+        mLocalTransform.Position = Pos;
+    }
 
 private:
     void UpdateWorldTransform(bool /*RecursiveChildren*/)
@@ -285,6 +364,14 @@ private:
     Transform2D mWorldTransform{};
     bool mTransformDirty = true;
     bool mVisible = true;
+    int32_t mDirection32 = 0;
+    int32_t mDirection17 = 0;
+    bool mFlipHorizontal = false;
+    bool mFollowParentDirection = false;
+    int32_t mFrameSet = 0;
+    uint32_t mImageID = 0;
+    uint8_t mElevationSortLayer = 4;
+    int16_t mZIndexOffset = 0;
     std::string mActiveSocketName;
     std::unordered_map<std::string, Core::Math::Vec2> mSockets;
     std::vector<std::unique_ptr<Node2D>> mChildren;

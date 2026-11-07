@@ -61,6 +61,65 @@ struct ECSQueryTelemetry
     uint64_t CachedQueryMisses = 0;
 };
 
+namespace Detail
+{
+template <typename PodT>
+inline void AppendPodBytes(std::vector<uint8_t>& Buf, const PodT& Val)
+{
+    static_assert(std::is_trivially_copyable_v<PodT>, "AppendPodBytes requires trivially copyable type");
+    const auto* Ptr = reinterpret_cast<const uint8_t*>(&Val);
+    Buf.insert(Buf.end(), Ptr, Ptr + sizeof(PodT));
+}
+
+template <typename ElemT>
+inline void AppendVectorPodBytes(std::vector<uint8_t>& Buf, const std::vector<ElemT>& Vec)
+{
+    static_assert(std::is_trivially_copyable_v<ElemT>, "AppendVectorPodBytes requires trivially copyable element");
+    const uint32_t Count = static_cast<uint32_t>(Vec.size());
+    AppendPodBytes(Buf, Count);
+    if (Count > 0)
+    {
+        const auto* Ptr = reinterpret_cast<const uint8_t*>(Vec.data());
+        Buf.insert(Buf.end(), Ptr, Ptr + static_cast<size_t>(Count) * sizeof(ElemT));
+    }
+}
+
+template <typename PodT>
+inline bool ReadPodBytes(const std::vector<uint8_t>& Buf, size_t& Cursor, PodT& Out)
+{
+    static_assert(std::is_trivially_copyable_v<PodT>, "ReadPodBytes requires trivially copyable type");
+    if (Cursor + sizeof(PodT) > Buf.size())
+        return false;
+    std::memcpy(&Out, Buf.data() + Cursor, sizeof(PodT));
+    Cursor += sizeof(PodT);
+    return true;
+}
+
+template <typename ElemT>
+inline bool ReadVectorPodBytes(const std::vector<uint8_t>& Buf, size_t& Cursor, std::vector<ElemT>& Out)
+{
+    static_assert(std::is_trivially_copyable_v<ElemT>, "ReadVectorPodBytes requires trivially copyable element");
+    uint32_t Count = 0;
+    if (!ReadPodBytes(Buf, Cursor, Count))
+        return false;
+    const size_t ByteCount = static_cast<size_t>(Count) * sizeof(ElemT);
+    if (Cursor + ByteCount > Buf.size())
+        return false;
+    Out.resize(Count);
+    if (Count > 0)
+        std::memcpy(Out.data(), Buf.data() + Cursor, ByteCount);
+    Cursor += ByteCount;
+    return true;
+}
+} // namespace Detail
+
+// Specialization point for components containing dynamic containers (e.g. std::vector)
+template <typename T>
+struct CustomComponentBinarySerializer
+{
+    static constexpr bool kSupported = false;
+};
+
 class IComponentPool
 {
 public:
@@ -75,6 +134,7 @@ public:
     // General-Purpose Engine Foundation: Type-Erased Snapshot & Cloning API
     virtual size_t GetComponentByteSize() const = 0;
     virtual bool IsTriviallyCopyable() const = 0;
+    virtual bool HasBinarySerializer() const = 0;
     virtual std::unique_ptr<IComponentPool> CreateEmptyPool() const = 0;
     virtual void CapturePoolBinary(std::vector<EntityID>& OutEntities,
                                    std::vector<uint8_t>& OutBytes) const = 0;
@@ -230,6 +290,11 @@ public:
         return std::is_trivially_copyable_v<T>;
     }
 
+    bool HasBinarySerializer() const override
+    {
+        return std::is_trivially_copyable_v<T> || CustomComponentBinarySerializer<T>::kSupported;
+    }
+
     std::unique_ptr<IComponentPool> CreateEmptyPool() const override
     {
         return std::make_unique<ComponentPool<T>>();
@@ -250,6 +315,16 @@ public:
                 const T* Comp = GetComponent(OutEntities[i]);
                 if (Comp)
                     std::memcpy(OutBytes.data() + i * sizeof(T), Comp, sizeof(T));
+            }
+        }
+        else if constexpr (CustomComponentBinarySerializer<T>::kSupported)
+        {
+            OutEntities = mDenseEntities;
+            std::sort(OutEntities.begin(), OutEntities.end());
+            for (size_t i = 0; i < OutEntities.size(); ++i)
+            {
+                if (const T* Comp = GetComponent(OutEntities[i]))
+                    CustomComponentBinarySerializer<T>::Serialize(*Comp, OutBytes);
             }
         }
     }
@@ -366,21 +441,22 @@ public:
         return Slot < MaxComponents ? mPools[Slot].get() : nullptr;
     }
 
-    IComponentPool* EnsurePoolSlot(uint8_t Slot, const IComponentPool& PrototypePool)
+    IComponentPool* GetOrCreatePoolBySlot(uint8_t Slot)
     {
         if (Slot >= MaxComponents)
             return nullptr;
-        if (!mPools[Slot])
-            mPools[Slot] = PrototypePool.CreateEmptyPool();
+        if (!mPools[Slot] && sPoolFactories[Slot])
+            mPools[Slot] = sPoolFactories[Slot]();
         return mPools[Slot].get();
     }
 
-    EntityID GetLastEntityId() const { return mLastEntityId; }
-    const std::vector<uint32_t>& GetGenerationTable() const { return mGenerations; }
-    const std::deque<EntityID>& GetFreeIdQueue() const { return mFreeIds; }
-    void RestoreEntityAllocatorState(EntityID LastEntityId,
-                                     const std::vector<uint32_t>& Generations,
-                                     const std::deque<EntityID>& FreeIds);
+    IComponentPool* InstallPoolBySlot(uint8_t Slot, std::unique_ptr<IComponentPool> Pool)
+    {
+        if (Slot >= MaxComponents)
+            return nullptr;
+        mPools[Slot] = std::move(Pool);
+        return mPools[Slot].get();
+    }
 
     void SetEntityComponentBitInternal(EntityID Id, uint8_t Slot)
     {
@@ -390,6 +466,13 @@ public:
             ++mMaskMutationVersion;
         }
     }
+
+    EntityID GetLastEntityId() const { return mLastEntityId; }
+    const std::vector<uint32_t>& GetGenerationTable() const { return mGenerations; }
+    const std::deque<EntityID>& GetFreeIds() const { return mFreeIds; }
+    void RestoreEntityAllocatorState(EntityID LastEntityId,
+                                     const std::vector<uint32_t>& Generations,
+                                     const std::deque<EntityID>& FreeIds);
 
     template <typename T>
     T& AddComponent(EntityID Id)
@@ -889,6 +972,12 @@ private:
     ComponentPool<T>* GetOrCreatePool()
     {
         const uint8_t ID = GetComponentTypeID<T>();
+        if (!sPoolFactories[ID])
+        {
+            sPoolFactories[ID] = []() -> std::unique_ptr<IComponentPool> {
+                return std::make_unique<ComponentPool<T>>();
+            };
+        }
         if (!mPools[ID])
             mPools[ID] = std::make_unique<ComponentPool<T>>();
         return static_cast<ComponentPool<T>*>(mPools[ID].get());
@@ -946,6 +1035,8 @@ private:
         return Mask;
     }
 
+    using PoolFactoryFn = std::unique_ptr<IComponentPool>(*)();
+    inline static std::array<PoolFactoryFn, MaxComponents> sPoolFactories{};
     inline static thread_local EntityManager* sActiveWorld = nullptr;
 
     EntityID mLastEntityId = 0;
@@ -986,6 +1077,21 @@ void ComponentPool<T>::RestorePoolBinary(EntityManager& Owner,
                 continue;
             T& Slot = AddComponent(Id);
             std::memcpy(&Slot, Bytes.data() + i * sizeof(T), sizeof(T));
+            Owner.SetEntityComponentBitInternal(Id, ComponentTypeSlot);
+            NotifyConstructed(Owner, Id, Slot);
+        }
+    }
+    else if constexpr (CustomComponentBinarySerializer<T>::kSupported)
+    {
+        size_t Cursor = 0;
+        for (size_t i = 0; i < Entities.size(); ++i)
+        {
+            const EntityID Id = Entities[i];
+            if (!Owner.IsAlive(Id))
+                continue;
+            T& Slot = AddComponent(Id);
+            if (!CustomComponentBinarySerializer<T>::Deserialize(Bytes, Cursor, Slot))
+                break;
             Owner.SetEntityComponentBitInternal(Id, ComponentTypeSlot);
             NotifyConstructed(Owner, Id, Slot);
         }

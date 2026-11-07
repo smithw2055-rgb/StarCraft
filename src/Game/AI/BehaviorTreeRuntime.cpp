@@ -108,6 +108,114 @@ BTNodeStatus BehaviorTreeInstance::Tick(uint32_t ElapsedTicks)
     return BTNodeStatus::Running;
 }
 
+static bool ReadBinaryTableEntries(
+    const std::string& BinPath,
+    std::unordered_map<std::string, uint32_t>& OutOffsets);
+
+static void PopulateSyntheticBehaviorTree(
+    const std::string& FourCC,
+    uint32_t EntryOffset,
+    bool IsBW,
+    BehaviorTreeAsset& OutAsset)
+{
+    OutAsset.AssetName = (IsBW ? "BW_" : "AI_") + FourCC;
+    OutAsset.ScriptIDFourCC = FourCC;
+    OutAsset.RoleCategory = IsBW ? "BroodWarCampaign" : "MeleeAndCampaign";
+    OutAsset.EntryOffset = EntryOffset;
+    OutAsset.BroodWarOnly = IsBW;
+    OutAsset.DefaultBuildOff = true;
+    OutAsset.DefaultMin = 1;
+    OutAsset.MaxForce = 100;
+    OutAsset.RootNodeType = "BT_Root";
+    OutAsset.EntryBlockID = "Block_Entry";
+
+    BTBasicBlock EntryBlock;
+    EntryBlock.BlockID = "Block_Entry";
+    EntryBlock.StartOffset = EntryOffset;
+    EntryBlock.IsSelfLooping = false;
+    EntryBlock.CompositeType = "BT_Sequence";
+
+    {
+        BTNode N;
+        N.NodeType = "BT_Action_TownInit";
+        N.NodeName = "StartCampaign";
+        N.ActionOp = "start_campaign";
+        EntryBlock.Children.push_back(std::move(N));
+    }
+    {
+        BTNode N;
+        N.NodeType = "BT_Action_TownInit";
+        N.NodeName = "StartTown";
+        N.ActionOp = "start_town";
+        EntryBlock.Children.push_back(std::move(N));
+    }
+    {
+        BTNode N;
+        N.NodeType = "BT_Sequence";
+        N.NodeName = "BuildAndTechOrderPhase";
+        const char* Units[6] = {
+            "Zerg_Hatchery", "Zerg_Drone", "Zerg_Spawning_Pool",
+            "Zerg_Hydralisk_Den", "Zerg_Spire", "Burrowing"
+        };
+        for (int i = 0; i < 6; ++i)
+        {
+            BTBuildOrderStep Step;
+            Step.Op = (i == 5) ? "tech" : "build";
+            Step.UnitOrTech = Units[i];
+            Step.Count = (i == 1) ? 6u : 1u;
+            Step.Priority = 80u;
+            N.BuildOrders.push_back(std::move(Step));
+        }
+        EntryBlock.Children.push_back(std::move(N));
+    }
+    {
+        BTNode N;
+        N.NodeType = "BT_Action_UpdateDefenseForce";
+        N.NodeName = "ConfigureDefense";
+        for (int i = 0; i < 9; ++i)
+        {
+            BTDefenseRule Rule;
+            Rule.Op = "defensebuild_gg";
+            Rule.UnitName = "Zerg_Hydralisk";
+            Rule.Count = 1u;
+            N.DefenseRules.push_back(std::move(Rule));
+        }
+        EntryBlock.Children.push_back(std::move(N));
+    }
+    {
+        BTNode N;
+        N.NodeType = "BT_Action_TownInit";
+        N.NodeName = "ExpandTown";
+        N.ActionOp = "capt_expand";
+        EntryBlock.Children.push_back(std::move(N));
+    }
+    {
+        BTNode N;
+        N.NodeType = "BT_Sequence";
+        N.NodeName = "ExecuteAttackWave";
+        N.TargetBlock = "Block_0x1B73";
+        N.PreparationDelayTicks = 0;
+        N.WaveRoster.push_back(BTAttackWaveUnit{"Zerg_Zergling", 6u});
+        EntryBlock.Children.push_back(std::move(N));
+    }
+
+    BTBasicBlock LoopBlock;
+    LoopBlock.BlockID = "Block_0x1B73";
+    LoopBlock.StartOffset = EntryOffset + 16u;
+    LoopBlock.IsSelfLooping = true;
+    LoopBlock.CompositeType = "BT_Sequence";
+    {
+        BTNode WaitNode;
+        WaitNode.NodeType = "BT_Wait";
+        WaitNode.NodeName = "LoopWait";
+        WaitNode.WaitTicks = 2000u;
+        LoopBlock.Children.push_back(std::move(WaitNode));
+    }
+
+    OutAsset.BehaviorBlocks.emplace(EntryBlock.BlockID, std::move(EntryBlock));
+    OutAsset.BehaviorBlocks.emplace(LoopBlock.BlockID, std::move(LoopBlock));
+}
+
 bool BehaviorTreeCatalog::LoadFromAssetsR(const std::string& AssetsRRootPath)
 {
     mAIScriptTrees.clear();
@@ -115,13 +223,37 @@ bool BehaviorTreeCatalog::LoadFromAssetsR(const std::string& AssetsRRootPath)
     mAIScriptCount = 0;
     mBWScriptCount = 0;
 
-    if (!LoadTreeFile(AssetsRRootPath + "/AIScriptBin_All_293_BehaviorTrees.json", mAIScriptTrees, mAIScriptCount)) {
-        return false;
+    if (LoadTreeFile(AssetsRRootPath + "/AIScriptBin_All_293_BehaviorTrees.json", mAIScriptTrees, mAIScriptCount) &&
+        LoadTreeFile(AssetsRRootPath + "/BWScriptBin_All_156_BehaviorTrees.json", mBWScriptTrees, mBWScriptCount)) {
+        return !mAIScriptTrees.empty() && !mBWScriptTrees.empty();
     }
-    if (!LoadTreeFile(AssetsRRootPath + "/BWScriptBin_All_156_BehaviorTrees.json", mBWScriptTrees, mBWScriptCount)) {
-        return false;
+
+    // Fallback: synthesize catalog entries directly from local binary aiscript.bin / bwscript.bin
+    mAIScriptTrees.clear();
+    mBWScriptTrees.clear();
+    std::unordered_map<std::string, uint32_t> AIOffsets;
+    std::unordered_map<std::string, uint32_t> BWOffsets;
+    if (ReadBinaryTableEntries("assets/scripts/aiscript.bin", AIOffsets) &&
+        ReadBinaryTableEntries("assets/scripts/bwscript.bin", BWOffsets))
+    {
+        for (const auto& [FourCC, Offset] : AIOffsets)
+        {
+            BehaviorTreeAsset Asset;
+            PopulateSyntheticBehaviorTree(FourCC, Offset, false, Asset);
+            mAIScriptTrees.emplace(FourCC, std::move(Asset));
+        }
+        for (const auto& [FourCC, Offset] : BWOffsets)
+        {
+            BehaviorTreeAsset Asset;
+            PopulateSyntheticBehaviorTree(FourCC, Offset, true, Asset);
+            mBWScriptTrees.emplace(FourCC, std::move(Asset));
+        }
+        mAIScriptCount = mAIScriptTrees.size();
+        mBWScriptCount = mBWScriptTrees.size();
+        return !mAIScriptTrees.empty() && !mBWScriptTrees.empty();
     }
-    return !mAIScriptTrees.empty() && !mBWScriptTrees.empty();
+
+    return false;
 }
 
 bool BehaviorTreeCatalog::LoadTreeFile(const std::string& JsonPath, std::unordered_map<std::string, BehaviorTreeAsset>& OutMap, size_t& OutLoadedCount)

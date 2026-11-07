@@ -14,10 +14,19 @@
 #include "Core/ECS/SystemManager.h"
 #include "Core/Input/InputActionMap.h"
 #include "Core/Scene/SceneManager.h"
+#include "Engine/AI/BehaviorTreeServer.h"
 #include "Engine/DataAssetRegistry.h"
+#include "Engine/Debug/EngineTelemetryServer.h"
 #include "Engine/ECS/GenericWorldSnapshot.h"
+#include "Engine/ECS/WorldSerializer.h"
 #include "Engine/EngineTime.h"
+#include "Engine/Input/CommandRouter.h"
+#include "Engine/Navigation/NavigationServer2D.h"
+#include "Engine/Net/DeterministicSessionServer.h"
 #include "Engine/Node2D.h"
+#include "Engine/Render/RenderGraph2D.h"
+#include "Engine/Scene/PackedScene2D.h"
+#include "Engine/Scene/PrefabRegistry.h"
 #include "Render/RenderServer2D.h"
 #include "Resource/AssetServer.h"
 
@@ -47,9 +56,9 @@ public:
 };
 
 // ============================================================================
-// EngineContext: Unified Server Architecture Container
+// EngineContext: Unified Server Architecture Container (Phases 34–42)
 // Referenced from Godot 4 Server Architecture (RenderingServer, AudioServer,
-// ResourceLoader, InputMap, SceneTree) & Unity SubsystemRegistry:
+// NavigationServer2D, ResourceLoader, InputMap, SceneTree) & Unity Subsystems:
 // - Aggregates all core engine servers into a single non-global context owned
 //   by EngineApp, eliminating scattered global state across modules.
 // ============================================================================
@@ -67,8 +76,23 @@ public:
     Resource::AssetServer& Assets() noexcept { return mAssetServer; }
     const Resource::AssetServer& Assets() const noexcept { return mAssetServer; }
 
-    Render::RenderServer2D& Rendering2D() noexcept { return mRenderServer2D; }
-    const Render::RenderServer2D& Rendering2D() const noexcept { return mRenderServer2D; }
+    ::Render::RenderServer2D& Rendering2D() noexcept { return mRenderServer2D; }
+    const ::Render::RenderServer2D& Rendering2D() const noexcept { return mRenderServer2D; }
+
+    Engine::Render::RenderGraph2D& RenderGraph() noexcept { return mRenderGraph2D; }
+    const Engine::Render::RenderGraph2D& RenderGraph() const noexcept { return mRenderGraph2D; }
+
+    Engine::Navigation::NavigationServer2D& Navigation2D() noexcept { return mNavigationServer2D; }
+    const Engine::Navigation::NavigationServer2D& Navigation2D() const noexcept { return mNavigationServer2D; }
+
+    Engine::AI::BehaviorTreeServer& BehaviorTrees() noexcept { return mBehaviorTreeServer; }
+    const Engine::AI::BehaviorTreeServer& BehaviorTrees() const noexcept { return mBehaviorTreeServer; }
+
+    Engine::Scene::PrefabRegistry& Prefabs() noexcept { return mPrefabRegistry; }
+    const Engine::Scene::PrefabRegistry& Prefabs() const noexcept { return mPrefabRegistry; }
+
+    Engine::Debug::EngineTelemetryServer& Telemetry() noexcept { return mTelemetryServer; }
+    const Engine::Debug::EngineTelemetryServer& Telemetry() const noexcept { return mTelemetryServer; }
 
     Core::Audio::AudioBusMixer& AudioBuses() noexcept { return mAudioBusMixer; }
     const Core::Audio::AudioBusMixer& AudioBuses() const noexcept { return mAudioBusMixer; }
@@ -88,7 +112,12 @@ public:
 private:
     TimeStepAccumulator mTime;
     Resource::AssetServer mAssetServer;
-    Render::RenderServer2D mRenderServer2D;
+    ::Render::RenderServer2D mRenderServer2D;
+    Engine::Render::RenderGraph2D mRenderGraph2D;
+    Engine::Navigation::NavigationServer2D mNavigationServer2D;
+    Engine::AI::BehaviorTreeServer mBehaviorTreeServer;
+    Engine::Scene::PrefabRegistry mPrefabRegistry;
+    Engine::Debug::EngineTelemetryServer mTelemetryServer;
     Core::Audio::AudioBusMixer mAudioBusMixer;
     Core::Input::InputActionMap mInputActionMap = Core::Input::InputActionMap::CreateDefaultRTSMap();
     Core::Scene::SceneManager mScenes;
@@ -97,10 +126,6 @@ private:
 
 // ============================================================================
 // EngineApp: General-Purpose Modular Game Engine Host
-// Referenced from Godot 4 MainLoop & Unity PlayerLoop / World Host:
-// - Manages EngineContext servers, primary + auxiliary ECS Worlds (multi-world
-//   sandbox / parallel simulation / background AI preview), GenericRollbackBuffer,
-//   and registered IPlugin lifecycle hooks.
 // ============================================================================
 class EngineApp
 {
@@ -175,14 +200,6 @@ public:
         mInitialized = false;
     }
 
-    // Advances the engine by WallDeltaSeconds:
-    // 1. Accumulates fixed simulation steps via TimeStepAccumulator
-    // 2. For each fixed step, optionally records a GenericWorldSnapshot into mRollbackBuffer,
-    //    invokes plugin OnFixedUpdate, and executes ECS Simulation phases
-    //    (Input -> NetworkLockstep -> FixedSimulation -> TransformPropagation)
-    // 3. Invokes plugin OnUpdate, flushes time-sliced GPU uploads on AssetServer,
-    //    advances AudioBusMixer, propagates SceneTree2D transforms, and executes
-    //    ECS Presentation phases (Presentation -> RenderExtract).
     int StepFrame(float WallDeltaSeconds, uint32_t GpuUploadBudgetBytes = 4u * 1024u * 1024u)
     {
         if (!mInitialized)
@@ -211,7 +228,6 @@ public:
         return SubSteps;
     }
 
-    // Deterministically steps an exact number of fixed simulation ticks
     void StepFixedTicks(uint32_t TickCount)
     {
         if (!mInitialized)
@@ -225,7 +241,6 @@ public:
         }
     }
 
-    // Multi-World Management (Unity DOTS World / Godot SubViewport World2D pattern)
     Core::ECS::SystemManager& PrimaryWorld() noexcept { return mPrimaryWorld; }
     const Core::ECS::SystemManager& PrimaryWorld() const noexcept { return mPrimaryWorld; }
 
@@ -271,7 +286,7 @@ private:
         const uint32_t CurrentTick = static_cast<uint32_t>(mContext.Time().GetTickCount());
         if (mAutoRecordRollback)
         {
-            mRollbackBuffer.RecordFrame(mPrimaryWorld.GetEntityManager(), CurrentTick);
+            mRollbackBuffer.RecordTick(mPrimaryWorld.GetEntityManager(), CurrentTick);
         }
 
         for (auto& Plugin : mPlugins)

@@ -4,10 +4,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include "Core/ECS/EntityManager.h"
@@ -17,101 +17,105 @@ namespace Engine::ECS
 
 // ============================================================================
 // GenericWorldSnapshot: Game-Agnostic Type-Erased ECS World Snapshot
-// - Zero dependency on any game-specific components (no Game/Components.h).
-// - Iterates over all active Core::ECS::IComponentPool slots [0 .. MaxComponents-1].
-// - Uses fast contiguous binary buffers (CapturePoolBinary / RestorePoolBinary)
-//   for trivially copyable components, and type-erased pool cloning
-//   (ClonePoolState / RestoreFromClonedPool) for non-trivial components.
-// - Supports pluggable WorldContext resource snapshot hooks for singleton state.
+// - Zero dependency on Game/Components.h or any game-specific header.
+// - Automatically iterates all active ComponentPools in EntityManager:
+//   * Pools supporting binary serialization (trivially copyable or specialized
+//     CustomComponentBinarySerializer<T>) are captured as contiguous raw byte
+//     buffers (CapturePoolBinary / RestorePoolBinary).
+//   * Remaining copyable pools are captured via virtual type-erased cloning
+//     (ClonePoolState / RestoreFromClonedPool).
+// - Supports optional type-erased WorldContext resource snapshot hooks.
 // ============================================================================
 class GenericWorldSnapshot
 {
 public:
+    struct EntityIdentityEntry
+    {
+        Core::ECS::EntityID Id = Core::ECS::InvalidEntity;
+        uint32_t Generation = 0;
+    };
+
     struct PoolSnapshotEntry
     {
         uint8_t Slot = 0;
-        bool IsBinary = true;
-        size_t ComponentByteSize = 0;
+        bool IsBinary = false;
         std::vector<Core::ECS::EntityID> Entities;
         std::vector<uint8_t> RawBytes;
         std::unique_ptr<Core::ECS::IComponentPool> ClonedPool;
 
         PoolSnapshotEntry() = default;
-        PoolSnapshotEntry(PoolSnapshotEntry&&) noexcept = default;
-        PoolSnapshotEntry& operator=(PoolSnapshotEntry&&) noexcept = default;
-
         PoolSnapshotEntry(const PoolSnapshotEntry& Other)
             : Slot(Other.Slot)
             , IsBinary(Other.IsBinary)
-            , ComponentByteSize(Other.ComponentByteSize)
             , Entities(Other.Entities)
             , RawBytes(Other.RawBytes)
             , ClonedPool(Other.ClonedPool ? Other.ClonedPool->ClonePoolState() : nullptr)
         {
         }
-
         PoolSnapshotEntry& operator=(const PoolSnapshotEntry& Other)
         {
             if (this != &Other)
             {
                 Slot = Other.Slot;
                 IsBinary = Other.IsBinary;
-                ComponentByteSize = Other.ComponentByteSize;
                 Entities = Other.Entities;
                 RawBytes = Other.RawBytes;
                 ClonedPool = Other.ClonedPool ? Other.ClonedPool->ClonePoolState() : nullptr;
             }
             return *this;
         }
-    };
-
-    struct EntityIdentityEntry
-    {
-        Core::ECS::EntityID Id = Core::ECS::InvalidEntity;
-        uint32_t Generation = 1;
+        PoolSnapshotEntry(PoolSnapshotEntry&&) noexcept = default;
+        PoolSnapshotEntry& operator=(PoolSnapshotEntry&&) noexcept = default;
     };
 
     using ResourceRestoreFn = std::function<void(Core::ECS::EntityManager&)>;
     using ResourceCaptureHook = std::function<ResourceRestoreFn(const Core::ECS::EntityManager&)>;
 
+    void Clear()
+    {
+        mTick = 0;
+        mLastEntityId = 0;
+        mGenerations.clear();
+        mFreeIds.clear();
+        mEntities.clear();
+        mPoolSnapshots.clear();
+        mResourceRestorers.clear();
+    }
+
     void Capture(const Core::ECS::EntityManager& EM,
                  uint32_t Tick = 0,
                  const std::vector<ResourceCaptureHook>* ResourceHooks = nullptr)
     {
+        Clear();
         mTick = Tick;
         mLastEntityId = EM.GetLastEntityId();
         mGenerations = EM.GetGenerationTable();
-        mFreeIds = EM.GetFreeIdQueue();
-        mEntities.clear();
-        mPoolSnapshots.clear();
-        mResourceRestorers.clear();
+        mFreeIds = EM.GetFreeIds();
 
-        std::vector<Core::ECS::EntityID> Alive = EM.GetActiveEntities();
-        std::sort(Alive.begin(), Alive.end());
-        mEntities.reserve(Alive.size());
-        for (Core::ECS::EntityID Id : Alive)
+        std::vector<Core::ECS::EntityID> Active = EM.GetActiveEntities();
+        std::sort(Active.begin(), Active.end());
+        mEntities.reserve(Active.size());
+        for (Core::ECS::EntityID Id : Active)
         {
             mEntities.push_back({Id, EM.GetGeneration(Id)});
         }
 
-        for (uint8_t Slot = 0; Slot < static_cast<uint8_t>(Core::ECS::MaxComponents); ++Slot)
+        for (size_t Slot = 0; Slot < Core::ECS::MaxComponents; ++Slot)
         {
-            const Core::ECS::IComponentPool* Pool = EM.GetPoolBySlot(Slot);
+            const Core::ECS::IComponentPool* Pool = EM.GetPoolBySlot(static_cast<uint8_t>(Slot));
             if (!Pool || Pool->Size() == 0)
                 continue;
 
             PoolSnapshotEntry Entry;
-            Entry.Slot = Slot;
-            Entry.ComponentByteSize = Pool->GetComponentByteSize();
-            Entry.IsBinary = Pool->IsTriviallyCopyable();
-
-            if (Entry.IsBinary)
+            Entry.Slot = static_cast<uint8_t>(Slot);
+            if (Pool->HasBinarySerializer())
             {
+                Entry.IsBinary = true;
                 Pool->CapturePoolBinary(Entry.Entities, Entry.RawBytes);
-                Entry.ClonedPool = Pool->CreateEmptyPool();
             }
             else
             {
+                Entry.IsBinary = false;
                 Entry.ClonedPool = Pool->ClonePoolState();
             }
             mPoolSnapshots.push_back(std::move(Entry));
@@ -141,10 +145,10 @@ public:
 
         for (const auto& Entry : mPoolSnapshots)
         {
-            Core::ECS::IComponentPool* Pool = EM.GetMutablePoolBySlot(Entry.Slot);
+            Core::ECS::IComponentPool* Pool = EM.GetOrCreatePoolBySlot(Entry.Slot);
             if (!Pool && Entry.ClonedPool)
             {
-                Pool = EM.EnsurePoolSlot(Entry.Slot, *Entry.ClonedPool);
+                Pool = EM.InstallPoolBySlot(Entry.Slot, Entry.ClonedPool->CreateEmptyPool());
             }
             if (!Pool)
                 continue;
@@ -166,9 +170,46 @@ public:
         }
     }
 
+    uint32_t ComputeBinaryHashFNV1a() const
+    {
+        uint32_t Hash = 2166136261u;
+        auto MixBytes = [&Hash](const void* Data, size_t Len) {
+            const auto* Bytes = static_cast<const uint8_t*>(Data);
+            for (size_t i = 0; i < Len; ++i)
+            {
+                Hash ^= Bytes[i];
+                Hash *= 16777619u;
+            }
+        };
+
+        MixBytes(&mTick, sizeof(mTick));
+        for (const auto& Ent : mEntities)
+        {
+            MixBytes(&Ent.Id, sizeof(Ent.Id));
+            MixBytes(&Ent.Generation, sizeof(Ent.Generation));
+        }
+        for (const auto& Pool : mPoolSnapshots)
+        {
+            MixBytes(&Pool.Slot, sizeof(Pool.Slot));
+            if (!Pool.Entities.empty())
+                MixBytes(Pool.Entities.data(), Pool.Entities.size() * sizeof(Core::ECS::EntityID));
+            if (!Pool.RawBytes.empty())
+                MixBytes(Pool.RawBytes.data(), Pool.RawBytes.size());
+        }
+        return Hash;
+    }
+
     uint32_t GetTick() const { return mTick; }
+    void SetTick(uint32_t Tick) { mTick = Tick; }
+
     size_t GetEntityCount() const { return mEntities.size(); }
     size_t GetCapturedPoolCount() const { return mPoolSnapshots.size(); }
+
+    const std::vector<EntityIdentityEntry>& GetEntities() const { return mEntities; }
+    std::vector<EntityIdentityEntry>& GetMutableEntities() { return mEntities; }
+
+    const std::vector<PoolSnapshotEntry>& GetPoolSnapshots() const { return mPoolSnapshots; }
+    std::vector<PoolSnapshotEntry>& GetMutablePoolSnapshots() { return mPoolSnapshots; }
 
     size_t ComputeTotalBinaryBytes() const
     {
@@ -192,76 +233,80 @@ private:
 };
 
 // ============================================================================
-// GenericRollbackBuffer: Ring-Buffered Deterministic World State Manager
-// Supports registering arbitrary WorldContext singleton types <ResT> to be
-// automatically snapshotted and restored alongside all ECS component pools.
+// GenericRollbackBuffer: Ring-buffered deterministic rollback state manager
+// usable by any 2D/RTS game built on the Engine foundation.
 // ============================================================================
-template <size_t kRingCapacity = 64>
+template <size_t kRingCapacity = 128>
 class GenericRollbackBuffer
 {
 public:
-    template <typename ResT>
+    template <typename ResourceT>
     void RegisterWorldResource()
     {
-        mResourceHooks.push_back([](const Core::ECS::EntityManager& EM) -> GenericWorldSnapshot::ResourceRestoreFn
-        {
-            if (!EM.HasResource<ResT>())
-                return nullptr;
-            const ResT Copy = *EM.GetResource<ResT>();
-            return [Copy](Core::ECS::EntityManager& TargetEM)
+        static_assert(std::is_copy_constructible_v<ResourceT>,
+                      "Registered WorldContext resource must be copy-constructible");
+        mResourceHooks.push_back([](const Core::ECS::EntityManager& EM) -> GenericWorldSnapshot::ResourceRestoreFn {
+            if (const auto* Res = EM.Context().GetResource<ResourceT>())
             {
-                TargetEM.SetResource<ResT>(Copy);
+                ResourceT Copy = *Res;
+                return [Copy](Core::ECS::EntityManager& TargetEM) {
+                    TargetEM.Context().SetResource<ResourceT>(Copy);
+                };
+            }
+            return [](Core::ECS::EntityManager& TargetEM) {
+                TargetEM.Context().RemoveResource<ResourceT>();
             };
         });
     }
 
-    void RecordFrame(const Core::ECS::EntityManager& EM, uint32_t Tick)
+    void RecordTick(const Core::ECS::EntityManager& EM, uint32_t Tick)
     {
-        const size_t Slot = static_cast<size_t>(Tick) % kRingCapacity;
-        mSlots[Slot].Capture(EM, Tick, &mResourceHooks);
-        mSlotValid[Slot] = true;
-        mLatestTick = Tick;
-        ++mRecordedCount;
+        const size_t Idx = Tick % kRingCapacity;
+        mSlots[Idx].Capture(EM, Tick, &mResourceHooks);
+        mSlotValid[Idx] = true;
+        ++mTotalRecorded;
     }
 
     bool RollbackToTick(Core::ECS::EntityManager& EM, uint32_t TargetTick)
     {
-        const size_t Slot = static_cast<size_t>(TargetTick) % kRingCapacity;
-        if (!mSlotValid[Slot] || mSlots[Slot].GetTick() != TargetTick)
+        const size_t Idx = TargetTick % kRingCapacity;
+        if (!mSlotValid[Idx] || mSlots[Idx].GetTick() != TargetTick)
             return false;
 
-        mSlots[Slot].Restore(EM);
-        mLatestTick = TargetTick;
-        ++mRollbackCount;
+        mSlots[Idx].Restore(EM);
+        ++mTotalRollbacks;
         return true;
     }
 
     const GenericWorldSnapshot* FindSnapshot(uint32_t Tick) const
     {
-        const size_t Slot = static_cast<size_t>(Tick) % kRingCapacity;
-        if (!mSlotValid[Slot] || mSlots[Slot].GetTick() != Tick)
+        const size_t Idx = Tick % kRingCapacity;
+        if (!mSlotValid[Idx] || mSlots[Idx].GetTick() != Tick)
             return nullptr;
-        return &mSlots[Slot];
+        return &mSlots[Idx];
     }
 
     void Clear()
     {
-        mSlotValid.fill(false);
-        mLatestTick = 0;
-        mRecordedCount = 0;
+        for (size_t i = 0; i < kRingCapacity; ++i)
+        {
+            mSlots[i].Clear();
+            mSlotValid[i] = false;
+        }
     }
 
-    uint32_t GetLatestTick() const { return mLatestTick; }
-    uint64_t GetRecordedCount() const { return mRecordedCount; }
-    uint64_t GetRollbackCount() const { return mRollbackCount; }
+    void RecordFrame(const Core::ECS::EntityManager& EM, uint32_t Tick) { RecordTick(EM, Tick); }
+    uint64_t GetTotalRecorded() const { return mTotalRecorded; }
+    uint64_t GetRecordedCount() const { return mTotalRecorded; }
+    uint64_t GetTotalRollbacks() const { return mTotalRollbacks; }
+    uint64_t GetRollbackCount() const { return mTotalRollbacks; }
 
 private:
     std::array<GenericWorldSnapshot, kRingCapacity> mSlots{};
     std::array<bool, kRingCapacity> mSlotValid{};
     std::vector<GenericWorldSnapshot::ResourceCaptureHook> mResourceHooks;
-    uint32_t mLatestTick = 0;
-    uint64_t mRecordedCount = 0;
-    uint64_t mRollbackCount = 0;
+    uint64_t mTotalRecorded = 0;
+    uint64_t mTotalRollbacks = 0;
 };
 
 } // namespace Engine::ECS

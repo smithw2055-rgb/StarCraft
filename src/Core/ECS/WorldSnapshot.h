@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "Core/ECS/EntityManager.h"
+#include "Engine/ECS/GenericWorldSnapshot.h"
+#include "Game/ComponentBinarySerializers.h"
 #include "Game/Components.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
@@ -19,75 +21,18 @@ struct WorldUpgradeResource {
     std::array<Game::Systems::PlayerUpgrades, kMaxPlayers> PlayerUpgrades{};
 };
 
-// Complete deterministic entity state record covering all simulation-affecting ECS components
+// Lightweight entity identity header retained for backwards compatibility
 struct EntityStateRecord {
     EntityID Id = InvalidEntity;
     uint32_t Generation = 0;
-
-    bool HasTransform = false;
-    Game::Components::TransformComponent Transform{};
-
-    bool HasUnit = false;
-    Game::Components::UnitComponent Unit{};
-
-    bool HasPlayer = false;
-    Game::Components::PlayerComponent Player{};
-
-    bool HasCombat = false;
-    Game::Components::CombatComponent Combat{};
-
-    bool HasRender = false;
-    Game::Components::RenderComponent Render{};
-
-    bool HasCommand = false;
-    Game::Components::CommandComponent Command{};
-
-    bool HasPathfinding = false;
-    Game::Components::PathfindingComponent Pathfinding{};
-
-    bool HasBuilding = false;
-    Game::Components::BuildingComponent Building{};
-
-    bool HasResource = false;
-    Game::Components::ResourceComponent Resource{};
-
-    bool HasHarvest = false;
-    Game::Components::HarvestComponent Harvest{};
-
-    bool HasProduction = false;
-    Game::Components::ProductionComponent Production{};
-
-    bool HasBullet = false;
-    Game::Components::BulletComponent Bullet{};
-
-    bool HasStatusEffect = false;
-    Game::Components::StatusEffectComponent StatusEffect{};
-
-    bool HasCloak = false;
-    Game::Components::CloakComponent Cloak{};
-
-    bool HasBurrow = false;
-    Game::Components::BurrowComponent Burrow{};
-
-    bool HasLoadedUnits = false;
-    Game::Components::LoadedUnitsComponent LoadedUnits{};
-
-    bool HasMorph = false;
-    Game::Components::MorphComponent Morph{};
-
-    bool HasSiegeTransition = false;
-    Game::Components::SiegeTransitionComponent SiegeTransition{};
-
-    bool HasSpiderMine = false;
-    Game::Components::SpiderMineComponent SpiderMine{};
-
-    bool HasNuke = false;
-    Game::Components::NukeComponent Nuke{};
-
-    bool HasArchonWarp = false;
-    Game::Components::ArchonWarpComponent ArchonWarp{};
 };
 
+// ============================================================================
+// WorldDeterministicSnapshot (Phase 37 Unification):
+// - Delegates all component pool capture & restore to the game-agnostic
+//   Engine::ECS::GenericWorldSnapshot instead of duplicating 22 component
+//   fields per entity.
+// ============================================================================
 struct WorldDeterministicSnapshot {
     uint32_t FrameNumber = 0;
     uint32_t StateHashFNV1a = 0;
@@ -96,6 +41,7 @@ struct WorldDeterministicSnapshot {
     bool HasEconomyResource = false;
     Game::Systems::PlayerResourceStore Economy{};
     std::vector<EntityStateRecord> Entities;
+    Engine::ECS::GenericWorldSnapshot GenericSnapshot;
 };
 
 class WorldSnapshotSerializer {
@@ -124,7 +70,6 @@ public:
             MixBytes(Econ, sizeof(Game::Systems::PlayerResourceStore));
         }
 
-        // Deterministically sort active entities by ID before hashing
         std::vector<EntityID> SortedIds = EM.GetActiveEntities();
         std::sort(SortedIds.begin(), SortedIds.end());
 
@@ -288,99 +233,10 @@ public:
             Snap.Economy = *Econ;
         }
 
-        std::vector<EntityID> SortedIds = EM.GetActiveEntities();
-        std::sort(SortedIds.begin(), SortedIds.end());
-        Snap.Entities.reserve(SortedIds.size());
-
-        for (EntityID Id : SortedIds) {
-            EntityStateRecord Rec;
-            Rec.Id = Id;
-            Rec.Generation = EM.GetGeneration(Id);
-            if (const auto* T = EM.GetComponent<Game::Components::TransformComponent>(Id)) {
-                Rec.HasTransform = true;
-                Rec.Transform = *T;
-            }
-            if (const auto* U = EM.GetComponent<Game::Components::UnitComponent>(Id)) {
-                Rec.HasUnit = true;
-                Rec.Unit = *U;
-            }
-            if (const auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Id)) {
-                Rec.HasPlayer = true;
-                Rec.Player = *P;
-            }
-            if (const auto* C = EM.GetComponent<Game::Components::CombatComponent>(Id)) {
-                Rec.HasCombat = true;
-                Rec.Combat = *C;
-            }
-            if (const auto* R = EM.GetComponent<Game::Components::RenderComponent>(Id)) {
-                Rec.HasRender = true;
-                Rec.Render = *R;
-            }
-            if (const auto* Cmd = EM.GetComponent<Game::Components::CommandComponent>(Id)) {
-                Rec.HasCommand = true;
-                Rec.Command = *Cmd;
-            }
-            if (const auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(Id)) {
-                Rec.HasPathfinding = true;
-                Rec.Pathfinding = *Path;
-            }
-            if (const auto* B = EM.GetComponent<Game::Components::BuildingComponent>(Id)) {
-                Rec.HasBuilding = true;
-                Rec.Building = *B;
-            }
-            if (const auto* Res = EM.GetComponent<Game::Components::ResourceComponent>(Id)) {
-                Rec.HasResource = true;
-                Rec.Resource = *Res;
-            }
-            if (const auto* H = EM.GetComponent<Game::Components::HarvestComponent>(Id)) {
-                Rec.HasHarvest = true;
-                Rec.Harvest = *H;
-            }
-            if (const auto* Prod = EM.GetComponent<Game::Components::ProductionComponent>(Id)) {
-                Rec.HasProduction = true;
-                Rec.Production = *Prod;
-            }
-            if (const auto* Bul = EM.GetComponent<Game::Components::BulletComponent>(Id)) {
-                Rec.HasBullet = true;
-                Rec.Bullet = *Bul;
-            }
-            if (const auto* Status = EM.GetComponent<Game::Components::StatusEffectComponent>(Id)) {
-                Rec.HasStatusEffect = true;
-                Rec.StatusEffect = *Status;
-            }
-            if (const auto* Cloak = EM.GetComponent<Game::Components::CloakComponent>(Id)) {
-                Rec.HasCloak = true;
-                Rec.Cloak = *Cloak;
-            }
-            if (const auto* Bur = EM.GetComponent<Game::Components::BurrowComponent>(Id)) {
-                Rec.HasBurrow = true;
-                Rec.Burrow = *Bur;
-            }
-            if (const auto* Loaded = EM.GetComponent<Game::Components::LoadedUnitsComponent>(Id)) {
-                Rec.HasLoadedUnits = true;
-                Rec.LoadedUnits = *Loaded;
-            }
-            if (const auto* Morph = EM.GetComponent<Game::Components::MorphComponent>(Id)) {
-                Rec.HasMorph = true;
-                Rec.Morph = *Morph;
-            }
-            if (const auto* Siege = EM.GetComponent<Game::Components::SiegeTransitionComponent>(Id)) {
-                Rec.HasSiegeTransition = true;
-                Rec.SiegeTransition = *Siege;
-            }
-            if (const auto* Mine = EM.GetComponent<Game::Components::SpiderMineComponent>(Id)) {
-                Rec.HasSpiderMine = true;
-                Rec.SpiderMine = *Mine;
-            }
-            if (const auto* Nuke = EM.GetComponent<Game::Components::NukeComponent>(Id)) {
-                Rec.HasNuke = true;
-                Rec.Nuke = *Nuke;
-            }
-            if (const auto* Warp = EM.GetComponent<Game::Components::ArchonWarpComponent>(Id)) {
-                Rec.HasArchonWarp = true;
-                Rec.ArchonWarp = *Warp;
-            }
-            Snap.Entities.push_back(std::move(Rec));
+        Snap.GenericSnapshot.Capture(EM, FrameNumber);
+        Snap.Entities.reserve(Snap.GenericSnapshot.GetEntities().size());
+        for (const auto& Ent : Snap.GenericSnapshot.GetEntities()) {
+            Snap.Entities.push_back({Ent.Id, Ent.Generation});
         }
 
         Snap.StateHashFNV1a = ComputeWorldHashFNV1a(EM, FrameNumber);
@@ -388,10 +244,7 @@ public:
     }
 
     static void RestoreSnapshot(EntityManager& EM, const WorldDeterministicSnapshot& Snap) {
-        std::vector<EntityID> CurrentIds = EM.GetActiveEntities();
-        for (EntityID Id : CurrentIds) {
-            EM.DestroyEntity(Id);
-        }
+        Snap.GenericSnapshot.Restore(EM);
 
         if (Snap.HasUpgradesResource) {
             EM.Context().SetResource<WorldUpgradeResource>(Snap.Upgrades);
@@ -403,73 +256,6 @@ public:
             EM.Context().SetResource<Game::Systems::PlayerResourceStore>(Snap.Economy);
         } else {
             EM.Context().RemoveResource<Game::Systems::PlayerResourceStore>();
-        }
-
-        for (const auto& Rec : Snap.Entities) {
-            EntityID NewId = EM.CreateEntityWithID(Rec.Id, Rec.Generation);
-            if (Rec.HasTransform) {
-                EM.AddComponent<Game::Components::TransformComponent>(NewId) = Rec.Transform;
-            }
-            if (Rec.HasUnit) {
-                EM.AddComponent<Game::Components::UnitComponent>(NewId) = Rec.Unit;
-            }
-            if (Rec.HasPlayer) {
-                EM.AddComponent<Game::Components::PlayerComponent>(NewId) = Rec.Player;
-            }
-            if (Rec.HasCombat) {
-                EM.AddComponent<Game::Components::CombatComponent>(NewId) = Rec.Combat;
-            }
-            if (Rec.HasRender) {
-                EM.AddComponent<Game::Components::RenderComponent>(NewId) = Rec.Render;
-            }
-            if (Rec.HasCommand) {
-                EM.AddComponent<Game::Components::CommandComponent>(NewId) = Rec.Command;
-            }
-            if (Rec.HasPathfinding) {
-                EM.AddComponent<Game::Components::PathfindingComponent>(NewId) = Rec.Pathfinding;
-            }
-            if (Rec.HasBuilding) {
-                EM.AddComponent<Game::Components::BuildingComponent>(NewId) = Rec.Building;
-            }
-            if (Rec.HasResource) {
-                EM.AddComponent<Game::Components::ResourceComponent>(NewId) = Rec.Resource;
-            }
-            if (Rec.HasHarvest) {
-                EM.AddComponent<Game::Components::HarvestComponent>(NewId) = Rec.Harvest;
-            }
-            if (Rec.HasProduction) {
-                EM.AddComponent<Game::Components::ProductionComponent>(NewId) = Rec.Production;
-            }
-            if (Rec.HasBullet) {
-                EM.AddComponent<Game::Components::BulletComponent>(NewId) = Rec.Bullet;
-            }
-            if (Rec.HasStatusEffect) {
-                EM.AddComponent<Game::Components::StatusEffectComponent>(NewId) = Rec.StatusEffect;
-            }
-            if (Rec.HasCloak) {
-                EM.AddComponent<Game::Components::CloakComponent>(NewId) = Rec.Cloak;
-            }
-            if (Rec.HasBurrow) {
-                EM.AddComponent<Game::Components::BurrowComponent>(NewId) = Rec.Burrow;
-            }
-            if (Rec.HasLoadedUnits) {
-                EM.AddComponent<Game::Components::LoadedUnitsComponent>(NewId) = Rec.LoadedUnits;
-            }
-            if (Rec.HasMorph) {
-                EM.AddComponent<Game::Components::MorphComponent>(NewId) = Rec.Morph;
-            }
-            if (Rec.HasSiegeTransition) {
-                EM.AddComponent<Game::Components::SiegeTransitionComponent>(NewId) = Rec.SiegeTransition;
-            }
-            if (Rec.HasSpiderMine) {
-                EM.AddComponent<Game::Components::SpiderMineComponent>(NewId) = Rec.SpiderMine;
-            }
-            if (Rec.HasNuke) {
-                EM.AddComponent<Game::Components::NukeComponent>(NewId) = Rec.Nuke;
-            }
-            if (Rec.HasArchonWarp) {
-                EM.AddComponent<Game::Components::ArchonWarpComponent>(NewId) = Rec.ArchonWarp;
-            }
         }
     }
 };

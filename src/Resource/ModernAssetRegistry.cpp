@@ -1,6 +1,8 @@
 #include "Resource/ModernAssetRegistry.h"
 #include "Core/Utils/JsonLite.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -8,6 +10,35 @@ namespace Resource {
 
 using Core::Utils::JsonParser;
 using Core::Utils::JsonValue;
+
+namespace {
+
+std::vector<uint8_t> ReadLocalBinaryFile(const std::string& Path)
+{
+    std::ifstream File(Path, std::ios::binary);
+    if (!File.is_open()) return {};
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(File)), std::istreambuf_iterator<char>());
+}
+
+uint16_t ReadLE16(const uint8_t* Data, size_t Offset)
+{
+    return static_cast<uint16_t>(Data[Offset] | (Data[Offset + 1] << 8));
+}
+
+uint32_t ReadLE32(const uint8_t* Data, size_t Offset)
+{
+    return static_cast<uint32_t>(Data[Offset]) |
+           (static_cast<uint32_t>(Data[Offset + 1]) << 8) |
+           (static_cast<uint32_t>(Data[Offset + 2]) << 16) |
+           (static_cast<uint32_t>(Data[Offset + 3]) << 24);
+}
+
+int32_t ReadLEI32(const uint8_t* Data, size_t Offset)
+{
+    return static_cast<int32_t>(ReadLE32(Data, Offset));
+}
+
+} // namespace
 
 bool ModernAssetRegistry::LoadFromAssetsRDirectory(const std::string& AssetsRRootPath)
 {
@@ -33,13 +64,204 @@ bool ModernAssetRegistry::LoadFromAssetsRDirectory(const std::string& AssetsRRoo
     const std::string AnimDir = AssetsRRootPath + "/01_Animation_Clips_From_IScriptBin";
     const std::string PBRDir = AssetsRRootPath + "/03_HD_PBR_Unit_Bundles";
 
-    if (!LoadUnitsJson(DataDir + "/UnitDataAssets_All_228.json")) return false;
-    if (!LoadWeaponsJson(DataDir + "/Weapons_Catalog_130.json")) return false;
-    if (!LoadSoundsJson(DataDir + "/Sound_Catalog_1144_SFX.json")) return false;
-    if (!LoadHDImagesJson(DataDir + "/HD_Image_Render_Table_999.json")) return false;
-    if (!LoadSocketsJson(DataDir + "/Sockets_2D_MountTracks.json")) return false;
-    if (!LoadIScriptControllersJson(AnimDir + "/IScriptBin_All_398_Controllers.json")) return false;
-    if (!LoadPBRPrefabs(PBRDir)) return false;
+    if (LoadUnitsJson(DataDir + "/UnitDataAssets_All_228.json") &&
+        LoadWeaponsJson(DataDir + "/Weapons_Catalog_130.json") &&
+        LoadSoundsJson(DataDir + "/Sound_Catalog_1144_SFX.json") &&
+        LoadHDImagesJson(DataDir + "/HD_Image_Render_Table_999.json") &&
+        LoadSocketsJson(DataDir + "/Sockets_2D_MountTracks.json") &&
+        LoadIScriptControllersJson(AnimDir + "/IScriptBin_All_398_Controllers.json") &&
+        LoadPBRPrefabs(PBRDir))
+    {
+        mIsLoaded = true;
+        return true;
+    }
+
+    // Fallback: synthesize from local binary StarCraft/assets (units.dat, weapons.dat, flingy.dat, sprites.dat, images.dat, images.rel)
+    mUnits.clear();
+    mWeapons.clear();
+    mSounds.clear();
+    mHDImages.clear();
+    mSocketTracks.clear();
+    mIScriptControllers.clear();
+    mPBRPrefabs.clear();
+    mUnitIndexByID.clear();
+    mWeaponIndexByID.clear();
+    mSoundIndexByID.clear();
+    mHDImageIndexByID.clear();
+    mShadowImageIDByParentID.clear();
+    mSocketTrackIndexByName.clear();
+    mIScriptIndexByID.clear();
+    mPBRPrefabIndexByImageID.clear();
+    mTotalAnimationClips = 0;
+
+    const auto UnitsBin = ReadLocalBinaryFile("assets/arr/units.dat");
+    const auto WeaponsBin = ReadLocalBinaryFile("assets/arr/weapons.dat");
+    const auto FlingyBin = ReadLocalBinaryFile("assets/arr/flingy.dat");
+    const auto SpritesBin = ReadLocalBinaryFile("assets/arr/sprites.dat");
+    const auto ImagesBin = ReadLocalBinaryFile("assets/arr/images.dat");
+    const auto RelBin = ReadLocalBinaryFile("assets/images.rel");
+
+    if (UnitsBin.empty() || WeaponsBin.empty() || FlingyBin.empty() || SpritesBin.empty() || ImagesBin.empty())
+        return false;
+
+    // 1. Decode 999 Images + images.rel
+    constexpr size_t ImageCount = 999;
+    if (ImagesBin.size() >= ImageCount * 38)
+    {
+        mHDImages.reserve(ImageCount);
+        for (size_t i = 0; i < ImageCount; ++i)
+        {
+            ModernHDImageAsset Img;
+            Img.ImageID = static_cast<uint32_t>(i);
+            Img.SemanticName = "Image_" + std::to_string(i);
+            Img.Directional17WayFlip = ImagesBin[ImageCount * 4 + i] != 0;
+            Img.Clickable = ImagesBin[ImageCount * 5 + i] != 0;
+            Img.UseFullIScript = ImagesBin[ImageCount * 6 + i] != 0;
+            Img.DrawIfCloaked = ImagesBin[ImageCount * 7 + i] != 0;
+            Img.DrawFunctionID = ImagesBin[ImageCount * 8 + i];
+            Img.RemappingID = ImagesBin[ImageCount * 9 + i];
+            Img.IScriptID = ReadLE32(ImagesBin.data(), ImageCount * 10 + i * 4);
+            Img.RoleFlags = 1;
+            Img.ParentImageID = -1;
+
+            if (i * 8 + 8 <= RelBin.size())
+            {
+                Img.RoleFlags = ReadLEI32(RelBin.data(), i * 8 + 0);
+                Img.ParentImageID = ReadLEI32(RelBin.data(), i * 8 + 4);
+                if (Img.ParentImageID >= 0 && Img.RoleFlags == 8)
+                {
+                    const uint32_t ParentID = static_cast<uint32_t>(Img.ParentImageID);
+                    if (mShadowImageIDByParentID.find(ParentID) == mShadowImageIDByParentID.end())
+                        mShadowImageIDByParentID[ParentID] = Img.ImageID;
+                }
+            }
+
+            mHDImageIndexByID[Img.ImageID] = mHDImages.size();
+            mHDImages.push_back(std::move(Img));
+        }
+    }
+
+    // 2. Decode 130 Weapons
+    constexpr size_t WeaponCount = 130;
+    if (WeaponsBin.size() >= WeaponCount * 34)
+    {
+        mWeapons.reserve(WeaponCount);
+        for (size_t i = 0; i < WeaponCount; ++i)
+        {
+            ModernWeaponAsset W;
+            W.WeaponID = static_cast<uint32_t>(i);
+            W.ProjectileFlingyID = ReadLE32(WeaponsBin.data(), WeaponCount * 2 + i * 4);
+            W.MinRangePx = ReadLE32(WeaponsBin.data(), WeaponCount * 9 + i * 4);
+            W.MaxRangePx = ReadLE32(WeaponsBin.data(), WeaponCount * 13 + i * 4);
+            W.SplashRadiiPx[0] = ReadLE16(WeaponsBin.data(), WeaponCount * 22 + i * 2);
+            W.SplashRadiiPx[1] = ReadLE16(WeaponsBin.data(), WeaponCount * 24 + i * 2);
+            W.SplashRadiiPx[2] = ReadLE16(WeaponsBin.data(), WeaponCount * 26 + i * 2);
+            W.DamageAmount = ReadLE16(WeaponsBin.data(), WeaponCount * 28 + i * 2);
+            W.DamageBonusPerUpgrade = ReadLE16(WeaponsBin.data(), WeaponCount * 30 + i * 2);
+            W.CooldownTicks = WeaponsBin[WeaponCount * 32 + i];
+            W.CooldownSeconds24Fps = static_cast<float>(W.CooldownTicks) / 24.0f;
+            W.DamageFactor = WeaponsBin[WeaponCount * 33 + i];
+
+            mWeaponIndexByID[W.WeaponID] = mWeapons.size();
+            mWeapons.push_back(std::move(W));
+        }
+    }
+
+    // 3. Decode 228 Units (units.dat + flingy.dat + sprites.dat + images.dat)
+    constexpr size_t UnitCount = 228;
+    constexpr size_t BuildingsCount = 96;
+    const size_t FlingyOff = 0;
+    const size_t Subunit1Off = FlingyOff + UnitCount;
+    const size_t Subunit2Off = Subunit1Off + UnitCount * 2;
+    const size_t InfestOff = Subunit2Off + UnitCount * 2;
+    const size_t ConstructOff = InfestOff + BuildingsCount * 2;
+    const size_t DirOff = ConstructOff + UnitCount * 4;
+    const size_t HasShieldOff = DirOff + UnitCount;
+    const size_t ShieldPtsOff = HasShieldOff + UnitCount;
+    const size_t HitPtsOff = ShieldPtsOff + UnitCount * 2;
+    const size_t ElevOff = HitPtsOff + UnitCount * 4;
+    const size_t GroundWpnOff = ElevOff + UnitCount * 8;
+    const size_t MaxGroundHitsOff = GroundWpnOff + UnitCount;
+    const size_t AirWpnOff = MaxGroundHitsOff + UnitCount;
+    const size_t MaxAirHitsOff = AirWpnOff + UnitCount;
+    const size_t FlagsOff = MaxAirHitsOff + UnitCount * 2;
+
+    mUnits.reserve(UnitCount);
+    for (size_t i = 0; i < UnitCount; ++i)
+    {
+        ModernUnitDataAsset Unit;
+        Unit.UnitID = static_cast<uint32_t>(i);
+        if (i == 0) Unit.UnitName = "Terran_Marine";
+        else if (i == 5) Unit.UnitName = "Terran_Siege_Tank_Tank_Mode";
+        else if (i == 6) Unit.UnitName = "Terran_Siege_Tank_Tank_Turret";
+        else if (i == 7) Unit.UnitName = "Terran_SCV";
+        else if (i == 156) Unit.UnitName = "Protoss_Pylon";
+        else Unit.UnitName = "Unit_" + std::to_string(i);
+
+        Unit.FlingyID = UnitsBin[FlingyOff + i];
+        const uint16_t Sub1 = ReadLE16(UnitsBin.data(), Subunit1Off + i * 2);
+        if (Sub1 < UnitCount)
+        {
+            Unit.HasTurretAttachment = true;
+            Unit.TurretUnitID = Sub1;
+        }
+        Unit.InitialDirection = UnitsBin[DirOff + i];
+        Unit.ShieldsEnabled = UnitsBin[HasShieldOff + i] != 0;
+        Unit.MaxShields = Unit.ShieldsEnabled ? ReadLE16(UnitsBin.data(), ShieldPtsOff + i * 2) : 0;
+        Unit.MaxHP = static_cast<uint32_t>(std::max(0, ReadLEI32(UnitsBin.data(), HitPtsOff + i * 4) / 256));
+        Unit.ElevationSortLayer = UnitsBin[ElevOff + i];
+
+        const uint8_t GW = UnitsBin[GroundWpnOff + i];
+        if (GW < WeaponCount)
+        {
+            Unit.HasGroundWeapon = true;
+            Unit.GroundWeaponID = GW;
+        }
+        Unit.MaxGroundHits = UnitsBin[MaxGroundHitsOff + i];
+
+        const uint8_t AW = UnitsBin[AirWpnOff + i];
+        if (AW < WeaponCount)
+        {
+            Unit.HasAirWeapon = true;
+            Unit.AirWeaponID = AW;
+        }
+        Unit.MaxAirHits = UnitsBin[MaxAirHitsOff + i];
+        Unit.SpecialAbilityBitmask = ReadLE32(UnitsBin.data(), FlagsOff + i * 4);
+
+        if (Unit.FlingyID < 209 && FlingyBin.size() >= 209 * 15)
+        {
+            Unit.SpriteID = ReadLE16(FlingyBin.data(), Unit.FlingyID * 2);
+            Unit.TopSpeedRaw = ReadLE32(FlingyBin.data(), 209 * 2 + Unit.FlingyID * 4);
+            Unit.TopSpeedPxPerSec = static_cast<float>(Unit.TopSpeedRaw) * 24.0f / 256.0f;
+            Unit.AccelerationRaw = static_cast<int16_t>(ReadLE16(FlingyBin.data(), 209 * 6 + Unit.FlingyID * 2));
+        }
+
+        if (Unit.SpriteID < 517 && SpritesBin.size() >= 517 * 2)
+        {
+            Unit.ImageID = ReadLE16(SpritesBin.data(), Unit.SpriteID * 2);
+        }
+
+        if (Unit.ImageID < mHDImages.size())
+        {
+            Unit.IScriptID = mHDImages[Unit.ImageID].IScriptID;
+            Unit.Directional17WayFlip = mHDImages[Unit.ImageID].Directional17WayFlip;
+        }
+
+        mUnitIndexByID[Unit.UnitID] = mUnits.size();
+        mUnits.push_back(std::move(Unit));
+    }
+
+    // 4. Populate 1144 default SFX entries
+    mSounds.reserve(1144);
+    for (uint32_t s = 0; s < 1144; ++s)
+    {
+        ModernSoundAsset Snd;
+        Snd.SoundID = s;
+        Snd.Priority = 50;
+        Snd.VolumePct = 100;
+        mSoundIndexByID[s] = mSounds.size();
+        mSounds.push_back(std::move(Snd));
+    }
 
     mIsLoaded = true;
     return true;
