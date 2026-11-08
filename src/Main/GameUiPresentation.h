@@ -265,7 +265,6 @@ inline void RenderNativeHudFrame(UI::Hud& Hud,
 } // namespace Game::Client::GameLoop
 
 #include "Main/GameMenuPresentation.h"
-#include "Main/GameMenuRuntime.h"
 #include "Main/GameSession.h"
 #include "Render/Draw2D.h"
 #include "UI/Hud.h"

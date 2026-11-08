@@ -1,4 +1,4 @@
-#include "Resource/MpqArchive.h"
+#include "Resource/IArchiveReader.h"
 #include "Core/Utils/Logger.h"
 
 #include <cstring>

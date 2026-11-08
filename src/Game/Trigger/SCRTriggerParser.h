@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Engine/Scripting/ScenarioTriggerServer.h"
 #include "Game/Locale/TextEncoding.h"
 
 #include <algorithm>
@@ -166,6 +167,115 @@ public:
         return true;
     }
 
+    // Phase 65 CHK Trigger Compiler:
+    // Compiles parsed StarCraft .chk SCRTrigger records into Engine::Scripting::ScenarioRule
+    // entries on Engine::Scripting::ScenarioTriggerServer (supporting Always, ElapsedTime,
+    // Switch, Accumulate/Deaths/Score thresholds, PreserveTrigger, SetSwitch, Wait, SetResources,
+    // Victory/Defeat/Transmission/RunAIScript signals).
+    static size_t CompileToScenarioTriggerServer(
+        const SCRTriggerData& Data,
+        Engine::Scripting::ScenarioTriggerServer& Server)
+    {
+        size_t CompiledCount = 0;
+        for (size_t I = 0; I < Data.Triggers.size(); ++I)
+        {
+            const auto& Trig = Data.Triggers[I];
+            Engine::Scripting::ScenarioRule Rule;
+            Rule.RuleID = static_cast<uint32_t>(I + 1);
+            Rule.Name = "CHK_Trigger_" + std::to_string(Rule.RuleID);
+            Rule.PreserveTrigger = (Trig.ExecutionFlags & 0x04u) != 0;
+
+            uint32_t Mask = 0;
+            for (size_t P = 0; P < std::min<size_t>(28, Trig.Owners.size()); ++P)
+            {
+                if (Trig.Owners[P] != 0)
+                    Mask |= (1u << P);
+            }
+            Rule.PlayerMask = Mask != 0 ? Mask : 0xFFFFFFFFu;
+
+            bool NeverFires = false;
+            for (const auto& Cond : Trig.Conditions)
+            {
+                if (Cond.ConditionType == 0 || Cond.Disabled())
+                    continue;
+                if (Cond.ConditionType == 23) // Never
+                {
+                    NeverFires = true;
+                    break;
+                }
+                Engine::Scripting::TriggerCondition OutCond;
+                switch (Cond.ConditionType)
+                {
+                case 22: // Always
+                    OutCond.Kind = Engine::Scripting::TriggerConditionKind::Always;
+                    break;
+                case 12: // Elapsed time (seconds -> 24Hz ticks)
+                    OutCond.Kind = Engine::Scripting::TriggerConditionKind::ElapsedTicksAtLeast;
+                    OutCond.TargetInt = static_cast<int64_t>(Cond.Amount) * 24;
+                    break;
+                case 11: // Switch
+                    OutCond.Kind = Engine::Scripting::TriggerConditionKind::BlackboardBoolEquals;
+                    OutCond.Key = "Switch_" + std::to_string(Cond.Extra);
+                    OutCond.TargetBool = (Cond.ComparisonType == 2); // 2 = Set, 3 = Cleared
+                    break;
+                case 4:  // Accumulate
+                case 15: // Deaths
+                case 21: // Score
+                default:
+                    OutCond.Kind = Engine::Scripting::TriggerConditionKind::BlackboardIntAtLeast;
+                    OutCond.Key = std::string(GetConditionName(Cond.ConditionType)) + "_P" +
+                                  std::to_string(Cond.PlayerID);
+                    OutCond.TargetInt = static_cast<int64_t>(Cond.Amount);
+                    break;
+                }
+                Rule.Conditions.push_back(std::move(OutCond));
+            }
+            if (NeverFires)
+                continue;
+
+            for (const auto& Act : Trig.Actions)
+            {
+                if (Act.ActionType == 0 || Act.Disabled())
+                    continue;
+                if (Act.ActionType == 3) // Preserve trigger
+                {
+                    Rule.PreserveTrigger = true;
+                    continue;
+                }
+                Engine::Scripting::TriggerAction OutAct;
+                switch (Act.ActionType)
+                {
+                case 4: // Wait (milliseconds -> 24Hz ticks)
+                    OutAct.Kind = Engine::Scripting::TriggerActionKind::WaitTicks;
+                    OutAct.WaitTicks = std::max<uint32_t>(1u, (Act.Time * 24u) / 1000u);
+                    break;
+                case 13: // Set switch
+                    OutAct.Kind = Engine::Scripting::TriggerActionKind::SetBlackboardBool;
+                    OutAct.Key = "Switch_" + std::to_string(Act.Secondary);
+                    OutAct.BoolValue = (Act.Amount == 4); // 4 = Set, 5 = Clear
+                    break;
+                case 26: // Set resources
+                    OutAct.Kind = (Act.Amount == 8)
+                                      ? Engine::Scripting::TriggerActionKind::AddBlackboardInt
+                                      : Engine::Scripting::TriggerActionKind::SetBlackboardInt;
+                    OutAct.Key = "Accumulate_P" + std::to_string(Act.PlayerID);
+                    OutAct.IntValue = static_cast<int64_t>(Act.Secondary);
+                    break;
+                default:
+                    OutAct.Kind = Engine::Scripting::TriggerActionKind::EmitSignal;
+                    OutAct.Key = GetActionName(Act.ActionType);
+                    OutAct.IntValue = static_cast<int64_t>(Act.UnitID != 0 ? Act.UnitID : Act.StringID);
+                    break;
+                }
+                Rule.Actions.push_back(std::move(OutAct));
+            }
+
+            Server.RegisterRule(std::move(Rule));
+            ++CompiledCount;
+        }
+        return CompiledCount;
+    }
+
     static const char* GetConditionName(uint16_t ConditionID)
     {
         switch (ConditionID)
@@ -298,42 +408,39 @@ private:
         while (Pos + 8 <= Data.size())
         {
             const uint32_t Size = ReadU32(Data, Pos + 4);
-            const size_t Payload = Pos + 8;
-            if (Payload + Size > Data.size())
+            if (std::memcmp(&Data[Pos], Name, 4) == 0)
+            {
+                const size_t Available = Data.size() - (Pos + 8);
+                return Section{&Data, Pos + 8, std::min<size_t>(Size, Available)};
+            }
+            if (Size > Data.size() - (Pos + 8))
                 break;
-            if (std::memcmp(Data.data() + Pos, Name, 4) == 0)
-                return { &Data, Payload, Size };
-            Pos = Payload + Size;
+            Pos += 8 + Size;
         }
         return {};
     }
 
     static void ParseStrings(const std::vector<uint8_t>& Data,
-                             size_t Offset,
-                             size_t Size,
-                             std::vector<std::string>& OutStrings)
+                              size_t Offset,
+                              size_t Size,
+                              std::vector<std::string>& OutStrings)
     {
-        if (Size < 2) return;
-
-        const uint16_t Count = ReadU16(Data, Offset);
-        OutStrings.assign((size_t)Count + 1u, {});
-        for (uint16_t I = 1; I <= Count; ++I)
+        const uint16_t NumStrings = ReadU16(Data, Offset);
+        OutStrings.resize((size_t)NumStrings + 1);
+        for (uint16_t I = 0; I < NumStrings; ++I)
         {
-            const size_t OffsetPos = Offset + 2u + (size_t)(I - 1u) * 2u;
-            if (OffsetPos + 2u > Offset + Size)
+            const size_t TablePos = Offset + 2 + (size_t)I * 2;
+            if (TablePos + 2 > Offset + Size)
                 break;
-
-            const uint16_t StringOffset = ReadU16(Data, OffsetPos);
-            const size_t StringPos = Offset + StringOffset;
-            if (StringOffset == 0 || StringPos >= Offset + Size)
+            const uint16_t RelOffset = ReadU16(Data, TablePos);
+            if (RelOffset >= Size)
                 continue;
-
-            size_t End = StringPos;
-            while (End < Offset + Size && Data[End] != 0)
-                ++End;
-            OutStrings[I] = Game::Locale::LegacyGameTextToUtf8(std::string(
-                reinterpret_cast<const char*>(Data.data() + StringPos),
-                End - StringPos));
+            const size_t StrStart = Offset + RelOffset;
+            size_t StrEnd = StrStart;
+            while (StrEnd < Offset + Size && Data[StrEnd] != 0)
+                ++StrEnd;
+            std::string Raw((const char*)&Data[StrStart], StrEnd - StrStart);
+            OutStrings[(size_t)I + 1] = Game::Locale::LegacyGameTextToUtf8(Raw);
         }
     }
 
@@ -341,28 +448,34 @@ private:
     {
         Section Ownr = FindSection(Data, "OWNR");
         if (Ownr.Data)
-            for (size_t I = 0; I < 12 && I < Ownr.Size; ++I)
+        {
+            for (size_t I = 0; I < std::min<size_t>(12, Ownr.Size); ++I)
                 OutData.Players[I].Owner = ReadU8(Data, Ownr.Offset + I);
+        }
 
         Section Side = FindSection(Data, "SIDE");
         if (Side.Data)
-            for (size_t I = 0; I < 12 && I < Side.Size; ++I)
+        {
+            for (size_t I = 0; I < std::min<size_t>(12, Side.Size); ++I)
                 OutData.Players[I].Race = ReadU8(Data, Side.Offset + I);
-
-        Section Colr = FindSection(Data, "COLR");
-        if (Colr.Data)
-            for (size_t I = 0; I < 8 && I < Colr.Size; ++I)
-                OutData.Players[I].Color = ReadU8(Data, Colr.Offset + I);
+        }
 
         Section Forc = FindSection(Data, "FORC");
         if (Forc.Data)
         {
-            for (size_t I = 0; I < 8 && I < Forc.Size; ++I)
+            for (size_t I = 0; I < std::min<size_t>(8, Forc.Size); ++I)
                 OutData.Players[I].Force = ReadU8(Data, Forc.Offset + I);
-            for (size_t F = 0; F < 4 && 8 + F * 2 + 2 <= Forc.Size; ++F)
-                OutData.Forces[F].NameStringID = ReadU16(Data, Forc.Offset + 8 + F * 2);
-            for (size_t F = 0; F < 4 && 16 + F < Forc.Size; ++F)
-                OutData.Forces[F].Flags = ReadU8(Data, Forc.Offset + 16 + F);
+            for (size_t I = 0; I < 4 && 8 + I * 2 + 2 <= Forc.Size; ++I)
+                OutData.Forces[I].NameStringID = ReadU16(Data, Forc.Offset + 8 + I * 2);
+            for (size_t I = 0; I < 4 && 16 + I < Forc.Size; ++I)
+                OutData.Forces[I].Flags = ReadU8(Data, Forc.Offset + 16 + I);
+        }
+
+        Section Colr = FindSection(Data, "COLR");
+        if (Colr.Data)
+        {
+            for (size_t I = 0; I < std::min<size_t>(8, Colr.Size); ++I)
+                OutData.Players[I].Color = ReadU8(Data, Colr.Offset + I);
         }
     }
 
@@ -379,15 +492,16 @@ private:
     static void ParseLocations(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)
     {
         Section Mrgn = FindSection(Data, "MRGN");
-        if (!Mrgn.Data) return;
+        if (!Mrgn.Data || Mrgn.Size < 20)
+            return;
 
-        const size_t Count = std::min<size_t>(255, Mrgn.Size / 20u);
-        OutData.Locations.reserve(Count);
+        const size_t Count = Mrgn.Size / 20;
+        OutData.Locations.resize(Count);
         for (size_t I = 0; I < Count; ++I)
         {
-            const size_t Pos = Mrgn.Offset + I * 20u;
-            SCRLocation Loc;
-            Loc.ID = (uint32_t)I + 1u;
+            const size_t Pos = Mrgn.Offset + I * 20;
+            auto& Loc = OutData.Locations[I];
+            Loc.ID = (uint32_t)(I + 1);
             Loc.Left = ReadI32(Data, Pos + 0);
             Loc.Top = ReadI32(Data, Pos + 4);
             Loc.Right = ReadI32(Data, Pos + 8);
@@ -395,57 +509,64 @@ private:
             Loc.StringID = ReadU16(Data, Pos + 16);
             Loc.ElevationFlags = ReadU16(Data, Pos + 18);
             Loc.Name = OutData.GetString(Loc.StringID);
-            OutData.Locations.push_back(std::move(Loc));
         }
     }
 
     static void ParseWavs(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)
     {
         Section Wav = FindSection(Data, "WAV ");
-        if (!Wav.Data) return;
+        if (!Wav.Data || Wav.Size < 4)
+            return;
 
-        const size_t Count = Wav.Size / 4u;
+        const size_t Count = Wav.Size / 4;
         OutData.WavStringIDs.resize(Count);
         for (size_t I = 0; I < Count; ++I)
-            OutData.WavStringIDs[I] = ReadU32(Data, Wav.Offset + I * 4u);
+            OutData.WavStringIDs[I] = ReadU32(Data, Wav.Offset + I * 4);
     }
 
     static void ParseUnitProperties(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)
     {
         Section Upus = FindSection(Data, "UPUS");
         if (Upus.Data)
-            for (size_t I = 0; I < OutData.UnitProperties.size() && I < Upus.Size; ++I)
+        {
+            for (size_t I = 0; I < std::min<size_t>(64, Upus.Size); ++I)
                 OutData.UnitProperties[I].Used = ReadU8(Data, Upus.Offset + I) != 0;
+        }
 
         Section Uprp = FindSection(Data, "UPRP");
-        if (!Uprp.Data) return;
+        if (!Uprp.Data || Uprp.Size < 20)
+            return;
 
-        const size_t Count = std::min<size_t>(OutData.UnitProperties.size(), Uprp.Size / 20u);
+        const size_t Count = std::min<size_t>(64, Uprp.Size / 20);
         for (size_t I = 0; I < Count; ++I)
         {
-            const size_t Pos = Uprp.Offset + I * 20u;
-            auto& Props = OutData.UnitProperties[I];
-            Props.ValidSpecialFlags = ReadU16(Data, Pos + 0);
-            Props.ValidFieldFlags = ReadU16(Data, Pos + 2);
-            Props.Owner = ReadU8(Data, Pos + 4);
-            Props.HitPointPercent = ReadU8(Data, Pos + 5);
-            Props.ShieldPercent = ReadU8(Data, Pos + 6);
-            Props.EnergyPercent = ReadU8(Data, Pos + 7);
-            Props.ResourceAmount = ReadU32(Data, Pos + 8);
-            Props.HangarCount = ReadU16(Data, Pos + 12);
-            Props.StateFlags = ReadU16(Data, Pos + 14);
-            Props.Unused = ReadU32(Data, Pos + 16);
+            const size_t Pos = Uprp.Offset + I * 20;
+            auto& Prop = OutData.UnitProperties[I];
+            Prop.ValidSpecialFlags = ReadU16(Data, Pos + 0);
+            Prop.ValidFieldFlags = ReadU16(Data, Pos + 2);
+            Prop.Owner = ReadU8(Data, Pos + 4);
+            Prop.HitPointPercent = ReadU8(Data, Pos + 5);
+            Prop.ShieldPercent = ReadU8(Data, Pos + 6);
+            Prop.EnergyPercent = ReadU8(Data, Pos + 7);
+            Prop.ResourceAmount = ReadU32(Data, Pos + 8);
+            Prop.HangarCount = ReadU16(Data, Pos + 12);
+            Prop.StateFlags = ReadU16(Data, Pos + 14);
+            Prop.Unused = ReadU32(Data, Pos + 16);
         }
     }
 
     static void ParseSwitchNames(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)
     {
         Section Swnm = FindSection(Data, "SWNM");
-        if (!Swnm.Data) return;
+        if (!Swnm.Data || Swnm.Size < 4)
+            return;
 
-        const size_t Count = std::min<size_t>(OutData.SwitchNames.size(), Swnm.Size / 4u);
+        const size_t Count = std::min<size_t>(256, Swnm.Size / 4);
         for (size_t I = 0; I < Count; ++I)
-            OutData.SwitchNames[I] = OutData.GetString(ReadU32(Data, Swnm.Offset + I * 4u));
+        {
+            const uint32_t StringID = ReadU32(Data, Swnm.Offset + I * 4);
+            OutData.SwitchNames[I] = OutData.GetString(StringID);
+        }
     }
 
     static void ParseTriggers(const std::vector<uint8_t>& Data, SCRTriggerData& OutData)

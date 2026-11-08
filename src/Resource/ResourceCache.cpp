@@ -514,9 +514,7 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
 // === Consolidated from src/Resource/ResourceCacheSources.cpp ===
 
 
-#include "Resource/CascArchive.h"
-#include "Resource/FileSystemArchive.h"
-#include "Resource/MpqArchive.h"
+#include "Resource/IArchiveReader.h"
 
 #include <memory>
 

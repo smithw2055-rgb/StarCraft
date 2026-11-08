@@ -1,4 +1,4 @@
-#include "Resource/CascArchive.h"
+#include "Resource/IArchiveReader.h"
 #include "Core/Utils/Logger.h"
 #include <cstdio>
 

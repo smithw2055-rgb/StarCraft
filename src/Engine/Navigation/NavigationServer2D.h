@@ -62,6 +62,47 @@ struct AvoidanceAgent2D
     float Radius = 12.0f;
 };
 
+// ============================================================================
+// NavigationAgent2D (Phase 62 — Godot 4 NavigationAgent2D Equivalent):
+// Stateful per-entity navigation agent that automatically queries
+// NavigationServer2D for O(1) island connectivity, footprint-aware A* paths,
+// waypoint progression, and local avoidance steering velocity.
+// ============================================================================
+struct NavigationAgent2D
+{
+    int32_t EntityID = -1;
+    uint8_t FootprintClearance = 1;
+    float Radius = 12.0f;
+    float WaypointReachThresholdPx = 10.0f;
+    Core::Math::Vec2 TargetWorldPosition{0.0f, 0.0f};
+    std::vector<GridCoord2D> Waypoints;
+    size_t CurrentWaypointIndex = 0;
+    bool HasActiveTarget = false;
+    bool PathNeedsRebuild = false;
+    bool TargetReachable = false;
+    bool ReachedTarget = true;
+    Core::Math::Vec2 DesiredVelocity{0.0f, 0.0f};
+
+    void SetTargetPosition(Core::Math::Vec2 NewTargetWorldPos) noexcept
+    {
+        TargetWorldPosition = NewTargetWorldPos;
+        HasActiveTarget = true;
+        PathNeedsRebuild = true;
+        ReachedTarget = false;
+    }
+
+    void ClearTarget() noexcept
+    {
+        Waypoints.clear();
+        CurrentWaypointIndex = 0;
+        HasActiveTarget = false;
+        PathNeedsRebuild = false;
+        TargetReachable = false;
+        ReachedTarget = true;
+        DesiredVelocity = {0.0f, 0.0f};
+    }
+};
+
 struct NavigationServerTelemetry
 {
     uint64_t ClearanceRebuilds = 0;
@@ -69,10 +110,11 @@ struct NavigationServerTelemetry
     uint64_t AStarQueriesExecuted = 0;
     uint64_t FlowFieldsGenerated = 0;
     uint64_t AvoidanceStepsComputed = 0;
+    uint64_t AgentStepsEvaluated = 0;
 };
 
 // ============================================================================
-// NavigationServer2D (Phase 40 & Phase 47 Unified Navigation Server):
+// NavigationServer2D (Phase 40, Phase 47 & Phase 62 Unified Navigation Server):
 // - General-purpose 2D RTS navigation server inspired by Godot NavigationServer2D
 //   and classic RTS hierarchical/clearance pathfinding.
 // - Converges NavigationGrid (elevation levels, ramps) & RegionPathfinder
@@ -82,7 +124,7 @@ struct NavigationServerTelemetry
 //      Connected Component Region labeling (AreCellsConnected in O(1)).
 //   3. Deterministic A* pathfinding with footprint clearance & cliff/ramp rules.
 //   4. Goal-based Dijkstra Flow Field generation for large crowd steering.
-//   5. Deterministic radial separation / local avoidance for unit steering.
+//   5. Deterministic radial separation / local avoidance & NavigationAgent2D stepping.
 // ============================================================================
 class NavigationServer2D
 {
@@ -105,6 +147,22 @@ public:
     int32_t GetWidth() const noexcept { return mWidth; }
     int32_t GetHeight() const noexcept { return mHeight; }
     float GetCellSize() const noexcept { return mCellSize; }
+
+    GridCoord2D WorldToCell(Core::Math::Vec2 WorldPos) const noexcept
+    {
+        const int32_t CX = std::clamp(
+            static_cast<int32_t>(WorldPos.X / mCellSize), 0, std::max(0, mWidth - 1));
+        const int32_t CY = std::clamp(
+            static_cast<int32_t>(WorldPos.Y / mCellSize), 0, std::max(0, mHeight - 1));
+        return {CX, CY};
+    }
+
+    Core::Math::Vec2 CellToWorldCenter(GridCoord2D Cell) const noexcept
+    {
+        return {
+            (static_cast<float>(Cell.X) + 0.5f) * mCellSize,
+            (static_cast<float>(Cell.Y) + 0.5f) * mCellSize};
+    }
 
     bool InBounds(int32_t X, int32_t Y) const noexcept
     {
@@ -318,60 +376,50 @@ public:
             int32_t Index = 0;
             bool operator>(const OpenEntry& Other) const noexcept
             {
-                if (FScore != Other.FScore)
-                    return FScore > Other.FScore;
-                return Index > Other.Index;
+                return FScore != Other.FScore ? (FScore > Other.FScore) : (Index > Other.Index);
             }
         };
 
-        auto OctileHeuristic = [](int32_t X0, int32_t Y0, int32_t X1, int32_t Y1) -> uint32_t {
-            const uint32_t DX = static_cast<uint32_t>(std::abs(X1 - X0));
-            const uint32_t DY = static_cast<uint32_t>(std::abs(Y1 - Y0));
+        auto OctileHeuristic = [](GridCoord2D A, GridCoord2D B) -> uint32_t {
+            const uint32_t DX = static_cast<uint32_t>(std::abs(A.X - B.X));
+            const uint32_t DY = static_cast<uint32_t>(std::abs(A.Y - B.Y));
             const uint32_t MinD = std::min(DX, DY);
             const uint32_t MaxD = std::max(DX, DY);
             return 14u * MinD + 10u * (MaxD - MinD);
         };
 
         std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::greater<OpenEntry>> OpenSet;
-        const size_t StartIdx = CellIndex(Start.X, Start.Y);
-        const size_t GoalIdx = CellIndex(Goal.X, Goal.Y);
+        const int32_t StartIdx = static_cast<int32_t>(CellIndex(Start.X, Start.Y));
+        const int32_t GoalIdx = static_cast<int32_t>(CellIndex(Goal.X, Goal.Y));
 
-        GScore[StartIdx] = 0;
-        OpenSet.push({OctileHeuristic(Start.X, Start.Y, Goal.X, Goal.Y), static_cast<int32_t>(StartIdx)});
+        GScore[static_cast<size_t>(StartIdx)] = 0;
+        OpenSet.push({OctileHeuristic(Start, Goal), StartIdx});
 
         static constexpr int32_t kDirX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
         static constexpr int32_t kDirY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
         static constexpr uint32_t kStepCost[8] = {10, 10, 10, 10, 14, 14, 14, 14};
 
         uint32_t Expanded = 0;
+        bool Found = false;
+
         while (!OpenSet.empty() && Expanded < MaxExpandedNodes)
         {
             const OpenEntry Current = OpenSet.top();
             OpenSet.pop();
 
-            const size_t CurIdx = static_cast<size_t>(Current.Index);
-            if (Closed[CurIdx])
+            if (Current.Index == GoalIdx)
+            {
+                Found = true;
+                break;
+            }
+            if (Closed[static_cast<size_t>(Current.Index)] != 0u)
                 continue;
-            Closed[CurIdx] = 1u;
+            Closed[static_cast<size_t>(Current.Index)] = 1u;
             ++Expanded;
 
-            if (CurIdx == GoalIdx)
-            {
-                std::vector<GridCoord2D> Path;
-                int32_t Trace = static_cast<int32_t>(GoalIdx);
-                while (Trace >= 0)
-                {
-                    const int32_t TX = Trace % mWidth;
-                    const int32_t TY = Trace / mWidth;
-                    Path.push_back({TX, TY});
-                    Trace = CameFrom[static_cast<size_t>(Trace)];
-                }
-                std::reverse(Path.begin(), Path.end());
-                return Path;
-            }
-
-            const int32_t CX = static_cast<int32_t>(CurIdx) % mWidth;
-            const int32_t CY = static_cast<int32_t>(CurIdx) / mWidth;
+            const int32_t CX = Current.Index % mWidth;
+            const int32_t CY = Current.Index / mWidth;
+            const uint32_t CurG = GScore[static_cast<size_t>(Current.Index)];
 
             for (int Dir = 0; Dir < 8; ++Dir)
             {
@@ -382,6 +430,7 @@ public:
                 if (!CanTraverseElevation(CX, CY, NX, NY))
                     continue;
 
+                // Prevent diagonal corner cutting across blocked cells or cliffs
                 if (Dir >= 4)
                 {
                     if (!CanFitFootprint(CX + kDirX[Dir], CY, RequiredClearance) ||
@@ -395,24 +444,36 @@ public:
                     }
                 }
 
-                const size_t NextIdx = CellIndex(NX, NY);
-                if (Closed[NextIdx])
+                const int32_t NeighborIdx = static_cast<int32_t>(CellIndex(NX, NY));
+                if (Closed[static_cast<size_t>(NeighborIdx)] != 0u)
                     continue;
 
-                const uint32_t TentativeG = GScore[CurIdx] + kStepCost[Dir];
-                if (TentativeG < GScore[NextIdx])
+                const uint32_t TentativeG = CurG + kStepCost[Dir];
+                if (TentativeG < GScore[static_cast<size_t>(NeighborIdx)])
                 {
-                    GScore[NextIdx] = TentativeG;
-                    CameFrom[NextIdx] = static_cast<int32_t>(CurIdx);
-                    const uint32_t F = TentativeG + OctileHeuristic(NX, NY, Goal.X, Goal.Y);
-                    OpenSet.push({F, static_cast<int32_t>(NextIdx)});
+                    CameFrom[static_cast<size_t>(NeighborIdx)] = Current.Index;
+                    GScore[static_cast<size_t>(NeighborIdx)] = TentativeG;
+                    const uint32_t F = TentativeG + OctileHeuristic({NX, NY}, Goal);
+                    OpenSet.push({F, NeighborIdx});
                 }
             }
         }
-        return {};
+
+        if (!Found)
+            return {};
+
+        std::vector<GridCoord2D> Path;
+        int32_t Cur = GoalIdx;
+        while (Cur != -1)
+        {
+            Path.push_back({Cur % mWidth, Cur / mWidth});
+            Cur = CameFrom[static_cast<size_t>(Cur)];
+        }
+        std::reverse(Path.begin(), Path.end());
+        return Path;
     }
 
-    // Builds a Dijkstra Flow Field toward Goal for mass RTS crowd movement
+    // Dijkstra Goal-based FlowField2D generator for crowd steering
     bool BuildFlowField(GridCoord2D Goal, uint8_t FootprintSize, FlowField2D& OutField)
     {
         if (mClearanceDirty)
@@ -420,10 +481,8 @@ public:
         ++mTelemetry.FlowFieldsGenerated;
 
         const uint8_t RequiredClearance = std::max<uint8_t>(1u, FootprintSize);
-        if (!CanFitFootprint(Goal.X, Goal.Y, RequiredClearance))
-            return false;
-
         const size_t Total = static_cast<size_t>(mWidth) * static_cast<size_t>(mHeight);
+
         OutField.Width = mWidth;
         OutField.Height = mHeight;
         OutField.Goal = Goal;
@@ -431,15 +490,16 @@ public:
         OutField.IntegrationCost.assign(Total, FlowField2D::kUnreachableCost);
         OutField.FlowVectors.assign(Total, {0.0f, 0.0f});
 
+        if (!CanFitFootprint(Goal.X, Goal.Y, RequiredClearance))
+            return false;
+
         struct QueueNode
         {
             uint32_t Cost = 0;
             int32_t Index = 0;
             bool operator>(const QueueNode& Other) const noexcept
             {
-                if (Cost != Other.Cost)
-                    return Cost > Other.Cost;
-                return Index > Other.Index;
+                return Cost != Other.Cost ? (Cost > Other.Cost) : (Index > Other.Index);
             }
         };
 
@@ -457,12 +517,11 @@ public:
             const QueueNode Top = Frontier.top();
             Frontier.pop();
 
-            const size_t CurIdx = static_cast<size_t>(Top.Index);
-            if (Top.Cost > OutField.IntegrationCost[CurIdx])
+            if (Top.Cost > OutField.IntegrationCost[static_cast<size_t>(Top.Index)])
                 continue;
 
-            const int32_t CX = static_cast<int32_t>(CurIdx) % mWidth;
-            const int32_t CY = static_cast<int32_t>(CurIdx) / mWidth;
+            const int32_t CX = Top.Index % mWidth;
+            const int32_t CY = Top.Index / mWidth;
 
             for (int Dir = 0; Dir < 8; ++Dir)
             {
@@ -472,7 +531,6 @@ public:
                     continue;
                 if (!CanTraverseElevation(CX, CY, NX, NY))
                     continue;
-
                 if (Dir >= 4)
                 {
                     if (!CanFitFootprint(CX + kDirX[Dir], CY, RequiredClearance) ||
@@ -600,6 +658,111 @@ public:
             Combined.Y *= Scale;
         }
         return Combined;
+    }
+
+    // Phase 62 NavigationAgent2D Stepper:
+    // Advances a stateful NavigationAgent2D from CurrentWorldPos toward its TargetWorldPosition,
+    // computing its A* path on demand (after O(1) region reachability check when regions are built),
+    // advancing through waypoints, applying local avoidance, and returning the new world position.
+    Core::Math::Vec2 StepNavigationAgent(
+        NavigationAgent2D& Agent,
+        Core::Math::Vec2 CurrentWorldPos,
+        float MaxSpeedPxPerSec,
+        float DeltaSeconds,
+        const std::vector<AvoidanceAgent2D>& Neighbors = {})
+    {
+        ++mTelemetry.AgentStepsEvaluated;
+        if (!Agent.HasActiveTarget || Agent.ReachedTarget || DeltaSeconds <= 0.0f)
+        {
+            Agent.DesiredVelocity = {0.0f, 0.0f};
+            return CurrentWorldPos;
+        }
+
+        const GridCoord2D StartCell = WorldToCell(CurrentWorldPos);
+        const GridCoord2D GoalCell = WorldToCell(Agent.TargetWorldPosition);
+
+        if (Agent.PathNeedsRebuild)
+        {
+            Agent.PathNeedsRebuild = false;
+            Agent.CurrentWaypointIndex = 0;
+
+            if (mRegionCount > 0 && Agent.FootprintClearance == 1 &&
+                !AreCellsConnected(StartCell, GoalCell))
+            {
+                Agent.Waypoints.clear();
+                Agent.TargetReachable = false;
+                Agent.DesiredVelocity = {0.0f, 0.0f};
+                return CurrentWorldPos;
+            }
+
+            Agent.Waypoints = FindPath(StartCell, GoalCell, Agent.FootprintClearance);
+            Agent.TargetReachable = !Agent.Waypoints.empty();
+            if (!Agent.TargetReachable)
+            {
+                Agent.DesiredVelocity = {0.0f, 0.0f};
+                return CurrentWorldPos;
+            }
+            if (Agent.Waypoints.size() > 1 && Agent.Waypoints[0] == StartCell)
+                Agent.CurrentWaypointIndex = 1;
+        }
+
+        if (Agent.Waypoints.empty() || Agent.CurrentWaypointIndex >= Agent.Waypoints.size())
+        {
+            Agent.ReachedTarget = true;
+            Agent.HasActiveTarget = false;
+            Agent.DesiredVelocity = {0.0f, 0.0f};
+            return CurrentWorldPos;
+        }
+
+        Core::Math::Vec2 WaypointPos = (Agent.CurrentWaypointIndex + 1 == Agent.Waypoints.size())
+                                           ? Agent.TargetWorldPosition
+                                           : CellToWorldCenter(Agent.Waypoints[Agent.CurrentWaypointIndex]);
+
+        float DX = WaypointPos.X - CurrentWorldPos.X;
+        float DY = WaypointPos.Y - CurrentWorldPos.Y;
+        float Dist = std::sqrt(DX * DX + DY * DY);
+
+        while (Dist <= Agent.WaypointReachThresholdPx &&
+               Agent.CurrentWaypointIndex + 1 < Agent.Waypoints.size())
+        {
+            ++Agent.CurrentWaypointIndex;
+            WaypointPos = (Agent.CurrentWaypointIndex + 1 == Agent.Waypoints.size())
+                              ? Agent.TargetWorldPosition
+                              : CellToWorldCenter(Agent.Waypoints[Agent.CurrentWaypointIndex]);
+            DX = WaypointPos.X - CurrentWorldPos.X;
+            DY = WaypointPos.Y - CurrentWorldPos.Y;
+            Dist = std::sqrt(DX * DX + DY * DY);
+        }
+
+        if (Dist <= Agent.WaypointReachThresholdPx &&
+            Agent.CurrentWaypointIndex + 1 >= Agent.Waypoints.size())
+        {
+            Agent.ReachedTarget = true;
+            Agent.HasActiveTarget = false;
+            Agent.DesiredVelocity = {0.0f, 0.0f};
+            return Agent.TargetWorldPosition;
+        }
+
+        Core::Math::Vec2 PreferredVel{0.0f, 0.0f};
+        if (Dist > 1e-4f)
+        {
+            PreferredVel.X = (DX / Dist) * MaxSpeedPxPerSec;
+            PreferredVel.Y = (DY / Dist) * MaxSpeedPxPerSec;
+        }
+
+        if (!Neighbors.empty())
+        {
+            AvoidanceAgent2D Self{Agent.EntityID, CurrentWorldPos, PreferredVel, Agent.Radius};
+            Agent.DesiredVelocity = ComputeAvoidanceVelocity(Self, Neighbors, PreferredVel, MaxSpeedPxPerSec);
+        }
+        else
+        {
+            Agent.DesiredVelocity = PreferredVel;
+        }
+
+        return {
+            CurrentWorldPos.X + Agent.DesiredVelocity.X * DeltaSeconds,
+            CurrentWorldPos.Y + Agent.DesiredVelocity.Y * DeltaSeconds};
     }
 
     const NavigationServerTelemetry& GetTelemetry() const noexcept { return mTelemetry; }

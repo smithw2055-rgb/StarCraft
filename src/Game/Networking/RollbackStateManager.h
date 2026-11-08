@@ -11,10 +11,38 @@
 #include "Core/ECS/EntityManager.h"
 #include "Core/ECS/WorldSnapshot.h"
 #include "Engine/ECS/GenericWorldSnapshot.h"
+#include "Engine/Net/DeterministicSessionServer.h"
 #include "Game/Networking/LockstepSync.h"
 
 namespace Game::Networking
 {
+
+// Trivially-copyable command packet descriptor for Engine::Net::DeterministicSessionServer
+struct SyncActionWirePacket
+{
+    uint32_t Frame = 0;
+    uint8_t PlayerID = 0;
+    uint8_t PrimaryOpcode = 0;
+    uint16_t PayloadByteLength = 0;
+    uint32_t PayloadHashFNV1a = 0x811C9DC5u;
+
+    static SyncActionWirePacket FromSyncAction(const SyncAction& Act) noexcept
+    {
+        SyncActionWirePacket Pkt{};
+        Pkt.Frame = Act.Frame;
+        Pkt.PlayerID = Act.PlayerID;
+        Pkt.PrimaryOpcode = Act.Data.empty() ? 0u : Act.Data[0];
+        Pkt.PayloadByteLength = static_cast<uint16_t>(std::min<size_t>(65535u, Act.Data.size()));
+        uint32_t Hash = 0x811C9DC5u;
+        for (uint8_t B : Act.Data)
+        {
+            Hash ^= static_cast<uint32_t>(B);
+            Hash *= 0x01000193u;
+        }
+        Pkt.PayloadHashFNV1a = Hash;
+        return Pkt;
+    }
+};
 
 struct RollbackFrameEntry
 {
@@ -33,23 +61,39 @@ struct RollbackTelemetry
 };
 
 // ============================================================================
-// RollbackStateManager (Phase 45 Streamlined Adapter):
+// RollbackStateManager (Phase 45 & Phase 65 Streamlined Adapter):
 // - Delegates snapshot capture/restore directly to the type-erased
 //   Engine::ECS::GenericWorldSnapshot kernel via WorldSnapshotSerializer.
+// - Supports optional binding to Engine::Net::DeterministicSessionServer<SyncActionWirePacket>
+//   so game-side lockstep/rollback and engine-level replay/session management
+//   share a single authoritative timeline.
 // ============================================================================
 class RollbackStateManager
 {
 public:
     static constexpr size_t kMaxRollbackWindow = 64;
+    using EngineSessionServer = Engine::Net::DeterministicSessionServer<SyncActionWirePacket>;
 
     using ActionApplyFn = std::function<void(Core::ECS::EntityManager&, const SyncAction&)>;
     using SimulationTickFn = std::function<void(Core::ECS::EntityManager&, uint32_t FrameNumber)>;
+
+    void BindDeterministicSessionServer(EngineSessionServer* Server) noexcept
+    {
+        mBoundEngineServer = Server;
+    }
+
+    EngineSessionServer* GetBoundDeterministicSessionServer() const noexcept
+    {
+        return mBoundEngineServer;
+    }
 
     void Clear()
     {
         for (auto& Slot : mRing)
             Slot = RollbackFrameEntry{};
         mTelemetry = {};
+        if (mBoundEngineServer)
+            mBoundEngineServer->ResetSession();
     }
 
     uint32_t RecordFrame(const Core::ECS::EntityManager& EM,
@@ -60,6 +104,14 @@ public:
         Slot.Valid = true;
         Slot.FrameNumber = FrameNumber;
         Slot.Snapshot = Core::ECS::WorldSnapshotSerializer::CaptureSnapshot(EM, FrameNumber);
+        if (mBoundEngineServer)
+        {
+            for (const auto& Act : Actions)
+            {
+                mBoundEngineServer->ScheduleCommand(
+                    FrameNumber, Act.PlayerID, SyncActionWirePacket::FromSyncAction(Act));
+            }
+        }
         Slot.FrameActions = std::move(Actions);
         ++mTelemetry.TotalSnapshotsRecorded;
         return Slot.Snapshot.StateHashFNV1a;
@@ -73,6 +125,9 @@ public:
 
     bool VerifyRemoteFrameHash(uint32_t FrameNumber, uint32_t RemoteHash)
     {
+        if (mBoundEngineServer)
+            mBoundEngineServer->VerifyRemoteTickHash(FrameNumber, RemoteHash);
+
         const auto* Entry = FindFrame(FrameNumber);
         if (Entry && Entry->Snapshot.StateHashFNV1a != RemoteHash)
         {
@@ -92,6 +147,12 @@ public:
         auto* TargetSlot = FindFrameMutable(TargetFrame);
         if (!TargetSlot || TargetFrame > CurrentFrame)
             return false;
+
+        if (mBoundEngineServer)
+        {
+            mBoundEngineServer->ScheduleCommand(
+                TargetFrame, InjectedAction.PlayerID, SyncActionWirePacket::FromSyncAction(InjectedAction));
+        }
 
         TargetSlot->FrameActions.push_back(InjectedAction);
         std::stable_sort(TargetSlot->FrameActions.begin(),
@@ -148,6 +209,7 @@ private:
 
     std::array<RollbackFrameEntry, kMaxRollbackWindow> mRing{};
     RollbackTelemetry mTelemetry{};
+    EngineSessionServer* mBoundEngineServer = nullptr;
 };
 
 } // namespace Game::Networking

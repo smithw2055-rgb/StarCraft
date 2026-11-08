@@ -37,6 +37,7 @@
 #include "Game/Systems/TransportSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"
+#include "Game/StarCraftEnginePlugin.h"
 #include "Main/GameSession.h"
 
 namespace Game::Client::GameLoop::GameSessionBootstrap
@@ -440,71 +441,16 @@ inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSyst
     auto& SysMgr = Session.Systems();
     auto& World = Session.Entities();
 
-    // Group 1: Spatial & Command Ingestion Group (FixedSimulation Phase)
-    auto SpatialAndCommandGroup = std::make_unique<Core::ECS::SystemGroup>(
-        "SpatialAndCommandGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
-    SpatialAndCommandGroup->AddSubSystemInstance(
-        std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SysMgr), false);
-    auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
-    CmdSys->Init(&SysMgr);
-    SpatialAndCommandGroup->AddSubSystemInstance(std::move(CmdSys), true);
-    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(SpatialAndCommandGroup));
-
-    // Group 2: Locomotion, Economy & Construction Group (FixedSimulation Phase)
-    auto LocomotionAndEconomyGroup = std::make_unique<Core::ECS::SystemGroup>(
-        "LocomotionAndEconomyGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
-    LocomotionAndEconomyGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::MovementSystem>(SysMgr, &Session.MutableEcsMap()), false);
-    LocomotionAndEconomyGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::HarvestSystem>(SysMgr), false);
-    LocomotionAndEconomyGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::BuildingSystem>(SysMgr), true);
-    LocomotionAndEconomyGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::ProductionSystem>(SysMgr), true);
-    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(LocomotionAndEconomyGroup));
-
-    // Group 3: Combat, Projectiles, FogOfWar & Race Mechanics Group (FixedSimulation Phase)
-    auto CombatAndRaceGroup = std::make_unique<Core::ECS::SystemGroup>(
-        "CombatAndRaceGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
-    auto BulletSys = std::make_unique<Game::Systems::BulletSystem>(SysMgr);
-    auto* BulletSysRaw = BulletSys.get();
-    CombatAndRaceGroup->AddSubSystemInstance(std::move(BulletSys), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::CombatSystem>(SysMgr, *BulletSysRaw, &Session.MutableEcsMap()), true);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::UpgradeSystem>(SysMgr), false);
-    auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, &Session.MutableEcsMap());
-    FogSys->SetLocalPlayerID(Session.GetLocalPlayerID());
-    FogSys->SetObserverRevealAll(Detail::IsAiObserverMatch());
-    Session.SetFogSystem(FogSys.get());
-    CombatAndRaceGroup->AddSubSystemInstance(std::move(FogSys), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::ZergSystem>(SysMgr, &Session.MutableEcsMap()), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::ProtossSystem>(SysMgr, &Session.MutableEcsMap()), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::NukeAndSpiderMineSystem>(SysMgr, *BulletSysRaw), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::SpellSystem>(SysMgr), true);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::AnimationSystem>(SysMgr, &Audio, BulletSysRaw), false);
-    CombatAndRaceGroup->AddSubSystemInstance(
-        std::make_unique<Game::Systems::TransportSystem>(SysMgr), true);
-    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(CombatAndRaceGroup));
-
-    // Group 4: Presentation & Audio Event Router Group (Presentation Phase)
-    auto PresentationGroup = std::make_unique<Core::ECS::SystemGroup>(
-        "PresentationAndAudioGroup", Core::ECS::SystemPhase::Presentation, &World);
-    PresentationGroup->AddSubSystemInstance(
-        std::make_unique<Core::Audio::ModernAudioEventRouterSystem>(SysMgr, nullptr, &Audio), false);
-    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::Presentation, std::move(PresentationGroup));
-
-    // Group 5: Modern Render Pipeline Extraction Group (RenderExtract Phase)
-    auto RenderExtractGroup = std::make_unique<Core::ECS::SystemGroup>(
-        "RenderExtractionGroup", Core::ECS::SystemPhase::RenderExtract, &World);
-    RenderExtractGroup->AddSubSystemInstance(
-        std::make_unique<Render::ModernRenderPipelineSystem>(SysMgr, nullptr), false);
-    SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::RenderExtract, std::move(RenderExtractGroup));
+    (void)World;
+    const auto PipelineHandles = Game::StarCraftEnginePlugin::InstallStandardGameplaySystemGroups(
+        SysMgr,
+        &Session.MutableEcsMap(),
+        &Audio,
+        /*AssetRegistry=*/nullptr,
+        /*AnimServer=*/nullptr,
+        Session.GetLocalPlayerID(),
+        Detail::IsAiObserverMatch());
+    Session.SetFogSystem(PipelineHandles.FogOfWar);
 
     // Bind LockstepSync deterministic FNV-1a world state hash callback
     Session.NetSync.SetStateHashCallback([&Session]() {

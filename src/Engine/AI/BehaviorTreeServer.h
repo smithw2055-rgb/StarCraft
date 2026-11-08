@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -166,11 +167,13 @@ private:
 };
 
 // ============================================================================
-// BehaviorTreeAsset & BehaviorTreeServer (Phase 40 & Phase 49):
+// BehaviorTreeAsset & BehaviorTreeServer (Phase 40, Phase 49 & Phase 63):
 // - Zero dependency on Game/ headers.
 // - Stores data-driven BehaviorTreeAssets in an Engine::DataAssetTable<BehaviorTreeAsset>.
 // - Supports direct import of cloud assets-R AIScriptBin_All_293_BehaviorTrees.json
 //   & BWScriptBin_All_156_BehaviorTrees.json via Engine::AI::BehaviorTreeCatalog.
+// - Provides ExecuteTacticalScriptToBlackboard (Phase 63) to extract build orders,
+//   tech/upgrade queues, defense rules, and attack wave rosters directly into Blackboard.
 // ============================================================================
 struct BehaviorTreeAsset
 {
@@ -204,7 +207,13 @@ public:
     }
 
     // Imports AI Behavior Trees from cloud assets-R BehaviorTreeCatalog
-    size_t ImportFromCatalog(const BehaviorTreeCatalog& Catalog) { if (&Catalog != &mCatalog) mCatalog = Catalog; return ImportFromCatalogImpl(Catalog); }
+    size_t ImportFromCatalog(const BehaviorTreeCatalog& Catalog)
+    {
+        if (&Catalog != &mCatalog)
+            mCatalog = Catalog;
+        return ImportFromCatalogImpl(Catalog);
+    }
+
     size_t ImportFromCatalogImpl(const BehaviorTreeCatalog& Catalog)
     {
         size_t Imported = 0;
@@ -241,13 +250,50 @@ public:
                         for (const auto& Child : BlockIt->second.Children)
                         {
                             const std::string ActionOp = Child.ActionOp.empty() ? Child.NodeType : Child.ActionOp;
+                            const auto BuildOrders = Child.BuildOrders;
+                            const auto DefenseRules = Child.DefenseRules;
+                            const auto WaveRoster = Child.WaveRoster;
+
                             if (!ActionOp.empty())
                             {
                                 Asset.HighLevelNodes.push_back(ActionOp);
                                 ParentSeq.AddChild(std::make_unique<BTActionNode>(
-                                    [this, ActionOp](Blackboard& Board) -> BTStatus {
+                                    [this, ActionOp, BuildOrders, DefenseRules, WaveRoster](Blackboard& Board) -> BTStatus {
                                         Board.SetInt("ExecutedNodeCount", Board.GetInt("ExecutedNodeCount", 0) + 1);
                                         Board.SetString("LastActionOp", ActionOp);
+
+                                        if (!BuildOrders.empty())
+                                        {
+                                            Board.SetInt("BuildQueueCount",
+                                                         Board.GetInt("BuildQueueCount", 0) +
+                                                             static_cast<int64_t>(BuildOrders.size()));
+                                            Board.SetString("LastBuildUnit", BuildOrders.back().UnitOrTech);
+                                            for (const auto& Step : BuildOrders)
+                                            {
+                                                if (Step.Op == "upgrade" || Step.Op == "tech")
+                                                {
+                                                    Board.SetInt("UpgradeQueueCount",
+                                                                 Board.GetInt("UpgradeQueueCount", 0) + 1);
+                                                }
+                                            }
+                                        }
+                                        if (!DefenseRules.empty())
+                                        {
+                                            Board.SetInt("DefensePoolRuleCount",
+                                                         Board.GetInt("DefensePoolRuleCount", 0) +
+                                                             static_cast<int64_t>(DefenseRules.size()));
+                                        }
+                                        if (!WaveRoster.empty())
+                                        {
+                                            Board.SetInt("AttackWaveCount", Board.GetInt("AttackWaveCount", 0) + 1);
+                                            int64_t WaveUnits = 0;
+                                            for (const auto& W : WaveRoster)
+                                                WaveUnits += static_cast<int64_t>(W.Count);
+                                            Board.SetInt("AttackWaveUnitCount",
+                                                         Board.GetInt("AttackWaveUnitCount", 0) + WaveUnits);
+                                            Board.SetString("LastWaveUnit", WaveRoster.back().UnitName);
+                                        }
+
                                         auto It = mNodeHandlers.find(ActionOp);
                                         if (It != mNodeHandlers.end() && It->second)
                                             return It->second(ActionOp, Board);
@@ -262,6 +308,14 @@ public:
                     };
 
                     AppendBlockRecursive(AppendBlockRecursive, *RootSeq, EntryIt->first);
+                    // Also append any branch blocks reachable via condition decorators or daemons
+                    std::vector<std::pair<uint32_t, std::string>> SortedBlocks;
+                    SortedBlocks.reserve(Src.BehaviorBlocks.size());
+                    for (const auto& [BID, BData] : Src.BehaviorBlocks)
+                        SortedBlocks.push_back({BData.StartOffset, BID});
+                    std::sort(SortedBlocks.begin(), SortedBlocks.end());
+                    for (const auto& [Offset, BID] : SortedBlocks)
+                        AppendBlockRecursive(AppendBlockRecursive, *RootSeq, BID);
                 }
                 Asset.RootNode = std::move(RootSeq);
 
@@ -295,6 +349,57 @@ public:
         return Asset->RootNode->Tick(Board);
     }
 
+    // Phase 63 Tactical Script Executor:
+    // Evaluates both the BehaviorTreeInstance (with wait ticks) and high-level tree nodes,
+    // writing structured tactical state (TownStarted, BuildQueueCount, DefensePoolRuleCount,
+    // AttackWaveCount, AttackWaveUnitCount, LastBuildUnit) into the target Blackboard.
+    bool ExecuteTacticalScriptToBlackboard(
+        std::string_view ScriptID,
+        Blackboard& Board,
+        uint32_t SimulatedTicks = 2400) const
+    {
+        std::string Key(ScriptID);
+        bool PreferBW = false;
+        if (Key.rfind("BW_", 0) == 0)
+        {
+            Key = Key.substr(3);
+            PreferBW = true;
+        }
+
+        const bool TreeOk = (TickTreeByName(ScriptID, Board) == BTStatus::Success);
+
+        const auto* ScriptAsset = mCatalog.FindTree(Key, PreferBW);
+        if (ScriptAsset)
+        {
+            BehaviorTreeInstance Instance(ScriptAsset);
+            Instance.Tick(SimulatedTicks);
+            const auto& State = Instance.GetBlackboard();
+            Board.SetBool("TownStarted", State.TownStarted);
+            Board.SetBool("CampaignMode", State.CampaignMode);
+            Board.SetInt("MaxForce", State.MaxForce);
+            Board.SetInt("ExpansionsTriggered", static_cast<int64_t>(State.ExpansionsTriggered));
+            if (!State.QueuedBuildOrders.empty() && Board.GetInt("BuildQueueCount", 0) == 0)
+            {
+                Board.SetInt("BuildQueueCount", static_cast<int64_t>(State.QueuedBuildOrders.size()));
+                Board.SetString("LastBuildUnit", State.QueuedBuildOrders.back().UnitOrTech);
+            }
+            if (!State.ActiveDefensePool.empty() && Board.GetInt("DefensePoolRuleCount", 0) == 0)
+            {
+                Board.SetInt("DefensePoolRuleCount", static_cast<int64_t>(State.ActiveDefensePool.size()));
+            }
+            if (State.AttackWavesLaunched > 0 && Board.GetInt("AttackWaveCount", 0) == 0)
+            {
+                Board.SetInt("AttackWaveCount", static_cast<int64_t>(State.AttackWavesLaunched));
+                int64_t Units = 0;
+                for (const auto& W : State.LastLaunchedWave)
+                    Units += static_cast<int64_t>(W.Count);
+                Board.SetInt("AttackWaveUnitCount", Units);
+            }
+        }
+
+        return TreeOk;
+    }
+
     BTStatus TickTree(Engine::AssetHandle<BehaviorTreeAsset> Handle, Blackboard& Board) const
     {
         const BehaviorTreeAsset* Asset = mTreeTable.Resolve(Handle);
@@ -304,13 +409,19 @@ public:
         return Asset->RootNode->Tick(Board);
     }
 
+    const BehaviorTreeAsset* FindTreeByName(std::string_view ScriptID) const noexcept
+    {
+        return mTreeTable.FindByName(ScriptID);
+    }
+
     const Engine::DataAssetTable<BehaviorTreeAsset>& GetTreeTable() const noexcept { return mTreeTable; }
     Engine::DataAssetTable<BehaviorTreeAsset>& GetTreeTable() noexcept { return mTreeTable; }
+    size_t GetTreeCount() const noexcept { return mTreeTable.Size(); }
     uint64_t GetTotalTreeTicks() const noexcept { return mTotalTreeTicks; }
 
 private:
-    BehaviorTreeCatalog mCatalog;
     Engine::DataAssetTable<BehaviorTreeAsset> mTreeTable;
+    BehaviorTreeCatalog mCatalog;
     std::unordered_map<std::string, NodeActionHandler> mNodeHandlers;
     mutable uint64_t mTotalTreeTicks = 0;
 };

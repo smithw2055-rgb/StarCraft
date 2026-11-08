@@ -339,13 +339,11 @@ if(BUILD_SPRITE_IMAGE_DATA_TEST)
         src/Game/IScriptVM.cpp
         src/Resource/CascArchive.cpp
         src/Resource/DatDecoder.cpp
-        src/Resource/FileSystemArchive.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
         src/Resource/Palette.cpp
-        src/Resource/TblDecoder.cpp
     )
 
     starcraft_configure_test_target(SpriteImageDataTest)
@@ -384,7 +382,6 @@ if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
         src/Game/Systems/HarvestSystem.cpp
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
-        src/Main/GameLoop/InputHandler.cpp
     )
 
     starcraft_configure_test_target(CommandSystemOrderTest)
@@ -434,7 +431,6 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
-        src/Main/GameLoop/InputHandler.cpp
         src/UI/HudCommandPanel.cpp
         src/UI/HudContext.cpp
         src/UI/HudInfoPanelState.cpp
@@ -472,7 +468,6 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
-        src/Main/GameLoop/InputHandler.cpp
         src/UI/HudCommandPanel.cpp
         src/UI/HudContext.cpp
         src/UI/HudInfoPanelState.cpp
@@ -515,7 +510,6 @@ option(BUILD_CAMERA_EDGE_SCROLL_TEST "Build camera edge-scroll regression test" 
 if(BUILD_CAMERA_EDGE_SCROLL_TEST)
     add_executable(CameraEdgeScrollTest
         tests/Regression/CameraEdgeScrollTest.cpp
-        src/Client/CameraController.cpp
     )
 
     starcraft_configure_test_target(CameraEdgeScrollTest)
@@ -727,7 +721,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         tests/Regression/CampaignCatalogRuntimeTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Campaign/CampaignController.cpp
-        src/Game/Campaign/CampaignMissionCatalog.cpp
         src/Game/Trigger/TriggerVM.cpp
         src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/IScriptVM.cpp
@@ -744,7 +737,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
         src/Resource/CascArchive.cpp
-        src/Resource/FileSystemArchive.cpp
     )
 
     target_include_directories(CampaignCatalogRuntimeTest PRIVATE
@@ -887,7 +879,6 @@ if(BUILD_GAME_CLIENT)
         src/Render/Shader2D.cpp
         src/Render/BitmapFont.cpp
         src/Render/Draw2D.cpp
-        src/Render/ParticleSystem.cpp
         src/Resource/Palette.cpp
         src/Resource/AssetCacheViews.cpp
         src/Resource/GrpToGpu.cpp
@@ -902,32 +893,26 @@ if(BUILD_GAME_CLIENT)
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
         src/Resource/CascArchive.cpp
-        src/Resource/FileSystemArchive.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/Cv5Decoder.cpp
-        src/Resource/Vf4Decoder.cpp
         src/Resource/DatDecoder.cpp
-        src/Resource/TblDecoder.cpp
         src/Game/Map/ChkParser.cpp
         src/Client/MapLoader.cpp
         src/Client/ClientRuntime.cpp
         src/Game/IScriptVM.cpp
         src/Client/TilesetRenderer.cpp
         src/Client/EntityRenderer.cpp
-        src/Client/CameraController.cpp
         src/Client/Selection.cpp
         src/Resource/ModernAssetRegistry.cpp
         src/Game/Systems/DeclarativeAnimationPlayer.cpp
         src/Render/EnvironmentAndTerrainPipeline.cpp
         src/Render/SokolPBRDispatcher.cpp
-        "src/UI/GlueCampaignData.cpp"
         "src/UI/Hud.cpp"
         "src/UI/HudCommandPanel.cpp"
         "src/UI/HudContext.cpp"
         "src/UI/HudInfoPanel.cpp"
         "src/UI/HudInfoPanelState.cpp"
-        "src/UI/HudLayout.cpp"
         "src/UI/HudMinimap.cpp"
         "src/UI/HudResources.cpp"
         "src/Main/AppRuntime.cpp"
@@ -938,7 +923,6 @@ if(BUILD_GAME_CLIENT)
         "src/Main/GameLoop/CursorTypes.cpp"
         "src/Main/GameLoop/CursorManager.cpp"
         "src/Main/GameLoop/GameSaveState.cpp"
-        "src/Main/GameLoop/InputHandler.cpp"
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Game/Systems/CommandSystem.cpp
@@ -954,7 +938,6 @@ if(BUILD_GAME_CLIENT)
         src/Game/Races/RaceDef.cpp
         src/Game/AI/AIBrain.cpp
         src/Game/Campaign/CampaignController.cpp
-        src/Game/Campaign/CampaignMissionCatalog.cpp
         src/Game/Trigger/TriggerVM.cpp
         src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/Systems/UpgradeSystem.cpp
@@ -1309,12 +1292,9 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         src/Game/Systems/ZergSystem.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/IArchiveReader.cpp
-        src/Resource/FileSystemArchive.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/Palette.cpp
-        src/Resource/TblDecoder.cpp
         src/Resource/Cv5Decoder.cpp
-        src/Resource/Vf4Decoder.cpp
         src/Resource/RgbaImageFileDecoder.cpp
         src/Resource/ModernAssetRegistry.cpp
         src/Render/Draw2D.cpp
@@ -1483,13 +1463,9 @@ add_library(EngineFoundationObj OBJECT
     src/Core/ECS/SystemManager.cpp
     src/Core/Utils/Logger.cpp
     src/Resource/IArchiveReader.cpp
-    src/Resource/FileSystemArchive.cpp
     src/Resource/Cv5Decoder.cpp
-    src/Resource/Vf4Decoder.cpp
-    src/Resource/TblDecoder.cpp
     src/Resource/Palette.cpp
     src/Resource/ModernAssetRegistry.cpp
-    src/Render/ParticleSystem.cpp
 )
 target_include_directories(EngineFoundationObj PUBLIC
     ${CMAKE_SOURCE_DIR}
@@ -1507,4 +1483,14 @@ if(BUILD_PHASE55_TO_60_ENGINE_PROJECT_SPLIT_TEST)
     starcraft_add_modern_phase_test(Phase55To60EngineProjectSplitAndVfsTilemapTest
         tests/Regression/Phase55To60EngineProjectSplitAndVfsTilemapTest.cpp
         src/Resource/Cv5Decoder.cpp)
+endif()
+
+option(BUILD_PHASE61_TO_66_ENGINE_CONVERGENCE_TEST "Build Phase 61-66 Engine Convergence, NavigationAgent2D, BehaviorTree Tactical Executor, 20-File Consolidation & CommonComponents2D test" ON)
+if(BUILD_PHASE61_TO_66_ENGINE_CONVERGENCE_TEST)
+    starcraft_add_modern_phase_test(Phase61To66EngineConvergenceAndLegacyRetirementTest
+        tests/Regression/Phase61To66EngineConvergenceAndLegacyRetirementTest.cpp
+        src/Game/AI/AIBrain.cpp
+        src/Resource/IArchiveReader.cpp
+        src/Resource/Cv5Decoder.cpp
+        src/Resource/Palette.cpp)
 endif()

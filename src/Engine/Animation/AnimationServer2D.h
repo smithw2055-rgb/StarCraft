@@ -57,16 +57,19 @@ struct AnimationServerTelemetry
     uint64_t SocketTracksRegistered = 0;
     uint64_t AnimatorStepsEvaluated = 0;
     uint64_t NotifyEventsEmitted = 0;
+    uint64_t StateTransitionsExecuted = 0;
 };
 
 // ============================================================================
-// AnimationServer2D (Phase 46):
+// AnimationServer2D (Phase 46 & Phase 61):
 // Referenced from Godot 4 AnimationPlayer / AnimationTree & Unity DOTS Timeline:
 // - Manages declarative 6-track 2D animation state machines (SpriteFrame,
 //   AudioNotify, CombatNotify, SocketVfxSpawn, RootMotion, FsmSignal) and
 //   17-way mirrored 2D Socket mount tracks.
 // - Directly imports all 398 IScript controllers (1,364 declarative clips) and
 //   2D Socket tracks from cloud assets-R ModernAssetRegistry.
+// - Provides high-level declarative state evaluation (`EvaluateUnitLocomotionAndCombatState`)
+//   for locomotion/combat/harvest/death transitions without legacy bytecode polling.
 // ============================================================================
 class AnimationServer2D
 {
@@ -151,19 +154,66 @@ public:
         if (!Clip)
             return false;
 
-        State.CurrentClipName = ClipStr;
-        State.CurrentTick = 0;
-        State.NonInterruptibleSection = false;
-        State.Playing = true;
-        State.Finished = false;
-
-        // Evaluate initial tick 0 frame if present
-        for (const auto& FrameKey : Clip->SpriteFrameTrack)
+        if (State.CurrentClipName != ClipStr || State.Finished)
         {
-            if (FrameKey.Tick == 0)
-                State.CurrentFrameSet = FrameKey.FrameSetIndex;
+            State.CurrentClipName = ClipStr;
+            State.CurrentTick = 0;
+            State.NonInterruptibleSection = false;
+            State.Playing = true;
+            State.Finished = false;
+            ++mTelemetry.StateTransitionsExecuted;
+
+            for (const auto& FrameKey : Clip->SpriteFrameTrack)
+            {
+                if (FrameKey.Tick == 0)
+                    State.CurrentFrameSet = FrameKey.FrameSetIndex;
+            }
         }
         return true;
+    }
+
+    // Phase 61 Declarative State Machine Evaluator:
+    // Automatically resolves desired clip ("Death", "AirAttkInit", "GndAttkInit",
+    // "IsWorking", "Walking", or "Init") based on entity locomotion/combat flags,
+    // transitions if allowed by nobrkcodestart..nobrkcodeend, and steps all 6 tracks.
+    bool EvaluateUnitLocomotionAndCombatState(
+        Animator2DState& State,
+        float SpeedPxPerSec,
+        bool IsAttacking,
+        bool IsAirTarget,
+        bool IsWorking,
+        bool IsDead,
+        uint32_t DeltaTicks,
+        std::vector<AnimationNotifyEvent2D>& OutEvents) const
+    {
+        std::string DesiredClip = "Init";
+        if (IsDead)
+        {
+            DesiredClip = "Death";
+        }
+        else if (IsAttacking)
+        {
+            if (IsAirTarget && FindClip(State.ControllerID, "AirAttkInit") != nullptr)
+                DesiredClip = "AirAttkInit";
+            else if (FindClip(State.ControllerID, "GndAttkInit") != nullptr)
+                DesiredClip = "GndAttkInit";
+            else if (FindClip(State.ControllerID, "AirAttkInit") != nullptr)
+                DesiredClip = "AirAttkInit";
+        }
+        else if (IsWorking && FindClip(State.ControllerID, "IsWorking") != nullptr)
+        {
+            DesiredClip = "IsWorking";
+        }
+        else if (SpeedPxPerSec > 0.5f && FindClip(State.ControllerID, "Walking") != nullptr)
+        {
+            DesiredClip = "Walking";
+        }
+
+        if (State.CurrentClipName != DesiredClip)
+        {
+            RequestStateTransition(State, DesiredClip, /*ForceInterrupt=*/IsDead);
+        }
+        return StepAnimator(State, DeltaTicks, OutEvents);
     }
 
     // Steps an Animator2DState by DeltaTicks along all 6 declarative tracks

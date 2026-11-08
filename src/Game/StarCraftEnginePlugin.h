@@ -5,9 +5,11 @@
 #include <string_view>
 #include <vector>
 
+#include "Core/Audio/AudioSystem.h"
 #include "Core/Audio/ModernAudioEventRouter.h"
 #include "Core/ECS/SystemGroup.h"
 #include "Core/ECS/WorldSnapshot.h"
+#include "Engine/ECS/CommonComponents2D.h"
 #include "Engine/EngineApp.h"
 #include "Engine/Project/EngineProjectHost.h"
 #include "Game/Map/Map.h"
@@ -37,8 +39,21 @@
 namespace Game
 {
 
+struct InstalledGameplayPipelineHandles
+{
+    Core::ECS::SystemGroup* SpatialAndCommandGroup = nullptr;
+    Core::ECS::SystemGroup* LocomotionAndEconomyGroup = nullptr;
+    Core::ECS::SystemGroup* CombatAndRaceGroup = nullptr;
+    Core::ECS::SystemGroup* PresentationAndAudioGroup = nullptr;
+    Core::ECS::SystemGroup* RenderExtractionGroup = nullptr;
+    Game::Systems::FogOfWarSystem* FogOfWar = nullptr;
+    Game::Systems::BulletSystem* BulletSys = nullptr;
+    Core::Audio::ModernAudioEventRouterSystem* AudioRouter = nullptr;
+    Render::ModernRenderPipelineSystem* RenderPipeline = nullptr;
+};
+
 // ============================================================================
-// StarCraftEnginePlugin / StarCraftGameModule:
+// StarCraftEnginePlugin / StarCraftGameModule (Phases 48–66):
 // StarCraft RTS Experimental Game Module Mounted on General-Purpose EngineApp
 // Demonstrates how StarCraft: Remastered acts as a decoupled game project module
 // hosted on top of the reusable Engine Foundation (Engine::EngineApp & EngineProjectHost):
@@ -49,11 +64,11 @@ namespace Game
 //   Engine::Audio::AudioServer2D (1,144 SFX catalog),
 //   Engine::UI::UIServer2D (12 HD UI & wireframe atlases),
 //   Engine::Tilemap::TilemapServer2D (8 GPU Tileset LUTs + 395 foliage records + 294 parallax stars),
-//   Engine::Scripting::ScenarioTriggerServer (CHK scenario trigger metadata), and
-//   Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees)
+//   Engine::Scripting::ScenarioTriggerServer (CHK scenario trigger metadata),
+//   Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees), and
+//   Engine::ECS::CapabilityTraitRegistry (228 unit capability bitmasks)
 // - Synchronizes UnitPrototypeRegistry and SystemAssetBridge without legacy .dat files
-// - Registers WorldContext rollback resources (PlayerResourceStore, WorldUpgradeResource)
-// - Installs hierarchical SystemGroups across FixedSimulation, Presentation, and RenderExtract
+// - Provides unified `InstallStandardGameplaySystemGroups` shared with `GameSessionBootstrap`
 // ============================================================================
 class StarCraftEnginePlugin final : public Engine::Project::IGameModule
 {
@@ -66,7 +81,7 @@ public:
     }
 
     std::string_view GetName() const override { return "StarCraftEnginePlugin"; }
-    std::string_view GetModuleVersion() const override { return "2.0.0-Remastered-HD"; }
+    std::string_view GetModuleVersion() const override { return "2.1.0-Remastered-HD-Phase66"; }
 
     void ConfigureProject(Engine::Project::ProjectManifest& Manifest) override
     {
@@ -105,9 +120,106 @@ public:
 
     void OnRegister(Engine::EngineApp& App) override
     {
-        // Register StarCraft world singleton resources into EngineApp's generic rollback buffer
         App.RollbackBuffer().RegisterWorldResource<Game::Systems::PlayerResourceStore>();
         App.RollbackBuffer().RegisterWorldResource<Core::ECS::WorldUpgradeResource>();
+    }
+
+    // Unified SystemGroup pipeline installer shared across EngineApp and GameSessionBootstrap
+    static InstalledGameplayPipelineHandles InstallStandardGameplaySystemGroups(
+        Core::ECS::SystemManager& SysMgr,
+        Game::Map::GameMap* Map,
+        Core::Audio::AudioSystem* LegacyAudio = nullptr,
+        const Resource::ModernAssetRegistry* AssetRegistry = nullptr,
+        Engine::Animation::AnimationServer2D* AnimServer = nullptr,
+        int LocalPlayerID = 0,
+        bool ObserverRevealAll = false)
+    {
+        InstalledGameplayPipelineHandles Out{};
+        auto& World = SysMgr.GetEntityManager();
+
+        // Group 1: Spatial & Command Ingestion Group (FixedSimulation Phase)
+        auto SpatialAndCommandGroup = std::make_unique<Core::ECS::SystemGroup>(
+            "SpatialAndCommandGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
+        SpatialAndCommandGroup->AddSubSystemInstance(
+            std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SysMgr), false);
+        auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
+        CmdSys->Init(&SysMgr);
+        SpatialAndCommandGroup->AddSubSystemInstance(std::move(CmdSys), true);
+        Out.SpatialAndCommandGroup = SpatialAndCommandGroup.get();
+        SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(SpatialAndCommandGroup));
+
+        // Group 2: Locomotion, Economy & Construction Group (FixedSimulation Phase)
+        auto LocomotionAndEconomyGroup = std::make_unique<Core::ECS::SystemGroup>(
+            "LocomotionAndEconomyGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
+        LocomotionAndEconomyGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::MovementSystem>(SysMgr, Map), false);
+        LocomotionAndEconomyGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::HarvestSystem>(SysMgr), false);
+        LocomotionAndEconomyGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::BuildingSystem>(SysMgr), true);
+        LocomotionAndEconomyGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::ProductionSystem>(SysMgr), true);
+        Out.LocomotionAndEconomyGroup = LocomotionAndEconomyGroup.get();
+        SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(LocomotionAndEconomyGroup));
+
+        // Group 3: Combat, Projectiles, FogOfWar & Race Mechanics Group (FixedSimulation Phase)
+        auto CombatAndRaceGroup = std::make_unique<Core::ECS::SystemGroup>(
+            "CombatAndRaceGroup", Core::ECS::SystemPhase::FixedSimulation, &World);
+        auto BulletSys = std::make_unique<Game::Systems::BulletSystem>(SysMgr);
+        auto* BulletSysRaw = BulletSys.get();
+        Out.BulletSys = BulletSysRaw;
+        CombatAndRaceGroup->AddSubSystemInstance(std::move(BulletSys), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::CombatSystem>(SysMgr, *BulletSysRaw, Map), true);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::UpgradeSystem>(SysMgr), false);
+        auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SysMgr, Map);
+        FogSys->SetLocalPlayerID(LocalPlayerID);
+        FogSys->SetObserverRevealAll(ObserverRevealAll);
+        Out.FogOfWar = FogSys.get();
+        CombatAndRaceGroup->AddSubSystemInstance(std::move(FogSys), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::ZergSystem>(SysMgr, Map), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::ProtossSystem>(SysMgr, Map), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::NukeAndSpiderMineSystem>(SysMgr, *BulletSysRaw), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::SpellSystem>(SysMgr), true);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::AnimationSystem>(SysMgr, LegacyAudio, BulletSysRaw), false);
+        CombatAndRaceGroup->AddSubSystemInstance(
+            std::make_unique<Game::Systems::TransportSystem>(SysMgr), true);
+        Out.CombatAndRaceGroup = CombatAndRaceGroup.get();
+        SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(CombatAndRaceGroup));
+
+        // Group 4: Presentation & Audio Event Router Group (Presentation Phase)
+        auto PresentationGroup = std::make_unique<Core::ECS::SystemGroup>(
+            "PresentationAndAudioGroup", Core::ECS::SystemPhase::Presentation, &World);
+        if (AnimServer || AssetRegistry)
+        {
+            PresentationGroup->AddSubSystemInstance(
+                std::make_unique<Game::Systems::DeclarativeAnimationPlayerSystem>(
+                    SysMgr, AssetRegistry, AnimServer),
+                false);
+        }
+        auto AudioRouter = std::make_unique<Core::Audio::ModernAudioEventRouterSystem>(
+            SysMgr, AssetRegistry, LegacyAudio);
+        Out.AudioRouter = AudioRouter.get();
+        PresentationGroup->AddSubSystemInstance(std::move(AudioRouter), false);
+        Out.PresentationAndAudioGroup = PresentationGroup.get();
+        SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::Presentation, std::move(PresentationGroup));
+
+        // Group 5: Modern Render Pipeline Extraction Group (RenderExtract Phase)
+        auto RenderExtractGroup = std::make_unique<Core::ECS::SystemGroup>(
+            "RenderExtractionGroup", Core::ECS::SystemPhase::RenderExtract, &World);
+        auto RenderPipeline = std::make_unique<Render::ModernRenderPipelineSystem>(SysMgr, AssetRegistry);
+        Out.RenderPipeline = RenderPipeline.get();
+        RenderExtractGroup->AddSubSystemInstance(std::move(RenderPipeline), false);
+        Out.RenderExtractionGroup = RenderExtractGroup.get();
+        SysMgr.RegisterSystemInPhase(Core::ECS::SystemPhase::RenderExtract, std::move(RenderExtractGroup));
+
+        return Out;
     }
 
     void OnStartup(Engine::EngineApp& App) override
@@ -138,6 +250,7 @@ public:
             App.Context().Prefabs().BuildUnitPrefabsFromModernRegistry(*mActiveRegistry);
             App.Context().Animation2D().ImportFromModernRegistry(*mActiveRegistry);
             App.Context().Audio2D().ImportFromModernRegistry(*mActiveRegistry);
+            mTraitRegistry.ImportFromModernRegistry(*mActiveRegistry);
             Game::Systems::SystemAssetBridge::BindModernAssetRegistry(*mActiveRegistry);
             SyncUnitPrototypesFromModernAssets(*mActiveRegistry);
         }
@@ -160,69 +273,22 @@ public:
         Game::Systems::HarvestSystem::ResetResources(EM);
         Game::Systems::UpgradeSystem::ResetUpgrades(EM);
 
-        // 3. Build Hierarchical FixedSimulation SystemGroups
-        auto SpatialGroup = std::make_unique<Core::ECS::SystemGroup>(
-            "SpatialAndEnvironmentGroup",
-            Core::ECS::SystemPhase::FixedSimulation,
-            &EM);
-        SpatialGroup->AddSubSystemInstance(
-            std::make_unique<Game::Pathfinding::WorldSpatialIndexSystem>(SM), false);
-        auto CmdSys = std::make_unique<Game::Systems::CommandSystem>();
-        CmdSys->Init(&SM);
-        SpatialGroup->AddSubSystemInstance(std::move(CmdSys), true);
-        auto FogSys = std::make_unique<Game::Systems::FogOfWarSystem>(SM, mMap);
-        SimCtx.FogOfWar = FogSys.get();
-        SpatialGroup->AddSubSystemInstance(std::move(FogSys), false);
-        mSpatialGroup = SpatialGroup.get();
-        SM.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(SpatialGroup));
+        // 3. Install Unified Hierarchical SystemGroups across FixedSimulation, Presentation, and RenderExtract
+        const auto Handles = InstallStandardGameplaySystemGroups(
+            SM,
+            mMap,
+            /*LegacyAudio=*/nullptr,
+            mActiveRegistry,
+            &App.Context().Animation2D(),
+            /*LocalPlayerID=*/0,
+            /*ObserverRevealAll=*/false);
 
-        auto EconomyGroup = std::make_unique<Core::ECS::SystemGroup>(
-            "EconomyAndProductionGroup",
-            Core::ECS::SystemPhase::FixedSimulation,
-            &EM);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::HarvestSystem>(SM), false);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::BuildingSystem>(SM), true);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::ProductionSystem>(SM), true);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::UpgradeSystem>(SM), false);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::ZergSystem>(SM, mMap), false);
-        EconomyGroup->AddSubSystemInstance(std::make_unique<Game::Systems::ProtossSystem>(SM, mMap), false);
-        mEconomyGroup = EconomyGroup.get();
-        SM.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(EconomyGroup));
-
-        auto CombatGroup = std::make_unique<Core::ECS::SystemGroup>(
-            "LocomotionAndCombatGroup",
-            Core::ECS::SystemPhase::FixedSimulation,
-            &EM);
-        CombatGroup->AddSubSystemInstance(std::make_unique<Game::Systems::MovementSystem>(SM, mMap), false);
-        CombatGroup->AddSubSystemInstance(std::make_unique<Game::Systems::TransportSystem>(SM), true);
-        auto BulletSys = std::make_unique<Game::Systems::BulletSystem>(SM);
-        auto* BulletSysRaw = BulletSys.get();
-        CombatGroup->AddSubSystemInstance(std::move(BulletSys), false);
-        CombatGroup->AddSubSystemInstance(
-            std::make_unique<Game::Systems::CombatSystem>(SM, *BulletSysRaw, mMap), true);
-        CombatGroup->AddSubSystemInstance(std::make_unique<Game::Systems::SpellSystem>(SM), true);
-        CombatGroup->AddSubSystemInstance(
-            std::make_unique<Game::Systems::NukeAndSpiderMineSystem>(SM, *BulletSysRaw), false);
-        mCombatGroup = CombatGroup.get();
-        SM.RegisterSystemInPhase(Core::ECS::SystemPhase::FixedSimulation, std::move(CombatGroup));
-
-        // 4. Presentation & RenderExtract Systems
-        auto PresentationGroup = std::make_unique<Core::ECS::SystemGroup>(
-            "PresentationAndAudioGroup",
-            Core::ECS::SystemPhase::Presentation,
-            &EM);
-        PresentationGroup->AddSubSystemInstance(
-            std::make_unique<Game::Systems::AnimationSystem>(SM, nullptr, BulletSysRaw), false);
-        PresentationGroup->AddSubSystemInstance(
-            std::make_unique<Game::Systems::DeclarativeAnimationPlayerSystem>(SM, mActiveRegistry, &App.Context().Animation2D()), false);
-        auto AudioRouter = std::make_unique<Core::Audio::ModernAudioEventRouterSystem>(SM, mActiveRegistry, nullptr);
-        mAudioRouter = AudioRouter.get();
-        PresentationGroup->AddSubSystemInstance(std::move(AudioRouter), false);
-        SM.RegisterSystemInPhase(Core::ECS::SystemPhase::Presentation, std::move(PresentationGroup));
-
-        auto RenderPipeline = std::make_unique<Render::ModernRenderPipelineSystem>(SM, mActiveRegistry);
-        mRenderPipeline = RenderPipeline.get();
-        SM.RegisterSystemInPhase(Core::ECS::SystemPhase::RenderExtract, std::move(RenderPipeline));
+        SimCtx.FogOfWar = Handles.FogOfWar;
+        mSpatialGroup = Handles.SpatialAndCommandGroup;
+        mEconomyGroup = Handles.LocomotionAndEconomyGroup;
+        mCombatGroup = Handles.CombatAndRaceGroup;
+        mAudioRouter = Handles.AudioRouter;
+        mRenderPipeline = Handles.RenderPipeline;
     }
 
     void OnShutdown(Engine::EngineApp& /*App*/) override
@@ -271,6 +337,7 @@ public:
     }
 
     const Resource::ModernAssetRegistry* GetAssetRegistry() const noexcept { return mActiveRegistry; }
+    const Engine::ECS::CapabilityTraitRegistry& GetCapabilityTraits() const noexcept { return mTraitRegistry; }
     Render::ModernRenderPipelineSystem* GetRenderPipeline() const noexcept { return mRenderPipeline; }
     Core::Audio::ModernAudioEventRouterSystem* GetAudioRouter() const noexcept { return mAudioRouter; }
     Core::ECS::SystemGroup* GetSpatialGroup() const noexcept { return mSpatialGroup; }
@@ -282,6 +349,7 @@ private:
     std::string mAssetsRPath;
     Resource::ModernAssetRegistry mOwnedAssetRegistry;
     const Resource::ModernAssetRegistry* mActiveRegistry = nullptr;
+    Engine::ECS::CapabilityTraitRegistry mTraitRegistry;
     std::unique_ptr<Game::Map::GameMap> mOwnedFallbackMap;
     Game::Map::GameMap* mMap = nullptr;
 

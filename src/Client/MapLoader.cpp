@@ -1,7 +1,5 @@
 #include "Client/MapLoader.h"
 
-#include "Resource/MpqArchive.h"
-#include "Resource/CascArchive.h"
 #include "Resource/IArchiveReader.h"
 
 #include "Core/Utils/Logger.h"

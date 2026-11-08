@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <vector>
 
 #include "Core/ECS/EntityManager.h"
 #include "Engine/Navigation/NavigationServer2D.h"
@@ -12,9 +13,10 @@ namespace Game::Pathfinding
 {
 
 // ============================================================================
-// NavigationWorldResource (Phase 52 Unified Navigation Resource):
+// NavigationWorldResource (Phase 52 & Phase 62 Unified Navigation Resource):
 // - Converges NavigationService & Engine::Navigation::NavigationServer2D
 //   (replacing the legacy stack-heavy 417-line RegionPathfinder).
+// - Provides unified FindPathViaEngineServer and StepNavigationAgent helpers.
 // ============================================================================
 struct NavigationWorldResource
 {
@@ -56,6 +58,30 @@ struct NavigationWorldResource
             BoundMap = Map;
             RegionsBuilt = true;
         }
+    }
+
+    std::vector<Engine::Navigation::GridCoord2D> FindPathViaEngineServer(
+        Engine::Navigation::GridCoord2D StartTile,
+        Engine::Navigation::GridCoord2D GoalTile,
+        uint8_t FootprintClearance = 1)
+    {
+        if (RegionsBuilt && FootprintClearance == 1 &&
+            !NavServer.AreCellsConnected(StartTile, GoalTile))
+        {
+            return {};
+        }
+        return NavServer.FindPath(StartTile, GoalTile, FootprintClearance);
+    }
+
+    Core::Math::Vec2 StepNavigationAgent(
+        Engine::Navigation::NavigationAgent2D& Agent,
+        Core::Math::Vec2 CurrentWorldPos,
+        float MaxSpeedPxPerSec,
+        float DeltaSeconds,
+        const std::vector<Engine::Navigation::AvoidanceAgent2D>& Neighbors = {})
+    {
+        return NavServer.StepNavigationAgent(
+            Agent, CurrentWorldPos, MaxSpeedPxPerSec, DeltaSeconds, Neighbors);
     }
 
     static const Game::Map::GameMap* ResolveMap(

@@ -81,3 +81,110 @@ private:
 };
 
 } // namespace Resource
+
+// === Consolidated Archive Headers ===
+
+
+#include <string>
+#include <vector>
+#include <optional>
+
+namespace Resource
+{
+
+class FileSystemArchive : public IArchiveReader
+{
+public:
+    FileSystemArchive();
+    ~FileSystemArchive() override;
+
+    bool Open(const std::string& ArchivePath) override;
+    void Close() override;
+
+    bool HasFile(const std::string& FilePath) const override;
+    std::optional<std::vector<uint8_t>> ReadFile(const std::string& FilePath) override;
+    std::vector<ArchiveFileInfo> ListFiles() override;
+
+    bool IsOpen() const override { return mIsOpen; }
+    std::string GetArchiveTypeName() const override { return "FileSystem"; }
+
+private:
+    std::string mBasePath;
+    bool mIsOpen = false;
+    
+    std::string GetFullPath(const std::string& FilePath) const;
+    bool FileExists(const std::string& Path) const;
+};
+
+} // namespace Resource
+
+
+
+#include <string>
+#include <vector>
+#include <optional>
+
+// Forward declare CascLib handle
+typedef void* HANDLE;
+struct _CASC_STORAGE;
+struct _CASC_FILE;
+
+namespace Resource
+{
+
+class CascArchive : public IArchiveReader
+{
+public:
+    CascArchive();
+    ~CascArchive() override;
+
+    bool Open(const std::string& StoragePath) override;
+    void Close() override;
+
+    bool HasFile(const std::string& FilePath) const override;
+    std::optional<std::vector<uint8_t>> ReadFile(const std::string& FilePath) override;
+    std::vector<ArchiveFileInfo> ListFiles() override;
+
+    bool IsOpen() const override { return mIsOpen; }
+    std::string GetArchiveTypeName() const override { return "CASC"; }
+
+private:
+    HANDLE mStorageHandle = nullptr;
+    bool mIsOpen = false;
+    std::string mStoragePath;
+};
+
+} // namespace Resource
+
+
+
+namespace Resource
+{
+
+class MpqArchive : public IArchiveReader
+{
+public:
+    MpqArchive();
+    ~MpqArchive() override;
+
+    bool Open(const std::string& ArchivePath) override;
+    bool OpenWithPatch(const std::string& BasePath, const std::string& PatchPath);
+    void Close() override;
+
+    bool HasFile(const std::string& FilePath) const override;
+    std::optional<std::vector<uint8_t>> ReadFile(const std::string& FilePath) override;
+    std::vector<ArchiveFileInfo> ListFiles() override;
+
+    // Attach an external listfile for filename resolution
+    bool AddListFile(const std::string& FilePath);
+
+    bool IsOpen() const override { return mIsOpen; }
+    std::string GetArchiveTypeName() const override { return "MPQ"; }
+
+private:
+    HANDLE mArchiveHandle = nullptr;
+    bool mIsOpen = false;
+    std::string mArchivePath;
+};
+
+} // namespace Resource
