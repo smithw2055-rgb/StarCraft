@@ -8,7 +8,6 @@
 #include "Game/Systems/GeyserState.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
-#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>

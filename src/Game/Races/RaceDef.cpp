@@ -1035,6 +1035,7 @@ size_t SyncAndVerifyWithModernAssets(const Resource::ModernAssetRegistry& Regist
     SyncRaceList(TerranDefs);
     SyncRaceList(ZergDefs);
     SyncRaceList(ProtossDefs);
+    UnitPrototypeRegistry::Instance().RebuildFromDefaults();
 
     if (OutVerifiedWeapons) {
         *OutVerifiedWeapons = SyncedWeapons;

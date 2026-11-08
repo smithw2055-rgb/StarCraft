@@ -5,26 +5,15 @@
 #include <vector>
 
 #include "Core/ECS/SystemManager.h"
+#include "Core/ECS/WorldSnapshot.h"
 #include "Game/Components.h"
 
 namespace Game::Systems
 {
 
-inline constexpr int kPlayerResourceSlots = 12;
-
-struct PlayerResources
-{
-    int Minerals = 400;
-    int VespeneGas = 100;
-    int SupplyUsed = 0;
-    int SupplyMax = 10;
-};
-
-// World-scoped Singleton Resource storing per-player economy state.
-struct PlayerResourceStore
-{
-    std::array<PlayerResources, kPlayerResourceSlots> Players{};
-};
+using Core::ECS::kPlayerResourceSlots;
+using PlayerResources = Core::ECS::PlayerResources;
+using PlayerResourceStore = Core::ECS::PlayerResourceStore;
 
 class HarvestSystem : public Core::ECS::ISystem
 {

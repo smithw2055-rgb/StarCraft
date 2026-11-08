@@ -10,27 +10,24 @@ bool DeclarativeAnimationPlayerSystem::TransitionToState(
 {
     auto& EM = mSystemMgr.GetEntityManager();
     auto* Anim = EM.GetComponent<DeclarativeAnimatorComponent>(Entity);
-    if (!Anim || !mRegistry) return false;
+    if (!Anim || (!mRegistry && !mAnimServer)) return false;
 
     if (Anim->NoBreakSectionActive && !ForceInterrupt && NewClipName != "Death") {
         return false;
     }
 
-    const auto* Ctrl = mRegistry->FindIScriptControllerByID(Anim->IScriptID);
-    if (!Ctrl) return false;
-
-    auto ClipIt = Ctrl->Clips.find(NewClipName);
-    if (ClipIt == Ctrl->Clips.end()) return false;
+    const auto* ClipPtr = ResolveClip(Anim->IScriptID, NewClipName);
+    if (!ClipPtr) return false;
 
     Anim->CurrentClipName = NewClipName;
     Anim->CurrentTick = 0;
     Anim->TickAccumulator = 0.0f;
     Anim->NoBreakSectionActive = false;
     Anim->Playing = true;
-    Anim->DestroyOnClipEnd = ClipIt->second.DestroysEntityOnEnd;
+    Anim->DestroyOnClipEnd = ClipPtr->DestroysEntityOnEnd;
     Anim->LoopsCompleted = 0;
 
-    EvaluateTickKeyframes(Entity, *Anim, ClipIt->second, 0);
+    EvaluateTickKeyframes(Entity, *Anim, *ClipPtr, 0);
     return true;
 }
 
@@ -38,14 +35,11 @@ void DeclarativeAnimationPlayerSystem::StepEntityTicks(Core::ECS::EntityID Entit
 {
     auto& EM = mSystemMgr.GetEntityManager();
     auto* Anim = EM.GetComponent<DeclarativeAnimatorComponent>(Entity);
-    if (!Anim || !Anim->Playing || !mRegistry) return;
+    if (!Anim || !Anim->Playing || (!mRegistry && !mAnimServer)) return;
 
-    const auto* Ctrl = mRegistry->FindIScriptControllerByID(Anim->IScriptID);
-    if (!Ctrl) return;
-
-    auto ClipIt = Ctrl->Clips.find(Anim->CurrentClipName);
-    if (ClipIt == Ctrl->Clips.end()) return;
-    const auto& Clip = ClipIt->second;
+    const auto* ClipPtr = ResolveClip(Anim->IScriptID, Anim->CurrentClipName);
+    if (!ClipPtr) return;
+    const auto& Clip = *ClipPtr;
 
     if (Anim->CurrentTick == 0 && TicksToAdvance > 0 && Anim->TickAccumulator == 0.0f) {
         EvaluateTickKeyframes(Entity, *Anim, Clip, 0);
@@ -74,7 +68,7 @@ void DeclarativeAnimationPlayerSystem::StepEntityTicks(Core::ECS::EntityID Entit
 
 void DeclarativeAnimationPlayerSystem::Update(float DeltaTime)
 {
-    if (!mRegistry) return;
+    if (!mRegistry && !mAnimServer) return;
     constexpr float kSecPerTick = 1.0f / 24.0f;
     auto& EM = mSystemMgr.GetEntityManager();
 

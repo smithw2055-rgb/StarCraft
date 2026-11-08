@@ -2,11 +2,9 @@
 
 #include "Core/Platform/Platform.h"
 #include "Game/Campaign/CampaignController.h"
-#include "Resource/ArchiveAssetSourceView.h"
-#include "Resource/DataAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
 #include "Resource/UIAssetTypes.h"
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/Draw2D.h"
 #include "UI/Hud.h"
 
@@ -309,11 +307,8 @@ void RenderMatchGameOverOverlay(
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
-#include "Game/Campaign/CampaignController.h"
 
-#include <algorithm>
 #include <filesystem>
-#include <vector>
 
 namespace Game::Client::GameLoop
 {
@@ -401,11 +396,8 @@ void PlayCampaignMessageAudio(
 #include "Resource/GameDataLoader.h"
 #include "Resource/TblDecoder.h"
 
-#include <algorithm>
 #include <cctype>
-#include <cstddef>
 #include <cmath>
-#include <vector>
 
 namespace Game::Client::GameLoop
 {
@@ -651,7 +643,6 @@ const Resource::Graphics::PortraitFrame* CampaignPortraitFrameAt(
 
 // === Consolidated from src/Main/CampaignText.cpp ===
 
-#include <algorithm>
 
 namespace Game::Client::GameLoop
 {

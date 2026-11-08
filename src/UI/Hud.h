@@ -7,8 +7,7 @@
 
 #include "Core/ECS/EntityManager.h"
 #include "Render/GpuTextureHandle.h"
-#include "Resource/GpuImage.h"
-#include "Resource/SpriteAssetCacheView.h"
+#include "Resource/UIAssetTypes.h"
 #include "Resource/UIAssetCacheView.h"
 #include "UI/HudState.h"
 #include "UI/ViewModel/HudViewModel.h"

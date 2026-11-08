@@ -1,6 +1,6 @@
 #include "Main/GameMenuPresentation.h"
 
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/Draw2D.h"
 
 #include <algorithm>

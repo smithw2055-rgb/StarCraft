@@ -1,14 +1,34 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-#include <string>
 #include <optional>
+#include <string>
+#include <vector>
+
+#include "Resource/RawColor.h"
+
+namespace Resource
+{
+
+class PalDecoder
+{
+public:
+    static std::optional<RawPalette> DecodePal(const std::vector<uint8_t>& Data);
+    static std::optional<RawPalette> DecodeWpe(const std::vector<uint8_t>& Data);
+
+    static RawImage ApplyPalette(const std::vector<uint8_t>& PixelData,
+                                 int Width, int Height,
+                                 const RawPalette& Pal,
+                                 RawColor TransparentColor = RawColor(0, 0, 0, 0));
+
+    static RawPalette GetDefaultPalette();
+};
+
+} // namespace Resource
 
 namespace Resource::Graphics
 {
 
-// Independent color type to avoid raylib pollution on the graphics side.
 struct SokoColor
 {
     uint8_t R = 0;
@@ -22,13 +42,8 @@ struct ColorPalette
     SokoColor Colors[256] = {};
 };
 
-// Decode a .pal (768 bytes RGB or 1024 bytes RGBX)
 std::optional<ColorPalette> DecodePal(const std::vector<uint8_t>& Data);
-
-// Decode a .wpe (1024 bytes RGBA, no header)
 std::optional<ColorPalette> DecodeWpe(const std::vector<uint8_t>& Data);
-
-// Synthesised default palette (rainbow spread, alpha 0 on idx 0)
 ColorPalette GetDefaultPalette();
 
 } // namespace Resource::Graphics

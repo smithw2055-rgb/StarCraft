@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "Resource/GameDataLoader.h"
-#include "Game/IScriptVM.h"
+
 
 namespace Resource {
 
@@ -399,7 +399,33 @@ public:
     // Cross-verify 1:1 fidelity between StarCraft/assets-R and raw binary StarCraft/assets
     AssetCrossVerificationReport CrossVerifyWithBinaryAssets(
         const GameDataLoader& BinaryLoader,
-        const Game::IScriptDatabase* BinaryIScriptDB = nullptr) const;
+        const void* BinaryIScriptDB = nullptr) const;
+
+    template <typename IScriptDBType>
+    AssetCrossVerificationReport CrossVerifyWithBinaryAssets(
+        const GameDataLoader& BinaryLoader,
+        const IScriptDBType* BinaryIScriptDB) const
+    {
+        AssetCrossVerificationReport Report = CrossVerifyWithBinaryAssets(BinaryLoader, static_cast<const void*>(nullptr));
+        if (BinaryIScriptDB && BinaryIScriptDB->IsLoaded()) {
+            Report.IScriptControllersChecked = 0;
+            for (const auto& Ctrl : mIScriptControllers) {
+                const auto* BinScript = BinaryIScriptDB->FindScript(static_cast<int>(Ctrl.IScriptID));
+                if (!BinScript) {
+                    ++Report.IScriptMismatches;
+                    Report.Diagnostics.push_back("Missing binary IScript ID " + std::to_string(Ctrl.IScriptID));
+                    continue;
+                }
+                ++Report.IScriptControllersChecked;
+                if (BinScript->AnimationPC.size() != Ctrl.SupportedAnimationSlots) {
+                    ++Report.IScriptMismatches;
+                    Report.Diagnostics.push_back("IScript slot count mismatch on ID " + std::to_string(Ctrl.IScriptID));
+                }
+            }
+            Report.Passed = Report.Passed && (Report.IScriptMismatches == 0);
+        }
+        return Report;
+    }
 
 private:
     bool LoadUnitsJson(const std::string& Path);

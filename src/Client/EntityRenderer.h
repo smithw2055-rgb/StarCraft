@@ -4,8 +4,7 @@
 #include "Game/Components.h"
 #include "Client/Entity.h"
 #include "Render/RenderServer2D.h"
-#include "Resource/DataAssetCacheView.h"
-#include "Resource/SpriteAssetCacheView.h"
+#include "Resource/UIAssetCacheView.h"
 #include <algorithm>
 #include <unordered_map>
 #include <vector>

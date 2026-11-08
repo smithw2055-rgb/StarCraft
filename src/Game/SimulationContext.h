@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "Core/Audio/ModernAudioEventRouter.h"
 #include "Core/ECS/EntityManager.h"
 
 namespace Game::Map
@@ -75,13 +76,7 @@ struct BuildingCompletedEvent
     int BuildingDefID = -1;
 };
 
-struct SoundRequestEvent
-{
-    int SoundID = -1;
-    float WorldX = 0.0f;
-    float WorldY = 0.0f;
-    int Priority = 20;
-};
+using SoundRequestEvent = Core::Audio::SoundRequestEvent;
 
 } // namespace Events
 

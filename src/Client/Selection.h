@@ -3,7 +3,7 @@
 #include "Core/Platform/Platform.h"
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
-#include "Resource/DataAssetCacheView.h"
+#include "Resource/UIAssetCacheView.h"
 #include "Render/Camera2D.h"
 
 #include <vector>

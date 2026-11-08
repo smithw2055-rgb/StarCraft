@@ -8,7 +8,6 @@
 
 #include "Core/Concurrency/JobSystem.h"
 #include "Core/ECS/EntityManager.h"
-#include "Game/Components.h"
 
 namespace Core::ECS
 {
@@ -16,11 +15,10 @@ namespace Core::ECS
 // ============================================================================
 // KinematicsSoAStream: Structure-of-Arrays (SoA) Hot Component Stream
 // Inspired by Unity DOTS Archetype Chunk SoA Layout & SIMD Data Streams:
+// - Zero dependency on Game/Components.h (Phase 49 Engine Decoupling).
 // - Extracts hot locomotion & transform fields (PosX, PosY, PrevPosX, PrevPosY,
 //   VelX, VelY, Speed) into contiguous flat float arrays for auto-vectorization
 //   (SSE/AVX2) and cache-line-friendly parallel batch integration.
-// - Eliminates AoS (Array-of-Structures) cache misses when integrating or
-//   interpolating thousands of RTS units.
 // ============================================================================
 class KinematicsSoAStream
 {
@@ -49,30 +47,45 @@ public:
         mMaxSpeed.clear();
     }
 
+    void PushEntityKinematics(EntityID Id,
+                              float PosX,
+                              float PosY,
+                              float PrevPosX,
+                              float PrevPosY,
+                              float VelX,
+                              float VelY,
+                              float MaxSpeed = 0.0f)
+    {
+        mEntityIds.push_back(Id);
+        mPosX.push_back(PosX);
+        mPosY.push_back(PosY);
+        mPrevPosX.push_back(PrevPosX);
+        mPrevPosY.push_back(PrevPosY);
+        mVelX.push_back(VelX);
+        mVelY.push_back(VelY);
+        mMaxSpeed.push_back(MaxSpeed);
+    }
+
     size_t ExtractFromECS(const EntityManager& EM)
     {
         Clear();
-        const size_t EstCount = EM.GetComponentCount<Game::Components::TransformComponent>();
-        Reserve(EstCount);
-
-        EM.ForEachComponent<Game::Components::TransformComponent>(
-            [&](EntityID Id, const Game::Components::TransformComponent& Trans)
-            {
-                const auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(Id);
-                const auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Id);
-                if (Unit && Unit->HitPoints <= 0)
-                    return;
-
-                mEntityIds.push_back(Id);
-                mPosX.push_back(Trans.Position.X);
-                mPosY.push_back(Trans.Position.Y);
-                mPrevPosX.push_back(Trans.HasPrevPosition ? Trans.PrevPosition.X : Trans.Position.X);
-                mPrevPosY.push_back(Trans.HasPrevPosition ? Trans.PrevPosition.Y : Trans.Position.Y);
-                mVelX.push_back(Path ? Path->CurrentVelocity.X : 0.0f);
-                mVelY.push_back(Path ? Path->CurrentVelocity.Y : 0.0f);
-                mMaxSpeed.push_back(Unit ? Unit->Speed : 0.0f);
-            });
-
+        const auto& Hooks = EngineAdapterHooks::Instance();
+        if (Hooks.ExtractKinematics)
+        {
+            Hooks.ExtractKinematics(
+                EM,
+                [this](EntityID Id,
+                       float PX,
+                       float PY,
+                       float PrevX,
+                       float PrevY,
+                       float VX,
+                       float VY,
+                       float Speed)
+                {
+                    PushEntityKinematics(Id, PX, PY, PrevX, PrevY, VX, VY, Speed);
+                });
+        }
         return mEntityIds.size();
     }
 
@@ -142,16 +155,14 @@ public:
 
     void WriteBackToECS(EntityManager& EM) const
     {
+        const auto& Hooks = EngineAdapterHooks::Instance();
+        if (!Hooks.WriteBackKinematics)
+            return;
+
         const size_t Count = mEntityIds.size();
         for (size_t I = 0; I < Count; ++I)
         {
-            const EntityID Id = mEntityIds[I];
-            if (auto* Trans = EM.GetComponent<Game::Components::TransformComponent>(Id))
-            {
-                Trans->PrevPosition = {mPrevPosX[I], mPrevPosY[I]};
-                Trans->HasPrevPosition = true;
-                Trans->Position = {mPosX[I], mPosY[I]};
-            }
+            Hooks.WriteBackKinematics(EM, mEntityIds[I], mPosX[I], mPosY[I], mPrevPosX[I], mPrevPosY[I]);
         }
     }
 

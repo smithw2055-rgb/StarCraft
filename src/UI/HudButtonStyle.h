@@ -3,8 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "Render/Color.h"
-#include "Resource/GpuImage.h"
+#include "Core/Color.h"
 #include "Resource/UIAssetTypes.h"
 #include "UI/HudState.h"
 

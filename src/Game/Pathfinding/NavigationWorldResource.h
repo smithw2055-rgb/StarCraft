@@ -3,23 +3,23 @@
 #include <algorithm>
 
 #include "Core/ECS/EntityManager.h"
+#include "Engine/Navigation/NavigationServer2D.h"
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/NavigationService.h"
-#include "Game/Pathfinding/RegionPathfinder.h"
 #include "Game/SimulationContext.h"
 
 namespace Game::Pathfinding
 {
 
 // ============================================================================
-// NavigationWorldResource: World-scoped navigation & region pathfinding state
-// Eliminates global static sNavigationService / sRegionPathfinder / gCmdMap
-// cross-talk when multiple ECS Worlds execute concurrently or in lockstep tests.
+// NavigationWorldResource (Phase 52 Unified Navigation Resource):
+// - Converges NavigationService & Engine::Navigation::NavigationServer2D
+//   (replacing the legacy stack-heavy 417-line RegionPathfinder).
 // ============================================================================
 struct NavigationWorldResource
 {
     NavigationService NavService;
-    RegionPathfinder RegionPath;
+    Engine::Navigation::NavigationServer2D NavServer;
     const Game::Map::GameMap* BoundMap = nullptr;
     uint32_t BoundGridVersion = 0;
     bool RegionsBuilt = false;
@@ -40,18 +40,19 @@ struct NavigationWorldResource
 
         if (MapChanged || !RegionsBuilt)
         {
-            RegionPathfinder::MapContext Ctx;
-            Ctx.MapWidth = std::min(Map->GetWidth(), RegionPathfinder::kMaxMapWidth);
-            Ctx.MapHeight = std::min(Map->GetHeight(), RegionPathfinder::kMaxMapHeight);
-            for (int y = 0; y < Ctx.MapHeight; ++y)
+            const int W = std::max(1, Map->GetWidth());
+            const int H = std::max(1, Map->GetHeight());
+            NavServer.InitializeGrid(W, H, 32.0f);
+            for (int y = 0; y < H; ++y)
             {
-                for (int x = 0; x < Ctx.MapWidth; ++x)
+                for (int x = 0; x < W; ++x)
                 {
-                    Ctx.Walkable[x][y] = Map->IsWalkable(x, y);
-                    Ctx.TileRegion[x][y] = -1;
+                    NavServer.SetCellBlocked(x, y, !Map->IsWalkable(x, y));
+                    NavServer.SetCellElevation(
+                        x, y, static_cast<uint8_t>(Map->GetGroundHeight(x, y)), false);
                 }
             }
-            RegionPath.BuildRegions(Ctx);
+            NavServer.RebuildConnectedRegions(1u);
             BoundMap = Map;
             RegionsBuilt = true;
         }

@@ -45,3 +45,12 @@ namespace Colors
 }
 
 } // namespace Core
+
+namespace Render
+{
+using Color = Core::Color;
+namespace Colors
+{
+    using namespace Core::Colors;
+}
+} // namespace Render

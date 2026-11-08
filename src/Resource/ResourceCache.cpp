@@ -1,11 +1,8 @@
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
-#include "Resource/ArchiveAssetSourceView.h"
-#include "Resource/DataAssetCacheView.h"
-#include "Resource/SpriteAssetCacheView.h"
-#include "Resource/TilesetAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
+#include "Resource/TilesetAssetCacheView.h"
 
 #include <cctype>
 #include <cstddef>
@@ -346,18 +343,11 @@ GpuImage ResourceCache::GetUIConsoleOver() { return mUI.ConsoleOver; }
 
 
 // === Consolidated from src/Resource/ResourceCacheInitialize.cpp ===
-#include "Resource/ResourceCache.h"
 
-#include "Core/Utils/Logger.h"
 
 #include <algorithm>
-#include <cctype>
-#include <cstdint>
 #include <filesystem>
-#include <optional>
-#include <string>
 #include <unordered_set>
-#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -523,22 +513,13 @@ bool ResourceCache::Initialize(const std::string& GameInstallPath)
 
 
 // === Consolidated from src/Resource/ResourceCacheSources.cpp ===
-#include "Resource/ResourceCache.h"
 
-#include "Core/Utils/Logger.h"
 
 #include "Resource/CascArchive.h"
 #include "Resource/FileSystemArchive.h"
 #include "Resource/MpqArchive.h"
 
-#include <algorithm>
-#include <cctype>
-#include <filesystem>
 #include <memory>
-#include <optional>
-#include <string>
-#include <unordered_set>
-#include <vector>
 
 namespace Resource::Graphics
 {

@@ -8,7 +8,7 @@
 
 #include "Core/Math/Vec2.h"
 #include "Resource/Cv5Decoder.h"
-#include "Resource/RgbaImage.h"
+#include "Resource/RawColor.h"
 #include "Resource/Vf4Decoder.h"
 
 namespace Render {

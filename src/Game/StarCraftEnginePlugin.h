@@ -167,7 +167,7 @@ public:
         PresentationGroup->AddSubSystemInstance(
             std::make_unique<Game::Systems::AnimationSystem>(SM, nullptr, BulletSysRaw), false);
         PresentationGroup->AddSubSystemInstance(
-            std::make_unique<Game::Systems::DeclarativeAnimationPlayerSystem>(SM, mActiveRegistry), false);
+            std::make_unique<Game::Systems::DeclarativeAnimationPlayerSystem>(SM, mActiveRegistry, &App.Context().Animation2D()), false);
         auto AudioRouter = std::make_unique<Core::Audio::ModernAudioEventRouterSystem>(SM, mActiveRegistry, nullptr);
         mAudioRouter = AudioRouter.get();
         PresentationGroup->AddSubSystemInstance(std::move(AudioRouter), false);

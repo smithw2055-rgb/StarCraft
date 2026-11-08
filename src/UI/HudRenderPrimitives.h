@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/Draw2D.h"
-#include "Resource/GpuImage.h"
+#include "Resource/UIAssetTypes.h"
 #include "UI/HudLayout.h"
 #include "UI/HudText.h"
 

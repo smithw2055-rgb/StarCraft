@@ -320,7 +320,7 @@ if(BUILD_MAP_RESOURCE_ANALYZER)
         src/Resource/GameDataLoader.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/TblDecoder.cpp
-        src/Resource/PalDecoder.cpp
+        src/Resource/Palette.cpp
         src/Game/IScriptVM.cpp
         src/Game/Map/ChkParser.cpp
         src/Core/Utils/Logger.cpp
@@ -381,67 +381,7 @@ function(starcraft_configure_test_target TARGET_NAME)
     endif()
 endfunction()
 
-option(BUILD_ISCRIPT_ANGELSCRIPT_TOOL "Build IScript to AngelScript source exporter" ON)
-if(BUILD_ISCRIPT_ANGELSCRIPT_TOOL)
-    add_executable(IScriptToAngelScript
-        src/Game/IScriptToAngelScript.cpp
-        src/Game/IScriptAngelScriptExporter.cpp
-        src/Game/IScriptVM.cpp
-        src/Core/Utils/Logger.cpp
-    )
-
-    target_include_directories(IScriptToAngelScript PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(IScriptToAngelScript PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(IScriptToAngelScript PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(IScriptToAngelScript PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-
-    add_executable(IScriptAngelScriptExportTest
-        tests/Regression/IScriptAngelScriptExportTest.cpp
-        src/Game/IScriptAngelScriptExporter.cpp
-        src/Game/IScriptVM.cpp
-        src/Core/Utils/Logger.cpp
-    )
-
-    target_include_directories(IScriptAngelScriptExportTest PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    if(MSVC)
-        target_compile_options(IScriptAngelScriptExportTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(IScriptAngelScriptExportTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(IScriptAngelScriptExportTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-
-    if(HAS_ANGELSCRIPT)
-        add_executable(IScriptAngelScriptCompileTest
-            tests/Regression/IScriptAngelScriptCompileTest.cpp
-            src/Game/IScriptAngelScriptExporter.cpp
-            src/Game/IScriptVM.cpp
-            src/Core/Utils/Logger.cpp
-        )
-
-        target_include_directories(IScriptAngelScriptCompileTest PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-            ${CMAKE_SOURCE_DIR}/third_party/AngelScript/angelscript/include)
-        target_link_libraries(IScriptAngelScriptCompileTest PRIVATE
-            ${ANGELSCRIPT_TARGET})
-
-        if(MSVC)
-            target_compile_options(IScriptAngelScriptCompileTest PRIVATE /W4 /utf-8 /permissive-)
-            target_compile_definitions(IScriptAngelScriptCompileTest PRIVATE
-                _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-        else()
-            target_compile_options(IScriptAngelScriptCompileTest PRIVATE -Wall -Wextra -Wpedantic)
-        endif()
-    endif()
-endif()
+# Phase 51: Legacy AngelScript exporter retired in favor of declarative AnimationServer2D clips
 
 option(BUILD_COMBAT_RULES_TEST "Build combat rule regression test" ON)
 if(BUILD_COMBAT_RULES_TEST)
@@ -521,7 +461,7 @@ if(BUILD_SPRITE_IMAGE_DATA_TEST)
         src/Resource/GrpDecoder.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
-        src/Resource/PalDecoder.cpp
+        src/Resource/Palette.cpp
         src/Resource/TblDecoder.cpp
     )
 
@@ -1129,8 +1069,6 @@ endif()
 foreach(_StarCraftRegressionTest IN ITEMS
     Phase2EngineModernizationTest
     EcsFoundationModernizationTest
-    IScriptAngelScriptExportTest
-    IScriptAngelScriptCompileTest
     AnimationStateTest
     AnimationRuntimeDirectionTest
     MovementCommandTest
@@ -1215,7 +1153,6 @@ if(BUILD_GAME_CLIENT)
         src/Resource/Vx4Decoder.cpp
         src/Resource/Vf4Decoder.cpp
         src/Resource/DatDecoder.cpp
-        src/Resource/PalDecoder.cpp
         src/Resource/TblDecoder.cpp
         src/Game/Map/ChkParser.cpp
         src/Client/MapLoader.cpp
@@ -1621,7 +1558,7 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         src/Resource/IArchiveReader.cpp
         src/Resource/FileSystemArchive.cpp
         src/Resource/DatDecoder.cpp
-        src/Resource/PalDecoder.cpp
+        src/Resource/Palette.cpp
         src/Resource/TblDecoder.cpp
         src/Resource/Cv5Decoder.cpp
         src/Resource/Vf4Decoder.cpp
@@ -1775,4 +1712,12 @@ option(BUILD_PHASE43_TO_48_ENGINE_GENERALIZATION_TEST "Build Phase 43-48 Engine 
 if(BUILD_PHASE43_TO_48_ENGINE_GENERALIZATION_TEST)
     starcraft_add_modern_phase_test(Phase43To48EngineGeneralizationAndSimplificationTest
         tests/Regression/Phase43To48EngineGeneralizationAndSimplificationTest.cpp)
+endif()
+
+option(BUILD_PHASE49_TO_54_ENGINE_ZERO_DEPENDENCY_TEST "Build Phase 49-54 Zero-Dependency Engine & Unification test" ON)
+if(BUILD_PHASE49_TO_54_ENGINE_ZERO_DEPENDENCY_TEST)
+    starcraft_add_modern_phase_test(Phase49To54EngineZeroDependencyAndUnificationTest
+        tests/Regression/Phase49To54EngineZeroDependencyAndUnificationTest.cpp
+        src/Game/AI/AIBrain.cpp
+        src/Resource/Palette.cpp)
 endif()

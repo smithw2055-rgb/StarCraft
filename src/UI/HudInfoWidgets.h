@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "Render/Color.h"
-#include "Resource/GpuImage.h"
+#include "Core/Color.h"
+#include "Resource/UIAssetTypes.h"
 #include "UI/HudLayout.h"
 #include "UI/HudRenderPrimitives.h"
 #include "UI/HudText.h"

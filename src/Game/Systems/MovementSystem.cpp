@@ -7,7 +7,6 @@
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/AStar.h"
-#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Core/Concurrency/JobSystem.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/Logger.h"

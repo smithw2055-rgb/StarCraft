@@ -8,6 +8,15 @@
 #include <cstdlib>
 #include <memory>
 
+namespace Core::Platform
+{
+    bool IsKeyPressed(int) { return false; }
+    bool IsKeyDown(int) { return false; }
+    bool IsKeyReleased(int) { return false; }
+    int GetWindowWidth() { return 1280; }
+    int GetWindowHeight() { return 720; }
+}
+
 namespace
 {
 

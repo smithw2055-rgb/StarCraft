@@ -1146,4 +1146,664 @@ struct PendingTransportUnloadComponent
 
 } // namespace Game::Components
 
-#include "Game/ComponentBinarySerializers.h"
+namespace Core::ECS
+{
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::CommandComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::CommandComponent& Cmd, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendVectorPodBytes(Buf, Cmd.CommandQueue);
+        Detail::AppendPodBytes(Buf, Cmd.CurrentCommand);
+        Detail::AppendPodBytes(Buf, Cmd.TargetPosition);
+        Detail::AppendPodBytes(Buf, Cmd.TargetEntityID);
+        Detail::AppendPodBytes(Buf, Cmd.PatrolAnchor);
+        Detail::AppendPodBytes(Buf, Cmd.HasPatrolAnchor);
+        Detail::AppendVectorPodBytes(Buf, Cmd.Orders);
+        Detail::AppendPodBytes(Buf, Cmd.CurrentOrderIndex);
+        Detail::AppendPodBytes(Buf, Cmd.RallyPoint);
+        Detail::AppendPodBytes(Buf, Cmd.HasRallyPoint);
+        Detail::AppendPodBytes(Buf, Cmd.RallyDisplayTimer);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::CommandComponent& Cmd)
+    {
+        return Detail::ReadVectorPodBytes(Buf, Cursor, Cmd.CommandQueue) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.CurrentCommand) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.TargetPosition) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.TargetEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.PatrolAnchor) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.HasPatrolAnchor) &&
+               Detail::ReadVectorPodBytes(Buf, Cursor, Cmd.Orders) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.CurrentOrderIndex) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.RallyPoint) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.HasRallyPoint) &&
+               Detail::ReadPodBytes(Buf, Cursor, Cmd.RallyDisplayTimer);
+    }
+};
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::PathfindingComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::PathfindingComponent& Path, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendVectorPodBytes(Buf, Path.Path);
+        Detail::AppendPodBytes(Buf, Path.PathIndex);
+        Detail::AppendPodBytes(Buf, Path.NodeTolerance);
+        Detail::AppendPodBytes(Buf, Path.RequestedDestination);
+        Detail::AppendPodBytes(Buf, Path.RequestedTargetEntityID);
+        Detail::AppendPodBytes(Buf, Path.RequestedIgnoreEntityID);
+        Detail::AppendPodBytes(Buf, Path.RequestedAdditionalIgnoreEntityID);
+        Detail::AppendPodBytes(Buf, Path.RepathFailCount);
+        Detail::AppendPodBytes(Buf, Path.LastRepathTime);
+        Detail::AppendPodBytes(Buf, Path.BlockedByEntityID);
+        Detail::AppendPodBytes(Buf, Path.LastPathStatus);
+        Detail::AppendPodBytes(Buf, Path.LastPathEndReason);
+        Detail::AppendPodBytes(Buf, Path.ResolvedPathDestination);
+        Detail::AppendPodBytes(Buf, Path.NavigationVersion);
+        Detail::AppendPodBytes(Buf, Path.LastPathExpandedCells);
+        Detail::AppendPodBytes(Buf, Path.CurrentVelocity);
+        Detail::AppendPodBytes(Buf, Path.FixedPosition);
+        Detail::AppendPodBytes(Buf, Path.FixedVelocity);
+        Detail::AppendPodBytes(Buf, Path.HasFixedPosition);
+        Detail::AppendPodBytes(Buf, Path.CurrentSpeed);
+        Detail::AppendPodBytes(Buf, Path.TargetSpeed);
+        Detail::AppendPodBytes(Buf, Path.Acceleration);
+        Detail::AppendPodBytes(Buf, Path.TurnRate);
+        Detail::AppendPodBytes(Buf, Path.FacingAngle);
+        Detail::AppendPodBytes(Buf, Path.FriendlyYieldVector);
+        Detail::AppendPodBytes(Buf, Path.FriendlyYieldAnchor);
+        Detail::AppendPodBytes(Buf, Path.HasFriendlyYieldAnchor);
+        Detail::AppendPodBytes(Buf, Path.IsAir);
+        Detail::AppendPodBytes(Buf, Path.CollisionRadius);
+        Detail::AppendPodBytes(Buf, Path.HasCollisionBounds);
+        Detail::AppendPodBytes(Buf, Path.CollisionLeft);
+        Detail::AppendPodBytes(Buf, Path.CollisionUp);
+        Detail::AppendPodBytes(Buf, Path.CollisionRight);
+        Detail::AppendPodBytes(Buf, Path.CollisionDown);
+        Detail::AppendPodBytes(Buf, Path.HasRecentMoveFailure);
+        Detail::AppendPodBytes(Buf, Path.RecentFailedMoveTarget);
+        Detail::AppendPodBytes(Buf, Path.RecentMoveFailureCooldown);
+        Detail::AppendPodBytes(Buf, Path.StallTimer);
+        Detail::AppendPodBytes(Buf, Path.LastWaypointDistance);
+        Detail::AppendPodBytes(Buf, Path.HasLastWaypointDistance);
+        Detail::AppendPodBytes(Buf, Path.DestinationStallTimer);
+        Detail::AppendPodBytes(Buf, Path.LastDestinationDistance);
+        Detail::AppendPodBytes(Buf, Path.HasLastDestinationDistance);
+        Detail::AppendPodBytes(Buf, Path.StallTicks);
+        Detail::AppendPodBytes(Buf, Path.DestinationStallTicks);
+        Detail::AppendPodBytes(Buf, Path.RecentMoveFailureTicks);
+        Detail::AppendPodBytes(Buf, Path.ConsecutiveMoveFailures);
+        Detail::AppendPodBytes(Buf, Path.RecentMoveFailureNavigationVersion);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::PathfindingComponent& Path)
+    {
+        return Detail::ReadVectorPodBytes(Buf, Cursor, Path.Path) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.PathIndex) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.NodeTolerance) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RequestedDestination) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RequestedTargetEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RequestedIgnoreEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RequestedAdditionalIgnoreEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RepathFailCount) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastRepathTime) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.BlockedByEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastPathStatus) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastPathEndReason) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.ResolvedPathDestination) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.NavigationVersion) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastPathExpandedCells) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CurrentVelocity) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.FixedPosition) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.FixedVelocity) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasFixedPosition) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CurrentSpeed) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.TargetSpeed) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.Acceleration) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.TurnRate) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.FacingAngle) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.FriendlyYieldVector) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.FriendlyYieldAnchor) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasFriendlyYieldAnchor) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.IsAir) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CollisionRadius) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasCollisionBounds) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CollisionLeft) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CollisionUp) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CollisionRight) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.CollisionDown) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasRecentMoveFailure) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RecentFailedMoveTarget) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RecentMoveFailureCooldown) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.StallTimer) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastWaypointDistance) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasLastWaypointDistance) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.DestinationStallTimer) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.LastDestinationDistance) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.HasLastDestinationDistance) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.StallTicks) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.DestinationStallTicks) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RecentMoveFailureTicks) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.ConsecutiveMoveFailures) &&
+               Detail::ReadPodBytes(Buf, Cursor, Path.RecentMoveFailureNavigationVersion);
+    }
+};
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::BuildingComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::BuildingComponent& Bldg, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendPodBytes(Buf, Bldg.IsBuilding);
+        Detail::AppendPodBytes(Buf, Bldg.BuildProgress);
+        Detail::AppendPodBytes(Buf, Bldg.TotalBuildTime);
+        Detail::AppendPodBytes(Buf, Bldg.ConstructionHitPointAccumulator);
+        Detail::AppendPodBytes(Buf, Bldg.ConstructionShieldAccumulator);
+        Detail::AppendPodBytes(Buf, Bldg.IsAddon);
+        Detail::AppendPodBytes(Buf, Bldg.CanLiftOff);
+        Detail::AppendPodBytes(Buf, Bldg.IsLifted);
+        Detail::AppendPodBytes(Buf, Bldg.FlightPhase);
+        Detail::AppendPodBytes(Buf, Bldg.FlightAnimationComplete);
+        Detail::AppendPodBytes(Buf, Bldg.FlightHeightTransitionActive);
+        Detail::AppendPodBytes(Buf, Bldg.FlightHeightTransitionElapsed);
+        Detail::AppendPodBytes(Buf, Bldg.FlightVisualHeight);
+        Detail::AppendPodBytes(Buf, Bldg.RequiresCreep);
+        Detail::AppendPodBytes(Buf, Bldg.RequiresPylon);
+        Detail::AppendPodBytes(Buf, Bldg.HasPylonPower);
+        Detail::AppendPodBytes(Buf, Bldg.UnderConstruction);
+        Detail::AppendPodBytes(Buf, Bldg.ProtossPhase);
+        Detail::AppendPodBytes(Buf, Bldg.ProtossPhaseSignal);
+        Detail::AppendPodBytes(Buf, Bldg.ProtossPhaseElapsed);
+        Detail::AppendPodBytes(Buf, Bldg.IsOrganic);
+        Detail::AppendPodBytes(Buf, Bldg.BuilderUnitID);
+        Detail::AppendVectorPodBytes(Buf, Bldg.AssistantBuilderUnitIDs);
+        Detail::AppendPodBytes(Buf, Bldg.AddonID);
+        Detail::AppendPodBytes(Buf, Bldg.BuildingDefID);
+        Detail::AppendPodBytes(Buf, Bldg.LarvaCount);
+        Detail::AppendPodBytes(Buf, Bldg.LarvaTimer);
+        Detail::AppendPodBytes(Buf, Bldg.BuildTimeRemaining);
+        Detail::AppendPodBytes(Buf, Bldg.ResearchingID);
+        Detail::AppendPodBytes(Buf, Bldg.IsResearching);
+        Detail::AppendPodBytes(Buf, Bldg.ResearchPlayer);
+        Detail::AppendPodBytes(Buf, Bldg.BurnDamageAccumulator);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::BuildingComponent& Bldg)
+    {
+        return Detail::ReadPodBytes(Buf, Cursor, Bldg.IsBuilding) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.BuildProgress) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.TotalBuildTime) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ConstructionHitPointAccumulator) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ConstructionShieldAccumulator) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.IsAddon) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.CanLiftOff) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.IsLifted) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.FlightPhase) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.FlightAnimationComplete) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.FlightHeightTransitionActive) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.FlightHeightTransitionElapsed) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.FlightVisualHeight) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.RequiresCreep) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.RequiresPylon) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.HasPylonPower) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.UnderConstruction) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ProtossPhase) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ProtossPhaseSignal) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ProtossPhaseElapsed) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.IsOrganic) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.BuilderUnitID) &&
+               Detail::ReadVectorPodBytes(Buf, Cursor, Bldg.AssistantBuilderUnitIDs) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.AddonID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.BuildingDefID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.LarvaCount) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.LarvaTimer) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.BuildTimeRemaining) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ResearchingID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.IsResearching) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.ResearchPlayer) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bldg.BurnDamageAccumulator);
+    }
+};
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::ResourceComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::ResourceComponent& Res, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendPodBytes(Buf, Res.Type);
+        Detail::AppendPodBytes(Buf, Res.Amount);
+        Detail::AppendPodBytes(Buf, Res.MaxAmount);
+        Detail::AppendPodBytes(Buf, Res.IsDepleted);
+        Detail::AppendPodBytes(Buf, Res.ActiveGathererEntityID);
+        Detail::AppendVectorPodBytes(Buf, Res.QueuedGatherers);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::ResourceComponent& Res)
+    {
+        return Detail::ReadPodBytes(Buf, Cursor, Res.Type) &&
+               Detail::ReadPodBytes(Buf, Cursor, Res.Amount) &&
+               Detail::ReadPodBytes(Buf, Cursor, Res.MaxAmount) &&
+               Detail::ReadPodBytes(Buf, Cursor, Res.IsDepleted) &&
+               Detail::ReadPodBytes(Buf, Cursor, Res.ActiveGathererEntityID) &&
+               Detail::ReadVectorPodBytes(Buf, Cursor, Res.QueuedGatherers);
+    }
+};
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::BulletComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::BulletComponent& Bul, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendPodBytes(Buf, Bul.SourceEntityID);
+        Detail::AppendPodBytes(Buf, Bul.Behavior);
+        Detail::AppendPodBytes(Buf, Bul.Splash);
+        Detail::AppendPodBytes(Buf, Bul.SplashInnerRadius);
+        Detail::AppendPodBytes(Buf, Bul.SplashMediumRadius);
+        Detail::AppendPodBytes(Buf, Bul.SplashRadius);
+        Detail::AppendPodBytes(Buf, Bul.BaseDamage);
+        Detail::AppendPodBytes(Buf, Bul.DamageKind);
+        Detail::AppendPodBytes(Buf, Bul.Speed);
+        Detail::AppendPodBytes(Buf, Bul.MaxLifetime);
+        Detail::AppendPodBytes(Buf, Bul.LifetimeRemaining);
+        Detail::AppendPodBytes(Buf, Bul.DamageTickAccumulator);
+        Detail::AppendPodBytes(Buf, Bul.Velocity);
+        Detail::AppendPodBytes(Buf, Bul.TargetPos);
+        Detail::AppendPodBytes(Buf, Bul.TargetPositionOffset);
+        Detail::AppendPodBytes(Buf, Bul.SplashLineStart);
+        Detail::AppendPodBytes(Buf, Bul.SplashLineEnd);
+        Detail::AppendPodBytes(Buf, Bul.TargetEntityID);
+        Detail::AppendPodBytes(Buf, Bul.PreviousBounceTargetEntityID);
+        Detail::AppendPodBytes(Buf, Bul.RemainingBounces);
+        Detail::AppendPodBytes(Buf, Bul.BounceDamageDivisor);
+        Detail::AppendPodBytes(Buf, Bul.CanTargetGround);
+        Detail::AppendPodBytes(Buf, Bul.CanTargetAir);
+        Detail::AppendPodBytes(Buf, Bul.HasHit);
+        Detail::AppendPodBytes(Buf, Bul.DamageUpgradeBonus);
+        Detail::AppendPodBytes(Buf, Bul.HitCount);
+        Detail::AppendPodBytes(Buf, Bul.IsRangedAttack);
+        Detail::AppendPodBytes(Buf, Bul.MissedAtLaunch);
+        Detail::AppendPodBytes(Buf, Bul.PlayImpactAnimation);
+        Detail::AppendPodBytes(Buf, Bul.AppliesAcidSpores);
+        Detail::AppendPodBytes(Buf, Bul.SelfDestructSourceOnHit);
+        Detail::AppendPodBytes(Buf, Bul.ImpactAtProjectilePosition);
+        Detail::AppendPodBytes(Buf, Bul.FollowTargetPositionOffset);
+        Detail::AppendPodBytes(Buf, Bul.DamageDrivenByIScript);
+        Detail::AppendVectorPodBytes(Buf, Bul.IScriptHitEntityIDs);
+        Detail::AppendPodBytes(Buf, Bul.ReachedIScriptDamageEndpoint);
+        Detail::AppendPodBytes(Buf, Bul.IScriptEndpointGraceRemaining);
+        Detail::AppendPodBytes(Buf, Bul.AwaitingLaunchSignal);
+        Detail::AppendPodBytes(Buf, Bul.VisualAnimationOverride);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::BulletComponent& Bul)
+    {
+        return Detail::ReadPodBytes(Buf, Cursor, Bul.SourceEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.Behavior) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.Splash) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SplashInnerRadius) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SplashMediumRadius) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SplashRadius) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.BaseDamage) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.DamageKind) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.Speed) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.MaxLifetime) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.LifetimeRemaining) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.DamageTickAccumulator) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.Velocity) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.TargetPos) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.TargetPositionOffset) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SplashLineStart) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SplashLineEnd) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.TargetEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.PreviousBounceTargetEntityID) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.RemainingBounces) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.BounceDamageDivisor) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.CanTargetGround) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.CanTargetAir) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.HasHit) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.DamageUpgradeBonus) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.HitCount) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.IsRangedAttack) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.MissedAtLaunch) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.PlayImpactAnimation) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.AppliesAcidSpores) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.SelfDestructSourceOnHit) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.ImpactAtProjectilePosition) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.FollowTargetPositionOffset) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.DamageDrivenByIScript) &&
+               Detail::ReadVectorPodBytes(Buf, Cursor, Bul.IScriptHitEntityIDs) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.ReachedIScriptDamageEndpoint) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.IScriptEndpointGraceRemaining) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.AwaitingLaunchSignal) &&
+               Detail::ReadPodBytes(Buf, Cursor, Bul.VisualAnimationOverride);
+    }
+};
+
+template <>
+struct CustomComponentBinarySerializer<Game::Components::PendingTransportBoardingComponent>
+{
+    static constexpr bool kSupported = true;
+
+    static void Serialize(const Game::Components::PendingTransportBoardingComponent& Comp, std::vector<uint8_t>& Buf)
+    {
+        Detail::AppendVectorPodBytes(Buf, Comp.PassengerIDs);
+        Detail::AppendPodBytes(Buf, Comp.CurrentIndex);
+    }
+
+    static bool Deserialize(const std::vector<uint8_t>& Buf, size_t& Cursor, Game::Components::PendingTransportBoardingComponent& Comp)
+    {
+        return Detail::ReadVectorPodBytes(Buf, Cursor, Comp.PassengerIDs) &&
+               Detail::ReadPodBytes(Buf, Cursor, Comp.CurrentIndex);
+    }
+};
+
+} // namespace Core::ECS
+
+
+namespace Game::Components::Detail
+{
+inline void ExtractStarCraftKinematics(
+    const Core::ECS::EntityManager& EM,
+    const Core::ECS::EngineAdapterHooks::KinematicsEmitFn& Emit)
+{
+    EM.ForEachComponent<TransformComponent>(
+        [&](Core::ECS::EntityID Id, const TransformComponent& Trans)
+        {
+            const auto* Path = EM.GetComponent<PathfindingComponent>(Id);
+            const auto* Unit = EM.GetComponent<UnitComponent>(Id);
+            if (Unit && Unit->HitPoints <= 0)
+                return;
+
+            Emit(Id,
+                 Trans.Position.X,
+                 Trans.Position.Y,
+                 Trans.HasPrevPosition ? Trans.PrevPosition.X : Trans.Position.X,
+                 Trans.HasPrevPosition ? Trans.PrevPosition.Y : Trans.Position.Y,
+                 Path ? Path->CurrentVelocity.X : 0.0f,
+                 Path ? Path->CurrentVelocity.Y : 0.0f,
+                 Unit ? Unit->Speed : 0.0f);
+        });
+}
+
+inline void WriteBackStarCraftKinematics(
+    Core::ECS::EntityManager& EM,
+    Core::ECS::EntityID Id,
+    float PosX,
+    float PosY,
+    float PrevX,
+    float PrevY)
+{
+    if (auto* Trans = EM.GetComponent<TransformComponent>(Id))
+    {
+        Trans->PrevPosition = {PrevX, PrevY};
+        Trans->HasPrevPosition = true;
+        Trans->Position = {PosX, PosY};
+    }
+}
+
+inline void InitStarCraftSpawnedUnitPrefab(
+    Core::ECS::EntityManager& EM,
+    Core::ECS::EntityID Entity,
+    float PosX,
+    float PosY,
+    int32_t OwnerPlayerID,
+    uint32_t UnitID,
+    uint32_t MaxHP,
+    bool ShieldsEnabled,
+    uint32_t MaxShields,
+    uint32_t ImageID,
+    uint8_t ElevationSortLayer)
+{
+    EM.AddComponent<TransformComponent>(Entity).Position = {PosX, PosY};
+    EM.AddComponent<PlayerComponent>(Entity).PlayerID = OwnerPlayerID;
+
+    auto& UnitComp = EM.AddComponent<UnitComponent>(Entity);
+    UnitComp.ChkUnitID = static_cast<int>(UnitID);
+    UnitComp.HitPoints = static_cast<int>(MaxHP);
+    UnitComp.MaxHitPoints = static_cast<int>(MaxHP);
+    UnitComp.ShieldPoints = ShieldsEnabled ? static_cast<int>(MaxShields) : 0;
+    UnitComp.MaxShieldPoints = ShieldsEnabled ? static_cast<int>(MaxShields) : 0;
+
+    auto& RenderComp = EM.AddComponent<RenderComponent>(Entity);
+    RenderComp.ImageID = ImageID;
+    RenderComp.Visible = true;
+    RenderComp.Layer = (ElevationSortLayer >= 12) ? RenderLayer::AirUnits : RenderLayer::Units;
+}
+
+inline void ExtractStarCraftRenderEntities(
+    const Core::ECS::EntityManager& EM,
+    const Core::ECS::EngineAdapterHooks::RenderEntityEmitFn& Emit)
+{
+    std::vector<Core::ECS::ExtractedOverlaySubnode> Overlays;
+    EM.ForEachComponent<TransformComponent, RenderComponent>(
+        [&](Core::ECS::EntityID Entity,
+            const TransformComponent& Trans,
+            const RenderComponent& RenderComp)
+        {
+            if (!RenderComp.Visible)
+                return;
+
+            const auto* UnitComp = EM.GetComponent<UnitComponent>(Entity);
+            const auto* PlayerComp = EM.GetComponent<PlayerComponent>(Entity);
+            const uint8_t TeamColorID = PlayerComp ? static_cast<uint8_t>(PlayerComp->PlayerID & 0xFF) : 0;
+            const uint8_t ElevationLayer = (RenderComp.Layer == RenderLayer::AirUnits) ? 12 : 4;
+            const int32_t ChkUnitID = UnitComp ? UnitComp->ChkUnitID : -1;
+
+            Overlays.clear();
+            if (const auto* TreeComp = EM.GetComponent<ImageTreeComponent>(Entity))
+            {
+                for (const auto& Sub : TreeComp->Nodes)
+                {
+                    if (!Sub.Visible || Sub.HiddenByBurrow)
+                        continue;
+                    Overlays.push_back({
+                        static_cast<uint32_t>(Sub.ImageID),
+                        Sub.Offset.X,
+                        Sub.Offset.Y,
+                        Sub.DrawAbove
+                    });
+                }
+            }
+
+            Emit(Entity,
+                 Trans.Position.X + RenderComp.VisualOffset.X,
+                 Trans.Position.Y + RenderComp.VisualOffset.Y,
+                 RenderComp.FrameIndex,
+                 RenderComp.ImageID,
+                 RenderComp.SubunitImageID,
+                 ElevationLayer,
+                 ChkUnitID,
+                 TeamColorID,
+                 Overlays);
+        });
+}
+
+inline void MixStarCraftWorldComponentsHash(const Core::ECS::EntityManager& EM, uint32_t& Hash)
+{
+    auto MixBytes = [&](const void* Data, size_t Len) {
+        const auto* Bytes = static_cast<const uint8_t*>(Data);
+        for (size_t i = 0; i < Len; ++i) {
+            Hash ^= Bytes[i];
+            Hash *= 16777619u;
+        }
+    };
+    auto MixFloat = [&](float Value) {
+        const float Canonical = (Value == 0.0f) ? 0.0f : Value;
+        MixBytes(&Canonical, sizeof(float));
+    };
+
+    std::vector<Core::ECS::EntityID> SortedIds = EM.GetActiveEntities();
+    std::sort(SortedIds.begin(), SortedIds.end());
+
+    for (Core::ECS::EntityID Id : SortedIds) {
+        const uint32_t Gen = EM.GetGeneration(Id);
+        MixBytes(&Id, sizeof(Id));
+        MixBytes(&Gen, sizeof(Gen));
+
+        if (const auto* T = EM.GetComponent<TransformComponent>(Id)) {
+            MixFloat(T->Position.X);
+            MixFloat(T->Position.Y);
+            MixFloat(T->Rotation);
+        }
+        if (const auto* U = EM.GetComponent<UnitComponent>(Id)) {
+            MixBytes(&U->ChkUnitID, sizeof(int));
+            MixBytes(&U->HitPoints, sizeof(int));
+            MixBytes(&U->ShieldPoints, sizeof(int));
+            MixBytes(&U->EnergyPoints, sizeof(int));
+            MixBytes(&U->HangarCount, sizeof(int));
+        }
+        if (const auto* P = EM.GetComponent<PlayerComponent>(Id)) {
+            MixBytes(&P->PlayerID, sizeof(int));
+        }
+        if (const auto* C = EM.GetComponent<CombatComponent>(Id)) {
+            MixBytes(&C->TargetEntityID, sizeof(int));
+            MixFloat(C->CooldownRemaining);
+        }
+        if (const auto* Cmd = EM.GetComponent<CommandComponent>(Id)) {
+            MixBytes(&Cmd->CurrentCommand, sizeof(Cmd->CurrentCommand));
+            MixFloat(Cmd->TargetPosition.X);
+            MixFloat(Cmd->TargetPosition.Y);
+            MixBytes(&Cmd->TargetEntityID, sizeof(int));
+            MixBytes(&Cmd->CurrentOrderIndex, sizeof(int));
+            const uint32_t OrderCount = static_cast<uint32_t>(Cmd->Orders.size());
+            MixBytes(&OrderCount, sizeof(OrderCount));
+            for (const auto& Ord : Cmd->Orders) {
+                MixBytes(&Ord.Type, sizeof(Ord.Type));
+                MixFloat(Ord.TargetPosition.X);
+                MixFloat(Ord.TargetPosition.Y);
+                MixBytes(&Ord.TargetEntityID, sizeof(int));
+                MixBytes(&Ord.AbilityID, sizeof(int));
+            }
+        }
+        if (const auto* Path = EM.GetComponent<PathfindingComponent>(Id)) {
+            MixBytes(&Path->HasFixedPosition, sizeof(bool));
+            if (Path->HasFixedPosition) {
+                MixBytes(&Path->FixedPosition.X.raw_value, sizeof(int32_t));
+                MixBytes(&Path->FixedPosition.Y.raw_value, sizeof(int32_t));
+                MixBytes(&Path->FixedVelocity.X.raw_value, sizeof(int32_t));
+                MixBytes(&Path->FixedVelocity.Y.raw_value, sizeof(int32_t));
+            }
+            MixBytes(&Path->PathIndex, sizeof(int));
+            const uint32_t WaypointCount = static_cast<uint32_t>(Path->Path.size());
+            MixBytes(&WaypointCount, sizeof(WaypointCount));
+            for (const auto& Wp : Path->Path) {
+                MixFloat(Wp.X);
+                MixFloat(Wp.Y);
+            }
+        }
+        if (const auto* B = EM.GetComponent<BuildingComponent>(Id)) {
+            MixBytes(&B->BuildingDefID, sizeof(int));
+            MixFloat(B->BuildProgress);
+            MixBytes(&B->UnderConstruction, sizeof(bool));
+            MixBytes(&B->IsLifted, sizeof(bool));
+            MixBytes(&B->LarvaCount, sizeof(int));
+            MixBytes(&B->IsResearching, sizeof(bool));
+            MixBytes(&B->ResearchingID, sizeof(int));
+        }
+        if (const auto* Res = EM.GetComponent<ResourceComponent>(Id)) {
+            MixBytes(&Res->Type, sizeof(Res->Type));
+            MixBytes(&Res->Amount, sizeof(int));
+            MixBytes(&Res->IsDepleted, sizeof(bool));
+        }
+        if (const auto* H = EM.GetComponent<HarvestComponent>(Id)) {
+            MixBytes(&H->State, sizeof(H->State));
+            MixBytes(&H->CarryingType, sizeof(H->CarryingType));
+            MixBytes(&H->CarryingAmount, sizeof(int));
+            MixBytes(&H->TargetResourceID, sizeof(int));
+            MixBytes(&H->ReturnBuildingID, sizeof(int));
+        }
+        if (const auto* Prod = EM.GetComponent<ProductionComponent>(Id)) {
+            MixFloat(Prod->TrainingProgress);
+            MixBytes(&Prod->CurrentTrainingUnitDefID, sizeof(int));
+            const uint16_t QSize = static_cast<uint16_t>(Prod->Queue.size());
+            MixBytes(&QSize, sizeof(QSize));
+            for (uint16_t i = 0; i < QSize; ++i) {
+                const int Item = Prod->Queue[i];
+                MixBytes(&Item, sizeof(int));
+            }
+        }
+        if (const auto* Bul = EM.GetComponent<BulletComponent>(Id)) {
+            MixBytes(&Bul->SourceEntityID, sizeof(int));
+            MixBytes(&Bul->TargetEntityID, sizeof(int));
+            MixBytes(&Bul->BaseDamage, sizeof(int));
+            MixFloat(Bul->LifetimeRemaining);
+            MixBytes(&Bul->HasHit, sizeof(bool));
+        }
+        if (const auto* Status = EM.GetComponent<StatusEffectComponent>(Id)) {
+            MixBytes(Status->ActiveEffects, sizeof(Status->ActiveEffects));
+            for (int i = 0; i < StatusEffectComponent::kMaxEffects; ++i) {
+                MixFloat(Status->EffectTimers[i]);
+            }
+        }
+        if (const auto* Cloak = EM.GetComponent<CloakComponent>(Id)) {
+            MixBytes(&Cloak->IsCloaked, sizeof(bool));
+            MixBytes(&Cloak->IsBurrowed, sizeof(bool));
+        }
+        if (const auto* Bur = EM.GetComponent<BurrowComponent>(Id)) {
+            MixBytes(&Bur->IsBurrowed, sizeof(bool));
+            MixBytes(&Bur->Phase, sizeof(Bur->Phase));
+        }
+        if (const auto* Loaded = EM.GetComponent<LoadedUnitsComponent>(Id)) {
+            const uint16_t Count = static_cast<uint16_t>(Loaded->PassengerIDs.size());
+            MixBytes(&Count, sizeof(Count));
+            for (uint16_t i = 0; i < Count; ++i) {
+                const int Pid = Loaded->PassengerIDs[i];
+                MixBytes(&Pid, sizeof(int));
+            }
+        }
+        if (const auto* Morph = EM.GetComponent<MorphComponent>(Id)) {
+            MixBytes(&Morph->MorphTargetDefID, sizeof(int));
+            MixFloat(Morph->MorphTimer);
+            MixBytes(&Morph->IsMorphing, sizeof(bool));
+        }
+        if (const auto* Siege = EM.GetComponent<SiegeTransitionComponent>(Id)) {
+            MixBytes(&Siege->Active, sizeof(bool));
+            MixBytes(&Siege->TargetSieged, sizeof(bool));
+            MixBytes(&Siege->Stage, sizeof(int));
+            MixFloat(Siege->Elapsed);
+        }
+        if (const auto* Mine = EM.GetComponent<SpiderMineComponent>(Id)) {
+            MixBytes(&Mine->IsPlaced, sizeof(bool));
+            MixBytes(&Mine->IsBurrowed, sizeof(bool));
+            MixBytes(&Mine->IsTriggered, sizeof(bool));
+            MixBytes(&Mine->ChasingEntityID, sizeof(int));
+        }
+        if (const auto* Nuke = EM.GetComponent<NukeComponent>(Id)) {
+            MixBytes(&Nuke->Armed, sizeof(bool));
+            MixBytes(&Nuke->Launched, sizeof(bool));
+            MixFloat(Nuke->FlightTimer);
+        }
+        if (const auto* Warp = EM.GetComponent<ArchonWarpComponent>(Id)) {
+            MixBytes(&Warp->PartnerEntityID, sizeof(int));
+            MixBytes(&Warp->IsDarkArchon, sizeof(bool));
+            MixFloat(Warp->WarpTimer);
+            MixBytes(&Warp->IsWarping, sizeof(bool));
+        }
+    }
+}
+
+inline bool RegisterStarCraftECSAdapters() noexcept
+{
+    auto& Hooks = Core::ECS::EngineAdapterHooks::Instance();
+    Hooks.ExtractKinematics = &ExtractStarCraftKinematics;
+    Hooks.WriteBackKinematics = &WriteBackStarCraftKinematics;
+    Hooks.InitSpawnedUnitPrefab = &InitStarCraftSpawnedUnitPrefab;
+    Hooks.ExtractRenderEntities = &ExtractStarCraftRenderEntities;
+    Hooks.MixWorldComponentsHash = &MixStarCraftWorldComponentsHash;
+    return true;
+}
+
+inline const bool kStarCraftECSAdaptersRegistered = RegisterStarCraftECSAdapters();
+} // namespace Game::Components::Detail

@@ -1,5 +1,6 @@
-#include "Game/AI/BehaviorTreeRuntime.h"
 #pragma once
+#include "Game/AI/BehaviorTreeRuntime.h"
+#include "Engine/AI/BehaviorTreeServer.h"
 
 #include "Game/AI/AIDifficulty.h"
 #include "Core/ECS/SystemManager.h"
@@ -27,6 +28,8 @@ public:
 
     // Phase 2 BehaviorTree Integration: Bind a decompiled StarCraft/BroodWar AI Behavior Tree
     bool BindBehaviorTree(const Game::AI::BehaviorTreeAsset* Asset);
+    bool BindBehaviorTreeFromServer(const Engine::AI::BehaviorTreeServer& Server, std::string_view ScriptID);
+    Engine::AI::BTStatus TickServerBehaviorTree(const Engine::AI::BehaviorTreeServer& Server, std::string_view ScriptID, Engine::AI::Blackboard& Board);
     bool HasBoundBehaviorTree() const { return mBTInstance != nullptr; }
     const Game::AI::BehaviorTreeInstance* GetBehaviorTreeInstance() const { return mBTInstance.get(); }
     int ResolveModernAssetUnitDefID(const std::string& ModernUnitName) const;

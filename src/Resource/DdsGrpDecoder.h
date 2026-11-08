@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 
-#include "Resource/RgbaImage.h"
+#include "Resource/RawColor.h"
 
 namespace Resource::Graphics
 {

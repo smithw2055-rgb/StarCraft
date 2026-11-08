@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/Camera2D.h"
 #include "Render/GpuBufferHandle.h"
 #include "Render/Shader2D.h"

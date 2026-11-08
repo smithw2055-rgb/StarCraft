@@ -2,7 +2,7 @@
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/ECS/EntityManager.h"
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/Draw2D.h"
 
 #include <algorithm>

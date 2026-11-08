@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstdint>
 
-#include "Render/Color.h"
+#include "Core/Color.h"
 
 namespace Render
 {

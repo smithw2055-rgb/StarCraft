@@ -1,8 +1,5 @@
-#include "Resource/ArchiveAssetSourceView.h"
-#include "Resource/DataAssetCacheView.h"
-#include "Resource/SpriteAssetCacheView.h"
-#include "Resource/TilesetAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
+#include "Resource/TilesetAssetCacheView.h"
 
 #include "Resource/ResourceCache.h"
 

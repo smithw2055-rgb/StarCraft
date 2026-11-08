@@ -1,8 +1,6 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Components.h"
-#include "Game/Pathfinding/AStar.h"
 #include "Game/Pathfinding/NavigationService.h"
-#include "Game/Pathfinding/NavigationSpatialHash.h"
 #include "Game/Pathfinding/NavigationWorldResource.h"
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/SimulationContext.h"

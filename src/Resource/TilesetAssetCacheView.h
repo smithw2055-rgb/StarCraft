@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Resource/GpuImage.h"
+#include "Resource/UIAssetTypes.h"
 #include "Resource/RawColor.h"
 
 namespace Resource::Graphics

@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "Engine/AI/BehaviorTreeCatalog.h"
 #include "Engine/DataAssetRegistry.h"
-#include "Game/AI/BehaviorTreeRuntime.h"
 
 namespace Engine::AI
 {
@@ -166,10 +166,11 @@ private:
 };
 
 // ============================================================================
-// BehaviorTreeAsset & BehaviorTreeServer (Phase 40):
+// BehaviorTreeAsset & BehaviorTreeServer (Phase 40 & Phase 49):
+// - Zero dependency on Game/ headers.
 // - Stores data-driven BehaviorTreeAssets in an Engine::DataAssetTable<BehaviorTreeAsset>.
 // - Supports direct import of cloud assets-R AIScriptBin_All_293_BehaviorTrees.json
-//   via Game::AI::BehaviorTreeCatalog and runtime execution against Blackboards.
+//   & BWScriptBin_All_156_BehaviorTrees.json via Engine::AI::BehaviorTreeCatalog.
 // ============================================================================
 struct BehaviorTreeAsset
 {
@@ -203,12 +204,13 @@ public:
     }
 
     // Imports AI Behavior Trees from cloud assets-R BehaviorTreeCatalog
-    size_t ImportFromCatalog(const Game::AI::BehaviorTreeCatalog& Catalog)
+    size_t ImportFromCatalog(const BehaviorTreeCatalog& Catalog) { if (&Catalog != &mCatalog) mCatalog = Catalog; return ImportFromCatalogImpl(Catalog); }
+    size_t ImportFromCatalogImpl(const BehaviorTreeCatalog& Catalog)
     {
         size_t Imported = 0;
         uint32_t NextID = 1;
 
-        auto ImportMap = [&](const std::unordered_map<std::string, Game::AI::BehaviorTreeAsset>& Map,
+        auto ImportMap = [&](const std::unordered_map<std::string, BehaviorTreeScriptAsset>& Map,
                              bool IsBW) {
             for (const auto& [FourCC, Src] : Map)
             {
@@ -263,7 +265,9 @@ public:
                 }
                 Asset.RootNode = std::move(RootSeq);
 
-                const uint32_t Id = Asset.TreeID; const std::string Name = Asset.ScriptID; mTreeTable.Register(Id, Name, std::move(Asset));
+                const uint32_t Id = Asset.TreeID;
+                const std::string Name = Asset.ScriptID;
+                mTreeTable.Register(Id, Name, std::move(Asset));
                 ++Imported;
             }
         };
@@ -275,11 +279,12 @@ public:
 
     size_t LoadFromAssetsRDirectory(const std::string& AssetsRRootPath)
     {
-        Game::AI::BehaviorTreeCatalog Catalog;
-        if (!Catalog.LoadFromAssetsR(AssetsRRootPath))
+        if (!mCatalog.LoadFromAssetsR(AssetsRRootPath))
             return 0;
-        return ImportFromCatalog(Catalog);
+        return ImportFromCatalog(mCatalog);
     }
+
+    const BehaviorTreeCatalog& GetCatalog() const noexcept { return mCatalog; }
 
     BTStatus TickTreeByName(std::string_view ScriptID, Blackboard& Board) const
     {
@@ -304,6 +309,7 @@ public:
     uint64_t GetTotalTreeTicks() const noexcept { return mTotalTreeTicks; }
 
 private:
+    BehaviorTreeCatalog mCatalog;
     Engine::DataAssetTable<BehaviorTreeAsset> mTreeTable;
     std::unordered_map<std::string, NodeActionHandler> mNodeHandlers;
     mutable uint64_t mTotalTreeTicks = 0;

@@ -6,118 +6,14 @@
 #include <string_view>
 
 #include "Core/ECS/SystemManager.h"
+#include "Core/ECS/WorldSnapshot.h"
 
 namespace Game::Systems
 {
 
-enum class ResearchId : uint8_t
-{
-    None = 0,
-
-    // Terran
-    Terran_InfantryWeapons,
-    Terran_InfantryArmor,
-    Terran_VehicleWeapons,
-    Terran_VehicleArmor,
-    Terran_ShipWeapons,
-    Terran_ShipArmor,
-    Terran_StimPacks,
-    Terran_U238Shells,
-    Terran_SiegeMode,
-    Terran_SpiderMines,
-    Terran_CloakingField,
-    Terran_IonThrusters,
-    Terran_Lockdown,
-    Terran_MoebiusReactor,
-    Terran_OcularImplants,
-    Terran_ApolloReactor,
-    Terran_TitanReactor,
-    Terran_CaduceusReactor,
-    Terran_YamatoGun,
-    Terran_ColossusReactor,
-    Terran_CharonBoosters,
-    Terran_PersonalCloaking,
-    Terran_EMPShockwave,
-    Terran_Irradiate,
-    Terran_Restoration,
-    Terran_OpticalFlare,
-
-    // Zerg
-    Zerg_MeleeAttacks,
-    Zerg_MissileAttacks,
-    Zerg_Carapace,
-    Zerg_FlyerAttacks,
-    Zerg_FlyerCarapace,
-    Zerg_AdrenalGlands,
-    Zerg_MetabolicBoost,
-    Zerg_AnabolicSynthesis,
-    Zerg_ChitinousPlating,
-    Zerg_MuscularAugments,
-    Zerg_GroovedSpines,
-    Zerg_VentralSacs,
-    Zerg_Antennae,
-    Zerg_PneumatizedCarapace,
-    Zerg_Burrow,
-    Zerg_Consume,
-    Zerg_Ensnare,
-    Zerg_Plague,
-    Zerg_SpawnBroodling,
-    Zerg_QueenEnergy,
-    Zerg_DefilerEnergy,
-    Zerg_LurkerMorph,
-
-    // Protoss
-    Protoss_GroundWeapons,
-    Protoss_GroundArmor,
-    Protoss_PlasmaShields,
-    Protoss_AirWeapons,
-    Protoss_AirArmor,
-    Protoss_SingularityCharge,
-    Protoss_GraviticDrive,
-    Protoss_ScarabDamage,
-    Protoss_ZealotSpeed,
-    Protoss_SensorArray,
-    Protoss_ApialSensors,
-    Protoss_KhaydarinAmulet,
-    Protoss_ArgusJewel,
-    Protoss_ArgusTalisman,
-    Protoss_KhaydarinCore,
-    Protoss_PsionicStorm,
-    Protoss_Hallucination,
-    Protoss_Recall,
-    Protoss_StasisField,
-    Protoss_MindControl,
-    Protoss_Maelstrom,
-    Protoss_DisruptionWeb,
-    Protoss_ReaverCapacity,
-    Protoss_CarrierCapacity,
-
-    // Keep newly added IDs at the end so existing serialized/menu IDs remain stable.
-    Protoss_GraviticBoosters,
-    Protoss_GraviticThrusters,
-
-    Count
-};
-
-struct PlayerUpgrades
-{
-    std::array<uint8_t, static_cast<size_t>(ResearchId::Count)> Levels = {};
-
-    int GetLevel(ResearchId Id) const
-    {
-        size_t Idx = static_cast<size_t>(Id);
-        if (Idx < Levels.size()) return Levels[Idx];
-        return 0;
-    }
-};
-
-// World-scoped Singleton Resource storing per-player upgrade levels and active research flags.
-struct PlayerUpgradeStore
-{
-    static constexpr size_t kMaxPlayers = 12;
-    std::array<PlayerUpgrades, kMaxPlayers> Upgrades{};
-    std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>, kMaxPlayers> Researching{};
-};
+using ResearchId = Core::ECS::ResearchId;
+using PlayerUpgrades = Core::ECS::PlayerUpgrades;
+using PlayerUpgradeStore = Core::ECS::PlayerUpgradeStore;
 
 class UpgradeSystem : public Core::ECS::ISystem
 {

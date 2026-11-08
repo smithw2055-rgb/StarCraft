@@ -5,7 +5,7 @@
 #include "Client/Entity.h"
 #include "Client/EntityRenderer.h"
 #include "Client/Selection.h"
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Client/TilesetRenderer.h"
 #include "Client/WorldEffects.h"
 #include "Core/ECS/EntityManager.h"

@@ -4,7 +4,7 @@
 #include "Resource/DdsGrpDecoder.h"
 #include "Resource/GrpToGpu.h"
 #include "Resource/Palette.h"
-#include "Resource/RgbaImage.h"
+#include "Resource/RawColor.h"
 #include "Resource/RgbaImageFileDecoder.h"
 #include "Resource/UIAssetTypes.h"
 

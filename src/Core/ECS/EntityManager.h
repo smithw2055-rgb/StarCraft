@@ -1149,4 +1149,44 @@ void EntityCommandBuffer::RemoveComponent(EntityID Id)
     });
 }
 
+
+struct ExtractedOverlaySubnode
+{
+    uint32_t ImageID = 0;
+    float OffsetX = 0.0f;
+    float OffsetY = 0.0f;
+    bool DrawAbove = true;
+};
+
+// ============================================================================
+// EngineAdapterHooks (Phase 49 Zero-Dependency Engine Bridge):
+// - Allows game modules (e.g. Game/Components.h) to register type-specific
+//   component extractors, snapshot hashers, and prefab initializers into the
+//   Core/Engine/Render layers without any upward Game header includes in Core/Engine/Render.
+// ============================================================================
+struct EngineAdapterHooks
+{
+    using KinematicsEmitFn = std::function<void(EntityID, float, float, float, float, float, float, float)>;
+    using ExtractKinematicsFn = void(*)(const EntityManager&, const KinematicsEmitFn&);
+    using WriteBackKinematicsFn = void(*)(EntityManager&, EntityID, float, float, float, float);
+    using MixWorldComponentsHashFn = void(*)(const EntityManager&, uint32_t&);
+    using InitSpawnedUnitPrefabFn = void(*)(EntityManager&, EntityID, float, float, int32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint8_t);
+    using RenderEntityEmitFn = std::function<void(
+        EntityID, float, float, int32_t, uint32_t, uint32_t, uint8_t, int32_t, uint8_t,
+        const std::vector<ExtractedOverlaySubnode>&)>;
+    using ExtractRenderEntitiesFn = void(*)(const EntityManager&, const RenderEntityEmitFn&);
+
+    ExtractKinematicsFn ExtractKinematics = nullptr;
+    WriteBackKinematicsFn WriteBackKinematics = nullptr;
+    MixWorldComponentsHashFn MixWorldComponentsHash = nullptr;
+    InitSpawnedUnitPrefabFn InitSpawnedUnitPrefab = nullptr;
+    ExtractRenderEntitiesFn ExtractRenderEntities = nullptr;
+
+    static EngineAdapterHooks& Instance() noexcept
+    {
+        static EngineAdapterHooks sHooks;
+        return sHooks;
+    }
+};
+
 } // namespace Core::ECS

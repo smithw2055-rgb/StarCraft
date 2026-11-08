@@ -6,9 +6,9 @@
 #include <utility>
 #include <vector>
 
+#include "Core/ECS/EntityManager.h"
 #include "Engine/DataAssetRegistry.h"
 #include "Engine/Scene/PackedScene2D.h"
-#include "Game/Components.h"
 #include "Render/SceneNode2D.h"
 #include "Resource/ModernAssetRegistry.h"
 
@@ -16,7 +16,8 @@ namespace Engine::Scene
 {
 
 // ============================================================================
-// PrefabRegistry (Phase 41):
+// PrefabRegistry (Phase 41 & Phase 49 Zero-Dependency Engine Prefab Server):
+// - Zero dependency on Game/Components.h.
 // - Indexes PackedScene2D prefabs in an Engine::DataAssetTable<PackedScene2D>.
 // - Automatically constructs data-driven unit prefabs (with shadow nodes,
 //   main body sprites, subunit turrets, and ECS component initializers) from
@@ -130,36 +131,34 @@ public:
 
             Prefab.RootNodeDescriptor.Children.push_back(std::move(BodyDesc));
 
-            // Declarative ECS Component Spawner bound to cloud ModernUnitDataAsset properties
+            // Declarative ECS Component Spawner bound via Core::ECS::EngineAdapterHooks
             const Resource::ModernUnitDataAsset CapturedAsset = UnitAsset;
             Prefab.AddComponentInitializer(
                 [CapturedAsset](Core::ECS::EntityManager& EM,
                                 Core::ECS::EntityID Entity,
                                 const Core::Math::Vec2& SpawnPos,
                                 int32_t OwnerPlayerID) {
-                    EM.AddComponent<Game::Components::TransformComponent>(Entity).Position = SpawnPos;
-                    EM.AddComponent<Game::Components::PlayerComponent>(Entity).PlayerID = OwnerPlayerID;
-
-                    auto& UnitComp = EM.AddComponent<Game::Components::UnitComponent>(Entity);
-                    UnitComp.ChkUnitID = static_cast<int>(CapturedAsset.UnitID);
-                    UnitComp.HitPoints = static_cast<int>(CapturedAsset.MaxHP);
-                    UnitComp.MaxHitPoints = static_cast<int>(CapturedAsset.MaxHP);
-                    UnitComp.ShieldPoints = CapturedAsset.ShieldsEnabled
-                                                ? static_cast<int>(CapturedAsset.MaxShields)
-                                                : 0;
-                    UnitComp.MaxShieldPoints = CapturedAsset.ShieldsEnabled
-                                                   ? static_cast<int>(CapturedAsset.MaxShields)
-                                                   : 0;
-
-                    auto& RenderComp = EM.AddComponent<Game::Components::RenderComponent>(Entity);
-                    RenderComp.ImageID = CapturedAsset.ImageID;
-                    RenderComp.Visible = true;
-                    RenderComp.Layer = (CapturedAsset.ElevationSortLayer >= 12)
-                                           ? Game::Components::RenderLayer::AirUnits
-                                           : Game::Components::RenderLayer::Units;
+                    const auto& Hooks = Core::ECS::EngineAdapterHooks::Instance();
+                    if (Hooks.InitSpawnedUnitPrefab)
+                    {
+                        Hooks.InitSpawnedUnitPrefab(
+                            EM,
+                            Entity,
+                            SpawnPos.X,
+                            SpawnPos.Y,
+                            OwnerPlayerID,
+                            CapturedAsset.UnitID,
+                            CapturedAsset.MaxHP,
+                            CapturedAsset.ShieldsEnabled,
+                            CapturedAsset.MaxShields,
+                            CapturedAsset.ImageID,
+                            CapturedAsset.ElevationSortLayer);
+                    }
                 });
 
-            const uint32_t Id = Prefab.PrefabID; const std::string Name = Prefab.SemanticName; mPrefabs.Register(Id, Name, std::move(Prefab));
+            const uint32_t Id = Prefab.PrefabID;
+            const std::string Name = Prefab.SemanticName;
+            mPrefabs.Register(Id, Name, std::move(Prefab));
             ++BuiltCount;
         }
         return BuiltCount;

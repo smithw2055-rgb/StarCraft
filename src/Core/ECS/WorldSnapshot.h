@@ -8,17 +8,142 @@
 
 #include "Core/ECS/EntityManager.h"
 #include "Engine/ECS/GenericWorldSnapshot.h"
-#include "Game/ComponentBinarySerializers.h"
-#include "Game/Components.h"
-#include "Game/Systems/HarvestSystem.h"
-#include "Game/Systems/UpgradeSystem.h"
 
 namespace Core::ECS {
 
-// World-scoped Upgrade & Tech Resource stored inside EntityManager::Context()
+// ============================================================================
+// World-Scoped Economy & Upgrade State Resources (Phase 49 Engine Decoupling):
+// - Pure POD structures with zero dependency on Game/ headers.
+// - Re-exported into Game::Systems in HarvestSystem.h and UpgradeSystem.h.
+// ============================================================================
+enum class ResearchId : uint8_t
+{
+    None = 0,
+
+    // Terran
+    Terran_InfantryWeapons,
+    Terran_InfantryArmor,
+    Terran_VehicleWeapons,
+    Terran_VehicleArmor,
+    Terran_ShipWeapons,
+    Terran_ShipArmor,
+    Terran_StimPacks,
+    Terran_U238Shells,
+    Terran_SiegeMode,
+    Terran_SpiderMines,
+    Terran_CloakingField,
+    Terran_IonThrusters,
+    Terran_Lockdown,
+    Terran_MoebiusReactor,
+    Terran_OcularImplants,
+    Terran_ApolloReactor,
+    Terran_TitanReactor,
+    Terran_CaduceusReactor,
+    Terran_YamatoGun,
+    Terran_ColossusReactor,
+    Terran_CharonBoosters,
+    Terran_PersonalCloaking,
+    Terran_EMPShockwave,
+    Terran_Irradiate,
+    Terran_Restoration,
+    Terran_OpticalFlare,
+
+    // Zerg
+    Zerg_MeleeAttacks,
+    Zerg_MissileAttacks,
+    Zerg_Carapace,
+    Zerg_FlyerAttacks,
+    Zerg_FlyerCarapace,
+    Zerg_AdrenalGlands,
+    Zerg_MetabolicBoost,
+    Zerg_AnabolicSynthesis,
+    Zerg_ChitinousPlating,
+    Zerg_MuscularAugments,
+    Zerg_GroovedSpines,
+    Zerg_VentralSacs,
+    Zerg_Antennae,
+    Zerg_PneumatizedCarapace,
+    Zerg_Burrow,
+    Zerg_Consume,
+    Zerg_Ensnare,
+    Zerg_Plague,
+    Zerg_SpawnBroodling,
+    Zerg_QueenEnergy,
+    Zerg_DefilerEnergy,
+    Zerg_LurkerMorph,
+
+    // Protoss
+    Protoss_GroundWeapons,
+    Protoss_GroundArmor,
+    Protoss_PlasmaShields,
+    Protoss_AirWeapons,
+    Protoss_AirArmor,
+    Protoss_SingularityCharge,
+    Protoss_GraviticDrive,
+    Protoss_ScarabDamage,
+    Protoss_ZealotSpeed,
+    Protoss_SensorArray,
+    Protoss_ApialSensors,
+    Protoss_KhaydarinAmulet,
+    Protoss_ArgusJewel,
+    Protoss_ArgusTalisman,
+    Protoss_KhaydarinCore,
+    Protoss_PsionicStorm,
+    Protoss_Hallucination,
+    Protoss_Recall,
+    Protoss_StasisField,
+    Protoss_MindControl,
+    Protoss_Maelstrom,
+    Protoss_DisruptionWeb,
+    Protoss_ReaverCapacity,
+    Protoss_CarrierCapacity,
+
+    Protoss_GraviticBoosters,
+    Protoss_GraviticThrusters,
+
+    Count
+};
+
+struct PlayerUpgradesData
+{
+    std::array<uint8_t, static_cast<size_t>(ResearchId::Count)> Levels = {};
+
+    int GetLevel(ResearchId Id) const
+    {
+        const size_t Idx = static_cast<size_t>(Id);
+        if (Idx < Levels.size())
+            return Levels[Idx];
+        return 0;
+    }
+};
+
+using PlayerUpgrades = PlayerUpgradesData;
+
+struct PlayerUpgradeStore
+{
+    static constexpr size_t kMaxPlayers = 12;
+    std::array<PlayerUpgrades, kMaxPlayers> Upgrades{};
+    std::array<std::array<bool, static_cast<size_t>(ResearchId::Count)>, kMaxPlayers> Researching{};
+};
+
 struct WorldUpgradeResource {
     static constexpr size_t kMaxPlayers = 12;
-    std::array<Game::Systems::PlayerUpgrades, kMaxPlayers> PlayerUpgrades{};
+    std::array<PlayerUpgradesData, kMaxPlayers> PlayerUpgrades{};
+};
+
+inline constexpr int kPlayerResourceSlots = 12;
+
+struct PlayerResources
+{
+    int Minerals = 400;
+    int VespeneGas = 100;
+    int SupplyUsed = 0;
+    int SupplyMax = 10;
+};
+
+struct PlayerResourceStore
+{
+    std::array<PlayerResources, kPlayerResourceSlots> Players{};
 };
 
 // Lightweight entity identity header retained for backwards compatibility
@@ -28,10 +153,10 @@ struct EntityStateRecord {
 };
 
 // ============================================================================
-// WorldDeterministicSnapshot (Phase 37 Unification):
+// WorldDeterministicSnapshot (Phase 37 & Phase 49 Unification):
+// - Zero dependency on Game/ headers.
 // - Delegates all component pool capture & restore to the game-agnostic
-//   Engine::ECS::GenericWorldSnapshot instead of duplicating 22 component
-//   fields per entity.
+//   Engine::ECS::GenericWorldSnapshot.
 // ============================================================================
 struct WorldDeterministicSnapshot {
     uint32_t FrameNumber = 0;
@@ -39,7 +164,7 @@ struct WorldDeterministicSnapshot {
     bool HasUpgradesResource = false;
     WorldUpgradeResource Upgrades{};
     bool HasEconomyResource = false;
-    Game::Systems::PlayerResourceStore Economy{};
+    PlayerResourceStore Economy{};
     std::vector<EntityStateRecord> Entities;
     Engine::ECS::GenericWorldSnapshot GenericSnapshot;
 };
@@ -55,10 +180,6 @@ public:
                 Hash *= 16777619u;
             }
         };
-        auto MixFloat = [&](float Value) {
-            const float Canonical = (Value == 0.0f) ? 0.0f : Value;
-            MixBytes(&Canonical, sizeof(float));
-        };
 
         MixBytes(&FrameNumber, sizeof(FrameNumber));
 
@@ -66,158 +187,21 @@ public:
             MixBytes(Upg, sizeof(WorldUpgradeResource));
         }
 
-        if (const auto* Econ = EM.Context().GetResource<Game::Systems::PlayerResourceStore>()) {
-            MixBytes(Econ, sizeof(Game::Systems::PlayerResourceStore));
+        if (const auto* Econ = EM.Context().GetResource<PlayerResourceStore>()) {
+            MixBytes(Econ, sizeof(PlayerResourceStore));
         }
 
-        std::vector<EntityID> SortedIds = EM.GetActiveEntities();
-        std::sort(SortedIds.begin(), SortedIds.end());
-
-        for (EntityID Id : SortedIds) {
-            const uint32_t Gen = EM.GetGeneration(Id);
-            MixBytes(&Id, sizeof(Id));
-            MixBytes(&Gen, sizeof(Gen));
-
-            if (const auto* T = EM.GetComponent<Game::Components::TransformComponent>(Id)) {
-                MixFloat(T->Position.X);
-                MixFloat(T->Position.Y);
-                MixFloat(T->Rotation);
-            }
-            if (const auto* U = EM.GetComponent<Game::Components::UnitComponent>(Id)) {
-                MixBytes(&U->ChkUnitID, sizeof(int));
-                MixBytes(&U->HitPoints, sizeof(int));
-                MixBytes(&U->ShieldPoints, sizeof(int));
-                MixBytes(&U->EnergyPoints, sizeof(int));
-                MixBytes(&U->HangarCount, sizeof(int));
-            }
-            if (const auto* P = EM.GetComponent<Game::Components::PlayerComponent>(Id)) {
-                MixBytes(&P->PlayerID, sizeof(int));
-            }
-            if (const auto* C = EM.GetComponent<Game::Components::CombatComponent>(Id)) {
-                MixBytes(&C->TargetEntityID, sizeof(int));
-                MixFloat(C->CooldownRemaining);
-            }
-            if (const auto* Cmd = EM.GetComponent<Game::Components::CommandComponent>(Id)) {
-                MixBytes(&Cmd->CurrentCommand, sizeof(Cmd->CurrentCommand));
-                MixFloat(Cmd->TargetPosition.X);
-                MixFloat(Cmd->TargetPosition.Y);
-                MixBytes(&Cmd->TargetEntityID, sizeof(int));
-                MixBytes(&Cmd->CurrentOrderIndex, sizeof(int));
-                const uint32_t OrderCount = static_cast<uint32_t>(Cmd->Orders.size());
-                MixBytes(&OrderCount, sizeof(OrderCount));
-                for (const auto& Ord : Cmd->Orders) {
-                    MixBytes(&Ord.Type, sizeof(Ord.Type));
-                    MixFloat(Ord.TargetPosition.X);
-                    MixFloat(Ord.TargetPosition.Y);
-                    MixBytes(&Ord.TargetEntityID, sizeof(int));
-                    MixBytes(&Ord.AbilityID, sizeof(int));
-                }
-            }
-            if (const auto* Path = EM.GetComponent<Game::Components::PathfindingComponent>(Id)) {
-                MixBytes(&Path->HasFixedPosition, sizeof(bool));
-                if (Path->HasFixedPosition) {
-                    MixBytes(&Path->FixedPosition.X.raw_value, sizeof(int32_t));
-                    MixBytes(&Path->FixedPosition.Y.raw_value, sizeof(int32_t));
-                    MixBytes(&Path->FixedVelocity.X.raw_value, sizeof(int32_t));
-                    MixBytes(&Path->FixedVelocity.Y.raw_value, sizeof(int32_t));
-                }
-                MixBytes(&Path->PathIndex, sizeof(int));
-                const uint32_t WaypointCount = static_cast<uint32_t>(Path->Path.size());
-                MixBytes(&WaypointCount, sizeof(WaypointCount));
-                for (const auto& Wp : Path->Path) {
-                    MixFloat(Wp.X);
-                    MixFloat(Wp.Y);
-                }
-            }
-            if (const auto* B = EM.GetComponent<Game::Components::BuildingComponent>(Id)) {
-                MixBytes(&B->BuildingDefID, sizeof(int));
-                MixFloat(B->BuildProgress);
-                MixBytes(&B->UnderConstruction, sizeof(bool));
-                MixBytes(&B->IsLifted, sizeof(bool));
-                MixBytes(&B->LarvaCount, sizeof(int));
-                MixBytes(&B->IsResearching, sizeof(bool));
-                MixBytes(&B->ResearchingID, sizeof(int));
-            }
-            if (const auto* Res = EM.GetComponent<Game::Components::ResourceComponent>(Id)) {
-                MixBytes(&Res->Type, sizeof(Res->Type));
-                MixBytes(&Res->Amount, sizeof(int));
-                MixBytes(&Res->IsDepleted, sizeof(bool));
-            }
-            if (const auto* H = EM.GetComponent<Game::Components::HarvestComponent>(Id)) {
-                MixBytes(&H->State, sizeof(H->State));
-                MixBytes(&H->CarryingType, sizeof(H->CarryingType));
-                MixBytes(&H->CarryingAmount, sizeof(int));
-                MixBytes(&H->TargetResourceID, sizeof(int));
-                MixBytes(&H->ReturnBuildingID, sizeof(int));
-            }
-            if (const auto* Prod = EM.GetComponent<Game::Components::ProductionComponent>(Id)) {
-                MixFloat(Prod->TrainingProgress);
-                MixBytes(&Prod->CurrentTrainingUnitDefID, sizeof(int));
-                const uint16_t QSize = static_cast<uint16_t>(Prod->Queue.size());
-                MixBytes(&QSize, sizeof(QSize));
-                for (uint16_t i = 0; i < QSize; ++i) {
-                    const int Item = Prod->Queue[i];
-                    MixBytes(&Item, sizeof(int));
-                }
-            }
-            if (const auto* Bul = EM.GetComponent<Game::Components::BulletComponent>(Id)) {
-                MixBytes(&Bul->SourceEntityID, sizeof(int));
-                MixBytes(&Bul->TargetEntityID, sizeof(int));
-                MixBytes(&Bul->BaseDamage, sizeof(int));
-                MixFloat(Bul->LifetimeRemaining);
-                MixBytes(&Bul->HasHit, sizeof(bool));
-            }
-            if (const auto* Status = EM.GetComponent<Game::Components::StatusEffectComponent>(Id)) {
-                MixBytes(Status->ActiveEffects, sizeof(Status->ActiveEffects));
-                for (int i = 0; i < Game::Components::StatusEffectComponent::kMaxEffects; ++i) {
-                    MixFloat(Status->EffectTimers[i]);
-                }
-            }
-            if (const auto* Cloak = EM.GetComponent<Game::Components::CloakComponent>(Id)) {
-                MixBytes(&Cloak->IsCloaked, sizeof(bool));
-                MixBytes(&Cloak->IsBurrowed, sizeof(bool));
-            }
-            if (const auto* Bur = EM.GetComponent<Game::Components::BurrowComponent>(Id)) {
-                MixBytes(&Bur->IsBurrowed, sizeof(bool));
-                MixBytes(&Bur->Phase, sizeof(Bur->Phase));
-            }
-            if (const auto* Loaded = EM.GetComponent<Game::Components::LoadedUnitsComponent>(Id)) {
-                const uint16_t Count = static_cast<uint16_t>(Loaded->PassengerIDs.size());
-                MixBytes(&Count, sizeof(Count));
-                for (uint16_t i = 0; i < Count; ++i) {
-                    const int Pid = Loaded->PassengerIDs[i];
-                    MixBytes(&Pid, sizeof(int));
-                }
-            }
-            if (const auto* Morph = EM.GetComponent<Game::Components::MorphComponent>(Id)) {
-                MixBytes(&Morph->MorphTargetDefID, sizeof(int));
-                MixFloat(Morph->MorphTimer);
-                MixBytes(&Morph->IsMorphing, sizeof(bool));
-            }
-            if (const auto* Siege = EM.GetComponent<Game::Components::SiegeTransitionComponent>(Id)) {
-                MixBytes(&Siege->Active, sizeof(bool));
-                MixBytes(&Siege->TargetSieged, sizeof(bool));
-                MixBytes(&Siege->Stage, sizeof(int));
-                MixFloat(Siege->Elapsed);
-            }
-            if (const auto* Mine = EM.GetComponent<Game::Components::SpiderMineComponent>(Id)) {
-                MixBytes(&Mine->IsPlaced, sizeof(bool));
-                MixBytes(&Mine->IsBurrowed, sizeof(bool));
-                MixBytes(&Mine->IsTriggered, sizeof(bool));
-                MixBytes(&Mine->ChasingEntityID, sizeof(int));
-            }
-            if (const auto* Nuke = EM.GetComponent<Game::Components::NukeComponent>(Id)) {
-                MixBytes(&Nuke->Armed, sizeof(bool));
-                MixBytes(&Nuke->Launched, sizeof(bool));
-                MixFloat(Nuke->FlightTimer);
-            }
-            if (const auto* Warp = EM.GetComponent<Game::Components::ArchonWarpComponent>(Id)) {
-                MixBytes(&Warp->PartnerEntityID, sizeof(int));
-                MixBytes(&Warp->IsDarkArchon, sizeof(bool));
-                MixFloat(Warp->WarpTimer);
-                MixBytes(&Warp->IsWarping, sizeof(bool));
-            }
+        const auto& Hooks = EngineAdapterHooks::Instance();
+        if (Hooks.MixWorldComponentsHash) {
+            Hooks.MixWorldComponentsHash(EM, Hash);
+            return Hash;
         }
+
+        // Pure engine fallback when no game-specific hash hook is registered
+        Engine::ECS::GenericWorldSnapshot Generic;
+        Generic.Capture(EM, FrameNumber);
+        const uint32_t GenericHash = Generic.ComputeBinaryHashFNV1a();
+        MixBytes(&GenericHash, sizeof(GenericHash));
         return Hash;
     }
 
@@ -228,7 +212,7 @@ public:
             Snap.HasUpgradesResource = true;
             Snap.Upgrades = *Upg;
         }
-        if (const auto* Econ = EM.Context().GetResource<Game::Systems::PlayerResourceStore>()) {
+        if (const auto* Econ = EM.Context().GetResource<PlayerResourceStore>()) {
             Snap.HasEconomyResource = true;
             Snap.Economy = *Econ;
         }
@@ -253,11 +237,20 @@ public:
         }
 
         if (Snap.HasEconomyResource) {
-            EM.Context().SetResource<Game::Systems::PlayerResourceStore>(Snap.Economy);
+            EM.Context().SetResource<PlayerResourceStore>(Snap.Economy);
         } else {
-            EM.Context().RemoveResource<Game::Systems::PlayerResourceStore>();
+            EM.Context().RemoveResource<PlayerResourceStore>();
         }
     }
 };
 
 } // namespace Core::ECS
+
+namespace Game::Systems {
+using ResearchId = Core::ECS::ResearchId;
+using PlayerUpgrades = Core::ECS::PlayerUpgrades;
+using PlayerUpgradeStore = Core::ECS::PlayerUpgradeStore;
+using Core::ECS::kPlayerResourceSlots;
+using PlayerResources = Core::ECS::PlayerResources;
+using PlayerResourceStore = Core::ECS::PlayerResourceStore;
+} // namespace Game::Systems

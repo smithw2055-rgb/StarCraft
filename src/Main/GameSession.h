@@ -16,7 +16,7 @@
 #include "Game/Map/Map.h"
 #include "Game/Networking/LockstepSync.h"
 #include "Game/Networking/SyncTransport.h"
-#include "Game/Pathfinding/RegionPathfinder.h"
+#include "Engine/EngineApp.h"
 #include "Game/Replay.h"
 #include "Game/Trigger/SCRTriggerParser.h"
 
@@ -53,6 +53,11 @@ struct GameSession
         KinematicsStream.ExtractFromECS(EcsSysMgr.GetEntityManager());
     }
 
+    Engine::EngineApp& EngineHost() noexcept { return HostedEngineApp; }
+    const Engine::EngineApp& EngineHost() const noexcept { return HostedEngineApp; }
+    Engine::EngineContext& EngineContext() noexcept { return HostedEngineApp.Context(); }
+    const Engine::EngineContext& EngineContext() const noexcept { return HostedEngineApp.Context(); }
+
     void UpdateSimulationStep(float DeltaSeconds)
     {
         if (RollbackRecordingEnabled)
@@ -60,13 +65,20 @@ struct GameSession
             RollbackMgr.RecordFrame(
                 EcsSysMgr.GetEntityManager(),
                 static_cast<uint32_t>(SimulationTick));
+            HostedEngineApp.RollbackBuffer().RecordTick(
+                EcsSysMgr.GetEntityManager(),
+                static_cast<uint32_t>(SimulationTick));
         }
+        HostedEngineApp.Context().Time().StepExactTicks(1u);
         EcsSysMgr.UpdateSimulationStep(DeltaSeconds);
         KinematicsStream.ExtractFromECS(EcsSysMgr.GetEntityManager());
     }
 
     void UpdatePresentationFrame(float DeltaSeconds)
     {
+        HostedEngineApp.Context().Assets().FlushPendingGpuUploads(4u * 1024u * 1024u);
+        HostedEngineApp.Context().Audio2D().FlushFrame({0.0f, 0.0f}, 1600.0f, DeltaSeconds);
+        HostedEngineApp.Context().SceneTree().PropagateAllTransforms();
         EcsSysMgr.UpdatePresentationFrame(DeltaSeconds);
     }
 
@@ -277,23 +289,24 @@ struct GameSession
 
     void RebuildRegionsFromEcsMap()
     {
-        Game::Pathfinding::RegionPathfinder::MapContext Ctx;
-        Ctx.MapWidth = EcsMap.GetWidth();
-        Ctx.MapHeight = EcsMap.GetHeight();
-        for (int Y = 0; Y < Ctx.MapHeight; ++Y)
+        auto& Nav2D = HostedEngineApp.Context().Navigation2D();
+        const int W = std::max(1, EcsMap.GetWidth());
+        const int H = std::max(1, EcsMap.GetHeight());
+        Nav2D.InitializeGrid(W, H, 32.0f);
+        for (int Y = 0; Y < H; ++Y)
         {
-            for (int X = 0; X < Ctx.MapWidth; ++X)
+            for (int X = 0; X < W; ++X)
             {
-                Ctx.Walkable[X][Y] = EcsMap.IsWalkable(X, Y);
-                Ctx.TileRegion[X][Y] = -1;
+                Nav2D.SetCellBlocked(X, Y, !EcsMap.IsWalkable(X, Y));
+                Nav2D.SetCellElevation(X, Y, static_cast<uint8_t>(EcsMap.GetGroundHeight(X, Y)), false);
             }
         }
-        RegionPath.BuildRegions(Ctx);
+        Nav2D.RebuildConnectedRegions(1u);
     }
 
-    Game::Pathfinding::RegionPathfinder& Regions()
+    Engine::Navigation::NavigationServer2D& Navigation() noexcept
     {
-        return RegionPath;
+        return HostedEngineApp.Context().Navigation2D();
     }
 
     Game::BWAPI::BWAPIInterface& Bwapi()
@@ -584,10 +597,10 @@ struct GameSession
     GameMap MapData;
     std::vector<Game::Map::PlacedUnit> ChkUnits;
     std::vector<Game::Map::PlacedDoodad> ChkDoodads;
-    Core::ECS::SystemManager EcsSysMgr;
+    Engine::EngineApp HostedEngineApp{1.0f / 24.0f, 4};
+    Core::ECS::SystemManager& EcsSysMgr = HostedEngineApp.PrimaryWorld();
     Game::Map::GameMap EcsMap;
     Game::IScriptVM IscriptVM;
-    Game::Pathfinding::RegionPathfinder RegionPath;
     Game::Trigger::SCRTriggerData ScrTriggerData;
     Game::BWAPI::BWAPIInterface BwapiInterface;
     Game::Replay::ReplayWriter ReplayWriter;

@@ -3,11 +3,8 @@
 #include "Core/ECS/EntityManager.h"
 #include "Core/Math/Vec2.h"
 #include "Main/GameLoop/CursorTypes.h"
-#include "Resource/ArchiveAssetSourceView.h"
-#include "Resource/DataAssetCacheView.h"
-#include "Resource/SpriteAssetCacheView.h"
-#include "Resource/TilesetAssetCacheView.h"
 #include "Resource/UIAssetCacheView.h"
+#include "Resource/TilesetAssetCacheView.h"
 
 #include <memory>
 #include <string>

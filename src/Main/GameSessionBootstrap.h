@@ -434,6 +434,9 @@ private:
 
 inline void RegisterGameplaySystems(GameSession& Session, Core::Audio::AudioSystem& Audio)
 {
+    Session.EngineHost().RollbackBuffer().RegisterWorldResource<Game::Systems::PlayerResourceStore>();
+    Session.EngineHost().RollbackBuffer().RegisterWorldResource<Core::ECS::WorldUpgradeResource>();
+    Session.EngineHost().Initialize();
     auto& SysMgr = Session.Systems();
     auto& World = Session.Entities();
 

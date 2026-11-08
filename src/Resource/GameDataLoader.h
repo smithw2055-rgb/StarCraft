@@ -7,7 +7,7 @@
 
 #include "Resource/IArchiveReader.h"
 #include "Resource/DatDecoder.h"
-#include "Resource/PalDecoder.h"
+#include "Resource/Palette.h"
 #include "Resource/TblDecoder.h"
 
 namespace Resource

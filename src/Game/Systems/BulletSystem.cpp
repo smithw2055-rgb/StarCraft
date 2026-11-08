@@ -4,7 +4,6 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/DeathEvents.h"
 #include "Game/Systems/GeyserState.h"
-#include "Game/Pathfinding/NavigationSpatialHash.h"
 
 #include <algorithm>
 #include <cmath>

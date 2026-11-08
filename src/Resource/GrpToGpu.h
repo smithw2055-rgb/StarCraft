@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "Resource/GpuImage.h"
+#include "Resource/UIAssetTypes.h"
 
 #include "Resource/GrpDecoder.h"
 #include "Resource/RawColor.h"

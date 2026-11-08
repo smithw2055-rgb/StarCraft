@@ -5,7 +5,7 @@
 #include "Core/Platform/Platform.h"
 #include "Render/Camera2D.h"
 #include "Render/Draw2D.h"
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Client/Entity.h"
 #include "Client/EntityRenderer.h"
 #include "Client/Selection.h"

@@ -4,17 +4,17 @@
 #include <cstring>
 #include <fstream>
 
-namespace Game::AI {
+namespace Engine::AI {
 
 using Core::Utils::JsonParser;
 using Core::Utils::JsonValue;
 
-BehaviorTreeInstance::BehaviorTreeInstance(const BehaviorTreeAsset* Asset)
+BehaviorTreeInstance::BehaviorTreeInstance(const BehaviorTreeScriptAsset* Asset)
 {
     BindAsset(Asset);
 }
 
-void BehaviorTreeInstance::BindAsset(const BehaviorTreeAsset* Asset)
+void BehaviorTreeInstance::BindAsset(const BehaviorTreeScriptAsset* Asset)
 {
     mAsset = Asset;
     mBlackboard = AIBlackboardState{};
@@ -116,7 +116,7 @@ static void PopulateSyntheticBehaviorTree(
     const std::string& FourCC,
     uint32_t EntryOffset,
     bool IsBW,
-    BehaviorTreeAsset& OutAsset)
+    BehaviorTreeScriptAsset& OutAsset)
 {
     OutAsset.AssetName = (IsBW ? "BW_" : "AI_") + FourCC;
     OutAsset.ScriptIDFourCC = FourCC;
@@ -240,13 +240,13 @@ bool BehaviorTreeCatalog::LoadFromAssetsR(const std::string& AssetsRRootPath)
     {
         for (const auto& [FourCC, Offset] : AIOffsets)
         {
-            BehaviorTreeAsset Asset;
+            BehaviorTreeScriptAsset Asset;
             PopulateSyntheticBehaviorTree(FourCC, Offset, false, Asset);
             mAIScriptTrees.emplace(FourCC, std::move(Asset));
         }
         for (const auto& [FourCC, Offset] : BWOffsets)
         {
-            BehaviorTreeAsset Asset;
+            BehaviorTreeScriptAsset Asset;
             PopulateSyntheticBehaviorTree(FourCC, Offset, true, Asset);
             mBWScriptTrees.emplace(FourCC, std::move(Asset));
         }
@@ -258,7 +258,7 @@ bool BehaviorTreeCatalog::LoadFromAssetsR(const std::string& AssetsRRootPath)
     return false;
 }
 
-bool BehaviorTreeCatalog::LoadTreeFile(const std::string& JsonPath, std::unordered_map<std::string, BehaviorTreeAsset>& OutMap, size_t& OutLoadedCount)
+bool BehaviorTreeCatalog::LoadTreeFile(const std::string& JsonPath, std::unordered_map<std::string, BehaviorTreeScriptAsset>& OutMap, size_t& OutLoadedCount)
 {
     JsonValue Root;
     if (!JsonParser::ParseFile(JsonPath, Root)) return false;
@@ -267,7 +267,7 @@ bool BehaviorTreeCatalog::LoadTreeFile(const std::string& JsonPath, std::unorder
     OutLoadedCount = TreesObj.size();
 
     for (const auto& [FourCC, TreeVal] : TreesObj) {
-        BehaviorTreeAsset Asset;
+        BehaviorTreeScriptAsset Asset;
         Asset.AssetName = TreeVal["bt_asset_name"].AsString();
         Asset.ScriptIDFourCC = TreeVal["script_id_fourcc"].AsString(FourCC);
         Asset.RoleCategory = TreeVal["role_category"].AsString();
@@ -358,7 +358,7 @@ bool BehaviorTreeCatalog::LoadTreeFile(const std::string& JsonPath, std::unorder
     return true;
 }
 
-const BehaviorTreeAsset* BehaviorTreeCatalog::FindTree(const std::string& FourCC, bool PreferBWScript) const
+const BehaviorTreeScriptAsset* BehaviorTreeCatalog::FindTree(const std::string& FourCC, bool PreferBWScript) const
 {
     if (PreferBWScript) {
         auto BWIt = mBWScriptTrees.find(FourCC);
@@ -435,4 +435,4 @@ bool BehaviorTreeCatalog::CrossVerifyBinaryScripts(
     return OutMismatches == 0 && OutVerifiedCount == (mAIScriptTrees.size() + mBWScriptTrees.size());
 }
 
-} // namespace Game::AI
+} // namespace Engine::AI

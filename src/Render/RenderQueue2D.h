@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Render/GpuTextureHandle.h"
 #include "Render/SceneNode2D.h"
 #include "Resource/ModernAssetRegistry.h"

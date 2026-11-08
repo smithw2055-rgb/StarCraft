@@ -6103,6 +6103,29 @@ bool AIBrain::BindBehaviorTree(const Game::AI::BehaviorTreeAsset* Asset)
     return true;
 }
 
+bool AIBrain::BindBehaviorTreeFromServer(const Engine::AI::BehaviorTreeServer& Server, std::string_view ScriptID)
+{
+    std::string Key(ScriptID);
+    bool PreferBW = false;
+    if (Key.rfind("BW_", 0) == 0)
+    {
+        Key = Key.substr(3);
+        PreferBW = true;
+    }
+    const auto* ScriptAsset = Server.GetCatalog().FindTree(Key, PreferBW);
+    return BindBehaviorTree(ScriptAsset);
+}
+
+Engine::AI::BTStatus AIBrain::TickServerBehaviorTree(
+    const Engine::AI::BehaviorTreeServer& Server,
+    std::string_view ScriptID,
+    Engine::AI::Blackboard& Board)
+{
+    Board.SetInt("AIPlayerID", mAIPlayerID);
+    Board.SetInt("TargetPlayerID", mTargetPlayerID);
+    return Server.TickTreeByName(ScriptID, Board);
+}
+
 int AIBrain::ResolveModernAssetUnitDefID(const std::string& ModernUnitName) const
 {
     std::string Clean = ModernUnitName;

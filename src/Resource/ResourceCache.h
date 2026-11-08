@@ -15,7 +15,6 @@
 #include "Resource/GrpToGpu.h"
 #include "Resource/UIAssetTypes.h"
 #include "Resource/GameDataLoader.h"
-#include "Resource/GpuImage.h"
 #include "Resource/IArchiveReader.h"
 #include "Resource/Palette.h"
 #include "Resource/TilesetAssetCacheView.h"

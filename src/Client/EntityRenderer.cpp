@@ -6,7 +6,7 @@
 #include "Game/ProtossPower.h"
 #include "Resource/GameDataLoader.h"
 #include "Render/Draw2D.h"
-#include "Render/Color.h"
+#include "Core/Color.h"
 #include "Core/Utils/Logger.h"
 
 #include <algorithm>

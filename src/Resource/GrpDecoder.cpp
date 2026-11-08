@@ -1,5 +1,5 @@
 #include "Resource/GrpDecoder.h"
-#include "Resource/PalDecoder.h"
+#include "Resource/Palette.h"
 #include "Core/Utils/Logger.h"
 
 #include <cstdlib>

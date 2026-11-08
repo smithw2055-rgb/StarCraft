@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <optional>
 
-#include "Resource/RgbaImage.h"
+#include "Resource/RawColor.h"
 
 namespace Resource::Graphics
 {

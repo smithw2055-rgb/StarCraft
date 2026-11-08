@@ -3,22 +3,14 @@
 #include <cstdint>
 #include <string>
 
+#include "Core/Audio/ModernAudioEventRouter.h"
 #include "Core/ECS/EntityManager.h"
 #include "Core/Math/Vec2.h"
 
 namespace Game::Events {
 
-// Track 2: audio_notify_track signal
-struct AnimAudioNotifyEvent {
-    Core::ECS::EntityID SourceEntity = Core::ECS::InvalidEntity;
-    uint32_t IScriptID = 0;
-    std::string ClipName;
-    uint32_t Tick = 0;
-    uint32_t SoundID = 0;
-    uint32_t SoundIDMax = 0;
-    std::string AudioClipPath;
-    Core::Math::Vec2 WorldPos{0.0f, 0.0f};
-};
+// Track 2: audio_notify_track signal (aliased from Core::Audio::AnimAudioNotifyEvent)
+using AnimAudioNotifyEvent = Core::Audio::AnimAudioNotifyEvent;
 
 // Track 3: combat_notify_track signal
 struct AnimCombatNotifyEvent {
