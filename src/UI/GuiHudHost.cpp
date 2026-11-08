@@ -30,7 +30,7 @@ struct ID3D11DeviceContext;
 
 #include "third_party/sokol/sokol_app.h"
 #include "UI/GlueAnimatedImage.h"
-#include "UI/GlueComponentRegistration.h"
+#include "UI/GlueMenuController.h"
 #include "UI/HudMinimapGeometry.h"
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"

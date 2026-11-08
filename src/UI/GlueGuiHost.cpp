@@ -1,6 +1,6 @@
 #include "GlueGuiHost.h"
 #include "GlueAnimatedImage.h"
-#include "GlueComponentRegistration.h"
+// GlueComponentRegistration consolidated into GlueMenuController.h
 #include "GlueMenuController.h"
 #include <algorithm>
 #include <cmath>

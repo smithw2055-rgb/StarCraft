@@ -2,9 +2,8 @@
 
 #include "Core/Color.h"
 #include "Render/Camera2D.h"
-#include "Render/GpuBufferHandle.h"
-#include "Render/Shader2D.h"
 #include "Render/GpuTextureHandle.h"
+#include "Render/Shader2D.h"
 #include "Render/RenderQueue2D.h"
 
 #include "third_party/HandmadeMath.h"

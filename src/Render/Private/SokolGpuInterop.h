@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Render/GpuBufferHandle.h"
-#include "Render/GpuShaderHandle.h"
 #include "Render/GpuTextureHandle.h"
 #include "third_party/sokol/sokol_gfx.h"
 

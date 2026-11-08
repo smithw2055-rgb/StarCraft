@@ -93,23 +93,9 @@ set(GUI_CORE_LIB "${GUI_BIN_DIR}/Aero.lib")
 set(GUI_APP_DLL "${GUI_BIN_DIR}/AeroApp.dll")
 set(GUI_CORE_DLL "${GUI_BIN_DIR}/Aero.dll")
 
-# AngelScript (optional script runtime)
-option(BUILD_ANGELSCRIPT "Build AngelScript third-party scripting library" OFF)
+# AngelScript third-party scripting retired in Phase 51/55
 set(ANGELSCRIPT_TARGET "")
 set(HAS_ANGELSCRIPT FALSE)
-if(BUILD_ANGELSCRIPT)
-    set(ANGELSCRIPT_CMAKE_DIR "${CMAKE_SOURCE_DIR}/third_party/AngelScript/angelscript/projects/cmake")
-    if(EXISTS "${ANGELSCRIPT_CMAKE_DIR}/CMakeLists.txt")
-        add_subdirectory(
-            ${ANGELSCRIPT_CMAKE_DIR}
-            "${CMAKE_BINARY_DIR}/third_party/angelscript"
-        )
-        if(TARGET angelscript)
-            set(ANGELSCRIPT_TARGET angelscript)
-            set(HAS_ANGELSCRIPT TRUE)
-        endif()
-    endif()
-endif()
 
 if(EXISTS "${GUI_INCLUDE_DIR}"
     AND EXISTS "${GUI_APP_LIB}"
@@ -246,109 +232,6 @@ else()
     message(STATUS "  libvpx:    NOT FOUND (WebM decode disabled)")
 endif()
 
-# MpqListTest (legacy raylib dependent test removed).
-# Keep the tool available only for archive parsing smoke checks.
-option(BUILD_MPQ_LIST_TEST "Build MPQ file listing test tool" OFF)
-if(BUILD_MPQ_LIST_TEST)
-    add_executable(MpqListTest
-        tests/MpqListTest/MpqListTest.cpp
-        src/Resource/MpqArchive.cpp
-        src/Core/Utils/Logger.cpp
-    )
-
-    target_include_directories(MpqListTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-    target_link_libraries(MpqListTest PRIVATE
-        ${StormLib_TARGET}
-    )
-
-    target_compile_definitions(MpqListTest PRIVATE
-        $<$<BOOL:${HAS_STORMLIB}>:HAS_STORMLIB>
-        $<$<BOOL:${HAS_STORMLIB}>:STORMLIB_NO_AUTO_LINK>
-        $<$<BOOL:${HAS_STORMLIB}>:__STORMLIB_NO_STATIC_LINK__>
-    )
-
-    if(MSVC)
-        target_compile_options(MpqListTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MpqListTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MpqListTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
-option(BUILD_MAP_PARSE_TEST "Build map parsing test tool" OFF)
-if(BUILD_MAP_PARSE_TEST)
-    add_executable(MapParseTest
-        tests/MapParseTest/MapParseTest.cpp
-        src/Resource/MpqArchive.cpp
-        src/Core/Utils/Logger.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-    )
-
-    target_include_directories(MapParseTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-    target_link_libraries(MapParseTest PRIVATE
-        ${StormLib_TARGET}
-    )
-
-    target_compile_definitions(MapParseTest PRIVATE
-        $<$<BOOL:${HAS_STORMLIB}>:HAS_STORMLIB>
-        $<$<BOOL:${HAS_STORMLIB}>:STORMLIB_NO_AUTO_LINK>
-        $<$<BOOL:${HAS_STORMLIB}>:__STORMLIB_NO_STATIC_LINK__>
-    )
-
-    if(MSVC)
-        target_compile_options(MapParseTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MapParseTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MapParseTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
-option(BUILD_MAP_RESOURCE_ANALYZER "Build map resource analysis tool" OFF)
-if(BUILD_MAP_RESOURCE_ANALYZER)
-    add_executable(MapResourceAnalyzer
-        tests/MapResourceAnalyzer/MapResourceAnalyzer.cpp
-        src/Resource/MpqArchive.cpp
-        src/Resource/CascArchive.cpp
-        src/Resource/IArchiveReader.cpp
-        src/Resource/FileSystemArchive.cpp
-        src/Resource/GameDetector.cpp
-        src/Resource/GameDataLoader.cpp
-        src/Resource/DatDecoder.cpp
-        src/Resource/TblDecoder.cpp
-        src/Resource/Palette.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Core/Utils/Logger.cpp
-    )
-
-    target_include_directories(MapResourceAnalyzer PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-    target_link_libraries(MapResourceAnalyzer PRIVATE
-        ${StormLib_TARGET}
-        ${CascLib_TARGET}
-    )
-
-    target_compile_definitions(MapResourceAnalyzer PRIVATE
-        $<$<BOOL:${HAS_STORMLIB}>:HAS_STORMLIB>
-        $<$<BOOL:${HAS_STORMLIB}>:STORMLIB_NO_AUTO_LINK>
-        $<$<BOOL:${HAS_STORMLIB}>:__STORMLIB_NO_STATIC_LINK__>
-        $<$<BOOL:${HAS_CASCLIB}>:HAS_CASCLIB>
-    )
-
-    if(MSVC)
-        target_compile_options(MapResourceAnalyzer PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(MapResourceAnalyzer PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(MapResourceAnalyzer PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
 # ============================================================================
 # Shared Engine Core Object Library & Common Target Configuration Helper
 # ============================================================================
@@ -417,6 +300,7 @@ option(BUILD_ANIMATION_STATE_TEST "Build animation state regression test" ON)
 if(BUILD_ANIMATION_STATE_TEST)
     add_executable(AnimationStateTest
         tests/Regression/AnimationStateTest.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
     )
 
     starcraft_configure_test_target(AnimationStateTest)
@@ -457,7 +341,6 @@ if(BUILD_SPRITE_IMAGE_DATA_TEST)
         src/Resource/DatDecoder.cpp
         src/Resource/FileSystemArchive.cpp
         src/Resource/GameDataLoader.cpp
-        src/Resource/GameDetector.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/MpqArchive.cpp
@@ -511,6 +394,7 @@ option(BUILD_HUD_MINIMAP_GEOMETRY_TEST "Build HUD minimap geometry regression te
 if(BUILD_HUD_MINIMAP_GEOMETRY_TEST)
     add_executable(HudMinimapGeometryTest
         tests/Regression/HudMinimapGeometryTest.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
     )
 
     starcraft_configure_test_target(HudMinimapGeometryTest)
@@ -612,6 +496,7 @@ option(BUILD_SELECTION_FOOTPRINT_TEST "Build selection footprint regression test
 if(BUILD_SELECTION_FOOTPRINT_TEST)
     add_executable(SelectionFootprintTest
         tests/Regression/SelectionFootprintTest.cpp
+        $<TARGET_OBJECTS:StarCraftCoreObj>
     )
 
     starcraft_configure_test_target(SelectionFootprintTest)
@@ -797,35 +682,6 @@ if(BUILD_MATCH_OUTCOME_TEST)
     starcraft_configure_test_target(MatchOutcomeTest)
 endif()
 
-option(BUILD_RESOURCE_EXTRACTOR "Build resource extraction tool" OFF)
-if(BUILD_RESOURCE_EXTRACTOR)
-    add_executable(ResourceExtractor
-        tests/ResourceExtractor/ResourceExtractor.cpp
-        src/Resource/MpqArchive.cpp
-        src/Core/Utils/Logger.cpp
-    )
-
-    target_include_directories(ResourceExtractor PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-    target_link_libraries(ResourceExtractor PRIVATE
-        ${StormLib_TARGET}
-    )
-
-    target_compile_definitions(ResourceExtractor PRIVATE
-        $<$<BOOL:${HAS_STORMLIB}>:HAS_STORMLIB>
-        $<$<BOOL:${HAS_STORMLIB}>:STORMLIB_NO_AUTO_LINK>
-        $<$<BOOL:${HAS_STORMLIB}>:__STORMLIB_NO_STATIC_LINK__>
-    )
-
-    if(MSVC)
-        target_compile_options(ResourceExtractor PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(ResourceExtractor PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(ResourceExtractor PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
 option(BUILD_OGG_VORBIS_DECODE_TEST "Build Ogg/Vorbis decode regression test" ON)
 if(BUILD_OGG_VORBIS_DECODE_TEST)
     add_executable(OggVorbisDecodeTest
@@ -865,103 +721,6 @@ if(BUILD_TRANSPORT_SYSTEM_TEST)
     starcraft_configure_test_target(TransportSystemTest)
 endif()
 
-option(BUILD_MANUAL_WEBM_VIDEO_DECODE_TEST "Build manual WebM/VPx decode regression targets" OFF)
-if(BUILD_MANUAL_WEBM_VIDEO_DECODE_TEST AND HAS_LIBVPX)
-    set(_WEBM_VIDEO_DECODE_TEST_SRC "${CMAKE_SOURCE_DIR}/tests/Regression/WebmVideoDecodeTest.cpp")
-    set(_WEBM_ASSET_COVERAGE_TEST_SRC "${CMAKE_SOURCE_DIR}/tests/Regression/WebmAssetCoverageTest.cpp")
-    if(EXISTS "${_WEBM_VIDEO_DECODE_TEST_SRC}" AND EXISTS "${_WEBM_ASSET_COVERAGE_TEST_SRC}")
-        add_executable(WebmVideoDecodeTest
-            ${_WEBM_VIDEO_DECODE_TEST_SRC}
-            src/Resource/PortraitVideoDecoder.cpp
-        )
-
-        target_include_directories(WebmVideoDecodeTest PRIVATE
-            ${CMAKE_SOURCE_DIR}
-            ${CMAKE_SOURCE_DIR}/src)
-        target_compile_definitions(WebmVideoDecodeTest PRIVATE HAS_LIBVPX)
-        target_link_libraries(WebmVideoDecodeTest PRIVATE ${LIBVPX_TARGET})
-
-        if(MSVC)
-            target_compile_options(WebmVideoDecodeTest PRIVATE /W4 /utf-8 /permissive-)
-            target_compile_definitions(WebmVideoDecodeTest PRIVATE
-                _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-        else()
-            target_compile_options(WebmVideoDecodeTest PRIVATE -Wall -Wextra -Wpedantic)
-        endif()
-
-        add_executable(WebmAssetCoverageTest
-            ${_WEBM_ASSET_COVERAGE_TEST_SRC}
-            src/Resource/PortraitVideoDecoder.cpp
-        )
-
-        target_include_directories(WebmAssetCoverageTest PRIVATE
-            ${CMAKE_SOURCE_DIR}
-            ${CMAKE_SOURCE_DIR}/src)
-        target_compile_definitions(WebmAssetCoverageTest PRIVATE HAS_LIBVPX)
-        target_link_libraries(WebmAssetCoverageTest PRIVATE ${LIBVPX_TARGET})
-
-        if(MSVC)
-            target_compile_options(WebmAssetCoverageTest PRIVATE /W4 /utf-8 /permissive-)
-            target_compile_definitions(WebmAssetCoverageTest PRIVATE
-                _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-        else()
-            target_compile_options(WebmAssetCoverageTest PRIVATE -Wall -Wextra -Wpedantic)
-        endif()
-    else()
-        message(STATUS "  WebM tests: skipped (regression source file missing)")
-    endif()
-endif()
-
-option(BUILD_TRIGGER_RUNTIME_TEST "Build trigger parser/runtime regression test" ON)
-if(BUILD_TRIGGER_RUNTIME_TEST)
-    add_executable(TriggerRuntimeTest
-        tests/TriggerRuntimeTest/TriggerRuntimeTest.cpp
-        $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Campaign/CampaignController.cpp
-        src/Game/Trigger/TriggerVM.cpp
-        src/Game/AI/BehaviorTreeRuntime.cpp
-        src/Game/IScriptVM.cpp
-        src/Game/Races/RaceDef.cpp
-        src/Game/Systems/HarvestSystem.cpp
-        src/Game/Systems/AnimationSystem.cpp
-        src/Game/Systems/MovementSystem.cpp
-        src/Game/Systems/UpgradeSystem.cpp
-        src/Game/Pathfinding/AStar.cpp
-        src/Client/MapLoader.cpp
-        src/Game/Map/ChkParser.cpp
-        src/Game/Map/Map.cpp
-        src/Resource/IArchiveReader.cpp
-        src/Resource/MpqArchive.cpp
-        src/Resource/CascArchive.cpp
-        src/Resource/FileSystemArchive.cpp
-        src/Resource/GameDetector.cpp
-    )
-
-    target_include_directories(TriggerRuntimeTest PRIVATE
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src)
-
-    target_link_libraries(TriggerRuntimeTest PRIVATE
-        ${StormLib_TARGET}
-        ${CascLib_TARGET}
-    )
-
-    target_compile_definitions(TriggerRuntimeTest PRIVATE
-        $<$<BOOL:${HAS_STORMLIB}>:HAS_STORMLIB>
-        $<$<BOOL:${HAS_STORMLIB}>:STORMLIB_NO_AUTO_LINK>
-        $<$<BOOL:${HAS_STORMLIB}>:__STORMLIB_NO_STATIC_LINK__>
-        $<$<BOOL:${HAS_CASCLIB}>:HAS_CASCLIB>
-    )
-
-    if(MSVC)
-        target_compile_options(TriggerRuntimeTest PRIVATE /W4 /utf-8 /permissive-)
-        target_compile_definitions(TriggerRuntimeTest PRIVATE
-            _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    else()
-        target_compile_options(TriggerRuntimeTest PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
 option(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST "Build all-campaign catalog runtime regression test" ON)
 if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
     add_executable(CampaignCatalogRuntimeTest
@@ -986,7 +745,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Resource/MpqArchive.cpp
         src/Resource/CascArchive.cpp
         src/Resource/FileSystemArchive.cpp
-        src/Resource/GameDetector.cpp
     )
 
     target_include_directories(CampaignCatalogRuntimeTest PRIVATE
@@ -1088,7 +846,6 @@ foreach(_StarCraftRegressionTest IN ITEMS
     MouseCoordinateTest
     CameraEdgeScrollTest
     IScriptOverlayTest
-    TriggerRuntimeTest
     CampaignCatalogRuntimeTest
     HudMinimapGeometryTest
     FogOfWarStatusTest
@@ -1146,18 +903,15 @@ if(BUILD_GAME_CLIENT)
         src/Resource/MpqArchive.cpp
         src/Resource/CascArchive.cpp
         src/Resource/FileSystemArchive.cpp
-        src/Resource/GameDetector.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/Cv5Decoder.cpp
-        src/Resource/Vx4Decoder.cpp
         src/Resource/Vf4Decoder.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/TblDecoder.cpp
         src/Game/Map/ChkParser.cpp
         src/Client/MapLoader.cpp
         src/Client/ClientRuntime.cpp
-        src/Client/WorldEffects.cpp
         src/Game/IScriptVM.cpp
         src/Client/TilesetRenderer.cpp
         src/Client/EntityRenderer.cpp
@@ -1201,7 +955,6 @@ if(BUILD_GAME_CLIENT)
         src/Game/AI/AIBrain.cpp
         src/Game/Campaign/CampaignController.cpp
         src/Game/Campaign/CampaignMissionCatalog.cpp
-        src/Game/Campaign/CampaignProgressStore.cpp
         src/Game/Trigger/TriggerVM.cpp
         src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/Systems/UpgradeSystem.cpp
@@ -1720,4 +1473,38 @@ if(BUILD_PHASE49_TO_54_ENGINE_ZERO_DEPENDENCY_TEST)
         tests/Regression/Phase49To54EngineZeroDependencyAndUnificationTest.cpp
         src/Game/AI/AIBrain.cpp
         src/Resource/Palette.cpp)
+endif()
+
+# ============================================================================
+# Phase 55-60: General-Purpose Engine Foundation Library + Game Project Split
+# ============================================================================
+add_library(EngineFoundationObj OBJECT
+    src/Core/ECS/EntityManager.cpp
+    src/Core/ECS/SystemManager.cpp
+    src/Core/Utils/Logger.cpp
+    src/Resource/IArchiveReader.cpp
+    src/Resource/FileSystemArchive.cpp
+    src/Resource/Cv5Decoder.cpp
+    src/Resource/Vf4Decoder.cpp
+    src/Resource/TblDecoder.cpp
+    src/Resource/Palette.cpp
+    src/Resource/ModernAssetRegistry.cpp
+    src/Render/ParticleSystem.cpp
+)
+target_include_directories(EngineFoundationObj PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+)
+if(MSVC)
+    target_compile_options(EngineFoundationObj PRIVATE /W4 /utf-8 /permissive-)
+    target_compile_definitions(EngineFoundationObj PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    target_compile_options(EngineFoundationObj PRIVATE -Wall -Wextra -Wpedantic -pthread)
+endif()
+
+option(BUILD_PHASE55_TO_60_ENGINE_PROJECT_SPLIT_TEST "Build Phase 55-60 Engine Foundation + Game Project Split, VFS, TilemapServer2D & ScenarioTriggerServer test" ON)
+if(BUILD_PHASE55_TO_60_ENGINE_PROJECT_SPLIT_TEST)
+    starcraft_add_modern_phase_test(Phase55To60EngineProjectSplitAndVfsTilemapTest
+        tests/Regression/Phase55To60EngineProjectSplitAndVfsTilemapTest.cpp
+        src/Resource/Cv5Decoder.cpp)
 endif()

@@ -4,7 +4,6 @@
 #include "Core/Math/Vec2.h"
 #include "Main/GameLoop/CursorTypes.h"
 #include "Resource/UIAssetCacheView.h"
-#include "Resource/TilesetAssetCacheView.h"
 
 #include <memory>
 #include <string>

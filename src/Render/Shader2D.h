@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Render/GpuShaderHandle.h"
+#include "Render/GpuTextureHandle.h"
 
 namespace Render
 {

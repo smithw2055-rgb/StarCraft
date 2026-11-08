@@ -1,8 +1,7 @@
 #include "UI/Hud.h"
 
-#include "UI/HudButtonStyle.h"
-#include "UI/HudLayout.h"
 #include "UI/HudRenderPrimitives.h"
+#include "UI/HudLayout.h"
 #include "Game/Components.h"
 #include "Core/Platform/Platform.h"
 #include "Render/Draw2D.h"
@@ -1698,7 +1697,6 @@ void Hud::SetButton(int Index,
 } // namespace Game::Client::UI
 
 // === Consolidated HudCommandActions ===
-#include "Game/Races/RaceDef.h"
 
 #include <cstddef>
 

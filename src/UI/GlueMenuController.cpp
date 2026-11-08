@@ -2,7 +2,7 @@
 #include "GlueAnimatedImage.h"
 #include "UI/GlueCampaignData.h"
 #include "Game/Campaign/CampaignMissionCatalog.h"
-#include "Game/Campaign/CampaignProgressStore.h"
+#include "Game/Campaign/CampaignController.h"
 #include <NsCore/ReflectionImplement.h>
 #include <NsGui/Button.h>
 #include <NsGui/Border.h>

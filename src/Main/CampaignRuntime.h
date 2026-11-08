@@ -5,7 +5,6 @@
 
 #include "Core/Utils/Logger.h"
 #include "Game/Campaign/CampaignController.h"
-#include "Game/Campaign/CampaignProgressStore.h"
 #include "Game/Trigger/TriggerVM.h"
 #include "Main/CampaignPresentation.h"
 

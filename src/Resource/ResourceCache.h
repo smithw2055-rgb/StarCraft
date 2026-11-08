@@ -10,14 +10,14 @@
 #include <vector>
 
 #include "Resource/Cv5Decoder.h"
-#include "Resource/Vx4Decoder.h"
+
 #include "Resource/Vf4Decoder.h"
 #include "Resource/GrpToGpu.h"
 #include "Resource/UIAssetTypes.h"
 #include "Resource/GameDataLoader.h"
 #include "Resource/IArchiveReader.h"
 #include "Resource/Palette.h"
-#include "Resource/TilesetAssetCacheView.h"
+#include "Resource/UIAssetCacheView.h"
 
 namespace Resource::Graphics
 {

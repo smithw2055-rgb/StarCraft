@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Client/Entity.h"
-#include "Resource/TilesetAssetCacheView.h"
+#include "Resource/UIAssetCacheView.h"
 #include "Render/Camera2D.h"
 
 namespace Game::Client

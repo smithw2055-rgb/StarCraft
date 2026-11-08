@@ -32,7 +32,10 @@
 #include "Engine/Scene/PackedScene2D.h"
 #include "Engine/Scene/PrefabRegistry.h"
 #include "Engine/Scene/SceneLoaderServer.h"
+#include "Engine/Scripting/ScenarioTriggerServer.h"
+#include "Engine/Tilemap/TilemapServer2D.h"
 #include "Engine/UI/UIServer2D.h"
+#include "Engine/VFS/VirtualFileSystemServer.h"
 #include "Render/RenderServer2D.h"
 #include "Resource/AssetServer.h"
 
@@ -62,9 +65,10 @@ public:
 };
 
 // ============================================================================
-// EngineContext: Unified Server Architecture Container (Phases 34–48)
+// EngineContext: Unified 15-Server Architecture Container (Phases 34–60)
 // Referenced from Godot 4 Server Architecture (RenderingServer, AudioServer2D,
 // AnimationServer2D, PhysicsServer2D, NavigationServer2D, UIServer2D,
+// TilemapServer2D, VirtualFileSystemServer, ScenarioTriggerServer,
 // SceneLoaderServer, ResourceLoader, InputMap, SceneTree) & Unity Subsystems:
 // - Aggregates all core engine servers into a single non-global context owned
 //   by EngineApp, eliminating scattered global state across modules.
@@ -80,6 +84,10 @@ public:
     }
 
     Core::Concurrency::JobSystem& Jobs() noexcept { return Core::Concurrency::JobSystem::Instance(); }
+
+    Engine::VFS::VirtualFileSystemServer& VFS() noexcept { return mVFSServer; }
+    const Engine::VFS::VirtualFileSystemServer& VFS() const noexcept { return mVFSServer; }
+
     Resource::AssetServer& Assets() noexcept { return mAssetServer; }
     const Resource::AssetServer& Assets() const noexcept { return mAssetServer; }
 
@@ -88,6 +96,9 @@ public:
 
     Engine::Render::RenderGraph2D& RenderGraph() noexcept { return mRenderGraph2D; }
     const Engine::Render::RenderGraph2D& RenderGraph() const noexcept { return mRenderGraph2D; }
+
+    Engine::Tilemap::TilemapServer2D& Tilemap2D() noexcept { return mTilemapServer2D; }
+    const Engine::Tilemap::TilemapServer2D& Tilemap2D() const noexcept { return mTilemapServer2D; }
 
     Engine::Animation::AnimationServer2D& Animation2D() noexcept { return mAnimationServer2D; }
     const Engine::Animation::AnimationServer2D& Animation2D() const noexcept { return mAnimationServer2D; }
@@ -103,6 +114,9 @@ public:
 
     Engine::AI::BehaviorTreeServer& BehaviorTrees() noexcept { return mBehaviorTreeServer; }
     const Engine::AI::BehaviorTreeServer& BehaviorTrees() const noexcept { return mBehaviorTreeServer; }
+
+    Engine::Scripting::ScenarioTriggerServer& ScenarioTriggers() noexcept { return mScenarioTriggerServer; }
+    const Engine::Scripting::ScenarioTriggerServer& ScenarioTriggers() const noexcept { return mScenarioTriggerServer; }
 
     Engine::UI::UIServer2D& UI2D() noexcept { return mUIServer2D; }
     const Engine::UI::UIServer2D& UI2D() const noexcept { return mUIServer2D; }
@@ -136,14 +150,17 @@ public:
 
 private:
     TimeStepAccumulator mTime;
+    Engine::VFS::VirtualFileSystemServer mVFSServer;
     Resource::AssetServer mAssetServer;
     ::Render::RenderServer2D mRenderServer2D;
     Engine::Render::RenderGraph2D mRenderGraph2D;
+    Engine::Tilemap::TilemapServer2D mTilemapServer2D;
     Engine::Animation::AnimationServer2D mAnimationServer2D;
     Engine::Audio::AudioServer2D mAudioServer2D;
     Engine::Physics::PhysicsServer2D mPhysicsServer2D;
     Engine::Navigation::NavigationServer2D mNavigationServer2D;
     Engine::AI::BehaviorTreeServer mBehaviorTreeServer;
+    Engine::Scripting::ScenarioTriggerServer mScenarioTriggerServer;
     Engine::UI::UIServer2D mUIServer2D;
     Engine::Scene::PrefabRegistry mPrefabRegistry;
     Engine::Scene::SceneLoaderServer mSceneLoaderServer;
@@ -251,6 +268,7 @@ public:
         }
 
         mContext.Assets().FlushPendingGpuUploads(GpuUploadBudgetBytes);
+        mContext.Tilemap2D().StepEnvironmentSimulation(WallDeltaSeconds);
         mContext.Audio2D().FlushFrame({0.0f, 0.0f}, 1600.0f, WallDeltaSeconds);
         mContext.SceneTree().PropagateAllTransforms();
 
@@ -318,6 +336,8 @@ private:
         {
             mRollbackBuffer.RecordTick(mPrimaryWorld.GetEntityManager(), CurrentTick);
         }
+
+        mContext.ScenarioTriggers().EvaluateTick(CurrentTick);
 
         for (auto& Plugin : mPlugins)
         {

@@ -125,10 +125,7 @@ void Hud::DrawInfoPanelFrame(const HudLayout& Layout, bool HasModularConsole)
 
 #include "Core/Platform/Platform.h"
 #include "Game/Components.h"
-#include "Render/Draw2D.h"
-#include "UI/HudLayout.h"
 #include "UI/HudPortrait.h"
-#include "UI/HudRenderPrimitives.h"
 
 namespace Game::Client::UI
 {
@@ -307,12 +304,6 @@ void Hud::DrawInfoPanelPortraits(Core::ECS::EntityManager& Entities,
 #include <cstdio>
 #include <string>
 
-#include "Render/Draw2D.h"
-#include "UI/HudButtonStyle.h"
-#include "UI/HudLayout.h"
-#include "UI/HudRenderPrimitives.h"
-#include "UI/HudInfoWidgets.h"
-#include "UI/HudText.h"
 
 namespace Game::Client::UI
 {
@@ -446,12 +437,6 @@ void Hud::DrawScvInfoPanel(const HudLayout& Layout,
 #include <cstdio>
 #include <string>
 
-#include "Core/Platform/Platform.h"
-#include "Render/Draw2D.h"
-#include "UI/HudLayout.h"
-#include "UI/HudRenderPrimitives.h"
-#include "UI/HudInfoWidgets.h"
-#include "UI/HudText.h"
 
 namespace Game::Client::UI
 {

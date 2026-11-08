@@ -31,7 +31,6 @@ void Hud::Draw(Core::ECS::EntityManager& Entities,
 } // namespace Game::Client::UI
 
 // === Consolidated HudConsole ===
-#include "UI/HudLayout.h"
 #include "UI/HudRenderPrimitives.h"
 
 #include <algorithm>
@@ -179,7 +178,6 @@ bool Hud::DrawConsoleChrome(const HudLayout& Layout, int ViewportWidth)
 #include <sstream>
 
 #include "Core/Utils/InputDebug.h"
-#include "UI/HudLayout.h"
 #include "UI/HudMinimapGeometry.h"
 
 namespace Game::Client::UI
@@ -288,10 +286,6 @@ int Hud::GetHudHeight(int VW, int VH) const
 
 // === Consolidated HudCommandPanelRender ===
 #include "Core/Platform/Platform.h"
-#include "Render/Draw2D.h"
-#include "UI/HudButtonStyle.h"
-#include "UI/HudLayout.h"
-#include "UI/HudRenderPrimitives.h"
 #include "UI/HudText.h"
 
 #include <cstddef>

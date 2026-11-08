@@ -2,7 +2,7 @@
 
 #include "Resource/MpqArchive.h"
 #include "Resource/CascArchive.h"
-#include "Resource/GameDetector.h"
+#include "Resource/IArchiveReader.h"
 
 #include "Core/Utils/Logger.h"
 

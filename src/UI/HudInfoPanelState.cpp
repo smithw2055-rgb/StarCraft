@@ -5,7 +5,7 @@
 #include <string>
 #include <utility>
 
-#include "Game/MovementTuning.h"
+#include "Game/DataEnums.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "UI/HudText.h"
 

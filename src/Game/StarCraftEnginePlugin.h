@@ -9,6 +9,7 @@
 #include "Core/ECS/SystemGroup.h"
 #include "Core/ECS/WorldSnapshot.h"
 #include "Engine/EngineApp.h"
+#include "Engine/Project/EngineProjectHost.h"
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/Races/UnitPrototypeRegistry.h"
@@ -37,20 +38,24 @@ namespace Game
 {
 
 // ============================================================================
-// StarCraftEnginePlugin: StarCraft RTS Module Mounted on General-Purpose EngineApp
-// Demonstrates how StarCraft: Remastered acts as an experimental flagship module
-// hosted on top of the reusable Engine Foundation (Engine::EngineApp):
+// StarCraftEnginePlugin / StarCraftGameModule:
+// StarCraft RTS Experimental Game Module Mounted on General-Purpose EngineApp
+// Demonstrates how StarCraft: Remastered acts as a decoupled game project module
+// hosted on top of the reusable Engine Foundation (Engine::EngineApp & EngineProjectHost):
+// - Mounts cloud assets-R onto Engine::VFS::VirtualFileSystemServer ("res://")
 // - Loads or binds cloud-converted ModernAssetRegistry (assets-R)
 // - Auto-populates Engine::Scene::PrefabRegistry (228 unit prefabs),
 //   Engine::Animation::AnimationServer2D (398 controllers / 1,364 clips + 2D sockets),
 //   Engine::Audio::AudioServer2D (1,144 SFX catalog),
-//   Engine::UI::UIServer2D (HD UI & wireframe atlases), and
+//   Engine::UI::UIServer2D (12 HD UI & wireframe atlases),
+//   Engine::Tilemap::TilemapServer2D (8 GPU Tileset LUTs + 395 foliage records + 294 parallax stars),
+//   Engine::Scripting::ScenarioTriggerServer (CHK scenario trigger metadata), and
 //   Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees)
 // - Synchronizes UnitPrototypeRegistry and SystemAssetBridge without legacy .dat files
 // - Registers WorldContext rollback resources (PlayerResourceStore, WorldUpgradeResource)
 // - Installs hierarchical SystemGroups across FixedSimulation, Presentation, and RenderExtract
 // ============================================================================
-class StarCraftEnginePlugin final : public Engine::IPlugin
+class StarCraftEnginePlugin final : public Engine::Project::IGameModule
 {
 public:
     explicit StarCraftEnginePlugin(std::string AssetsRPath = "assets-R",
@@ -61,6 +66,42 @@ public:
     }
 
     std::string_view GetName() const override { return "StarCraftEnginePlugin"; }
+    std::string_view GetModuleVersion() const override { return "2.0.0-Remastered-HD"; }
+
+    void ConfigureProject(Engine::Project::ProjectManifest& Manifest) override
+    {
+        Manifest.ProjectName = "StarCraft: Remastered (Experimental Engine Project)";
+        Manifest.FixedTickHz = 24.0f;
+        Manifest.MaxSubStepsPerFrame = 4;
+        if (!mAssetsRPath.empty())
+            Manifest.AssetMountRoot = mAssetsRPath;
+        Manifest.StartupSceneUri = "res://04_Terrain_Environment_And_Shaders/Byways_Chk_Full_Scene.json";
+        Manifest.AuthoritativeRollback = true;
+    }
+
+    void OnMountVFS(Engine::VFS::VirtualFileSystemServer& VFS,
+                    const Engine::Project::ProjectManifest& Manifest) override
+    {
+        if (!Manifest.AssetMountRoot.empty() && VFS.GetMountCount() == 0)
+        {
+            VFS.MountDirectory("res://", Manifest.AssetMountRoot, /*Priority=*/0, /*ReadOnly=*/true);
+        }
+    }
+
+    bool OnLoadInitialScene(Engine::EngineApp& App,
+                            const Engine::Project::ProjectManifest& Manifest) override
+    {
+        const std::string ScenePath = App.Context().VFS().ResolvePhysicalPath(Manifest.StartupSceneUri);
+        App.Context().ScenarioTriggers().ImportScenarioMetadataFromChkJsonFile(ScenePath);
+        const std::string AssetsRoot = !Manifest.AssetMountRoot.empty() ? Manifest.AssetMountRoot : mAssetsRPath;
+        return App.Context().SceneLoader().LoadSceneFromAssetsR(
+            AssetsRoot,
+            App.Entities(),
+            App.Context().SceneTree(),
+            App.Context().Prefabs(),
+            &App.Context().Navigation2D(),
+            &App.Context().Physics2D());
+    }
 
     void OnRegister(Engine::EngineApp& App) override
     {
@@ -74,16 +115,22 @@ public:
         auto& SM = App.PrimaryWorld();
         auto& EM = SM.GetEntityManager();
 
-        // 1. Load cloud assets-R catalog if path is configured and bind to all Engine Servers
+        // 1. Mount VFS and load cloud assets-R catalog into all 15 Engine Servers
         if (!mAssetsRPath.empty())
         {
+            App.Context().VFS().MountDirectory("res://", mAssetsRPath, /*Priority=*/0, /*ReadOnly=*/true);
             if (mOwnedAssetRegistry.LoadFromAssetsRDirectory(mAssetsRPath))
             {
                 mActiveRegistry = &mOwnedAssetRegistry;
             }
             App.Context().BehaviorTrees().LoadFromAssetsRDirectory(mAssetsRPath);
+            App.Context().Tilemap2D().LoadFromAssetsRDirectory(mAssetsRPath);
             App.Context().UI2D().ImportHDUIAtlasesFromManifest(
-                mAssetsRPath + "/04_Terrain_Environment_And_Shaders/Terrain_CHK_And_HD_Effects_Manifest.json");
+                App.Context().VFS().ResolvePhysicalPath(
+                    "res://04_Terrain_Environment_And_Shaders/Terrain_CHK_And_HD_Effects_Manifest.json"));
+            App.Context().ScenarioTriggers().ImportScenarioMetadataFromChkJsonFile(
+                App.Context().VFS().ResolvePhysicalPath(
+                    "res://04_Terrain_Environment_And_Shaders/Byways_Chk_Full_Scene.json"));
         }
         if (mActiveRegistry && mActiveRegistry->IsLoaded())
         {
@@ -244,5 +291,7 @@ private:
     Core::Audio::ModernAudioEventRouterSystem* mAudioRouter = nullptr;
     Render::ModernRenderPipelineSystem* mRenderPipeline = nullptr;
 };
+
+using StarCraftGameModule = StarCraftEnginePlugin;
 
 } // namespace Game
