@@ -7,7 +7,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Core/ECS/SystemManager.h"
 #include "Core/ECS/WorldSnapshot.h"
-#include "Game/AI/BehaviorTreeRuntime.h"
+#include "Game/AI/AIBrain.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"

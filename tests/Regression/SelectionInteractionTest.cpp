@@ -1,5 +1,5 @@
 #include "Client/Selection.h"
-#include "Game/PlayerColor.h"
+#include "Game/DataEnums.h"
 
 #include "Core/ECS/EntityManager.h"
 #include "Resource/GameDataLoader.h"

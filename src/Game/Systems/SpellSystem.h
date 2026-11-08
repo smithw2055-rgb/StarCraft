@@ -2,6 +2,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Engine/Gameplay/AbilityAndStatusServer2D.h"
 #include <vector>
 #include <string>
 #include <functional>
@@ -69,9 +70,13 @@ public:
     static int GetSpellEnergyCost(SpellType Spell);
     static float GetSpellCooldown(SpellType Spell);
 
+    static void BindEngineAbilityServer(Engine::Gameplay::AbilityAndStatusServer2D* Server) noexcept { sEngineAbilityServer = Server; }
+    static Engine::Gameplay::AbilityAndStatusServer2D* GetBoundEngineAbilityServer() noexcept { return sEngineAbilityServer; }
+
 private:
     Core::ECS::SystemManager& mSystemMgr;
     float mStormTickTimer = 0.0f;
+    inline static Engine::Gameplay::AbilityAndStatusServer2D* sEngineAbilityServer = nullptr;
 };
 
 } // namespace Game::Systems

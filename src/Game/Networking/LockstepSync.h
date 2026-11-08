@@ -1,4 +1,6 @@
 #pragma once
+#include "Engine/Net/NetworkTransportServer.h"
+
 
 #include <vector>
 #include <cstdint>
@@ -480,6 +482,7 @@ public:
 
     bool VerifyHash(uint32_t FromClient, uint8_t Index, uint32_t RemoteHash) const
     {
+        (void)RemoteHash;
         auto It = mRemoteHashes.find(Index);
         if (It == mRemoteHashes.end()) return true;
         auto CI = It->second.find(FromClient);
@@ -745,6 +748,10 @@ private:
     std::unordered_map<uint8_t, std::unordered_map<uint32_t, uint32_t>> mRemoteHashes;
 
     StateHashFn mStateHashCallback;
+    Engine::Net::LoopbackNetworkHub* mBoundEngineTransportHub = nullptr;
+public:
+    void BindEngineTransportHub(Engine::Net::LoopbackNetworkHub* Hub) noexcept { mBoundEngineTransportHub = Hub; }
+    Engine::Net::LoopbackNetworkHub* GetBoundEngineTransportHub() const noexcept { return mBoundEngineTransportHub; }
 };
 
 } // namespace Game::Networking

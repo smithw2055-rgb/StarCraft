@@ -1,5 +1,5 @@
 #include "Render/SokolPBRDispatcher.h"
-#include "Render/Private/SokolGpuInterop.h"
+#include "Render/GpuTextureHandle.h"
 #include "Resource/RgbaImageFileDecoder.h"
 
 #include <algorithm>

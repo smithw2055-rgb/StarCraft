@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Core/ECS/SystemManager.h"
+#include "Engine/Gameplay/BuildingPlacementServer2D.h"
 #include "Core/Math/Vec2.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
@@ -311,12 +312,16 @@ public:
                                               int EntityID,
                                               float DeltaTime);
 
+    static void BindEnginePlacementServer(Engine::Gameplay::BuildingPlacementServer2D* Server) noexcept { sEnginePlacementServer = Server; }
+    static Engine::Gameplay::BuildingPlacementServer2D* GetBoundEnginePlacementServer() noexcept { return sEnginePlacementServer; }
+
 private:
     void ProcessPendingBuildOrders(Core::ECS::EntityManager& EM, float DeltaTime);
     void ProcessConstruction(Core::ECS::EntityManager& EM, int EntityID, float DeltaTime);
 
     Core::ECS::SystemManager& mSystemMgr;
     static const Game::Map::GameMap* sMap;
+    inline static Engine::Gameplay::BuildingPlacementServer2D* sEnginePlacementServer = nullptr;
 };
 
 inline BuildingSystem::BuildingFootprintTiles BuildingSystem::BuildingFootprintSizeForDef(int BuildingDefID)

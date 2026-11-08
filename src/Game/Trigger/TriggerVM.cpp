@@ -10,7 +10,7 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/BuildingSystem.h"
-#include "Game/PlayerColor.h"
+#include "Game/DataEnums.h"
 
 #include <algorithm>
 #include <cmath>

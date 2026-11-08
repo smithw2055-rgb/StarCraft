@@ -10,7 +10,6 @@
 
 #include "Core/ECS/EntityManager.h"
 #include "Core/Math/FixedPoint.h"
-#include "Core/Math/Rect.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Spatial/DeterministicSpatialGrid2D.h"
 

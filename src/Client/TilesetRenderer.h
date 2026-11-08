@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Client/Entity.h"
+#include "Client/EntityRenderer.h"
 #include "Resource/UIAssetCacheView.h"
 #include "Render/Camera2D.h"
 #include "Engine/Tilemap/TilemapServer2D.h"

@@ -23,7 +23,11 @@
 #include "Engine/ECS/GenericWorldSnapshot.h"
 #include "Engine/ECS/WorldSerializer.h"
 #include "Engine/EngineTime.h"
+#include "Engine/Gameplay/AbilityAndStatusServer2D.h"
+#include "Engine/Gameplay/BuildingPlacementServer2D.h"
 #include "Engine/Gameplay/EconomyAndProductionServer.h"
+#include "Engine/Gameplay/GarrisonAndTransportServer2D.h"
+#include "Engine/Gameplay/TechAndUpgradeServer.h"
 #include "Engine/Input/CameraAndSelectionServer2D.h"
 #include "Engine/Input/CommandRouter.h"
 #include "Engine/Navigation/NavigationServer2D.h"
@@ -126,6 +130,18 @@ public:
     Engine::Gameplay::EconomyAndProductionServer& EconomyAndProduction() noexcept { return mEconomyAndProductionServer; }
     const Engine::Gameplay::EconomyAndProductionServer& EconomyAndProduction() const noexcept { return mEconomyAndProductionServer; }
 
+    Engine::Gameplay::BuildingPlacementServer2D& BuildingPlacement2D() noexcept { return mBuildingPlacementServer2D; }
+    const Engine::Gameplay::BuildingPlacementServer2D& BuildingPlacement2D() const noexcept { return mBuildingPlacementServer2D; }
+
+    Engine::Gameplay::TechAndUpgradeServer& TechAndUpgrades() noexcept { return mTechAndUpgradeServer; }
+    const Engine::Gameplay::TechAndUpgradeServer& TechAndUpgrades() const noexcept { return mTechAndUpgradeServer; }
+
+    Engine::Gameplay::AbilityAndStatusServer2D& AbilityAndStatus2D() noexcept { return mAbilityAndStatusServer2D; }
+    const Engine::Gameplay::AbilityAndStatusServer2D& AbilityAndStatus2D() const noexcept { return mAbilityAndStatusServer2D; }
+
+    Engine::Gameplay::GarrisonAndTransportServer2D& GarrisonAndTransport2D() noexcept { return mGarrisonAndTransportServer2D; }
+    const Engine::Gameplay::GarrisonAndTransportServer2D& GarrisonAndTransport2D() const noexcept { return mGarrisonAndTransportServer2D; }
+
     Engine::Combat::CombatAndProjectileServer2D& Combat2D() noexcept { return mCombatServer2D; }
     const Engine::Combat::CombatAndProjectileServer2D& Combat2D() const noexcept { return mCombatServer2D; }
 
@@ -179,6 +195,10 @@ private:
     Engine::Vision::VisionServer2D mVisionServer2D;
     Engine::Input::CameraAndSelectionServer2D mCameraAndSelectionServer2D;
     Engine::Gameplay::EconomyAndProductionServer mEconomyAndProductionServer;
+    Engine::Gameplay::BuildingPlacementServer2D mBuildingPlacementServer2D;
+    Engine::Gameplay::TechAndUpgradeServer mTechAndUpgradeServer;
+    Engine::Gameplay::AbilityAndStatusServer2D mAbilityAndStatusServer2D;
+    Engine::Gameplay::GarrisonAndTransportServer2D mGarrisonAndTransportServer2D;
     Engine::Combat::CombatAndProjectileServer2D mCombatServer2D;
     Engine::AI::BehaviorTreeServer mBehaviorTreeServer;
     Engine::Scripting::ScenarioTriggerServer mScenarioTriggerServer;
@@ -360,6 +380,9 @@ private:
 
         mContext.ScenarioTriggers().EvaluateTick(CurrentTick);
         mContext.EconomyAndProduction().StepProductionQueues(1u);
+        mContext.TechAndUpgrades().StepResearchQueues(1u);
+        mContext.AbilityAndStatus2D().StepEnergyRegeneration(1u);
+        mContext.AbilityAndStatus2D().StepStatusEffects(1u);
         mContext.Combat2D().StepProjectiles(FixedDt);
 
         for (auto& Plugin : mPlugins)

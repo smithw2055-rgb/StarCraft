@@ -3,7 +3,7 @@
 #include "Game/IScriptVM.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/DeathEvents.h"
-#include "Game/Systems/GeyserState.h"
+#include "Game/Systems/HarvestSystem.h"
 
 #include <algorithm>
 #include <cmath>

@@ -2,7 +2,6 @@
 #include "Client/ClientRuntime.h"
 
 #include "Client/CameraController.h"
-#include "Client/Entity.h"
 #include "Client/EntityRenderer.h"
 #include "Client/Selection.h"
 #include "Core/Color.h"
@@ -18,7 +17,6 @@
 #include "Resource/ResourceCache.h"
 #include "Render/Camera2D.h"
 #include "Render/Draw2D.h"
-#include "Render/Renderer.h"
 #include "third_party/sokol/sokol_app.h"
 #include "UI/Hud.h"
 

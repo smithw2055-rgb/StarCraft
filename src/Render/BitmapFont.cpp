@@ -1,5 +1,5 @@
 #include "Render/BitmapFont.h"
-#include "Render/Private/SokolGpuInterop.h"
+#include "Render/GpuTextureHandle.h"
 
 #include "Core/Utils/Logger.h"
 

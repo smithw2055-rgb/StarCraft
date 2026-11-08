@@ -2,6 +2,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Engine/Gameplay/GarrisonAndTransportServer2D.h"
 #include <vector>
 
 namespace Game::Map { class GameMap; }
@@ -43,8 +44,12 @@ public:
     static bool CanEnterBunker(int ChkUnitID);
     static int GetLoadedSpace(Core::ECS::EntityManager& EM, int TransportID);
 
+    static void BindEngineGarrisonServer(Engine::Gameplay::GarrisonAndTransportServer2D* Server) noexcept { sEngineGarrisonServer = Server; }
+    static Engine::Gameplay::GarrisonAndTransportServer2D* GetBoundEngineGarrisonServer() noexcept { return sEngineGarrisonServer; }
+
 private:
     Core::ECS::SystemManager& mSystemMgr;
+    inline static Engine::Gameplay::GarrisonAndTransportServer2D* sEngineGarrisonServer = nullptr;
 };
 
 } // namespace Game::Systems

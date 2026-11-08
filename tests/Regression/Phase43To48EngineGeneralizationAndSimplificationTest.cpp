@@ -15,7 +15,7 @@
 #include "Engine/Engine.h"
 #include "Game/Networking/RollbackStateManager.h"
 #include "Game/StarCraftEnginePlugin.h"
-#include "Main/GameLoop/HudResourceSync.h"
+#include "Main/GameRuntimeFrame.h"
 #include "UI/HudState.h"
 
 namespace Core::Platform

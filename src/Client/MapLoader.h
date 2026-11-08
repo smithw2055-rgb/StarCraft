@@ -6,7 +6,7 @@
 
 #include "Resource/IArchiveReader.h"
 
-#include "Client/Entity.h"
+#include "Client/EntityRenderer.h"
 #include "Game/Map/ChkParser.h"
 
 namespace Game::Client

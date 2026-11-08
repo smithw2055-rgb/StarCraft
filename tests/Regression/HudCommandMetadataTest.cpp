@@ -3,7 +3,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
-#include "Game/ProtossPower.h"
+#include "Game/Systems/ProtossSystem.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/BuildingSystem.h"
 #include "Game/Systems/CombatSystem.h"
@@ -11,8 +11,8 @@
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Main/GameCommandDispatchRuntime.h"
-#include "Main/GameLoop/CursorTypes.h"
-#include "UI/MainGuiSelectionPresentation.h"
+#include "Main/GameLoop/CursorManager.h"
+#include "UI/MainGui.h"
 #include "UI/HudText.h"
 
 #include <cstdio>

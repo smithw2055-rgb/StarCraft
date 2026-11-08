@@ -5,8 +5,9 @@
 #define SOKOL_LOG_IMPL
 #include "third_party/sokol/sokol_gfx.h"
 #include "third_party/sokol/sokol_log.h"
+#undef SOKOL_GFX_IMPL
+#undef SOKOL_LOG_IMPL
 #include "Core/Platform/Platform.h"
-#include "Render/Renderer.h"
 #include "Render/Draw2D.h"
 namespace Core::Platform {
     int GetWindowWidth() { return 1280; }
@@ -55,7 +56,6 @@ namespace Core::Audio {
 }
 #include "Core/ECS/WorldSnapshot.h"
 #include "Game/AI/AIBrain.h"
-#include "Game/Events/GameEvents.h"
 #include "Game/Networking/LockstepSync.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/DeclarativeAnimationPlayer.h"
@@ -73,12 +73,11 @@ namespace Core::Audio {
 #include "Core/ECS/EventBus.h"
 #include "Core/ECS/SystemManager.h"
 #include "Core/ECS/WorldContext.h"
-#include "Game/AI/BehaviorTreeRuntime.h"
 #include "Game/Components.h"
 #include "Game/IScriptVM.h"
 #include "Game/Map/ChkParser.h"
 #include "Render/RenderQueue2D.h"
-#include "Render/SceneNode2D.h"
+#include "Engine/Node2D.h"
 #include "Resource/Cv5Decoder.h"
 #include "Resource/GameDataLoader.h"
 #include "Resource/ModernAssetRegistry.h"

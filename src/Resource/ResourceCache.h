@@ -12,7 +12,7 @@
 #include "Resource/Cv5Decoder.h"
 
 #include "Resource/Vf4Decoder.h"
-#include "Resource/GrpToGpu.h"
+#include "Resource/GrpDecoder.h"
 #include "Resource/UIAssetTypes.h"
 #include "Resource/GameDataLoader.h"
 #include "Resource/IArchiveReader.h"

@@ -237,8 +237,6 @@ endif()
 # ============================================================================
 add_library(StarCraftCoreObj OBJECT
     src/Core/ECS/EntityManager.cpp
-    src/Core/ECS/SystemManager.cpp
-    src/Core/Utils/Logger.cpp
 )
 target_include_directories(StarCraftCoreObj PUBLIC
     ${CMAKE_SOURCE_DIR}
@@ -272,7 +270,6 @@ if(BUILD_COMBAT_RULES_TEST)
         tests/Regression/CombatRulesTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BulletSystem.cpp
@@ -324,7 +321,6 @@ option(BUILD_ISCRIPT_OVERLAY_TEST "Build iscript overlay regression test" ON)
 if(BUILD_ISCRIPT_OVERLAY_TEST)
     add_executable(IScriptOverlayTest
         tests/Regression/IScriptOverlayTest.cpp
-        src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
     )
 
@@ -335,13 +331,11 @@ option(BUILD_SPRITE_IMAGE_DATA_TEST "Build sprite/image data mapping regression 
 if(BUILD_SPRITE_IMAGE_DATA_TEST)
     add_executable(SpriteImageDataTest
         tests/Regression/SpriteImageDataTest.cpp
-        src/Core/Utils/Logger.cpp
         src/Game/IScriptVM.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/IArchiveReader.cpp
-        src/Resource/Palette.cpp
     )
 
     starcraft_configure_test_target(SpriteImageDataTest)
@@ -372,7 +366,6 @@ if(BUILD_COMMAND_SYSTEM_ORDER_TEST)
     add_executable(CommandSystemOrderTest
         tests/Regression/CommandSystemOrderTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -414,7 +407,6 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
     add_executable(HudCommandMetadataTest
         tests/Regression/HudCommandMetadataTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -438,7 +430,6 @@ option(BUILD_CHK_STRING_ENCODING_TEST "Build CHK string encoding regression test
 if(BUILD_CHK_STRING_ENCODING_TEST)
     add_executable(ChkStringEncodingTest
         tests/Regression/ChkStringEncodingTest.cpp
-        src/Game/Map/ChkParser.cpp
     )
 
     starcraft_configure_test_target(ChkStringEncodingTest)
@@ -449,7 +440,6 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
     add_executable(SmartClickCommandTest
         tests/Regression/SmartClickCommandTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -512,7 +502,6 @@ if(BUILD_MOVEMENT_COMMAND_TEST)
     add_executable(MovementCommandTest
         tests/Regression/MovementCommandTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -538,7 +527,6 @@ if(BUILD_NAVIGATION_DETERMINISM_TEST)
     add_executable(NavigationDeterminismTest
         tests/Regression/NavigationDeterminismTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -554,7 +542,6 @@ if(BUILD_NAVIGATION_STRESS_TEST)
     add_executable(NavigationStressTest
         tests/Regression/NavigationStressTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -569,7 +556,6 @@ if(BUILD_PRODUCTION_ECONOMY_TEST)
     add_executable(ProductionEconomyTest
         tests/Regression/ProductionEconomyTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -591,7 +577,6 @@ if(BUILD_ZERG_CREEP_REGRESSION_TEST)
     add_executable(ZergCreepRegressionTest
         tests/Regression/ZergCreepRegressionTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -623,7 +608,6 @@ if(BUILD_HARVEST_SYSTEM_COMMAND_TEST)
     add_executable(HarvestSystemCommandTest
         tests/Regression/HarvestSystemCommandTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Systems/HarvestSystem.cpp
@@ -640,7 +624,6 @@ if(BUILD_BUILDING_PLACEMENT_TEST)
     add_executable(BuildingPlacementTest
         tests/Regression/BuildingPlacementTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/BuildingSystem.cpp
@@ -661,7 +644,6 @@ if(BUILD_MATCH_OUTCOME_TEST)
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/IScriptVM.cpp
         src/Game/Map/Map.cpp
-        src/Game/Map/ChkParser.cpp
     )
 
     starcraft_configure_test_target(MatchOutcomeTest)
@@ -682,7 +664,6 @@ if(BUILD_TRANSPORT_SYSTEM_TEST)
         tests/Regression/TransportSystemTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -721,7 +702,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Pathfinding/AStar.cpp
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Resource/IArchiveReader.cpp
     )
@@ -777,7 +757,6 @@ if(BUILD_PHASE2_ENGINE_MODERNIZATION_TEST)
     add_executable(Phase2EngineModernizationTest
         tests/Regression/Phase2EngineModernizationTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -859,20 +838,17 @@ if(BUILD_GAME_CLIENT)
     set(STARCRAFT_CLIENT_SOURCES
         src/Main/GameMain.cpp
         src/Core/Platform/Platform.cpp
-        src/Core/Utils/Logger.cpp
         src/Core/Audio/AudioSystem.cpp
         src/Render/Renderer.cpp
         src/Render/Shader2D.cpp
         src/Render/BitmapFont.cpp
         src/Render/Draw2D.cpp
-        src/Resource/Palette.cpp
         src/Resource/PortraitVideoDecoder.cpp
         src/Resource/ResourceCache.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/DatDecoder.cpp
-        src/Game/Map/ChkParser.cpp
         src/Client/ClientRuntime.cpp
         src/Game/IScriptVM.cpp
         src/Client/EntityRenderer.cpp
@@ -884,7 +860,6 @@ if(BUILD_GAME_CLIENT)
         "src/UI/HudInfoPanel.cpp"
         "src/Main/GameController.cpp"
         src/Core/ECS/EntityManager.cpp
-        src/Core/ECS/SystemManager.cpp
         src/Game/Systems/CommandSystem.cpp
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/HarvestSystem.cpp
@@ -1071,7 +1046,6 @@ if(BUILD_PHASE3_RENDER_PIPELINE_TEST)
         tests/Regression/Phase3RenderPipelineTest.cpp
         src/Client/EntityRenderer.cpp
         src/Core/ECS/EntityManager.cpp
-        src/Core/Utils/Logger.cpp
     )
 
     starcraft_configure_test_target(Phase3RenderPipelineTest)
@@ -1087,7 +1061,6 @@ if(BUILD_PHASE10_TO_13_ENGINE_MODERNIZATION_TEST)
     add_executable(Phase10To13EngineModernizationTest
         tests/Regression/Phase10To13EngineModernizationTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -1125,7 +1098,6 @@ if(BUILD_PHASE6_ENGINE_ARCHITECTURE_REFACTOR_TEST)
     add_executable(Phase6EngineArchitectureRefactorTest
         tests/Regression/Phase6EngineArchitectureRefactorTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
     )
@@ -1154,7 +1126,6 @@ if(BUILD_PHASE5_JOB_SYSTEM_PARALLEL_TEST)
     add_executable(Phase5JobSystemParallelTest
         tests/Regression/Phase5JobSystemParallelTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/FogOfWarSystem.cpp
@@ -1183,7 +1154,6 @@ if(BUILD_PHASE4_HUD_MVVM_BINDING_TEST)
     add_executable(Phase4HudMvvmBindingTest
         tests/Regression/Phase4HudMvvmBindingTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -1223,7 +1193,6 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         tests/Regression/ModernEngineVerificationTest.cpp
         $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/IScriptVM.cpp
-        src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
@@ -1247,7 +1216,6 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         src/Resource/GameDataLoader.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/DatDecoder.cpp
-        src/Resource/Palette.cpp
         src/Resource/ModernAssetRegistry.cpp
         src/Render/Draw2D.cpp
         src/Render/Shader2D.cpp
@@ -1278,7 +1246,6 @@ endif()
 
 add_library(StarCraftSimulationObj OBJECT
     src/Game/IScriptVM.cpp
-    src/Game/Map/ChkParser.cpp
     src/Game/Map/Map.cpp
     src/Game/Pathfinding/AStar.cpp
     src/Game/Races/RaceDef.cpp
@@ -1396,8 +1363,7 @@ option(BUILD_PHASE49_TO_54_ENGINE_ZERO_DEPENDENCY_TEST "Build Phase 49-54 Zero-D
 if(BUILD_PHASE49_TO_54_ENGINE_ZERO_DEPENDENCY_TEST)
     starcraft_add_modern_phase_test(Phase49To54EngineZeroDependencyAndUnificationTest
         tests/Regression/Phase49To54EngineZeroDependencyAndUnificationTest.cpp
-        src/Game/AI/AIBrain.cpp
-        src/Resource/Palette.cpp)
+        src/Game/AI/AIBrain.cpp)
 endif()
 
 # ============================================================================
@@ -1405,10 +1371,7 @@ endif()
 # ============================================================================
 add_library(EngineFoundationObj OBJECT
     src/Core/ECS/EntityManager.cpp
-    src/Core/ECS/SystemManager.cpp
-    src/Core/Utils/Logger.cpp
     src/Resource/IArchiveReader.cpp
-    src/Resource/Palette.cpp
     src/Resource/ModernAssetRegistry.cpp
 )
 target_include_directories(EngineFoundationObj PUBLIC
@@ -1433,8 +1396,7 @@ if(BUILD_PHASE61_TO_66_ENGINE_CONVERGENCE_TEST)
     starcraft_add_modern_phase_test(Phase61To66EngineConvergenceAndLegacyRetirementTest
         tests/Regression/Phase61To66EngineConvergenceAndLegacyRetirementTest.cpp
         src/Game/AI/AIBrain.cpp
-        src/Resource/IArchiveReader.cpp
-        src/Resource/Palette.cpp)
+        src/Resource/IArchiveReader.cpp)
 endif()
 
 option(BUILD_PHASE67_TO_71_ENGINE_CONVERGENCE_TEST "Build Phase 67-71 Cloud-First Animation, FlowFieldCache2D, Replay/Transport Convergence, RenderGraph2D Preset & 20-File Consolidation test" ON)
@@ -1442,8 +1404,7 @@ if(BUILD_PHASE67_TO_71_ENGINE_CONVERGENCE_TEST)
     starcraft_add_modern_phase_test(Phase67To71EngineConvergenceAndConsolidationTest
         tests/Regression/Phase67To71EngineConvergenceAndConsolidationTest.cpp
         src/Game/AI/AIBrain.cpp
-        src/Resource/IArchiveReader.cpp
-        src/Resource/Palette.cpp)
+        src/Resource/IArchiveReader.cpp)
 endif()
 
 option(BUILD_PHASE72_TO_77_ENGINE_EVOLUTION_TEST "Build Phase 72-77 21-File Consolidation, VisionServer2D, CameraAndSelectionServer2D, EconomyAndProductionServer, CombatAndProjectileServer2D & EngineProjectRegistry test" ON)
@@ -1451,6 +1412,13 @@ if(BUILD_PHASE72_TO_77_ENGINE_EVOLUTION_TEST)
     starcraft_add_modern_phase_test(Phase72To77EngineEvolutionAndSimplificationTest
         tests/Regression/Phase72To77EngineEvolutionAndSimplificationTest.cpp
         src/Game/AI/AIBrain.cpp
-        src/Resource/IArchiveReader.cpp
-        src/Resource/Palette.cpp)
+        src/Resource/IArchiveReader.cpp)
+endif()
+
+option(BUILD_PHASE78_TO_85_ENGINE_GAMEPLAY_SERVERS_TEST "Build Phase 78-85 24-File Consolidation, Dual-Track Unification, BuildingPlacementServer2D, TechAndUpgradeServer, AbilityAndStatusServer2D, GarrisonAndTransportServer2D & 23-Server Matrix test" ON)
+if(BUILD_PHASE78_TO_85_ENGINE_GAMEPLAY_SERVERS_TEST)
+    starcraft_add_modern_phase_test(Phase78To85EngineZeroCouplingAndGameplayServersTest
+        tests/Regression/Phase78To85EngineZeroCouplingAndGameplayServersTest.cpp
+        src/Game/AI/AIBrain.cpp
+        src/Resource/IArchiveReader.cpp)
 endif()

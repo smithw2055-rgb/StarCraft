@@ -3,6 +3,158 @@
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/Logger.h"
 #include "Main/GameLoop/GameSaveState.h"
+
+// === Consolidated from src/Main/GameLoop/HudResourceSync.h ===
+#include "Game/Systems/HarvestSystem.h"
+#include "UI/Hud.h"
+
+namespace Game::Client::GameLoop
+{
+
+inline void ResetPlayerResourceState()
+{
+    for (int PlayerId = 0; PlayerId < 8; ++PlayerId)
+    {
+        auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerId);
+        Resources.Minerals = 500;
+        Resources.VespeneGas = 0;
+        Resources.SupplyUsed = 0;
+        Resources.SupplyMax = 0;
+    }
+}
+
+inline UI::HudResourceState CaptureHudResourceState(const UI::Hud& Hud)
+{
+    return Hud.GetResourceState();
+}
+
+inline void RestorePlayerResourcesFromHudState(UI::Hud& Hud, const UI::HudResourceState& State, int PlayerId = 0)
+{
+    auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerId);
+    Resources.Minerals = State.MineralCount;
+    Resources.VespeneGas = State.GasCount;
+    Resources.SupplyUsed = State.SupplyUsed;
+    Resources.SupplyMax = State.SupplyMax;
+    Hud.SetResourceState(State);
+}
+
+inline void SyncHudFromPlayerResources(UI::Hud& Hud, int PlayerId = 0)
+{
+    auto& Resources = Game::Systems::HarvestSystem::GetResources(PlayerId);
+    UI::HudResourceState HudResources;
+    HudResources.MineralCount = Resources.Minerals;
+    HudResources.GasCount = Resources.VespeneGas;
+    HudResources.SupplyUsed = Resources.SupplyUsed;
+    HudResources.SupplyMax = Resources.SupplyMax;
+    Hud.SetResourceState(HudResources);
+}
+
+} // namespace Game::Client::GameLoop
+
+// === Consolidated from src/Main/GameMatchOutcomeRuntime.h ===
+#include "Main/GameSession.h"
+#include "Game/Components.h"
+#include "Game/Systems/FogOfWarSystem.h"
+
+#include <array>
+#include <cstdint>
+#include <string>
+
+namespace Game::Client::GameLoop
+{
+
+inline void UpdateMeleeMatchOutcome(GameSession& Session, float Dt)
+{
+    if (!Session.IsEcsInitialized() ||
+        !Session.IsMeleeVictoryCheckEnabled() ||
+        Session.IsMatchOver())
+    {
+        return;
+    }
+
+    Session.AdvanceMatchElapsed(Dt);
+
+    auto& EM = Session.Entities();
+    std::array<int, 8> BuildingCounts{};
+    std::array<int, 8> UnitCounts{};
+
+    for (int Eid : EM.GetEntitiesWith<Game::Components::UnitComponent,
+                                      Game::Components::PlayerComponent>())
+    {
+        auto* Unit = EM.GetComponent<Game::Components::UnitComponent>(Eid);
+        auto* Player = EM.GetComponent<Game::Components::PlayerComponent>(Eid);
+        if (!Unit || !Player || Unit->HitPoints <= 0 ||
+            Player->PlayerID < 0 || Player->PlayerID >= 8)
+        {
+            continue;
+        }
+        ++UnitCounts[(size_t)Player->PlayerID];
+        if (Game::Systems::IsMeleeStructureEntity(EM, Eid))
+            ++BuildingCounts[(size_t)Player->PlayerID];
+    }
+
+    for (int P = 0; P < 8; ++P)
+    {
+        if (UnitCounts[(size_t)P] > 0 || BuildingCounts[(size_t)P] > 0)
+            Session.ParticipatingPlayers[(size_t)P] = true;
+    }
+
+    if (Session.GetMatchElapsedSeconds() < 5.0f)
+        return;
+
+    const int LocalPlayerID = Session.GetLocalPlayerID();
+    const auto* Fog = Session.GetFogSystem();
+
+    if (!Session.ParticipatingPlayers[(size_t)LocalPlayerID])
+        return;
+
+    int ActiveOpponents = 0;
+    int EliminatedOpponents = 0;
+
+    for (int P = 0; P < 8; ++P)
+    {
+        if (P == LocalPlayerID || !Session.ParticipatingPlayers[(size_t)P])
+            continue;
+        if (Fog && Fog->AreAllied(LocalPlayerID, P))
+            continue;
+
+        ++ActiveOpponents;
+        if (BuildingCounts[(size_t)P] == 0)
+            ++EliminatedOpponents;
+    }
+
+    const bool LocalEliminated = BuildingCounts[(size_t)LocalPlayerID] == 0;
+
+    if (LocalEliminated)
+    {
+        if (ActiveOpponents > 0 && EliminatedOpponents == ActiveOpponents)
+        {
+            Session.SetMatchOutcome(MatchOutcome::Draw);
+            Core::Utils::Logger::Info(
+                "MatchOutcome", "Melee match draw at simulated_seconds=" +
+                std::to_string((int)Session.GetMatchElapsedSeconds()));
+        }
+        else
+        {
+            Session.SetMatchOutcome(MatchOutcome::Defeat);
+            Core::Utils::Logger::Info(
+                "MatchOutcome", "Melee match defeat: local player " +
+                std::to_string(LocalPlayerID) + " eliminated at simulated_seconds=" +
+                std::to_string((int)Session.GetMatchElapsedSeconds()));
+        }
+    }
+    else if (ActiveOpponents > 0 && EliminatedOpponents == ActiveOpponents)
+    {
+        Session.SetMatchOutcome(MatchOutcome::Victory);
+        Core::Utils::Logger::Info(
+            "MatchOutcome", "Melee match victory: local player " +
+            std::to_string(LocalPlayerID) + " victorious at simulated_seconds=" +
+            std::to_string((int)Session.GetMatchElapsedSeconds()));
+    }
+}
+
+} // namespace Game::Client::GameLoop
+
 // === Consolidated from src/Main/GameSaveRuntime.h ===
 #include <cstddef>
 #include <cstdio>
@@ -11,7 +163,6 @@
 #include "AppRuntime.h"
 #include "Core/ECS/WorldSnapshot.h"
 #include "Core/Utils/Logger.h"
-#include "Main/GameLoop/HudResourceSync.h"
 #include "Main/GameLoop/GameSaveState.h"
 #include "Main/GameMenuPresentation.h"
 #include "GameSession.h"
@@ -997,7 +1148,6 @@ inline bool UpdateActiveGameplayInputRuntime(
 #include "Main/GameRuntimeState.h"
 // === Consolidated from src/Main/GameSimulationRuntime.h ===
 #include "Client/ClientRuntime.h"
-#include "Main/GameLoop/HudResourceSync.h"
 // === Consolidated from src/Main/GameNetworkActionRuntime.h ===
 #include <cstddef>
 #include <cstdint>
@@ -1129,7 +1279,6 @@ inline void ExecuteNetworkAction(GameSession& Session, const Game::Networking::S
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
 
-#include "Main/GameMatchOutcomeRuntime.h"
 
 namespace Game::Client::GameLoop
 {
@@ -1294,7 +1443,7 @@ inline void RenderActiveCampaignOverlay(CampaignRuntime& Campaign,
 #include "Client/WorldEffects.h"
 #include "Game/Components.h"
 #include "Game/Systems/FogOfWarSystem.h"
-#include "Main/GameLoop/CursorTypes.h"
+#include "Main/GameLoop/CursorManager.h"
 #include "Main/GameSession.h"
 #include "UI/Hud.h"
 
@@ -1667,7 +1816,7 @@ inline Core::Scene::SceneManager& EnsureRuntimeScenesRegistered(GameRuntimeState
 } // namespace Game::Client::GameLoop
 
 
-#include "Render/Renderer.h"
+#include "Render/Draw2D.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -1818,3 +1967,4 @@ inline void HandleGameRuntimeFrameEvent(GameRuntimeState& Runtime, const void* E
 }
 
 } // namespace Game::Client::GameLoop
+

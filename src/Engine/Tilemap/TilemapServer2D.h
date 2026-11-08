@@ -11,7 +11,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Core/Math/Rect.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/JsonLite.h"
 

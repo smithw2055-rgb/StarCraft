@@ -1,6 +1,5 @@
-#include "Main/GameLoop/CursorTargeting.h"
-#include "Main/GameLoop/CursorTypes.h"
-#include "Game/Systems/GeyserState.h"
+#include "Main/GameLoop/CursorManager.h"
+#include "Game/Systems/HarvestSystem.h"
 
 #include <cstdlib>
 #include <iostream>

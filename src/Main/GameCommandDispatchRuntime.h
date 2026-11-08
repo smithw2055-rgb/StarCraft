@@ -1,5 +1,121 @@
 #pragma once
 
+// === Consolidated from src/Main/GameLoop/InputHandler.h ===
+#include <cstdint>
+#include <vector>
+#include "Core/ECS/EntityManager.h"
+
+namespace Core::Math { struct Vec2; }
+namespace Game::Components { enum class CommandType : uint8_t; }
+
+namespace Game::Client::GameLoop
+{
+
+void IssueMoveCommand(Core::ECS::EntityManager& EM,
+                      const std::vector<Core::ECS::EntityID>& EcsIds,
+                      const Core::Math::Vec2& Target);
+
+void IssuePatrolCommand(Core::ECS::EntityManager& EM,
+                        const std::vector<Core::ECS::EntityID>& EcsIds,
+                        const Core::Math::Vec2& Target);
+
+void IssueFollowCommand(Core::ECS::EntityManager& EM,
+                        const std::vector<Core::ECS::EntityID>& EcsIds,
+                        int TargetEntityId);
+
+void SetAllCommand(Core::ECS::EntityManager& EM,
+                   const std::vector<Core::ECS::EntityID>& EcsIds,
+                   Game::Components::CommandType Cmd);
+
+} // namespace Game::Client::GameLoop
+
+// === Inlined from src/Main/GameLoop/InputHandler.cpp ===
+
+
+#include "Game/Components.h"
+#include "Game/Systems/CommandSystem.h"
+#include "Core/Math/Vec2.h"
+
+namespace Game::Client::GameLoop
+{
+
+inline void IssueMoveCommand(Core::ECS::EntityManager& EM,
+                      const std::vector<Core::ECS::EntityID>& EcsIds,
+                      const Core::Math::Vec2& Target)
+{
+    Game::Systems::CommandSystem::IssueMove(EM, EcsIds, Target);
+}
+
+inline void IssuePatrolCommand(Core::ECS::EntityManager& EM,
+                        const std::vector<Core::ECS::EntityID>& EcsIds,
+                        const Core::Math::Vec2& Target)
+{
+    Game::Components::Order PatrolOrder;
+    PatrolOrder.Type = Game::Components::OrderType::Patrol;
+    PatrolOrder.TargetPosition = Target;
+    Game::Systems::CommandSystem::IssueOrder(EM, EcsIds, PatrolOrder, false);
+}
+
+inline void IssueFollowCommand(Core::ECS::EntityManager& EM,
+                        const std::vector<Core::ECS::EntityID>& EcsIds,
+                        int TargetEntityId)
+{
+    if (TargetEntityId < 0) return;
+    auto* FollowTarget = EM.GetComponent<Game::Components::TransformComponent>(TargetEntityId);
+    if (!FollowTarget)
+        return;
+
+    Game::Components::Order FollowOrder;
+    FollowOrder.Type = Game::Components::OrderType::Follow;
+    FollowOrder.TargetPosition = FollowTarget->Position;
+    FollowOrder.TargetEntityID = TargetEntityId;
+    Game::Systems::CommandSystem::IssueOrder(EM, EcsIds, FollowOrder, false);
+    for (int EntityId : EcsIds)
+    {
+        auto* Command = EM.GetComponent<Game::Components::CommandComponent>(EntityId);
+        if (Command && Command->CurrentCommand == Game::Components::CommandType::Follow)
+            Command->TargetEntityID = TargetEntityId;
+    }
+}
+
+inline void SetAllCommand(Core::ECS::EntityManager& EM,
+                   const std::vector<Core::ECS::EntityID>& EcsIds,
+                   Game::Components::CommandType Cmd)
+{
+    for (int Eid : EcsIds)
+    {
+        auto* C = EM.GetComponent<Game::Components::CommandComponent>(Eid);
+        if (C)
+        {
+            C->CancelAll();
+            C->CurrentCommand = Cmd;
+            C->TargetEntityID = -1;
+            C->TargetPosition = {};
+        }
+        auto* P = EM.GetComponent<Game::Components::PathfindingComponent>(Eid);
+        if (P)
+        {
+            P->Path.clear();
+            P->PathIndex = 0;
+            P->CurrentSpeed = 0.0f;
+            P->CurrentVelocity = {0.0f, 0.0f};
+        }
+        auto* Combat = EM.GetComponent<Game::Components::CombatComponent>(Eid);
+        if (Combat)
+        {
+            Combat->TargetEntityID = -1;
+            Combat->PendingAttackFrame = false;
+            Combat->PendingAttackTargetEntityID = -1;
+            Combat->PendingAttackTargetPos = {};
+            Combat->PendingAttackElapsed = 0.0f;
+        }
+    }
+}
+
+} // namespace Game::Client::GameLoop
+
+// === End src/Main/GameLoop/InputHandler.h ===
+
 #include <algorithm>
 #include <cctype>
 #include <vector>
@@ -19,8 +135,7 @@
 #include "Game/Systems/TransportSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"
-#include "Main/GameLoop/CursorTypes.h"
-#include "Main/GameLoop/InputHandler.h"
+#include "Main/GameLoop/CursorManager.h"
 #include "UI/Hud.h"
 
 namespace Game::Client::GameLoop

@@ -1,4 +1,4 @@
-#include "Client/SelectionFootprint.h"
+#include "Client/Selection.h"
 
 #include <cmath>
 #include <cstdlib>

@@ -60,7 +60,7 @@ namespace Core::Platform
     void SetMouseCursorVisible(bool) {}
 }
 
-#include "Main/GameLoop/EcsSync.h"
+#include "Main/GameRuntimeFrame.h"
 
 namespace Game::Client::UI
 {

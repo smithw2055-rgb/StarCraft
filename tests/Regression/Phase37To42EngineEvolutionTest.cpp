@@ -13,9 +13,8 @@
 
 #include "Engine/Engine.h"
 #include "Game/StarCraftEnginePlugin.h"
-#include "Main/GameLoop/EcsSync.h"
+#include "Main/GameRuntimeFrame.h"
 #include "Main/GameLoop/GameSaveState.h"
-#include "Main/GameLoop/HudResourceSync.h"
 
 
 namespace Core::Platform

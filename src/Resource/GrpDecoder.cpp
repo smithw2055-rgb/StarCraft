@@ -471,7 +471,7 @@ std::optional<std::vector<DecodedRgbaImage>> LoadDdsGrpRgbaFrames(const std::vec
 
 
 // === Consolidated from src/Resource/GrpToGpu.cpp ===
-#include "Resource/GrpToGpu.h"
+#include "Resource/GrpDecoder.h"
 
 #include "Core/Utils/Logger.h"
 

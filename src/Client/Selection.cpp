@@ -1,6 +1,5 @@
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Client/Selection.h"
-#include "Client/SelectionFootprint.h"
 #include "Game/DataEnums.h"
 #include "Resource/GameDataLoader.h"
 

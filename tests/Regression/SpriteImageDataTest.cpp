@@ -2,7 +2,6 @@
 #include "Resource/DatDecoder.h"
 #include "Resource/GrpDecoder.h"
 #include "Resource/LightTable.h"
-#include "Resource/GrpToGpu.h"
 #include "Resource/TblDecoder.h"
 
 #include "Core/Audio/AudioSystem.h"

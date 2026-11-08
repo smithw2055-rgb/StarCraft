@@ -9,7 +9,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Engine/DataAssetRegistry.h"
 #include "Engine/Scene/PackedScene2D.h"
-#include "Render/SceneNode2D.h"
+#include "Engine/Node2D.h"
 #include "Resource/ModernAssetRegistry.h"
 
 namespace Engine::Scene

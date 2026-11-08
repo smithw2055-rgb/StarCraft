@@ -1,5 +1,5 @@
 #include "Render/Draw2D.h"
-#include "Render/Private/SokolGpuInterop.h"
+#include "Render/GpuTextureHandle.h"
 
 #include "Core/Platform/Platform.h"
 #include "Render/BitmapFont.h"

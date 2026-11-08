@@ -7,6 +7,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/ECS/WorldSnapshot.h"
+#include "Engine/Gameplay/TechAndUpgradeServer.h"
 
 namespace Game::Systems
 {
@@ -74,8 +75,12 @@ public:
     static void RefreshUnitEnergyCap(Core::ECS::EntityManager& EM, int EntityID);
     static int GetMaxHangarCount(const Core::ECS::EntityManager& EM, int EntityID);
 
+    static void BindEngineTechAndUpgradeServer(Engine::Gameplay::TechAndUpgradeServer* Server) noexcept { sEngineTechServer = Server; }
+    static Engine::Gameplay::TechAndUpgradeServer* GetBoundEngineTechAndUpgradeServer() noexcept { return sEngineTechServer; }
+
 private:
     Core::ECS::SystemManager& mSystemMgr;
+    inline static Engine::Gameplay::TechAndUpgradeServer* sEngineTechServer = nullptr;
 };
 
 } // namespace Game::Systems

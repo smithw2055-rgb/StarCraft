@@ -1,9 +1,8 @@
 #include "Client/EntityRenderer.h"
-#include "Client/SelectionFootprint.h"
+#include "Client/Selection.h"
 
 #include "Game/DataEnums.h"
-#include "Game/PlayerColor.h"
-#include "Game/ProtossPower.h"
+#include "Game/Systems/ProtossSystem.h"
 #include "Resource/GameDataLoader.h"
 #include "Render/Draw2D.h"
 #include "Core/Color.h"

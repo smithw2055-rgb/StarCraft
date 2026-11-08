@@ -10,6 +10,12 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#ifdef DrawText
+#undef DrawText
+#endif
+#ifdef PlaySound
+#undef PlaySound
+#endif
 #elif __has_include(<iconv.h>)
 #include <iconv.h>
 #include <vector>

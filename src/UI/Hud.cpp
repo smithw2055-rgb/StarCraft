@@ -178,7 +178,7 @@ bool Hud::DrawConsoleChrome(const HudLayout& Layout, int ViewportWidth)
 #include <sstream>
 
 #include "Core/Utils/InputDebug.h"
-#include "UI/HudMinimapGeometry.h"
+#include "UI/HudLayout.h"
 
 namespace Game::Client::UI
 {
@@ -380,7 +380,7 @@ void Hud::DrawCommandPanel(const HudLayout& Layout, int ViewportWidth, int Viewp
 #include "UI/HudText.h"
 #include "UI/HudRenderPrimitives.h"
 #include "Render/Draw2D.h"
-#include "Render/Private/SokolGpuInterop.h"
+#include "Render/GpuTextureHandle.h"
 #include "third_party/sokol/sokol_gfx.h"
 namespace Game::Client::UI
 {
@@ -787,17 +787,16 @@ void Hud::DrawResourceBar(int ViewportWidth, const Resource::Graphics::GpuImage&
 #include <cctype>
 #include <cmath>
 
-#include "Client/Entity.h"
+#include "Client/EntityRenderer.h"
 #include "Core/Concurrency/JobSystem.h"
 #include "Core/Platform/Platform.h"
 #include "Game/Components.h"
 #include "Game/Map/Map.h"
 #include "Game/Systems/FogOfWarSystem.h"
 #include "Render/Draw2D.h"
-#include "Render/Private/SokolGpuInterop.h"
+#include "Render/GpuTextureHandle.h"
 #include "third_party/sokol/sokol_gfx.h"
 #include "UI/HudLayout.h"
-#include "UI/HudMinimapGeometry.h"
 
 namespace Game::Client::UI
 {

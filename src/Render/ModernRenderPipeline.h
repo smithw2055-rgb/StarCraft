@@ -10,7 +10,7 @@
 #include "Core/ECS/EntityManager.h"
 #include "Core/ECS/SystemManager.h"
 #include "Render/RenderQueue2D.h"
-#include "Render/SceneNode2D.h"
+#include "Engine/Node2D.h"
 #include "Render/SokolPBRDispatcher.h"
 #include "Resource/ModernAssetRegistry.h"
 

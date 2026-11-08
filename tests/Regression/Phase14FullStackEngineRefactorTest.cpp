@@ -11,7 +11,7 @@
 #include "Core/ECS/SystemManager.h"
 #include "Core/ECS/WorldSnapshot.h"
 #include "Game/Components.h"
-#include "Game/Events/GameEvents.h"
+#include "Game/Systems/DeclarativeAnimationPlayer.h"
 #include "Game/Map/Map.h"
 #include "Game/Networking/RollbackStateManager.h"
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"

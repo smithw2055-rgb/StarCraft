@@ -1,4 +1,4 @@
-#include "UI/HudMinimapGeometry.h"
+#include "UI/HudLayout.h"
 #include "UI/HudState.h"
 
 #include <cstdio>

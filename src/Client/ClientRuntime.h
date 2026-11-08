@@ -2,7 +2,7 @@
 
 #include "Core/ECS/EntityManager.h"
 #include "Core/Math/Vec2.h"
-#include "Main/GameLoop/CursorTypes.h"
+#include "Main/GameLoop/CursorManager.h"
 #include "Resource/UIAssetCacheView.h"
 
 #include <memory>

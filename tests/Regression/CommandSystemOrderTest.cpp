@@ -6,7 +6,7 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/BurrowState.h"
 #include "Game/Systems/HarvestSystem.h"
-#include "Main/GameLoop/InputHandler.h"
+#include "Main/GameCommandDispatchRuntime.h"
 #include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Races/RaceDef.h"

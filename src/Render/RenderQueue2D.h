@@ -2,7 +2,7 @@
 
 #include "Core/Color.h"
 #include "Render/GpuTextureHandle.h"
-#include "Render/SceneNode2D.h"
+#include "Engine/Node2D.h"
 #include "Resource/ModernAssetRegistry.h"
 
 #include <algorithm>

@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "Core/Color.h"
-#include "Core/Math/Rect.h"
 #include "Core/Math/Vec2.h"
 #include "Core/Utils/JsonLite.h"
 #include "Engine/DataAssetRegistry.h"

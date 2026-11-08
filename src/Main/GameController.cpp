@@ -1,9 +1,8 @@
 #include "Main/GameRuntimeState.h"
 #include "Game/Campaign/CampaignMissionCatalog.h"
 #include "Main/GameGuiPresentation.h"
-#include "Main/GameLoop/HudResourceSync.h"
+#include "Main/GameRuntimeFrame.h"
 #include "Render/Draw2D.h"
-#include "Render/Renderer.h"
 
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
@@ -19,7 +18,7 @@
 
 #include "Client/ClientRuntime.h"
 #include "Core/Utils/Logger.h"
-#include "Main/GameLoop/HudResourceSync.h"
+#include "Main/GameRuntimeFrame.h"
 // === Consolidated from src/Main/GameCampaignBootstrap.h ===
 #include <string>
 
@@ -1343,10 +1342,10 @@ bool GameController::LoadReplay(const std::string& FilePath)
 
 #include "Client/ClientRuntime.h"
 #include "Core/Platform/Platform.h"
-#include "Main/GameLoop/HudResourceSync.h"
+#include "Main/GameRuntimeFrame.h"
 #include "Main/AppRuntime.h"
 #include "Main/GameSession.h"
-#include "Render/Renderer.h"
+#include "Render/Draw2D.h"
 #include "UI/Hud.h"
 #include "third_party/sokol/sokol_app.h"
 #include "third_party/sokol/sokol_gfx.h"

@@ -1,6 +1,6 @@
 #include "Core/Platform/Platform.h"
 #include "Main/GameRuntimeState.h"
-#include "Render/Renderer.h"
+#include "Render/Draw2D.h"
 
 // Keep this translation unit tied to the complete GameController runtime layout.
 

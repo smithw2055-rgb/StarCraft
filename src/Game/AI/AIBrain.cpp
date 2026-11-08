@@ -5,7 +5,7 @@
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/FogOfWarSystem.h"
-#include "Game/Systems/GeyserState.h"
+#include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/SpellSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"

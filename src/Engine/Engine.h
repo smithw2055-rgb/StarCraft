@@ -2,7 +2,7 @@
 
 // ============================================================================
 // Engine.h: Single Umbrella Header for the General-Purpose 2D/RTS Engine Foundation
-// (Phases 34–77 Zero-Dependency 19-Server Matrix, Inspired by Godot 4 & Unity DOTS)
+// (Phases 34–85 Zero-Coupling 23-Server Matrix, Inspired by Godot 4 & Unity DOTS)
 // ============================================================================
 
 #include "Engine/AI/BehaviorTreeCatalog.h"
@@ -17,7 +17,11 @@
 #include "Engine/ECS/WorldSerializer.h"
 #include "Engine/EngineApp.h"
 #include "Engine/EngineTime.h"
+#include "Engine/Gameplay/AbilityAndStatusServer2D.h"
+#include "Engine/Gameplay/BuildingPlacementServer2D.h"
 #include "Engine/Gameplay/EconomyAndProductionServer.h"
+#include "Engine/Gameplay/GarrisonAndTransportServer2D.h"
+#include "Engine/Gameplay/TechAndUpgradeServer.h"
 #include "Engine/Input/CameraAndSelectionServer2D.h"
 #include "Engine/Input/CommandRouter.h"
 #include "Engine/Navigation/NavigationServer2D.h"

@@ -487,7 +487,7 @@ struct GameRuntimeState
 #include "Game/Systems/ProductionSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
 #include "Game/Systems/ZergSystem.h"
-#include "Main/GameLoop/CursorTypes.h"
+#include "Main/GameLoop/CursorManager.h"
 #include "Main/GameSession.h"
 
 namespace Game::Client::GameLoop::GameEntitySpawnRuntime

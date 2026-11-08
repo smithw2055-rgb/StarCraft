@@ -12,7 +12,7 @@
 #include "Game/Components.h"
 #include "Game/DataEnums.h"
 #include "Game/Map/Map.h"
-#include "Game/ProtossPower.h"
+#include "Game/Systems/ProtossSystem.h"
 #include "Game/Races/RaceDef.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/SimulationContext.h"

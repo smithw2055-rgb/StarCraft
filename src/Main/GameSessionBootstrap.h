@@ -27,7 +27,6 @@
 #include "Game/Systems/CombatSystem.h"
 #include "Game/Systems/CommandSystem.h"
 #include "Game/Systems/FogOfWarSystem.h"
-#include "Game/Systems/GeyserState.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/MovementSystem.h"
 #include "Game/Systems/NukeAndSpiderMineSystem.h"

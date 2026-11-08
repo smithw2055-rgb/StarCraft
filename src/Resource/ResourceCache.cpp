@@ -1,8 +1,8 @@
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
-#include "Render/Private/SokolGpuInterop.h"
-#include "Resource/GrpToGpu.h"
+#include "Render/GpuTextureHandle.h"
+#include "Resource/GrpDecoder.h"
 #include "Resource/UIAssetCacheView.h"
 
 #include <cctype>
@@ -925,7 +925,7 @@ bool ResourceCache::OpenAssetsDirectory(const std::string& AssetsPath)
 
 
 // === Consolidated from src/Resource/ResourceCachePortrait.cpp ===
-#include "Resource/GrpToGpu.h"
+#include "Resource/GrpDecoder.h"
 #include "Resource/PortraitVideoDecoder.h"
 #include "Resource/RgbaImageFileDecoder.h"
 
@@ -2274,7 +2274,7 @@ const PcxRegions* UIAssetCacheView::GetUIRegions() const
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
-#include "Resource/GrpToGpu.h"
+#include "Resource/GrpDecoder.h"
 #include "Resource/Palette.h"
 #include "Resource/RawColor.h"
 #include "Resource/RgbaImageFileDecoder.h"
@@ -2584,7 +2584,7 @@ bool ResourceCache::LoadHudChromeGraphics()
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
-#include "Resource/GrpToGpu.h"
+#include "Resource/GrpDecoder.h"
 
 #include <utility>
 

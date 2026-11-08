@@ -235,3 +235,25 @@ extern Draw2D g_Draw2D;
 void UploadPendingFontGlyphs();
 
 } // namespace Render
+
+// === Consolidated from src/Render/Renderer.h ===
+#include <string>
+
+namespace Render
+{
+
+bool Initialize();
+void Shutdown();
+void BeginFrame();
+void EndPass();
+void PrepareNativeOverlay();
+void Commit();
+void EndFrame();
+void ResetStateCache();
+bool IsActive();
+void SetClearColor(float R, float G, float B, float A = 1.0f);
+bool CaptureScreenshot(const std::string& OutputPath);
+
+} // namespace Render
+
+

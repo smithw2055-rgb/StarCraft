@@ -127,6 +127,7 @@ public:
             if (Scene.WidthTiles > 0 && Scene.HeightTiles > 0)
             {
                 App.Context().Vision2D().InitializeGrid(Scene.WidthTiles, Scene.HeightTiles, 8, 32);
+                App.Context().BuildingPlacement2D().InitializeGrid(Scene.WidthTiles, Scene.HeightTiles, 32.0f);
                 App.Context().CameraAndSelection2D().SetWorldBoundsByTiles(
                     Scene.WidthTiles, Scene.HeightTiles, 32.0f);
             }
@@ -283,8 +284,15 @@ public:
         App.Context().Navigation2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
         App.Context().Navigation2D().RebuildConnectedRegions(1u);
         App.Context().Vision2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 8, 32);
+        App.Context().BuildingPlacement2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
+        App.Context().TechAndUpgrades().LoadStandardRTSCatalog();
+        App.Context().AbilityAndStatus2D().LoadStandardRTSAbilities();
         App.Context().CameraAndSelection2D().SetWorldBoundsByTiles(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
         App.Context().EconomyAndProduction().ResetWallets(50, 0, 10);
+        Game::Systems::BuildingSystem::BindEnginePlacementServer(&App.Context().BuildingPlacement2D());
+        Game::Systems::UpgradeSystem::BindEngineTechAndUpgradeServer(&App.Context().TechAndUpgrades());
+        Game::Systems::SpellSystem::BindEngineAbilityServer(&App.Context().AbilityAndStatus2D());
+        Game::Systems::TransportSystem::BindEngineGarrisonServer(&App.Context().GarrisonAndTransport2D());
 
         auto& SimCtx = Game::SimulationContext::Get(EM);
         SimCtx.Map = mMap;
@@ -314,6 +322,10 @@ public:
 
     void OnShutdown(Engine::EngineApp& /*App*/) override
     {
+        Game::Systems::BuildingSystem::BindEnginePlacementServer(nullptr);
+        Game::Systems::UpgradeSystem::BindEngineTechAndUpgradeServer(nullptr);
+        Game::Systems::SpellSystem::BindEngineAbilityServer(nullptr);
+        Game::Systems::TransportSystem::BindEngineGarrisonServer(nullptr);
         Game::Systems::SystemAssetBridge::UnbindAll();
     }
 

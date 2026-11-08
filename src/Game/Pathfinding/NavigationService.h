@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "Engine/Navigation/NavigationServer2D.h"
 #include "Game/Pathfinding/NavigationGrid.h"
 
 namespace Game::Pathfinding
@@ -90,6 +91,8 @@ public:
     }
 
     const NavigationPerformanceStats& GetStats() const { return mStats; }
+    void BindEngineNavigationServer(Engine::Navigation::NavigationServer2D* Server) noexcept { mBoundEngineNav = Server; }
+    Engine::Navigation::NavigationServer2D* GetBoundEngineNavigationServer() const noexcept { return mBoundEngineNav; }
     void ResetStats() { mStats.Reset(); }
 
     NavigationPathResult QueryPath(NavigationPathQuery Query)
@@ -1499,6 +1502,7 @@ private:
     }
 
     NavigationGrid mGrid;
+    Engine::Navigation::NavigationServer2D* mBoundEngineNav = nullptr;
     uint32_t mBaseGridVersion = 0;
     NavigationPerformanceStats mStats;
     std::map<CorridorKey, std::vector<int>> mCorridorCache;

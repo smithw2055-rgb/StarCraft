@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "Core/ECS/EntityManager.h"
-#include "Core/Math/Rect.h"
 #include "Core/Math/Vec2.h"
 
 namespace Engine::Input
