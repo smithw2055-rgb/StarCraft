@@ -1,4 +1,4 @@
-#include "Main/GameController.h"
+#include "Main/GameRuntimeState.h"
 #include "Game/Campaign/CampaignMissionCatalog.h"
 #include "Main/GameGuiPresentation.h"
 #include "Main/GameLoop/HudResourceSync.h"
@@ -20,12 +20,10 @@
 #include "Client/ClientRuntime.h"
 #include "Core/Utils/Logger.h"
 #include "Main/GameLoop/HudResourceSync.h"
-#include "Main/CampaignRuntime.h"
 // === Consolidated from src/Main/GameCampaignBootstrap.h ===
 #include <string>
 
 #include "Client/ClientRuntime.h"
-#include "Main/CampaignRuntime.h"
 #include "Main/GameSession.h"
 #include "Game/Systems/ZergSystem.h"
 #include "Resource/GameDataLoader.h"
@@ -104,8 +102,6 @@ inline void InitializeCampaignRuntimeForSession(
 
 } // namespace Game::Client::GameLoop
 
-#include "Main/CampaignRuntime.h"
-#include "Main/GameEntitySpawnRuntime.h"
 #include "Main/GameSession.h"
 #include "Main/GameSessionBootstrap.h"
 #include "Resource/GameDataLoader.h"
@@ -1348,7 +1344,6 @@ bool GameController::LoadReplay(const std::string& FilePath)
 #include "Client/ClientRuntime.h"
 #include "Core/Platform/Platform.h"
 #include "Main/GameLoop/HudResourceSync.h"
-#include "Main/GameUiPresentation.h"
 #include "Main/AppRuntime.h"
 #include "Main/GameSession.h"
 #include "Render/Renderer.h"

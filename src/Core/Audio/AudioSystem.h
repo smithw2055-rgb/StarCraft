@@ -9,6 +9,10 @@
 #include <functional>
 #include <chrono>
 
+#ifdef PlaySound
+#undef PlaySound
+#endif
+
 namespace Core::Audio
 {
 

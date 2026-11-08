@@ -1,5 +1,5 @@
 #include "Core/Platform/Platform.h"
-#include "GameController.h"
+#include "Main/GameRuntimeState.h"
 #include "Render/Renderer.h"
 
 // Keep this translation unit tied to the complete GameController runtime layout.

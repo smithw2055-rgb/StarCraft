@@ -5,6 +5,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Engine/Combat/CombatAndProjectileServer2D.h"
 #include "Game/Components.h"
 
 namespace Game::Map
@@ -30,6 +31,17 @@ public:
     void SetMap(Game::Map::GameMap* Map);
     void Update(float DeltaTime) override;
     std::string_view GetName() const override { return "CombatSystem"; }
+
+    // Phase 76 Engine CombatAndProjectileServer2D Convergence
+    void BindEngineCombatServer(Engine::Combat::CombatAndProjectileServer2D* Server) noexcept
+    {
+        mBoundCombatServer = Server;
+    }
+
+    Engine::Combat::CombatAndProjectileServer2D* GetBoundEngineCombatServer() const noexcept
+    {
+        return mBoundCombatServer;
+    }
 
     static void SetDetectorChecker(DetectorChecker Checker);
     static void SetAllianceChecker(AllianceChecker Checker);
@@ -125,6 +137,7 @@ private:
     Core::ECS::SystemManager& mSystemMgr;
     BulletSystem& mBulletSystem;
     Game::Map::GameMap* mMap = nullptr;
+    Engine::Combat::CombatAndProjectileServer2D* mBoundCombatServer = nullptr;
     uint32_t mMissRngState = 0;
 };
 

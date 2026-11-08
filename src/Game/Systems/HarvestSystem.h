@@ -6,6 +6,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/ECS/WorldSnapshot.h"
+#include "Engine/Gameplay/EconomyAndProductionServer.h"
 #include "Game/Components.h"
 
 namespace Game::Systems
@@ -48,6 +49,35 @@ public:
     {
         EM.SetResource<PlayerResourceStore>();
         EM.ActivateWorld();
+    }
+
+    // Phase 75 Bidirectional Synchronization with Engine::Gameplay::EconomyAndProductionServer
+    static void SyncToEngineEconomyServer(const Core::ECS::EntityManager& EM,
+                                          Engine::Gameplay::EconomyAndProductionServer& Server) noexcept
+    {
+        for (int P = 0; P < kPlayerResourceSlots; ++P)
+        {
+            const auto& Res = GetResources(EM, P);
+            auto& W = Server.Wallet(P);
+            W.Minerals = Res.Minerals;
+            W.Gas = Res.VespeneGas;
+            W.SupplyUsed = Res.SupplyUsed;
+            W.SupplyMax = Res.SupplyMax;
+        }
+    }
+
+    static void SyncFromEngineEconomyServer(Core::ECS::EntityManager& EM,
+                                            const Engine::Gameplay::EconomyAndProductionServer& Server) noexcept
+    {
+        for (int P = 0; P < kPlayerResourceSlots; ++P)
+        {
+            auto& Res = GetResources(EM, P);
+            const auto& W = Server.Wallet(P);
+            Res.Minerals = W.Minerals;
+            Res.VespeneGas = W.Gas;
+            Res.SupplyUsed = W.SupplyUsed;
+            Res.SupplyMax = W.SupplyMax;
+        }
     }
 
     // Legacy static overload: resolves against the active EntityManager World if it has

@@ -125,7 +125,6 @@ void Hud::DrawInfoPanelFrame(const HudLayout& Layout, bool HasModularConsole)
 
 #include "Core/Platform/Platform.h"
 #include "Game/Components.h"
-#include "UI/HudPortrait.h"
 
 namespace Game::Client::UI
 {

@@ -53,20 +53,25 @@ struct InstalledGameplayPipelineHandles
 };
 
 // ============================================================================
-// StarCraftEnginePlugin / StarCraftGameModule (Phases 48–66):
+// StarCraftEnginePlugin / StarCraftGameModule (Phases 48–77):
 // StarCraft RTS Experimental Game Module Mounted on General-Purpose EngineApp
 // Demonstrates how StarCraft: Remastered acts as a decoupled game project module
 // hosted on top of the reusable Engine Foundation (Engine::EngineApp & EngineProjectHost):
 // - Mounts cloud assets-R onto Engine::VFS::VirtualFileSystemServer ("res://")
 // - Loads or binds cloud-converted ModernAssetRegistry (assets-R)
-// - Auto-populates Engine::Scene::PrefabRegistry (228 unit prefabs),
-//   Engine::Animation::AnimationServer2D (398 controllers / 1,364 clips + 2D sockets),
-//   Engine::Audio::AudioServer2D (1,144 SFX catalog),
-//   Engine::UI::UIServer2D (12 HD UI & wireframe atlases),
-//   Engine::Tilemap::TilemapServer2D (8 GPU Tileset LUTs + 395 foliage records + 294 parallax stars),
-//   Engine::Scripting::ScenarioTriggerServer (CHK scenario trigger metadata),
-//   Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees), and
-//   Engine::ECS::CapabilityTraitRegistry (228 unit capability bitmasks)
+// - Auto-populates all 19 Engine Foundation Servers:
+//   * Engine::Scene::PrefabRegistry (228 unit prefabs)
+//   * Engine::Animation::AnimationServer2D (398 controllers / 1,364 clips + 2D sockets)
+//   * Engine::Audio::AudioServer2D (1,144 SFX catalog)
+//   * Engine::Combat::CombatAndProjectileServer2D (130 weapons catalog & damage matrix)
+//   * Engine::Gameplay::EconomyAndProductionServer (228 unit production costs & queues)
+//   * Engine::Vision::VisionServer2D (multi-player elevation-aware FoW & detector grid)
+//   * Engine::Input::CameraAndSelectionServer2D (camera rig & 10-group control groups)
+//   * Engine::UI::UIServer2D (12 HD UI & wireframe atlases)
+//   * Engine::Tilemap::TilemapServer2D (8 GPU Tileset LUTs + 395 foliage records + 294 parallax stars)
+//   * Engine::Scripting::ScenarioTriggerServer (CHK scenario trigger metadata)
+//   * Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees)
+//   * Engine::ECS::CapabilityTraitRegistry (228 unit capability bitmasks)
 // - Synchronizes UnitPrototypeRegistry and SystemAssetBridge without legacy .dat files
 // - Provides unified `InstallStandardGameplaySystemGroups` shared with `GameSessionBootstrap`
 // ============================================================================
@@ -81,7 +86,7 @@ public:
     }
 
     std::string_view GetName() const override { return "StarCraftEnginePlugin"; }
-    std::string_view GetModuleVersion() const override { return "2.1.0-Remastered-HD-Phase66"; }
+    std::string_view GetModuleVersion() const override { return "3.0.0-Remastered-HD-Phase77"; }
 
     void ConfigureProject(Engine::Project::ProjectManifest& Manifest) override
     {
@@ -109,13 +114,24 @@ public:
         const std::string ScenePath = App.Context().VFS().ResolvePhysicalPath(Manifest.StartupSceneUri);
         App.Context().ScenarioTriggers().ImportScenarioMetadataFromChkJsonFile(ScenePath);
         const std::string AssetsRoot = !Manifest.AssetMountRoot.empty() ? Manifest.AssetMountRoot : mAssetsRPath;
-        return App.Context().SceneLoader().LoadSceneFromAssetsR(
+        const bool Loaded = App.Context().SceneLoader().LoadSceneFromAssetsR(
             AssetsRoot,
             App.Entities(),
             App.Context().SceneTree(),
             App.Context().Prefabs(),
             &App.Context().Navigation2D(),
             &App.Context().Physics2D());
+        if (Loaded)
+        {
+            const auto& Scene = App.Context().SceneLoader().GetActiveScene();
+            if (Scene.WidthTiles > 0 && Scene.HeightTiles > 0)
+            {
+                App.Context().Vision2D().InitializeGrid(Scene.WidthTiles, Scene.HeightTiles, 8, 32);
+                App.Context().CameraAndSelection2D().SetWorldBoundsByTiles(
+                    Scene.WidthTiles, Scene.HeightTiles, 32.0f);
+            }
+        }
+        return Loaded;
     }
 
     void OnRegister(Engine::EngineApp& App) override
@@ -227,7 +243,7 @@ public:
         auto& SM = App.PrimaryWorld();
         auto& EM = SM.GetEntityManager();
 
-        // 1. Mount VFS and load cloud assets-R catalog into all 15 Engine Servers
+        // 1. Mount VFS and load cloud assets-R catalog into all 19 Engine Servers
         if (!mAssetsRPath.empty())
         {
             App.Context().VFS().MountDirectory("res://", mAssetsRPath, /*Priority=*/0, /*ReadOnly=*/true);
@@ -250,12 +266,14 @@ public:
             App.Context().Prefabs().BuildUnitPrefabsFromModernRegistry(*mActiveRegistry);
             App.Context().Animation2D().ImportFromModernRegistry(*mActiveRegistry);
             App.Context().Audio2D().ImportFromModernRegistry(*mActiveRegistry);
+            App.Context().EconomyAndProduction().ImportFromModernRegistry(*mActiveRegistry);
+            App.Context().Combat2D().ImportFromModernRegistry(*mActiveRegistry);
             mTraitRegistry.ImportFromModernRegistry(*mActiveRegistry);
             Game::Systems::SystemAssetBridge::BindModernAssetRegistry(*mActiveRegistry);
             SyncUnitPrototypesFromModernAssets(*mActiveRegistry);
         }
 
-        // 2. Initialize authoritative world-scoped resources & NavigationServer2D
+        // 2. Initialize authoritative world-scoped resources & NavigationServer2D / VisionServer2D
         if (!mMap)
         {
             mOwnedFallbackMap = std::make_unique<Game::Map::GameMap>();
@@ -264,6 +282,9 @@ public:
         }
         App.Context().Navigation2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
         App.Context().Navigation2D().RebuildConnectedRegions(1u);
+        App.Context().Vision2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 8, 32);
+        App.Context().CameraAndSelection2D().SetWorldBoundsByTiles(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
+        App.Context().EconomyAndProduction().ResetWallets(50, 0, 10);
 
         auto& SimCtx = Game::SimulationContext::Get(EM);
         SimCtx.Map = mMap;

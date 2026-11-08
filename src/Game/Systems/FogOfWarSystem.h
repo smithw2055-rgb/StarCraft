@@ -5,6 +5,7 @@
 
 #include "Core/ECS/SystemManager.h"
 #include "Core/Math/Vec2.h"
+#include "Engine/Vision/VisionServer2D.h"
 
 namespace Game::Map { class GameMap; }
 
@@ -55,11 +56,48 @@ public:
     void SetAlliance(int PlayerA, int PlayerB, bool Allied);
     bool AreAllied(int PlayerA, int PlayerB) const;
     void SetLocalPlayerID(int PlayerID) { mLocalPlayerID = PlayerID; }
-    void SetObserverRevealAll(bool Enabled) { mObserverRevealAll = Enabled; ++mRevision; }
+    void SetObserverRevealAll(bool Enabled)
+    {
+        mObserverRevealAll = Enabled;
+        ++mRevision;
+        if (mBoundVisionServer)
+            mBoundVisionServer->SetObserverRevealAll(Enabled);
+    }
     uint32_t GetRevision() const { return mRevision; }
 
     int GetWidth() const { return mMapWidth; }
     int GetHeight() const { return mMapHeight; }
+
+    // Phase 73 Engine VisionServer2D Convergence
+    void BindEngineVisionServer(Engine::Vision::VisionServer2D* Server) noexcept
+    {
+        mBoundVisionServer = Server;
+        if (mBoundVisionServer && mMapWidth > 0 && mMapHeight > 0)
+        {
+            mBoundVisionServer->InitializeGrid(mMapWidth, mMapHeight, mMaxPlayers, 32);
+            mBoundVisionServer->SetObserverRevealAll(mObserverRevealAll);
+            SyncToEngineVisionServer();
+        }
+    }
+
+    Engine::Vision::VisionServer2D* GetBoundEngineVisionServer() const noexcept
+    {
+        return mBoundVisionServer;
+    }
+
+    void SyncToEngineVisionServer() const noexcept
+    {
+        if (!mBoundVisionServer || mMapWidth <= 0 || mMapHeight <= 0)
+            return;
+        const size_t CellsPerPlayer = static_cast<size_t>(mMapWidth) * static_cast<size_t>(mMapHeight);
+        for (int P = 0; P < mMaxPlayers; ++P)
+        {
+            const size_t Off = static_cast<size_t>(P) * CellsPerPlayer;
+            const uint8_t* FogPtr = (Off + CellsPerPlayer <= mFogGrid.size()) ? (mFogGrid.data() + Off) : nullptr;
+            const uint8_t* DetPtr = (Off + CellsPerPlayer <= mDetectorGrid.size()) ? (mDetectorGrid.data() + Off) : nullptr;
+            mBoundVisionServer->ImportPlayerGrids(P, FogPtr, DetPtr, CellsPerPlayer);
+        }
+    }
 
 private:
     void RevealAround(int CenterX, int CenterY, int SightRange, uint8_t* Grid, uint8_t* DetectorGrid);
@@ -87,6 +125,7 @@ private:
     int mLocalPlayerID = 0;
     bool mObserverRevealAll = false;
     uint32_t mRevision = 1;
+    Engine::Vision::VisionServer2D* mBoundVisionServer = nullptr;
 };
 
 } // namespace Game::Systems

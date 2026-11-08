@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -16,11 +18,11 @@ namespace Engine::Project
 {
 
 // ============================================================================
-// ProjectManifest & IGameModule (Phase 59):
+// ProjectManifest & IGameModule (Phases 59–77):
 // Referenced from Godot 4 (project.godot + MainLoop / GDExtension) &
 // Unity (ProjectSettings + Package/Assembly Definition Modular Architecture):
 // - Formalizes the separation between the reusable "Engine Foundation"
-//   (Core + Engine Server Matrix + Render + Resource) and any concrete
+//   (Core + 19-Server Matrix + Render + Resource) and any concrete
 //   "Experimental Game Project Module" (such as StarCraft: Remastered or a
 //   new 2D/RTS game built on top of the engine).
 // ============================================================================
@@ -28,7 +30,7 @@ struct ProjectManifest
 {
     std::string ProjectName = "Generic2DEngineProject";
     std::string ProjectVersion = "1.0.0";
-    std::string EngineVersion = "2.0.0-ModernEngine";
+    std::string EngineVersion = "3.0.0-ModernEngine-Phase77";
     float FixedTickHz = 24.0f;
     int MaxSubStepsPerFrame = 4;
     std::string AssetMountRoot = "assets-R";
@@ -102,6 +104,12 @@ public:
     GameModuleT& MountGameModule(Args&&... InArgs)
     {
         auto& ModuleRef = mApp.AddPlugin<GameModuleT>(std::forward<Args>(InArgs)...);
+        ConfigureAndMountModule(ModuleRef);
+        return ModuleRef;
+    }
+
+    void ConfigureAndMountModule(IGameModule& ModuleRef)
+    {
         ModuleRef.ConfigureProject(mManifest);
         mApp.ConfigureFixedStep(1.0f / std::max(1.0f, mManifest.FixedTickHz), mManifest.MaxSubStepsPerFrame);
         mApp.SetAutoRecordRollbackSnapshots(mManifest.AuthoritativeRollback);
@@ -116,7 +124,6 @@ public:
 
         ModuleRef.OnMountVFS(mApp.Context().VFS(), mManifest);
         mMountedModules.push_back(&ModuleRef);
-        return ModuleRef;
     }
 
     bool BootProject(bool LoadInitialScene = true)
@@ -158,6 +165,74 @@ private:
     ProjectManifest mManifest;
     Engine::EngineApp mApp;
     std::vector<IGameModule*> mMountedModules;
+};
+
+// ============================================================================
+// EngineProjectRegistry (Phase 77):
+// Referenced from Godot 4 ProjectManager & Unity Hub / Multi-Project Workspace:
+// - Allows registering multiple independent game projects (e.g., "starcraft-remastered",
+//   "sandbox-tower-defense", "orbital-skirmish") and launching any registered
+//   game project onto a clean EngineProjectHost instance.
+// ============================================================================
+struct RegisteredProjectEntry
+{
+    std::string ProjectID;
+    std::string DisplayTitle;
+    std::string GenreTag;
+    std::function<std::unique_ptr<EngineProjectHost>(bool /*LoadInitialScene*/)> HostBuilder;
+};
+
+class EngineProjectRegistry
+{
+public:
+    EngineProjectRegistry() = default;
+
+    template <typename GameModuleT, typename... Args>
+    void RegisterProject(std::string ProjectID,
+                         std::string DisplayTitle,
+                         std::string GenreTag,
+                         Args... DefaultArgs)
+    {
+        RegisteredProjectEntry Entry;
+        Entry.ProjectID = ProjectID;
+        Entry.DisplayTitle = std::move(DisplayTitle);
+        Entry.GenreTag = std::move(GenreTag);
+        Entry.HostBuilder = [DefaultArgs...](bool LoadScene) {
+            auto Host = std::make_unique<EngineProjectHost>();
+            Host->template MountGameModule<GameModuleT>(DefaultArgs...);
+            Host->BootProject(LoadScene);
+            return Host;
+        };
+        mProjects[std::move(ProjectID)] = std::move(Entry);
+    }
+
+    std::unique_ptr<EngineProjectHost> LaunchProject(const std::string& ProjectID,
+                                                     bool LoadInitialScene = true) const
+    {
+        auto It = mProjects.find(ProjectID);
+        if (It == mProjects.end() || !It->second.HostBuilder)
+            return nullptr;
+        return It->second.HostBuilder(LoadInitialScene);
+    }
+
+    bool HasProject(const std::string& ProjectID) const
+    {
+        return mProjects.find(ProjectID) != mProjects.end();
+    }
+
+    size_t GetRegisteredProjectCount() const noexcept { return mProjects.size(); }
+
+    std::vector<std::string> ListProjectIDs() const
+    {
+        std::vector<std::string> Out;
+        Out.reserve(mProjects.size());
+        for (const auto& [Id, _] : mProjects)
+            Out.push_back(Id);
+        return Out;
+    }
+
+private:
+    std::unordered_map<std::string, RegisteredProjectEntry> mProjects;
 };
 
 } // namespace Engine::Project

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Platform/Platform.h"
+#include "Engine/Input/CameraAndSelectionServer2D.h"
 #include "Render/Camera2D.h"
 
 namespace Game::Client
@@ -15,8 +16,24 @@ public:
     void SetTopBlockedPx(float Pixels) { mTopBlockedPx = Pixels; }
     void SetBottomBlockedPx(float Pixels) { mBottomBlockedPx = Pixels; }
 
+    // Phase 74 Engine CameraAndSelectionServer2D Convergence
+    void BindEngineCameraServer(Engine::Input::CameraAndSelectionServer2D* Server) noexcept
+    {
+        mBoundCameraServer = Server;
+        if (mBoundCameraServer && mMapWidth > 0 && mMapHeight > 0)
+        {
+            mBoundCameraServer->SetWorldBoundsByTiles(mMapWidth, mMapHeight, 32.0f);
+        }
+    }
+
+    Engine::Input::CameraAndSelectionServer2D* GetBoundEngineCameraServer() const noexcept
+    {
+        return mBoundCameraServer;
+    }
+
 private:
     Render::Camera2D* mCamera = nullptr;
+    Engine::Input::CameraAndSelectionServer2D* mBoundCameraServer = nullptr;
     int mMapWidth = 0;
     int mMapHeight = 0;
 
@@ -45,6 +62,10 @@ inline void CameraController::SetBounds(int MapWidthTiles, int MapHeightTiles)
     if (mCamera)
     {
         mCamera->SetMapBounds(MapWidthTiles, MapHeightTiles);
+    }
+    if (mBoundCameraServer)
+    {
+        mBoundCameraServer->SetWorldBoundsByTiles(MapWidthTiles, MapHeightTiles, 32.0f);
     }
 }
 
@@ -135,6 +156,12 @@ inline void CameraController::Update(float Dt)
     }
 
     mCamera->UpdateSmoothing(Dt);
+    if (mBoundCameraServer)
+    {
+        mBoundCameraServer->SetViewportSize(VW, VH);
+        mBoundCameraServer->SetZoom(mCamera->GetZoom());
+        mBoundCameraServer->SetCameraCenter({mCamera->GetX(), mCamera->GetY()});
+    }
 }
 
 } // namespace Game::Client

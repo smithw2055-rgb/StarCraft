@@ -248,7 +248,6 @@ std::optional<std::vector<RawImage>> GrpDecoder::DecodeToRawImages(
 
 
 // === Consolidated from src/Resource/DdsGrpDecoder.cpp ===
-#include "Resource/DdsGrpDecoder.h"
 
 #include <cstring>
 #include <utility>

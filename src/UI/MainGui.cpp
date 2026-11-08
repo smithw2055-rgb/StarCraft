@@ -5,7 +5,6 @@
 #include "UI/Hud.h"
 #include "UI/HudMinimapGeometry.h"
 #include "UI/MainGuiSelectionPresentation.h"
-#include "UI/HudPortrait.h"
 #include "UI/HudText.h"
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"

@@ -17,11 +17,14 @@
 #include "Engine/AI/BehaviorTreeServer.h"
 #include "Engine/Animation/AnimationServer2D.h"
 #include "Engine/Audio/AudioServer2D.h"
+#include "Engine/Combat/CombatAndProjectileServer2D.h"
 #include "Engine/DataAssetRegistry.h"
 #include "Engine/Debug/EngineTelemetryServer.h"
 #include "Engine/ECS/GenericWorldSnapshot.h"
 #include "Engine/ECS/WorldSerializer.h"
 #include "Engine/EngineTime.h"
+#include "Engine/Gameplay/EconomyAndProductionServer.h"
+#include "Engine/Input/CameraAndSelectionServer2D.h"
 #include "Engine/Input/CommandRouter.h"
 #include "Engine/Navigation/NavigationServer2D.h"
 #include "Engine/Net/DeterministicSessionServer.h"
@@ -36,6 +39,7 @@
 #include "Engine/Tilemap/TilemapServer2D.h"
 #include "Engine/UI/UIServer2D.h"
 #include "Engine/VFS/VirtualFileSystemServer.h"
+#include "Engine/Vision/VisionServer2D.h"
 #include "Render/RenderServer2D.h"
 #include "Resource/AssetServer.h"
 
@@ -65,10 +69,11 @@ public:
 };
 
 // ============================================================================
-// EngineContext: Unified 15-Server Architecture Container (Phases 34–60)
+// EngineContext: Unified 19-Server Architecture Container (Phases 34–77)
 // Referenced from Godot 4 Server Architecture (RenderingServer, AudioServer2D,
-// AnimationServer2D, PhysicsServer2D, NavigationServer2D, UIServer2D,
-// TilemapServer2D, VirtualFileSystemServer, ScenarioTriggerServer,
+// AnimationServer2D, PhysicsServer2D, NavigationServer2D, VisionServer2D,
+// CameraAndSelectionServer2D, EconomyAndProductionServer, CombatAndProjectileServer2D,
+// UIServer2D, TilemapServer2D, VirtualFileSystemServer, ScenarioTriggerServer,
 // SceneLoaderServer, ResourceLoader, InputMap, SceneTree) & Unity Subsystems:
 // - Aggregates all core engine servers into a single non-global context owned
 //   by EngineApp, eliminating scattered global state across modules.
@@ -111,6 +116,18 @@ public:
 
     Engine::Navigation::NavigationServer2D& Navigation2D() noexcept { return mNavigationServer2D; }
     const Engine::Navigation::NavigationServer2D& Navigation2D() const noexcept { return mNavigationServer2D; }
+
+    Engine::Vision::VisionServer2D& Vision2D() noexcept { return mVisionServer2D; }
+    const Engine::Vision::VisionServer2D& Vision2D() const noexcept { return mVisionServer2D; }
+
+    Engine::Input::CameraAndSelectionServer2D& CameraAndSelection2D() noexcept { return mCameraAndSelectionServer2D; }
+    const Engine::Input::CameraAndSelectionServer2D& CameraAndSelection2D() const noexcept { return mCameraAndSelectionServer2D; }
+
+    Engine::Gameplay::EconomyAndProductionServer& EconomyAndProduction() noexcept { return mEconomyAndProductionServer; }
+    const Engine::Gameplay::EconomyAndProductionServer& EconomyAndProduction() const noexcept { return mEconomyAndProductionServer; }
+
+    Engine::Combat::CombatAndProjectileServer2D& Combat2D() noexcept { return mCombatServer2D; }
+    const Engine::Combat::CombatAndProjectileServer2D& Combat2D() const noexcept { return mCombatServer2D; }
 
     Engine::AI::BehaviorTreeServer& BehaviorTrees() noexcept { return mBehaviorTreeServer; }
     const Engine::AI::BehaviorTreeServer& BehaviorTrees() const noexcept { return mBehaviorTreeServer; }
@@ -159,6 +176,10 @@ private:
     Engine::Audio::AudioServer2D mAudioServer2D;
     Engine::Physics::PhysicsServer2D mPhysicsServer2D;
     Engine::Navigation::NavigationServer2D mNavigationServer2D;
+    Engine::Vision::VisionServer2D mVisionServer2D;
+    Engine::Input::CameraAndSelectionServer2D mCameraAndSelectionServer2D;
+    Engine::Gameplay::EconomyAndProductionServer mEconomyAndProductionServer;
+    Engine::Combat::CombatAndProjectileServer2D mCombatServer2D;
     Engine::AI::BehaviorTreeServer mBehaviorTreeServer;
     Engine::Scripting::ScenarioTriggerServer mScenarioTriggerServer;
     Engine::UI::UIServer2D mUIServer2D;
@@ -338,6 +359,8 @@ private:
         }
 
         mContext.ScenarioTriggers().EvaluateTick(CurrentTick);
+        mContext.EconomyAndProduction().StepProductionQueues(1u);
+        mContext.Combat2D().StepProjectiles(FixedDt);
 
         for (auto& Plugin : mPlugins)
         {

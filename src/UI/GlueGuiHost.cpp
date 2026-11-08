@@ -1,5 +1,4 @@
-#include "GlueGuiHost.h"
-#include "GlueAnimatedImage.h"
+#include "Main/GameGuiPresentation.h"
 // GlueComponentRegistration consolidated into GlueMenuController.h
 #include "GlueMenuController.h"
 #include <algorithm>
@@ -271,7 +270,6 @@ bool GlueGuiHost::HandleEvent(const void* EventPtr)
 
 
 // === Consolidated from src/UI/GlueAnimatedImage.cpp ===
-#include "GlueAnimatedImage.h"
 
 #include <NsCore/Boxing.h>
 #include <NsCore/Ptr.h>

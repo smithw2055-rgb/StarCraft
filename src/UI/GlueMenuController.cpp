@@ -1,5 +1,4 @@
 #include "GlueMenuController.h"
-#include "GlueAnimatedImage.h"
 
 #include "Game/Campaign/CampaignMissionCatalog.h"
 #include "Game/Campaign/CampaignController.h"

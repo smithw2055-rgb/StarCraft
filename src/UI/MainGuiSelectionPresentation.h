@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UI/HudInfoPanelState.h"
+#include "UI/HudState.h"
 
 #include <string>
 #include <vector>

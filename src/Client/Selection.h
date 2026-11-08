@@ -2,6 +2,7 @@
 
 #include "Core/Platform/Platform.h"
 #include "Core/ECS/EntityManager.h"
+#include "Engine/Input/CameraAndSelectionServer2D.h"
 #include "Game/Components.h"
 #include "Resource/UIAssetCacheView.h"
 #include "Render/Camera2D.h"
@@ -60,6 +61,23 @@ public:
     using UnitClickSoundCallback = std::function<void(int EntityID, bool IsPissed)>;
     static void SetUnitClickSoundCallback(UnitClickSoundCallback Callback);
 
+    // Phase 74 Engine CameraAndSelectionServer2D Convergence
+    void BindEngineSelectionServer(Engine::Input::CameraAndSelectionServer2D* Server) noexcept
+    {
+        mBoundSelectionServer = Server;
+    }
+
+    Engine::Input::CameraAndSelectionServer2D* GetBoundEngineSelectionServer() const noexcept
+    {
+        return mBoundSelectionServer;
+    }
+
+    void SyncToEngineSelectionServer(const Core::ECS::EntityManager& Entities) const
+    {
+        if (mBoundSelectionServer)
+            mBoundSelectionServer->SetActiveSelection(Entities, mSelected);
+    }
+
 private:
     Phase mPhase = Phase::Idle;
     int mStartX = 0, mStartY = 0;
@@ -68,6 +86,7 @@ private:
     std::vector<Core::ECS::EntityHandle> mSelectedHandles;
     int mLocalPlayerId = 0;
     Resource::Graphics::DataAssetCacheView mDataAssets;
+    Engine::Input::CameraAndSelectionServer2D* mBoundSelectionServer = nullptr;
 
     // Control groups: 10 groups of up to 12 entity IDs + generational EntityHandles
     std::array<std::vector<int>, kNumControlGroups> mControlGroups;

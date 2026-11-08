@@ -713,7 +713,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         $<TARGET_OBJECTS:StarCraftCoreObj>
         src/Game/Campaign/CampaignController.cpp
         src/Game/Trigger/TriggerVM.cpp
-        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/IScriptVM.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/Systems/HarvestSystem.cpp
@@ -722,7 +721,6 @@ if(BUILD_CAMPAIGN_CATALOG_RUNTIME_TEST)
         src/Game/Systems/MovementSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Pathfinding/AStar.cpp
-        src/Client/MapLoader.cpp
         src/Game/Map/ChkParser.cpp
         src/Game/Map/Map.cpp
         src/Resource/IArchiveReader.cpp
@@ -860,7 +858,6 @@ option(BUILD_RUNTIME_SMOKE_TEST "Register the real StarCraft client runtime smok
 if(BUILD_GAME_CLIENT)
     set(STARCRAFT_CLIENT_SOURCES
         src/Main/GameMain.cpp
-        src/PlatformBackend.cpp
         src/Core/Platform/Platform.cpp
         src/Core/Utils/Logger.cpp
         src/Core/Audio/AudioSystem.cpp
@@ -869,30 +866,23 @@ if(BUILD_GAME_CLIENT)
         src/Render/BitmapFont.cpp
         src/Render/Draw2D.cpp
         src/Resource/Palette.cpp
-        src/Resource/RgbaImageFileDecoder.cpp
         src/Resource/PortraitVideoDecoder.cpp
         src/Resource/ResourceCache.cpp
-        src/Resource/ResourceCacheUI.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/GameDataLoader.cpp
         src/Resource/GrpDecoder.cpp
         src/Resource/DatDecoder.cpp
         src/Game/Map/ChkParser.cpp
-        src/Client/MapLoader.cpp
         src/Client/ClientRuntime.cpp
         src/Game/IScriptVM.cpp
-        src/Client/TilesetRenderer.cpp
         src/Client/EntityRenderer.cpp
         src/Client/Selection.cpp
         src/Resource/ModernAssetRegistry.cpp
-        src/Render/EnvironmentAndTerrainPipeline.cpp
         src/Render/SokolPBRDispatcher.cpp
         "src/UI/Hud.cpp"
         "src/UI/HudCommandPanel.cpp"
         "src/UI/HudInfoPanel.cpp"
-        "src/Main/CampaignPresentation.cpp"
         "src/Main/GameController.cpp"
-        "src/Main/GameLoop/CursorManager.cpp"
         src/Core/ECS/EntityManager.cpp
         src/Core/ECS/SystemManager.cpp
         src/Game/Systems/CommandSystem.cpp
@@ -909,7 +899,6 @@ if(BUILD_GAME_CLIENT)
         src/Game/AI/AIBrain.cpp
         src/Game/Campaign/CampaignController.cpp
         src/Game/Trigger/TriggerVM.cpp
-        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
         src/Game/Systems/ProtossSystem.cpp
@@ -1239,7 +1228,6 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         src/Game/Pathfinding/AStar.cpp
         src/Game/Races/RaceDef.cpp
         src/Game/AI/AIBrain.cpp
-        src/Game/AI/BehaviorTreeRuntime.cpp
         src/Game/Trigger/TriggerVM.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/AnimationSystem.cpp
@@ -1260,12 +1248,10 @@ if(BUILD_MODERN_ENGINE_VERIFICATION_TEST)
         src/Resource/IArchiveReader.cpp
         src/Resource/DatDecoder.cpp
         src/Resource/Palette.cpp
-        src/Resource/RgbaImageFileDecoder.cpp
         src/Resource/ModernAssetRegistry.cpp
         src/Render/Draw2D.cpp
         src/Render/Shader2D.cpp
         src/Render/BitmapFont.cpp
-        src/Render/EnvironmentAndTerrainPipeline.cpp
         src/Render/SokolPBRDispatcher.cpp
     )
     target_include_directories(ModernEngineVerificationTest PRIVATE
@@ -1291,7 +1277,6 @@ endif()
 # ============================================================================
 
 add_library(StarCraftSimulationObj OBJECT
-    src/Game/AI/BehaviorTreeRuntime.cpp
     src/Game/IScriptVM.cpp
     src/Game/Map/ChkParser.cpp
     src/Game/Map/Map.cpp
@@ -1386,8 +1371,7 @@ option(BUILD_PHASE27_TO_30_MODERN_ENGINE_REFACTOR_TEST "Build Phase 27-30 Moveme
 if(BUILD_PHASE27_TO_30_MODERN_ENGINE_REFACTOR_TEST)
     starcraft_add_modern_phase_test(Phase27To30ModernEngineRefactorTest
         tests/Regression/Phase27To30ModernEngineRefactorTest.cpp
-        src/Client/Selection.cpp
-        src/Main/GameLoop/CursorManager.cpp)
+        src/Client/Selection.cpp)
 endif()
 
 option(BUILD_PHASE31_TO_36_ENGINE_FOUNDATION_TEST "Build Phase 31-36 general-purpose Engine Foundation, GenericWorldSnapshot, EngineApp, and cloud SystemAssetBridge test" ON)
@@ -1457,6 +1441,15 @@ option(BUILD_PHASE67_TO_71_ENGINE_CONVERGENCE_TEST "Build Phase 67-71 Cloud-Firs
 if(BUILD_PHASE67_TO_71_ENGINE_CONVERGENCE_TEST)
     starcraft_add_modern_phase_test(Phase67To71EngineConvergenceAndConsolidationTest
         tests/Regression/Phase67To71EngineConvergenceAndConsolidationTest.cpp
+        src/Game/AI/AIBrain.cpp
+        src/Resource/IArchiveReader.cpp
+        src/Resource/Palette.cpp)
+endif()
+
+option(BUILD_PHASE72_TO_77_ENGINE_EVOLUTION_TEST "Build Phase 72-77 21-File Consolidation, VisionServer2D, CameraAndSelectionServer2D, EconomyAndProductionServer, CombatAndProjectileServer2D & EngineProjectRegistry test" ON)
+if(BUILD_PHASE72_TO_77_ENGINE_EVOLUTION_TEST)
+    starcraft_add_modern_phase_test(Phase72To77EngineEvolutionAndSimplificationTest
+        tests/Regression/Phase72To77EngineEvolutionAndSimplificationTest.cpp
         src/Game/AI/AIBrain.cpp
         src/Resource/IArchiveReader.cpp
         src/Resource/Palette.cpp)
