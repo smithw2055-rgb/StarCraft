@@ -2,13 +2,20 @@
 #include "Render/Private/SokolGpuInterop.h"
 #include "Resource/RgbaImageFileDecoder.h"
 
+#include <algorithm>
+
 namespace Render {
 
 void SokolPBRDispatcher::Shutdown()
 {
-    auto DestroyHandle = [](GpuTextureHandle& H) {
-        if (H.View.id)  { sg_destroy_view(ToSokol(H.View)); H.View = {}; }
-        if (H.Image.id) { sg_destroy_image(ToSokol(H.Image)); H.Image = {}; }
+    const bool GfxValid = sg_isvalid();
+    auto DestroyHandle = [&](GpuTextureHandle& H) {
+        if (GfxValid) {
+            if (H.View.id && H.View.id != mFallbackTexture.View.id)   { sg_destroy_view(ToSokol(H.View)); }
+            if (H.Image.id && H.Image.id != mFallbackTexture.Image.id) { sg_destroy_image(ToSokol(H.Image)); }
+        }
+        H.View = {};
+        H.Image = {};
     };
     for (auto& [Id, Set] : mPBRTextureSets) {
         DestroyHandle(Set.BaseColorA);
@@ -16,7 +23,12 @@ void SokolPBRDispatcher::Shutdown()
         DestroyHandle(Set.SpecEmissive);
     }
     mPBRTextureSets.clear();
-    DestroyHandle(mFallbackTexture);
+    if (GfxValid) {
+        if (mFallbackTexture.View.id)  { sg_destroy_view(ToSokol(mFallbackTexture.View)); }
+        if (mFallbackTexture.Image.id) { sg_destroy_image(ToSokol(mFallbackTexture.Image)); }
+    }
+    mFallbackTexture.View = {};
+    mFallbackTexture.Image = {};
 }
 
 GpuTextureHandle SokolPBRDispatcher::CreateSokolTextureFromPngFile(
@@ -76,11 +88,22 @@ size_t SokolPBRDispatcher::UploadPBRPrefabsToGpu(const Resource::ModernAssetRegi
         GpuPBRTextureSet Set;
         Set.ImageID = Prefab.ImageID;
         Set.BaseColorA = CreateSokolTextureFromPngFile(Prefab.BaseColorTexturePath, &Set.Width, &Set.Height);
+        if (!Set.BaseColorA.Valid()) {
+            Set.BaseColorA = mFallbackTexture;
+            Set.Width = std::max(1, Prefab.AtlasResolution[0]);
+            Set.Height = std::max(1, Prefab.AtlasResolution[1]);
+        }
         if (!Prefab.NormalTeamAOTexturePath.empty()) {
             Set.NormalTeamAO = CreateSokolTextureFromPngFile(Prefab.NormalTeamAOTexturePath);
+            if (!Set.NormalTeamAO.Valid()) {
+                Set.NormalTeamAO = mFallbackTexture;
+            }
         }
         if (!Prefab.SpecEmissiveTexturePath.empty()) {
             Set.SpecEmissive = CreateSokolTextureFromPngFile(Prefab.SpecEmissiveTexturePath);
+            if (!Set.SpecEmissive.Valid()) {
+                Set.SpecEmissive = mFallbackTexture;
+            }
         }
 
         if (Set.IsValid()) {

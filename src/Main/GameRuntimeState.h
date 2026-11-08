@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Client/ClientRuntime.h"
-#include "Main/GuiRuntime.h"
+#include "Main/GameGuiPresentation.h"
 #include "Main/AppRuntime.h"
 #include "Main/CampaignRuntime.h"
 #include "Main/GameAudioRuntime.h"

@@ -42,7 +42,6 @@ void Hud::DrawInfoPanel(Core::ECS::EntityManager& Entities,
 
 
 // === Consolidated from src/UI/HudInfoPanelFrame.cpp ===
-#include "UI/Hud.h"
 
 #include <algorithm>
 
@@ -119,7 +118,6 @@ void Hud::DrawInfoPanelFrame(const HudLayout& Layout, bool HasModularConsole)
 
 
 // === Consolidated from src/UI/HudInfoPanelPortrait.cpp ===
-#include "UI/Hud.h"
 
 #include <algorithm>
 #include <array>
@@ -303,7 +301,6 @@ void Hud::DrawInfoPanelPortraits(Core::ECS::EntityManager& Entities,
 
 
 // === Consolidated from src/UI/HudInfoPanelScv.cpp ===
-#include "UI/Hud.h"
 
 #include <algorithm>
 #include <cmath>
@@ -443,7 +440,6 @@ void Hud::DrawScvInfoPanel(const HudLayout& Layout,
 
 
 // === Consolidated from src/UI/HudInfoPanelStandard.cpp ===
-#include "UI/Hud.h"
 
 #include <algorithm>
 #include <cmath>

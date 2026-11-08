@@ -6,7 +6,7 @@
 #include "Game/SimulationContext.h"
 #include "Game/Systems/HarvestSystem.h"
 #include "Game/Systems/UpgradeSystem.h"
-#include "UI/HudResourceState.h"
+#include "UI/HudState.h"
 #include "UI/ViewModel/ObservableProperty.h"
 
 #include <algorithm>

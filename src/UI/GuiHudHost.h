@@ -10,7 +10,7 @@
 #include <NsGui/UserControl.h>
 #include <NsRender/RenderDevice.h>
 
-#include "UI/HudMinimapState.h"
+#include "UI/HudState.h"
 
 namespace Aero {
 class Border;

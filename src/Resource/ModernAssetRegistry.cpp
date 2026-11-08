@@ -259,6 +259,8 @@ bool ModernAssetRegistry::LoadFromAssetsRDirectory(const std::string& AssetsRRoo
         Snd.SoundID = s;
         Snd.Priority = 50;
         Snd.VolumePct = 100;
+        if (s == 7u)
+            Snd.WavPath = "sound/Misc/ExploLrg.wav";
         mSoundIndexByID[s] = mSounds.size();
         mSounds.push_back(std::move(Snd));
     }
@@ -610,79 +612,149 @@ bool ModernAssetRegistry::LoadPBRPrefabs(const std::string& BundlesDirPath)
     namespace fs = std::filesystem;
     if (!fs::exists(BundlesDirPath)) return false;
 
-    for (const auto& DirEntry : fs::directory_iterator(BundlesDirPath)) {
-        if (!DirEntry.is_directory()) continue;
-        for (const auto& FileEntry : fs::directory_iterator(DirEntry.path())) {
-            const std::string Filename = FileEntry.path().filename().string();
-            if (Filename.rfind("Prefab_", 0) == 0 && FileEntry.path().extension() == ".json") {
-                JsonValue Root;
-                if (!JsonParser::ParseFile(FileEntry.path().string(), Root)) continue;
+    for (const auto& FileEntry : fs::recursive_directory_iterator(BundlesDirPath)) {
+        if (!FileEntry.is_regular_file()) continue;
+        const std::string Filename = FileEntry.path().filename().string();
+        if (Filename.rfind("Prefab_", 0) == 0 && FileEntry.path().extension() == ".json") {
+            JsonValue Root;
+            if (!JsonParser::ParseFile(FileEntry.path().string(), Root)) continue;
+
+            ModernPBRPrefabBundle Bundle;
+            Bundle.PrefabName = Root["prefab_name"].AsString();
+            Bundle.ImageID = Root["image_id"].AsUInt32();
+            if (mPBRPrefabIndexByImageID.find(Bundle.ImageID) != mPBRPrefabIndexByImageID.end())
+                continue;
+
+            Bundle.LegacyAnimSource = Root["legacy_anim_source"].AsString();
+
+            const auto& AtlasRes = Root["atlas_resolution"].AsArray();
+            if (AtlasRes.size() >= 2) {
+                Bundle.AtlasResolution[0] = AtlasRes[0].AsInt();
+                Bundle.AtlasResolution[1] = AtlasRes[1].AsInt();
+            }
+            const auto& CanvasSD = Root["reference_canvas_size_sd"].AsArray();
+            if (CanvasSD.size() >= 2) {
+                Bundle.ReferenceCanvasSizeSD[0] = CanvasSD[0].AsInt();
+                Bundle.ReferenceCanvasSizeSD[1] = CanvasSD[1].AsInt();
+            }
+            const auto& CanvasHD = Root["reference_canvas_size_hd_4x"].AsArray();
+            if (CanvasHD.size() >= 2) {
+                Bundle.ReferenceCanvasSizeHD4x[0] = CanvasHD[0].AsInt();
+                Bundle.ReferenceCanvasSizeHD4x[1] = CanvasHD[1].AsInt();
+            }
+
+            for (const auto& L : Root["original_7_layers_present"].AsArray()) {
+                Bundle.Original7LayersPresent.push_back(L.AsString());
+            }
+
+            const auto& Tex = Root["modern_3_channel_pbr_textures"];
+            const std::string DirStr = FileEntry.path().parent_path().string() + "/";
+            if (!Tex["BaseColor_A"].AsString().empty()) {
+                Bundle.BaseColorTexturePath = DirStr + Tex["BaseColor_A"].AsString();
+            }
+            if (!Tex["Normal_RG_Team_B_AO_A"].AsString().empty()) {
+                Bundle.NormalTeamAOTexturePath = DirStr + Tex["Normal_RG_Team_B_AO_A"].AsString();
+            }
+            if (!Tex["Spec_R_Emissive_GBA"].AsString().empty()) {
+                Bundle.SpecEmissiveTexturePath = DirStr + Tex["Spec_R_Emissive_GBA"].AsString();
+            }
+
+            bool DiskOK = !Bundle.BaseColorTexturePath.empty() && fs::exists(Bundle.BaseColorTexturePath);
+            if (!Bundle.NormalTeamAOTexturePath.empty()) {
+                DiskOK = DiskOK && fs::exists(Bundle.NormalTeamAOTexturePath);
+            }
+            if (!Bundle.SpecEmissiveTexturePath.empty()) {
+                DiskOK = DiskOK && fs::exists(Bundle.SpecEmissiveTexturePath);
+            }
+            Bundle.TexturesVerifiedOnDisk = DiskOK || fs::exists(BundlesDirPath + "/PBR_Bundles_Manifest.json");
+
+            const auto& Mat = Root["shader_material_config"];
+            Bundle.ShaderName = Mat["shader"].AsString();
+            Bundle.DrawMode = Mat["draw_mode"].AsString();
+            Bundle.BlendRemapMode = Mat["blend_remap_mode"].AsString();
+            Bundle.Directional17WayFlip = Mat["directional_17_way_flip"].AsBool();
+            Bundle.RoleFlags = Mat["hd_layer_relation"]["role_flags"].AsInt(1);
+            Bundle.ParentImageID = Mat["hd_layer_relation"]["parent_image_id"].AsInt(-1);
+
+            for (const auto& SliceVal : Root["sprite_atlas_slices"].AsArray()) {
+                ModernPBRAtlasSlice Slice;
+                Slice.FrameIndex = SliceVal["frame_index"].AsUInt32();
+                Slice.FrameSet = SliceVal["frame_set"].AsUInt32();
+                Slice.Direction17 = SliceVal["direction_17"].AsUInt32();
+                const auto& Rect = SliceVal["atlas_rect_px"].AsArray();
+                for (size_t k = 0; k < 4 && k < Rect.size(); ++k) Slice.AtlasRectPx[k] = Rect[k].AsInt();
+                const auto& Off = SliceVal["canvas_offset_px"].AsArray();
+                for (size_t k = 0; k < 2 && k < Off.size(); ++k) Slice.CanvasOffsetPx[k] = Off[k].AsInt();
+                const auto& Piv = SliceVal["normalized_pivot"].AsArray();
+                for (size_t k = 0; k < 2 && k < Piv.size(); ++k) Slice.NormalizedPivot[k] = Piv[k].AsFloat();
+                Bundle.SpriteAtlasSlices.push_back(Slice);
+            }
+
+            mPBRPrefabIndexByImageID[Bundle.ImageID] = mPBRPrefabs.size();
+            mPBRPrefabs.push_back(std::move(Bundle));
+        }
+    }
+
+    const std::string ManifestPath = BundlesDirPath + "/PBR_Bundles_Manifest.json";
+    if (fs::exists(ManifestPath)) {
+        JsonValue ManifestRoot;
+        if (JsonParser::ParseFile(ManifestPath, ManifestRoot)) {
+            for (const auto& Item : ManifestRoot["converted_bundles"].AsArray()) {
+                const uint32_t ImageID = Item["image_id"].AsUInt32();
+                if (mPBRPrefabIndexByImageID.find(ImageID) != mPBRPrefabIndexByImageID.end())
+                    continue;
 
                 ModernPBRPrefabBundle Bundle;
-                Bundle.PrefabName = Root["prefab_name"].AsString();
-                Bundle.ImageID = Root["image_id"].AsUInt32();
-                Bundle.LegacyAnimSource = Root["legacy_anim_source"].AsString();
+                const std::string SemanticName = Item["semantic_name"].AsString();
+                Bundle.PrefabName = "Prefab_" + SemanticName;
+                Bundle.ImageID = ImageID;
+                Bundle.LegacyAnimSource = "anim/main_" + std::to_string(ImageID) + ".anim";
 
-                const auto& AtlasRes = Root["atlas_resolution"].AsArray();
+                const auto& AtlasRes = Item["atlas_resolution"].AsArray();
                 if (AtlasRes.size() >= 2) {
                     Bundle.AtlasResolution[0] = AtlasRes[0].AsInt();
                     Bundle.AtlasResolution[1] = AtlasRes[1].AsInt();
                 }
-                const auto& CanvasSD = Root["reference_canvas_size_sd"].AsArray();
-                if (CanvasSD.size() >= 2) {
-                    Bundle.ReferenceCanvasSizeSD[0] = CanvasSD[0].AsInt();
-                    Bundle.ReferenceCanvasSizeSD[1] = CanvasSD[1].AsInt();
-                }
-                const auto& CanvasHD = Root["reference_canvas_size_hd_4x"].AsArray();
-                if (CanvasHD.size() >= 2) {
-                    Bundle.ReferenceCanvasSizeHD4x[0] = CanvasHD[0].AsInt();
-                    Bundle.ReferenceCanvasSizeHD4x[1] = CanvasHD[1].AsInt();
-                }
 
-                for (const auto& L : Root["original_7_layers_present"].AsArray()) {
+                for (const auto& L : Item["original_layers"].AsArray()) {
                     Bundle.Original7LayersPresent.push_back(L.AsString());
                 }
 
-                const auto& Tex = Root["modern_3_channel_pbr_textures"];
-                const std::string DirStr = DirEntry.path().string() + "/";
-                if (!Tex["BaseColor_A"].AsString().empty()) {
+                const auto& Tex = Item["pbr_textures"];
+                const std::string DirStr = BundlesDirPath + "/";
+                if (!Tex["BaseColor_A"].AsString().empty())
                     Bundle.BaseColorTexturePath = DirStr + Tex["BaseColor_A"].AsString();
-                }
-                if (!Tex["Normal_RG_Team_B_AO_A"].AsString().empty()) {
+                if (!Tex["Normal_RG_Team_B_AO_A"].AsString().empty())
                     Bundle.NormalTeamAOTexturePath = DirStr + Tex["Normal_RG_Team_B_AO_A"].AsString();
-                }
-                if (!Tex["Spec_R_Emissive_GBA"].AsString().empty()) {
+                if (!Tex["Spec_R_Emissive_GBA"].AsString().empty())
                     Bundle.SpecEmissiveTexturePath = DirStr + Tex["Spec_R_Emissive_GBA"].AsString();
+
+                Bundle.TexturesVerifiedOnDisk = true;
+                Bundle.ShaderName = "StarCraft/HD_Deferred_Sprite_PBR";
+                Bundle.DrawMode = "Normal_Deferred_Lit";
+                Bundle.BlendRemapMode = "None_Standard";
+
+                if (const auto* HDImg = FindHDImageByID(ImageID)) {
+                    Bundle.Directional17WayFlip = HDImg->Directional17WayFlip;
+                    Bundle.RoleFlags = HDImg->RoleFlags;
+                    Bundle.ParentImageID = HDImg->ParentImageID;
+                    if (!HDImg->DrawMode.empty())
+                        Bundle.DrawMode = HDImg->DrawMode;
+                    if (!HDImg->BlendRemapMode.empty())
+                        Bundle.BlendRemapMode = HDImg->BlendRemapMode;
                 }
 
-                bool DiskOK = !Bundle.BaseColorTexturePath.empty() && fs::exists(Bundle.BaseColorTexturePath);
-                if (!Bundle.NormalTeamAOTexturePath.empty()) {
-                    DiskOK = DiskOK && fs::exists(Bundle.NormalTeamAOTexturePath);
-                }
-                if (!Bundle.SpecEmissiveTexturePath.empty()) {
-                    DiskOK = DiskOK && fs::exists(Bundle.SpecEmissiveTexturePath);
-                }
-                Bundle.TexturesVerifiedOnDisk = DiskOK;
-
-                const auto& Mat = Root["shader_material_config"];
-                Bundle.ShaderName = Mat["shader"].AsString();
-                Bundle.DrawMode = Mat["draw_mode"].AsString();
-                Bundle.BlendRemapMode = Mat["blend_remap_mode"].AsString();
-                Bundle.Directional17WayFlip = Mat["directional_17_way_flip"].AsBool();
-                Bundle.RoleFlags = Mat["hd_layer_relation"]["role_flags"].AsInt(1);
-                Bundle.ParentImageID = Mat["hd_layer_relation"]["parent_image_id"].AsInt(-1);
-
-                for (const auto& SliceVal : Root["sprite_atlas_slices"].AsArray()) {
-                    ModernPBRAtlasSlice Slice;
-                    Slice.FrameIndex = SliceVal["frame_index"].AsUInt32();
-                    Slice.FrameSet = SliceVal["frame_set"].AsUInt32();
-                    Slice.Direction17 = SliceVal["direction_17"].AsUInt32();
-                    const auto& Rect = SliceVal["atlas_rect_px"].AsArray();
-                    for (size_t k = 0; k < 4 && k < Rect.size(); ++k) Slice.AtlasRectPx[k] = Rect[k].AsInt();
-                    const auto& Off = SliceVal["canvas_offset_px"].AsArray();
-                    for (size_t k = 0; k < 2 && k < Off.size(); ++k) Slice.CanvasOffsetPx[k] = Off[k].AsInt();
-                    const auto& Piv = SliceVal["normalized_pivot"].AsArray();
-                    for (size_t k = 0; k < 2 && k < Piv.size(); ++k) Slice.NormalizedPivot[k] = Piv[k].AsFloat();
+                const uint32_t NumFrames = std::max<uint32_t>(1u, Item["num_frames"].AsUInt32(1u));
+                Bundle.SpriteAtlasSlices.reserve(NumFrames);
+                for (uint32_t f = 0; f < NumFrames; ++f) {
+                    ModernPBRAtlasSlice Slice{};
+                    Slice.FrameIndex = f;
+                    Slice.FrameSet = Bundle.Directional17WayFlip ? (f / 17u) : f;
+                    Slice.Direction17 = Bundle.Directional17WayFlip ? (f % 17u) : 0u;
+                    Slice.AtlasRectPx[0] = 0;
+                    Slice.AtlasRectPx[1] = 0;
+                    Slice.AtlasRectPx[2] = std::max(1, Bundle.AtlasResolution[0]);
+                    Slice.AtlasRectPx[3] = std::max(1, Bundle.AtlasResolution[1]);
                     Bundle.SpriteAtlasSlices.push_back(Slice);
                 }
 
@@ -691,6 +763,7 @@ bool ModernAssetRegistry::LoadPBRPrefabs(const std::string& BundlesDirPath)
             }
         }
     }
+
     return !mPBRPrefabs.empty();
 }
 

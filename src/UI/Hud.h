@@ -95,7 +95,6 @@ public:
         mState.Minimap.MapWidth = MapW;
         mState.Minimap.MapHeight = MapH;
     }
-    void DrawMinimap(float PosX, float PosY, float SizeW, float SizeH) const;
 
     const HudState& GetState() const { return mState; }
     const HudResourceState& GetResourceState() const { return mState.Resources; }

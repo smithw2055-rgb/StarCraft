@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
-namespace Game::Campaign { class CampaignController; }
+namespace Core::Audio { class AudioSystem; }
+namespace Game::Campaign { class CampaignController; struct CampaignMessage; }
 namespace Resource::Graphics { class ArchiveAssetSourceView; }
 namespace Resource::Graphics { class DataAssetCacheView; }
 namespace Resource::Graphics { class UIAssetCacheView; }
@@ -18,6 +20,14 @@ enum class MatchOutcome : uint8_t
     Defeat = 2,
     Draw = 3
 };
+
+std::string ResolveCampaignSoundFile(const std::string& MapPath, std::string SoundPath);
+void PlayCampaignMessageAudio(
+    Core::Audio::AudioSystem& Audio,
+    const std::string& MapPath,
+    const Game::Campaign::CampaignMessage& Message,
+    float FallbackX,
+    float FallbackY);
 
 void RenderCampaignOverlay(
     Game::Campaign::CampaignController& Campaign,

@@ -611,8 +611,6 @@ if(BUILD_HUD_COMMAND_METADATA_TEST)
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
         src/Main/GameLoop/InputHandler.cpp
-        src/UI/HudCommandActions.cpp
-        src/UI/HudCommandButtons.cpp
         src/UI/HudCommandPanel.cpp
         src/UI/HudContext.cpp
         src/UI/HudInfoPanelState.cpp
@@ -651,8 +649,6 @@ if(BUILD_SMART_CLICK_COMMAND_TEST)
         src/Game/Systems/ZergSystem.cpp
         src/Main/GameLoop/CursorTypes.cpp
         src/Main/GameLoop/InputHandler.cpp
-        src/UI/HudCommandActions.cpp
-        src/UI/HudCommandButtons.cpp
         src/UI/HudCommandPanel.cpp
         src/UI/HudContext.cpp
         src/UI/HudInfoPanelState.cpp
@@ -1202,9 +1198,7 @@ if(BUILD_GAME_CLIENT)
         src/Resource/GrpToGpu.cpp
         src/Resource/DdsGrpDecoder.cpp
         src/Resource/RgbaImageFileDecoder.cpp
-        src/Resource/UIAssetImageHelpers.cpp
         src/Resource/PortraitVideoDecoder.cpp
-        src/Resource/PcxToGpu.cpp
         src/Resource/ResourceCache.cpp
         src/Resource/ResourceCacheUI.cpp
         src/Resource/ResourceCacheSprites.cpp
@@ -1232,23 +1226,16 @@ if(BUILD_GAME_CLIENT)
         src/Client/EntityRenderer.cpp
         src/Client/CameraController.cpp
         src/Client/Selection.cpp
-        src/Client/SelectionOverlayPresentation.cpp
-        src/Client/ProjectileSystem.cpp
         src/Resource/ModernAssetRegistry.cpp
         src/Game/Systems/DeclarativeAnimationPlayer.cpp
         src/Render/EnvironmentAndTerrainPipeline.cpp
         src/Render/SokolPBRDispatcher.cpp
         "src/UI/GlueCampaignData.cpp"
         "src/UI/Hud.cpp"
-        "src/UI/HudCommandActions.cpp"
-        "src/UI/HudCommandButtons.cpp"
         "src/UI/HudCommandPanel.cpp"
-        "src/UI/HudCommandPanelRender.cpp"
-        "src/UI/HudConsole.cpp"
         "src/UI/HudContext.cpp"
         "src/UI/HudInfoPanel.cpp"
         "src/UI/HudInfoPanelState.cpp"
-        "src/UI/HudInput.cpp"
         "src/UI/HudLayout.cpp"
         "src/UI/HudMinimap.cpp"
         "src/UI/HudResources.cpp"
@@ -1291,7 +1278,6 @@ if(BUILD_GAME_CLIENT)
 
     if(ENABLE_GUI_UI AND HAS_GUI)
         list(APPEND STARCRAFT_CLIENT_SOURCES
-            "src/UI/GuiHost.cpp"
             "src/UI/GuiHudHost.cpp"
             "src/UI/MainGui.cpp"
             "src/UI/GlueAnimatedImage.cpp"
@@ -1580,8 +1566,6 @@ if(BUILD_PHASE4_HUD_MVVM_BINDING_TEST)
         src/Game/Systems/TransportSystem.cpp
         src/Game/Systems/UpgradeSystem.cpp
         src/Game/Systems/ZergSystem.cpp
-        src/UI/HudCommandActions.cpp
-        src/UI/HudCommandButtons.cpp
         src/UI/HudCommandPanel.cpp
         src/UI/HudContext.cpp
         src/UI/HudInfoPanelState.cpp
@@ -1785,4 +1769,10 @@ if(BUILD_PHASE37_TO_42_ENGINE_EVOLUTION_TEST)
     starcraft_add_modern_phase_test(Phase37To42EngineEvolutionTest
         tests/Regression/Phase37To42EngineEvolutionTest.cpp
         src/Main/GameLoop/GameSaveState.cpp)
+endif()
+
+option(BUILD_PHASE43_TO_48_ENGINE_GENERALIZATION_TEST "Build Phase 43-48 Engine Generalization & Simplification test" ON)
+if(BUILD_PHASE43_TO_48_ENGINE_GENERALIZATION_TEST)
+    starcraft_add_modern_phase_test(Phase43To48EngineGeneralizationAndSimplificationTest
+        tests/Regression/Phase43To48EngineGeneralizationAndSimplificationTest.cpp)
 endif()

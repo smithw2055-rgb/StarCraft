@@ -9,7 +9,6 @@
 #include "Main/GameRuntimeState.h"
 #include "Main/GameSimulationRuntime.h"
 #include "Main/GameUiPresentation.h"
-#include "Main/GameWorldPresentation.h"
 
 namespace Game::Client::GameLoop
 {

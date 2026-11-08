@@ -4,7 +4,7 @@
 #include "Core/Platform/Platform.h"
 #include "Main/GameLoop/HudResourceSync.h"
 #include "Main/GameHudPresentation.h"
-#include "Main/GuiRuntime.h"
+#include "Main/GameGuiPresentation.h"
 #include "Main/AppRuntime.h"
 #include "Main/GameSession.h"
 #include "Render/Renderer.h"
@@ -198,13 +198,12 @@ void HandleGuiHudPresentationEvent(GuiRuntime& Gui, const void* Event)
 
 
 // === Consolidated from src/Main/GameGuiBootstrap.cpp ===
-#include "Main/GameGuiBootstrap.h"
 
 #include <memory>
 #include <utility>
 
 #include "Core/Utils/Logger.h"
-#include "Main/GuiRuntime.h"
+#include "Main/GameGuiPresentation.h"
 
 #if ENABLE_GUI_UI
 #include <NsApp/ApplicationLauncher.h>

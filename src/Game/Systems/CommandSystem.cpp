@@ -3,7 +3,6 @@
 #include "Game/Pathfinding/AStar.h"
 #include "Game/Pathfinding/NavigationService.h"
 #include "Game/Pathfinding/NavigationSpatialHash.h"
-#include "Game/Pathfinding/RegionPathfinder.h"
 #include "Game/Pathfinding/NavigationWorldResource.h"
 #include "Game/Pathfinding/WorldSpatialIndexSystem.h"
 #include "Game/SimulationContext.h"
@@ -31,8 +30,6 @@ namespace Game::Systems
 using namespace Game::Components;
 
 const Game::Map::GameMap* gCmdMap = nullptr;
-static Game::Pathfinding::RegionPathfinder sRegionPathfinder;
-static const Game::Map::GameMap* sRegionPathfinderMap = nullptr;
 static Game::Pathfinding::NavigationService sNavigationService;
 static CommandSystem::ImageIDResolver sCommandImageResolver;
 static CommandSystem::ImageIDResolver sCommandSubunitImageResolver;
@@ -41,28 +38,6 @@ static bool PathingDebugEnabled()
 {
     const char* Value = std::getenv("STARCRAFT_DEBUG_PATHING");
     return Value && Value[0] != '\0' && Value[0] != '0';
-}
-
-static void RebuildRegionPathfinder(const Game::Map::GameMap* Map)
-{
-    sRegionPathfinderMap = Map;
-    if (!Map)
-        return;
-
-    Game::Pathfinding::RegionPathfinder::MapContext Ctx;
-    Ctx.MapWidth = std::min(
-        Map->GetWidth(), Game::Pathfinding::RegionPathfinder::kMaxMapWidth);
-    Ctx.MapHeight = std::min(
-        Map->GetHeight(), Game::Pathfinding::RegionPathfinder::kMaxMapHeight);
-
-    for (int y = 0; y < Ctx.MapHeight; ++y)
-        for (int x = 0; x < Ctx.MapWidth; ++x)
-        {
-            Ctx.Walkable[x][y] = Map->IsWalkable(x, y);
-            Ctx.TileRegion[x][y] = -1;
-        }
-
-    sRegionPathfinder.BuildRegions(Ctx);
 }
 
 static const Game::Map::GameMap* ResolveCmdMap(
@@ -86,7 +61,6 @@ static Game::Pathfinding::NavigationService& ResolveNavService(
 void CommandSystem::SetMap(const Game::Map::GameMap* Map)
 {
     gCmdMap = Map;
-    RebuildRegionPathfinder(Map);
     if (Map)
         sNavigationService.SetBaseGrid(Map->GetNavigationGrid());
     if (auto* ActiveEM = Core::ECS::EntityManager::GetActiveWorld())

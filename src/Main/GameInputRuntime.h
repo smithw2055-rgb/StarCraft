@@ -18,12 +18,25 @@
 #include "Core/Input/InputActionMap.h"
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
-#include "Main/GameClientViewRuntime.h"
+namespace Game::Client::GameLoop
+{
+inline void UpdateClientCameraForCurrentViewport(ClientRuntime& Client, const UI::Hud& Hud, float Dt)
+{
+    const int ViewportWidth = Core::Platform::GetWindowWidth();
+    const int ViewportHeight = Core::Platform::GetWindowHeight();
+    Client.UpdateCameraForViewport(
+        ViewportWidth,
+        ViewportHeight,
+        (float)Hud.GetResourceBarHeight(),
+        (float)Hud.GetHudHeight(ViewportWidth, ViewportHeight),
+        Dt);
+}
+} // namespace Game::Client::GameLoop
 #include "Main/GameCommandDispatchRuntime.h"
 #include "Main/GameEntitySpawnRuntime.h"
 #include "Main/GameMenuPresentation.h"
 #include "Main/GameSession.h"
-#include "Main/GuiRuntime.h"
+#include "Main/GameGuiPresentation.h"
 #include "UI/Hud.h"
 
 namespace Game::Client::GameLoop

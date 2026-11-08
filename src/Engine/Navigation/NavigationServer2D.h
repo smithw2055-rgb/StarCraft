@@ -65,20 +65,24 @@ struct AvoidanceAgent2D
 struct NavigationServerTelemetry
 {
     uint64_t ClearanceRebuilds = 0;
+    uint64_t RegionRebuilds = 0;
     uint64_t AStarQueriesExecuted = 0;
     uint64_t FlowFieldsGenerated = 0;
     uint64_t AvoidanceStepsComputed = 0;
 };
 
 // ============================================================================
-// NavigationServer2D (Phase 40):
+// NavigationServer2D (Phase 40 & Phase 47 Unified Navigation Server):
 // - General-purpose 2D RTS navigation server inspired by Godot NavigationServer2D
 //   and classic RTS hierarchical/clearance pathfinding.
-// - Provides:
+// - Converges NavigationGrid (elevation levels, ramps) & RegionPathfinder
+//   (O(1) connected-component island reachability) into a single engine server:
 //   1. True Clearance Field computation (supporting 1x1, 2x2, 3x3, 4x4 footprints).
-//   2. Deterministic A* pathfinding with footprint clearance filtering.
-//   3. Goal-based Dijkstra Flow Field generation for large crowd steering.
-//   4. Deterministic radial separation / local avoidance for unit steering.
+//   2. Per-cell Elevation Levels, Ramp transitions, and O(W*H) Flood-Fill
+//      Connected Component Region labeling (AreCellsConnected in O(1)).
+//   3. Deterministic A* pathfinding with footprint clearance & cliff/ramp rules.
+//   4. Goal-based Dijkstra Flow Field generation for large crowd steering.
+//   5. Deterministic radial separation / local avoidance for unit steering.
 // ============================================================================
 class NavigationServer2D
 {
@@ -91,6 +95,10 @@ public:
         const size_t Total = static_cast<size_t>(mWidth) * static_cast<size_t>(mHeight);
         mBlocked.assign(Total, 0u);
         mClearance.assign(Total, 1u);
+        mElevation.assign(Total, 0u);
+        mRamp.assign(Total, 0u);
+        mRegionIDs.assign(Total, -1);
+        mRegionCount = 0;
         RebuildClearanceField();
     }
 
@@ -118,6 +126,45 @@ public:
         return mBlocked[CellIndex(X, Y)] != 0u;
     }
 
+    void SetCellElevation(int32_t X, int32_t Y, uint8_t ElevationLevel, bool IsRamp = false)
+    {
+        if (!InBounds(X, Y))
+            return;
+        const size_t Idx = CellIndex(X, Y);
+        mElevation[Idx] = ElevationLevel;
+        mRamp[Idx] = IsRamp ? 1u : 0u;
+    }
+
+    uint8_t GetCellElevation(int32_t X, int32_t Y) const noexcept
+    {
+        if (!InBounds(X, Y))
+            return 0u;
+        return mElevation[CellIndex(X, Y)];
+    }
+
+    bool IsCellRamp(int32_t X, int32_t Y) const noexcept
+    {
+        if (!InBounds(X, Y))
+            return false;
+        return mRamp[CellIndex(X, Y)] != 0u;
+    }
+
+    // Checks whether a ground unit can step directly between two adjacent cells
+    // considering elevation cliff differences unless bridged by a ramp cell.
+    bool CanTraverseElevation(int32_t FromX, int32_t FromY, int32_t ToX, int32_t ToY) const noexcept
+    {
+        if (!InBounds(FromX, FromY) || !InBounds(ToX, ToY))
+            return false;
+        const size_t IdxA = CellIndex(FromX, FromY);
+        const size_t IdxB = CellIndex(ToX, ToY);
+        if (mElevation[IdxA] == mElevation[IdxB])
+            return true;
+        const int32_t Diff = std::abs(static_cast<int32_t>(mElevation[IdxA]) - static_cast<int32_t>(mElevation[IdxB]));
+        if (Diff > 1)
+            return false;
+        return (mRamp[IdxA] != 0u) || (mRamp[IdxB] != 0u);
+    }
+
     uint8_t GetCellClearance(int32_t X, int32_t Y)
     {
         if (mClearanceDirty)
@@ -127,9 +174,7 @@ public:
         return mClearance[CellIndex(X, Y)];
     }
 
-    // Dynamic programming true-clearance field computation in O(W * H):
-    // mClearance[y * W + x] = largest square footprint (capped at 16) that fits
-    // with its top-left corner at (x, y).
+    // Dynamic programming true-clearance field computation in O(W * H)
     void RebuildClearanceField()
     {
         if (mWidth <= 0 || mHeight <= 0)
@@ -163,6 +208,76 @@ public:
         ++mTelemetry.ClearanceRebuilds;
     }
 
+    // Rebuilds connected walkable regions via flood-fill in O(W * H)
+    uint32_t RebuildConnectedRegions(uint8_t FootprintSize = 1)
+    {
+        if (mClearanceDirty)
+            RebuildClearanceField();
+
+        const uint8_t ReqClearance = std::max<uint8_t>(1u, FootprintSize);
+        const size_t Total = static_cast<size_t>(mWidth) * static_cast<size_t>(mHeight);
+        mRegionIDs.assign(Total, -1);
+        mRegionCount = 0;
+
+        static constexpr int32_t kDirX[4] = {1, -1, 0, 0};
+        static constexpr int32_t kDirY[4] = {0, 0, 1, -1};
+
+        std::queue<GridCoord2D> Queue;
+        for (int32_t Y = 0; Y < mHeight; ++Y)
+        {
+            for (int32_t X = 0; X < mWidth; ++X)
+            {
+                const size_t StartIdx = CellIndex(X, Y);
+                if (mRegionIDs[StartIdx] != -1 || mClearance[StartIdx] < ReqClearance)
+                    continue;
+
+                const int32_t NewRegion = static_cast<int32_t>(mRegionCount++);
+                mRegionIDs[StartIdx] = NewRegion;
+                Queue.push({X, Y});
+
+                while (!Queue.empty())
+                {
+                    const GridCoord2D Cur = Queue.front();
+                    Queue.pop();
+
+                    for (int D = 0; D < 4; ++D)
+                    {
+                        const int32_t NX = Cur.X + kDirX[D];
+                        const int32_t NY = Cur.Y + kDirY[D];
+                        if (!InBounds(NX, NY))
+                            continue;
+                        const size_t NIdx = CellIndex(NX, NY);
+                        if (mRegionIDs[NIdx] != -1 || mClearance[NIdx] < ReqClearance)
+                            continue;
+                        if (!CanTraverseElevation(Cur.X, Cur.Y, NX, NY))
+                            continue;
+
+                        mRegionIDs[NIdx] = NewRegion;
+                        Queue.push({NX, NY});
+                    }
+                }
+            }
+        }
+        ++mTelemetry.RegionRebuilds;
+        return mRegionCount;
+    }
+
+    int32_t GetCellRegionID(int32_t X, int32_t Y) const noexcept
+    {
+        if (!InBounds(X, Y))
+            return -1;
+        return mRegionIDs[CellIndex(X, Y)];
+    }
+
+    bool AreCellsConnected(GridCoord2D A, GridCoord2D B) const noexcept
+    {
+        const int32_t RegA = GetCellRegionID(A.X, A.Y);
+        const int32_t RegB = GetCellRegionID(B.X, B.Y);
+        return RegA >= 0 && RegA == RegB;
+    }
+
+    uint32_t GetConnectedRegionCount() const noexcept { return mRegionCount; }
+
     bool CanFitFootprint(int32_t X, int32_t Y, uint8_t FootprintSize)
     {
         if (mClearanceDirty)
@@ -172,7 +287,7 @@ public:
         return mClearance[CellIndex(X, Y)] >= std::max<uint8_t>(1u, FootprintSize);
     }
 
-    // Deterministic A* Pathfinding with Footprint Clearance
+    // Deterministic A* Pathfinding with Footprint Clearance & Elevation/Ramp rules
     std::vector<GridCoord2D> FindPath(GridCoord2D Start,
                                       GridCoord2D Goal,
                                       uint8_t FootprintSize = 1,
@@ -205,7 +320,7 @@ public:
             {
                 if (FScore != Other.FScore)
                     return FScore > Other.FScore;
-                return Index > Other.Index; // Deterministic tie-break
+                return Index > Other.Index;
             }
         };
 
@@ -264,12 +379,17 @@ public:
                 const int32_t NY = CY + kDirY[Dir];
                 if (!CanFitFootprint(NX, NY, RequiredClearance))
                     continue;
+                if (!CanTraverseElevation(CX, CY, NX, NY))
+                    continue;
 
-                // Prevent corner cutting on diagonal moves
                 if (Dir >= 4)
                 {
                     if (!CanFitFootprint(CX + kDirX[Dir], CY, RequiredClearance) ||
-                        !CanFitFootprint(CX, CY + kDirY[Dir], RequiredClearance))
+                        !CanFitFootprint(CX, CY + kDirY[Dir], RequiredClearance) ||
+                        !CanTraverseElevation(CX, CY, CX + kDirX[Dir], CY) ||
+                        !CanTraverseElevation(CX, CY, CX, CY + kDirY[Dir]) ||
+                        !CanTraverseElevation(CX + kDirX[Dir], CY, NX, NY) ||
+                        !CanTraverseElevation(CX, CY + kDirY[Dir], NX, NY))
                     {
                         continue;
                     }
@@ -350,11 +470,17 @@ public:
                 const int32_t NY = CY + kDirY[Dir];
                 if (!CanFitFootprint(NX, NY, RequiredClearance))
                     continue;
+                if (!CanTraverseElevation(CX, CY, NX, NY))
+                    continue;
 
                 if (Dir >= 4)
                 {
                     if (!CanFitFootprint(CX + kDirX[Dir], CY, RequiredClearance) ||
-                        !CanFitFootprint(CX, CY + kDirY[Dir], RequiredClearance))
+                        !CanFitFootprint(CX, CY + kDirY[Dir], RequiredClearance) ||
+                        !CanTraverseElevation(CX, CY, CX + kDirX[Dir], CY) ||
+                        !CanTraverseElevation(CX, CY, CX, CY + kDirY[Dir]) ||
+                        !CanTraverseElevation(CX + kDirX[Dir], CY, NX, NY) ||
+                        !CanTraverseElevation(CX, CY + kDirY[Dir], NX, NY))
                     {
                         continue;
                     }
@@ -370,7 +496,6 @@ public:
             }
         }
 
-        // Compute normalized gradient vectors pointing toward lowest integration cost neighbor
         for (int32_t Y = 0; Y < mHeight; ++Y)
         {
             for (int32_t X = 0; X < mWidth; ++X)
@@ -390,10 +515,16 @@ public:
                     const int32_t NY = Y + kDirY[Dir];
                     if (!InBounds(NX, NY))
                         continue;
+                    if (!CanTraverseElevation(X, Y, NX, NY))
+                        continue;
                     if (Dir >= 4)
                     {
                         if (!CanFitFootprint(X + kDirX[Dir], Y, RequiredClearance) ||
-                            !CanFitFootprint(X, Y + kDirY[Dir], RequiredClearance))
+                            !CanFitFootprint(X, Y + kDirY[Dir], RequiredClearance) ||
+                            !CanTraverseElevation(X, Y, X + kDirX[Dir], Y) ||
+                            !CanTraverseElevation(X, Y, X, Y + kDirY[Dir]) ||
+                            !CanTraverseElevation(X + kDirX[Dir], Y, NX, NY) ||
+                            !CanTraverseElevation(X, Y + kDirY[Dir], NX, NY))
                         {
                             continue;
                         }
@@ -451,7 +582,6 @@ public:
                 }
                 else
                 {
-                    // Deterministic tie-breaker when centers coincide
                     const float Dir = (Self.EntityID < Other.EntityID) ? 1.0f : -1.0f;
                     Repulsion.X += Dir * MaxSpeed;
                 }
@@ -484,8 +614,12 @@ private:
     int32_t mHeight = 0;
     float mCellSize = 32.0f;
     bool mClearanceDirty = true;
+    uint32_t mRegionCount = 0;
     std::vector<uint8_t> mBlocked;
     std::vector<uint8_t> mClearance;
+    std::vector<uint8_t> mElevation;
+    std::vector<uint8_t> mRamp;
+    std::vector<int32_t> mRegionIDs;
     NavigationServerTelemetry mTelemetry{};
 };
 

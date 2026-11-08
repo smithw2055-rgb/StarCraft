@@ -5,7 +5,7 @@
 #include "Client/Entity.h"
 #include "Client/EntityRenderer.h"
 #include "Client/Selection.h"
-#include "Client/SelectionOverlayPresentation.h"
+#include "Render/Color.h"
 #include "Client/TilesetRenderer.h"
 #include "Client/WorldEffects.h"
 #include "Core/ECS/EntityManager.h"
@@ -421,7 +421,8 @@ void ClientRuntime::RenderSelectionDragOverlay()
     float W = 0.0f;
     float H = 0.0f;
     Selector->GetDragRectScreen(X, Y, W, H);
-    RenderSelectionDragRect(X, Y, W, H);
+    Render::g_Draw2D.DrawRect(X, Y, W, H, Render::Color(80, 200, 80, 24));
+    Render::g_Draw2D.DrawRectLines(X, Y, W, H, Render::Color(80, 220, 80, 220), 1.0f);
 }
 
 void ClientRuntime::RenderCursor(int MouseX,

@@ -223,8 +223,10 @@ bool BehaviorTreeCatalog::LoadFromAssetsR(const std::string& AssetsRRootPath)
     mAIScriptCount = 0;
     mBWScriptCount = 0;
 
-    if (LoadTreeFile(AssetsRRootPath + "/AIScriptBin_All_293_BehaviorTrees.json", mAIScriptTrees, mAIScriptCount) &&
-        LoadTreeFile(AssetsRRootPath + "/BWScriptBin_All_156_BehaviorTrees.json", mBWScriptTrees, mBWScriptCount)) {
+    if ((LoadTreeFile(AssetsRRootPath + "/05_AI_BehaviorTrees_From_AIBin/AIScriptBin_All_293_BehaviorTrees.json", mAIScriptTrees, mAIScriptCount) &&
+         LoadTreeFile(AssetsRRootPath + "/05_AI_BehaviorTrees_From_AIBin/BWScriptBin_All_156_BehaviorTrees.json", mBWScriptTrees, mBWScriptCount)) ||
+        (LoadTreeFile(AssetsRRootPath + "/AIScriptBin_All_293_BehaviorTrees.json", mAIScriptTrees, mAIScriptCount) &&
+         LoadTreeFile(AssetsRRootPath + "/BWScriptBin_All_156_BehaviorTrees.json", mBWScriptTrees, mBWScriptCount))) {
         return !mAIScriptTrees.empty() && !mBWScriptTrees.empty();
     }
 

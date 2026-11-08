@@ -94,10 +94,6 @@ void Hud::SetMinimapViewportRect(float CamWorldX, float CamWorldY, float CamWorl
     mState.Minimap.CamVisibleH = CamWorldH;
 }
 
-void Hud::DrawMinimap(float, float, float, float) const
-{
-}
-
 void Hud::RebuildBaseTerrainColors(int MapW, int MapH,
                                    const Game::Map::GameMap* EcsMap,
                                    const Game::Client::GameMap* ClientMap)

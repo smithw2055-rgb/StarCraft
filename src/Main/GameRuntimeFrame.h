@@ -11,7 +11,6 @@
 #include "Main/GameScenes.h"
 #include "Main/GameSimulationRuntime.h"
 #include "Main/GameUiPresentation.h"
-#include "Main/GameWorldPresentation.h"
 #include "Render/Renderer.h"
 
 #include <cstdint>

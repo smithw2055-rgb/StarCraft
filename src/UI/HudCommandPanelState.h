@@ -296,7 +296,7 @@ struct CmdButtonDef
     std::string Label;
     ActionKind Kind = ActionKind::None;
     HudCommandId CommandId = HudCommandId::None;
-    Game::Systems::TerranResearchId ResearchId;
+    Game::Systems::TerranResearchId ResearchId = Game::Systems::TerranResearchId::None;
     int TargetUnitDefID = -1;
     int IconIndex = -1;
     int NextMenuPage = 0;
@@ -307,7 +307,7 @@ struct CmdButtonDef
     HudVisualId VisualId = HudVisualId::None;
     char Hotkey = '\0';
 
-    CmdButtonDef();
+    CmdButtonDef() = default;
 };
 
 struct HudCommandPanelState

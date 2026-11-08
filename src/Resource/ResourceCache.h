@@ -12,13 +12,44 @@
 #include "Resource/Cv5Decoder.h"
 #include "Resource/Vx4Decoder.h"
 #include "Resource/Vf4Decoder.h"
-#include "Resource/PcxRegion.h"
 #include "Resource/GrpToGpu.h"
-#include "Resource/ArchiveSourceTypes.h"
-#include "Resource/DataAssetTypes.h"
 #include "Resource/UIAssetTypes.h"
-#include "Resource/SpriteAssetTypes.h"
-#include "Resource/TilesetAssetTypes.h"
+#include "Resource/GameDataLoader.h"
+#include "Resource/GpuImage.h"
+#include "Resource/IArchiveReader.h"
+#include "Resource/Palette.h"
+#include "Resource/TilesetAssetCacheView.h"
+
+namespace Resource::Graphics
+{
+
+struct ArchiveSourceState
+{
+    std::unique_ptr<IArchiveReader> Archive;
+    std::unique_ptr<IArchiveReader> Archive2;
+    std::unique_ptr<IArchiveReader> Archive3;
+    std::string ListfilePath;
+
+    bool IsCasc = false;
+    bool UseExtractedAssets = false;
+    std::string AssetsRoot;
+
+    std::vector<std::string> CascPrefixes = {"", "base1/", "sc1/", "sc1bw/"};
+    std::unordered_map<std::string, std::string> CascPathCache;
+};
+
+struct DataAssetCacheState
+{
+    Resource::GameDataLoader Loader;
+    ColorPalette ActivePalette;
+};
+
+struct SpriteAssetCacheState
+{
+    std::unordered_map<uint32_t, std::vector<GpuImage>> FramesByImageId;
+};
+
+} // namespace Resource::Graphics
 
 namespace Resource::Graphics
 {

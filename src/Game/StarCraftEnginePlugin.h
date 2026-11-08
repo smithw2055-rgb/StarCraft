@@ -41,8 +41,11 @@ namespace Game
 // Demonstrates how StarCraft: Remastered acts as an experimental flagship module
 // hosted on top of the reusable Engine Foundation (Engine::EngineApp):
 // - Loads or binds cloud-converted ModernAssetRegistry (assets-R)
-// - Auto-populates Engine::Scene::PrefabRegistry (228 unit prefabs) and
-//   Engine::AI::BehaviorTreeServer (293 AI behavior trees)
+// - Auto-populates Engine::Scene::PrefabRegistry (228 unit prefabs),
+//   Engine::Animation::AnimationServer2D (398 controllers / 1,364 clips + 2D sockets),
+//   Engine::Audio::AudioServer2D (1,144 SFX catalog),
+//   Engine::UI::UIServer2D (HD UI & wireframe atlases), and
+//   Engine::AI::BehaviorTreeServer (449 AIScript + BWScript behavior trees)
 // - Synchronizes UnitPrototypeRegistry and SystemAssetBridge without legacy .dat files
 // - Registers WorldContext rollback resources (PlayerResourceStore, WorldUpgradeResource)
 // - Installs hierarchical SystemGroups across FixedSimulation, Presentation, and RenderExtract
@@ -71,7 +74,7 @@ public:
         auto& SM = App.PrimaryWorld();
         auto& EM = SM.GetEntityManager();
 
-        // 1. Load cloud assets-R catalog if path is configured and bind to AssetServer + SystemAssetBridge
+        // 1. Load cloud assets-R catalog if path is configured and bind to all Engine Servers
         if (!mAssetsRPath.empty())
         {
             if (mOwnedAssetRegistry.LoadFromAssetsRDirectory(mAssetsRPath))
@@ -79,11 +82,15 @@ public:
                 mActiveRegistry = &mOwnedAssetRegistry;
             }
             App.Context().BehaviorTrees().LoadFromAssetsRDirectory(mAssetsRPath);
+            App.Context().UI2D().ImportHDUIAtlasesFromManifest(
+                mAssetsRPath + "/04_Terrain_Environment_And_Shaders/Terrain_CHK_And_HD_Effects_Manifest.json");
         }
         if (mActiveRegistry && mActiveRegistry->IsLoaded())
         {
             App.Context().Assets().BindModernRegistry(mActiveRegistry);
             App.Context().Prefabs().BuildUnitPrefabsFromModernRegistry(*mActiveRegistry);
+            App.Context().Animation2D().ImportFromModernRegistry(*mActiveRegistry);
+            App.Context().Audio2D().ImportFromModernRegistry(*mActiveRegistry);
             Game::Systems::SystemAssetBridge::BindModernAssetRegistry(*mActiveRegistry);
             SyncUnitPrototypesFromModernAssets(*mActiveRegistry);
         }
@@ -96,6 +103,7 @@ public:
             mMap = mOwnedFallbackMap.get();
         }
         App.Context().Navigation2D().InitializeGrid(mMap->GetWidth(), mMap->GetHeight(), 32.0f);
+        App.Context().Navigation2D().RebuildConnectedRegions(1u);
 
         auto& SimCtx = Game::SimulationContext::Get(EM);
         SimCtx.Map = mMap;

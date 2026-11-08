@@ -1,7 +1,5 @@
 #include "Main/CampaignPresentation.h"
 
-#include "Main/CampaignPortrait.h"
-#include "Main/CampaignText.h"
 #include "Core/Platform/Platform.h"
 #include "Game/Campaign/CampaignController.h"
 #include "Resource/ArchiveAssetSourceView.h"
@@ -16,6 +14,22 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+
+namespace Game::Client::GameLoop
+{
+std::string CampaignPortraitKeyFromUnitID(
+    const Resource::Graphics::DataAssetCacheView& DataAssets,
+    const Resource::Graphics::ArchiveAssetSourceView& ArchiveSource,
+    uint32_t UnitID);
+std::string CampaignPortraitKeyFromText(const std::string& Text);
+std::string CampaignAdvisorPortraitKey(int PlayerID);
+const Resource::Graphics::PortraitFrame* CampaignPortraitFrameAt(
+    const Resource::Graphics::PortraitClip& Clip,
+    double TimeSeconds);
+std::string SanitizeCampaignText(std::string Text);
+std::vector<std::string> WrapCampaignText(const std::string& Text, size_t MaxChars, size_t MaxLines);
+const char* CampaignMessageKind(uint8_t ActionID);
+} // namespace Game::Client::GameLoop
 
 namespace Game::Client::GameLoop
 {
@@ -292,7 +306,6 @@ void RenderMatchGameOverOverlay(
 
 
 // === Consolidated from src/Main/CampaignAudio.cpp ===
-#include "Main/CampaignAudio.h"
 
 #include "Core/Audio/AudioSystem.h"
 #include "Core/Utils/Logger.h"
@@ -384,7 +397,6 @@ void PlayCampaignMessageAudio(
 
 
 // === Consolidated from src/Main/CampaignPortrait.cpp ===
-#include "Main/CampaignPortrait.h"
 
 #include "Resource/GameDataLoader.h"
 #include "Resource/TblDecoder.h"
@@ -638,7 +650,6 @@ const Resource::Graphics::PortraitFrame* CampaignPortraitFrameAt(
 
 
 // === Consolidated from src/Main/CampaignText.cpp ===
-#include "Main/CampaignText.h"
 
 #include <algorithm>
 

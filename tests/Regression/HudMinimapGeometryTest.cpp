@@ -1,5 +1,5 @@
 #include "UI/HudMinimapGeometry.h"
-#include "UI/HudMinimapState.h"
+#include "UI/HudState.h"
 
 #include <cstdio>
 #include <cstdlib>

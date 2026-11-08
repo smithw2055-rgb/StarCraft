@@ -15,6 +15,8 @@
 #include "Core/Input/InputActionMap.h"
 #include "Core/Scene/SceneManager.h"
 #include "Engine/AI/BehaviorTreeServer.h"
+#include "Engine/Animation/AnimationServer2D.h"
+#include "Engine/Audio/AudioServer2D.h"
 #include "Engine/DataAssetRegistry.h"
 #include "Engine/Debug/EngineTelemetryServer.h"
 #include "Engine/ECS/GenericWorldSnapshot.h"
@@ -23,10 +25,14 @@
 #include "Engine/Input/CommandRouter.h"
 #include "Engine/Navigation/NavigationServer2D.h"
 #include "Engine/Net/DeterministicSessionServer.h"
+#include "Engine/Net/NetworkTransportServer.h"
 #include "Engine/Node2D.h"
+#include "Engine/Physics/PhysicsServer2D.h"
 #include "Engine/Render/RenderGraph2D.h"
 #include "Engine/Scene/PackedScene2D.h"
 #include "Engine/Scene/PrefabRegistry.h"
+#include "Engine/Scene/SceneLoaderServer.h"
+#include "Engine/UI/UIServer2D.h"
 #include "Render/RenderServer2D.h"
 #include "Resource/AssetServer.h"
 
@@ -56,9 +62,10 @@ public:
 };
 
 // ============================================================================
-// EngineContext: Unified Server Architecture Container (Phases 34–42)
-// Referenced from Godot 4 Server Architecture (RenderingServer, AudioServer,
-// NavigationServer2D, ResourceLoader, InputMap, SceneTree) & Unity Subsystems:
+// EngineContext: Unified Server Architecture Container (Phases 34–48)
+// Referenced from Godot 4 Server Architecture (RenderingServer, AudioServer2D,
+// AnimationServer2D, PhysicsServer2D, NavigationServer2D, UIServer2D,
+// SceneLoaderServer, ResourceLoader, InputMap, SceneTree) & Unity Subsystems:
 // - Aggregates all core engine servers into a single non-global context owned
 //   by EngineApp, eliminating scattered global state across modules.
 // ============================================================================
@@ -82,20 +89,38 @@ public:
     Engine::Render::RenderGraph2D& RenderGraph() noexcept { return mRenderGraph2D; }
     const Engine::Render::RenderGraph2D& RenderGraph() const noexcept { return mRenderGraph2D; }
 
+    Engine::Animation::AnimationServer2D& Animation2D() noexcept { return mAnimationServer2D; }
+    const Engine::Animation::AnimationServer2D& Animation2D() const noexcept { return mAnimationServer2D; }
+
+    Engine::Audio::AudioServer2D& Audio2D() noexcept { return mAudioServer2D; }
+    const Engine::Audio::AudioServer2D& Audio2D() const noexcept { return mAudioServer2D; }
+
+    Engine::Physics::PhysicsServer2D& Physics2D() noexcept { return mPhysicsServer2D; }
+    const Engine::Physics::PhysicsServer2D& Physics2D() const noexcept { return mPhysicsServer2D; }
+
     Engine::Navigation::NavigationServer2D& Navigation2D() noexcept { return mNavigationServer2D; }
     const Engine::Navigation::NavigationServer2D& Navigation2D() const noexcept { return mNavigationServer2D; }
 
     Engine::AI::BehaviorTreeServer& BehaviorTrees() noexcept { return mBehaviorTreeServer; }
     const Engine::AI::BehaviorTreeServer& BehaviorTrees() const noexcept { return mBehaviorTreeServer; }
 
+    Engine::UI::UIServer2D& UI2D() noexcept { return mUIServer2D; }
+    const Engine::UI::UIServer2D& UI2D() const noexcept { return mUIServer2D; }
+
     Engine::Scene::PrefabRegistry& Prefabs() noexcept { return mPrefabRegistry; }
     const Engine::Scene::PrefabRegistry& Prefabs() const noexcept { return mPrefabRegistry; }
+
+    Engine::Scene::SceneLoaderServer& SceneLoader() noexcept { return mSceneLoaderServer; }
+    const Engine::Scene::SceneLoaderServer& SceneLoader() const noexcept { return mSceneLoaderServer; }
+
+    Engine::Net::LoopbackNetworkHub& NetTransportHub() noexcept { return mNetTransportHub; }
+    const Engine::Net::LoopbackNetworkHub& NetTransportHub() const noexcept { return mNetTransportHub; }
 
     Engine::Debug::EngineTelemetryServer& Telemetry() noexcept { return mTelemetryServer; }
     const Engine::Debug::EngineTelemetryServer& Telemetry() const noexcept { return mTelemetryServer; }
 
-    Core::Audio::AudioBusMixer& AudioBuses() noexcept { return mAudioBusMixer; }
-    const Core::Audio::AudioBusMixer& AudioBuses() const noexcept { return mAudioBusMixer; }
+    Core::Audio::AudioBusMixer& AudioBuses() noexcept { return mAudioServer2D.BusMixer(); }
+    const Core::Audio::AudioBusMixer& AudioBuses() const noexcept { return mAudioServer2D.BusMixer(); }
 
     Core::Input::InputActionMap& InputMap() noexcept { return mInputActionMap; }
     const Core::Input::InputActionMap& InputMap() const noexcept { return mInputActionMap; }
@@ -114,11 +139,16 @@ private:
     Resource::AssetServer mAssetServer;
     ::Render::RenderServer2D mRenderServer2D;
     Engine::Render::RenderGraph2D mRenderGraph2D;
+    Engine::Animation::AnimationServer2D mAnimationServer2D;
+    Engine::Audio::AudioServer2D mAudioServer2D;
+    Engine::Physics::PhysicsServer2D mPhysicsServer2D;
     Engine::Navigation::NavigationServer2D mNavigationServer2D;
     Engine::AI::BehaviorTreeServer mBehaviorTreeServer;
+    Engine::UI::UIServer2D mUIServer2D;
     Engine::Scene::PrefabRegistry mPrefabRegistry;
+    Engine::Scene::SceneLoaderServer mSceneLoaderServer;
+    Engine::Net::LoopbackNetworkHub mNetTransportHub;
     Engine::Debug::EngineTelemetryServer mTelemetryServer;
-    Core::Audio::AudioBusMixer mAudioBusMixer;
     Core::Input::InputActionMap mInputActionMap = Core::Input::InputActionMap::CreateDefaultRTSMap();
     Core::Scene::SceneManager mScenes;
     SceneTree2D mSceneTree2D;
@@ -221,7 +251,7 @@ public:
         }
 
         mContext.Assets().FlushPendingGpuUploads(GpuUploadBudgetBytes);
-        mContext.AudioBuses().AdvanceFrame(WallDeltaSeconds);
+        mContext.Audio2D().FlushFrame({0.0f, 0.0f}, 1600.0f, WallDeltaSeconds);
         mContext.SceneTree().PropagateAllTransforms();
 
         mPrimaryWorld.UpdatePresentationFrame(WallDeltaSeconds);

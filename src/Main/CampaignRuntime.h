@@ -7,7 +7,7 @@
 #include "Game/Campaign/CampaignController.h"
 #include "Game/Campaign/CampaignProgressStore.h"
 #include "Game/Trigger/TriggerVM.h"
-#include "Main/CampaignAudio.h"
+#include "Main/CampaignPresentation.h"
 
 namespace Game::Client::GameLoop
 {

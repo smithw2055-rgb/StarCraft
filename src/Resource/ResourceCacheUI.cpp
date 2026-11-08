@@ -1,8 +1,41 @@
 #include "Resource/ResourceCache.h"
 
 #include "Core/Utils/Logger.h"
+#include "Resource/DdsGrpDecoder.h"
+#include "Resource/GrpToGpu.h"
+#include "Resource/Palette.h"
+#include "Resource/RgbaImage.h"
+#include "Resource/RgbaImageFileDecoder.h"
+#include "Resource/UIAssetTypes.h"
 
-#include "Resource/UIAssetImageHelpers.h"
+namespace Resource::Graphics
+{
+struct DecodedPcx
+{
+    int Width = 0;
+    int Height = 0;
+    std::vector<uint8_t> Rgba;
+    PcxRegions Regions;
+};
+
+std::optional<DecodedPcx> DecodePcxToRgba(const std::vector<uint8_t>& Data);
+ImageOpaqueBounds ComputeOpaqueBounds(const uint8_t* Rgba, int Width, int Height);
+std::optional<ColorPalette> LoadPcxPalette(const std::vector<uint8_t>& Data);
+void ApplyTransparentBlack(std::vector<uint8_t>& Rgba);
+void ConvertOpaquePixelsToWhiteMask(std::vector<uint8_t>& Rgba);
+std::optional<DecodedRgbaImage> ResizeRgbaImage(const DecodedRgbaImage& Source,
+                                                int TargetWidth,
+                                                int TargetHeight);
+void AlphaBlendInto(std::vector<uint8_t>& Dest,
+                    int DestWidth,
+                    int DestHeight,
+                    const DecodedRgbaImage& Source,
+                    int DestX,
+                    int DestY);
+} // namespace Resource::Graphics
+
+#include "Core/Utils/Logger.h"
+
 
 
 
@@ -90,9 +123,7 @@ bool ResourceCache::LoadUIGraphics()
 
 #include "Core/Utils/Logger.h"
 
-#include "Resource/PcxToGpu.h"
 #include "Resource/RgbaImageFileDecoder.h"
-#include "Resource/UIAssetImageHelpers.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -283,7 +314,6 @@ bool ResourceCache::LoadHudChromeGraphics()
 #include "Core/Utils/Logger.h"
 #include "Resource/DdsGrpDecoder.h"
 #include "Resource/GrpToGpu.h"
-#include "Resource/UIAssetImageHelpers.h"
 
 #include <utility>
 
@@ -485,9 +515,7 @@ bool ResourceCache::LoadCursorGraphics(const GrpDecodeOptions& CursorOptions)
 #include "Core/Utils/Logger.h"
 
 #include "Resource/DdsGrpDecoder.h"
-#include "Resource/PcxToGpu.h"
 #include "Resource/RgbaImageFileDecoder.h"
-#include "Resource/UIAssetImageHelpers.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1035,6 +1063,393 @@ bool ResourceCache::LoadPcxUIImage(const std::string& Path,
 
     Out = UploadRgbaFull(PcxOpt->Width, PcxOpt->Height, PcxOpt->Rgba.data());
     return Out.Valid();
+}
+
+} // namespace Resource::Graphics
+
+// === Consolidated PcxToGpu ===
+#include "Core/Utils/Logger.h"
+
+#include <algorithm>
+#include <cstring>
+#include <cstdint>
+
+namespace Resource::Graphics
+{
+
+#pragma pack(push, 1)
+struct PcxHeader
+{
+    uint8_t  Manufacturer;
+    uint8_t  Version;
+    uint8_t  Encoding;
+    uint8_t  BitsPerPixel;
+    uint16_t XMin, YMin, XMax, YMax;
+    uint16_t HDpi, VDpi;
+    uint8_t  ColorMap[48];
+    uint8_t  Reserved;
+    uint8_t  ColorPlanes;
+    uint16_t BytesPerLine;
+    uint16_t PaletteType;
+    uint16_t HScrSize, VScrSize;
+    uint8_t  Padding[54];
+};
+#pragma pack(pop)
+
+static bool IsRed(uint8_t R, uint8_t G, uint8_t B)
+{
+    return R >= 220 && G < 40 && B < 40;
+}
+
+std::optional<DecodedPcx> DecodePcxToRgba(const std::vector<uint8_t>& Data)
+{
+    if (Data.size() < sizeof(PcxHeader) + 256 * 3 + 1) return std::nullopt;
+
+    const PcxHeader* Hdr = reinterpret_cast<const PcxHeader*>(Data.data());
+    if (Hdr->Manufacturer != 10 || Hdr->Version < 5) return std::nullopt;
+
+    int Width = Hdr->XMax - Hdr->XMin + 1;
+    int Height = Hdr->YMax - Hdr->YMin + 1;
+    int Bpl = Hdr->BytesPerLine;
+    if (Bpl == 0 || Bpl < Width) Bpl = Width;
+
+    if (Width <= 0 || Height <= 0 || Width > 4096 || Height > 4096) return std::nullopt;
+
+    std::vector<uint8_t> Pixels(Width * Height, 0);
+    size_t SrcPos = sizeof(PcxHeader);
+    int Planes = Hdr->ColorPlanes ? Hdr->ColorPlanes : 1;
+
+    for (int Y = 0; Y < Height; Y++)
+    {
+        for (int P = 0; P < Planes; P++)
+        {
+            int X = 0;
+            int RowOff = Y * Width;
+            while (X < Bpl && SrcPos < Data.size())
+            {
+                uint8_t Byte = Data[SrcPos++];
+                if ((Byte & 0xC0) == 0xC0)
+                {
+                    int Count = Byte & 0x3F;
+                    uint8_t Value = (SrcPos < Data.size()) ? Data[SrcPos++] : 0;
+                    for (int R = 0; R < Count && X < Bpl; R++, X++)
+                    {
+                        if (X < Width && RowOff + X < Width * Height)
+                            Pixels[RowOff + X] = Value;
+                    }
+                }
+                else if (X < Width && RowOff + X < Width * Height)
+                {
+                    Pixels[RowOff + X] = Byte;
+                    X++;
+                }
+                else X++;
+            }
+        }
+    }
+
+    const uint8_t* PalStart = nullptr;
+    for (size_t I = Data.size() - 256 * 3 - 1; I < Data.size(); I++)
+    {
+        if (Data[I] == 0x0C && I + 1 + 256 * 3 <= Data.size())
+        {
+            PalStart = &Data[I + 1];
+            break;
+        }
+    }
+    if (!PalStart) return std::nullopt;
+
+    int RedIdx = -1;
+    for (int I = 1; I < 256; I++)
+    {
+        if (IsRed(PalStart[I * 3 + 0], PalStart[I * 3 + 1], PalStart[I * 3 + 2]))
+        { RedIdx = I; break; }
+    }
+
+    std::vector<bool> IsRedPixel(Width * Height, false);
+    for (int I = 0; I < Width * Height; I++)
+    {
+        uint8_t Idx = Pixels[I];
+        IsRedPixel[I] = (Idx == RedIdx) || (RedIdx == -1 && Idx != 0 &&
+            IsRed(PalStart[Idx * 3 + 0], PalStart[Idx * 3 + 1], PalStart[Idx * 3 + 2]));
+    }
+
+    struct Rect { int X1 = 9999, Y1 = 9999, X2 = 0, Y2 = 0; bool Active = false; };
+    std::vector<Rect> Rects;
+    for (int Y = 0; Y < Height; Y++)
+    {
+        for (int X = 0; X < Width; X++)
+        {
+            if (IsRedPixel[Y * Width + X])
+            {
+                int RX1 = X, RY1 = Y, RX2 = X, RY2 = Y;
+                while (RX2 + 1 < Width && IsRedPixel[Y * Width + RX2 + 1]) RX2++;
+                for (int DY = RY1; DY <= RY2 + 8 && DY < Height; DY++)
+                {
+                    int RowRed = 0;
+                    for (int DX = RX1; DX <= RX2; DX++)
+                        if (DY < Height && IsRedPixel[DY * Width + DX]) RowRed++;
+                    if (RowRed > (RX2 - RX1 + 1) * 3 / 4) { RY2 = DY; }
+                    else break;
+                }
+                int RW = RX2 - RX1 + 1, RH = RY2 - RY1 + 1;
+                if (RW >= 10 && RH >= 10)
+                {
+                    bool Merged = false;
+                    for (auto& R : Rects)
+                    {
+                        int Ox = std::max(RX1, R.X1), Oy = std::max(RY1, R.Y1);
+                        int Ox2 = std::min(RX2, R.X2), Oy2 = std::min(RY2, R.Y2);
+                        if (Ox <= Ox2 && Oy <= Oy2 && (RW * RH < 2000 || R.Active))
+                        {
+                            R.X1 = std::min(R.X1, RX1); R.Y1 = std::min(R.Y1, RY1);
+                            R.X2 = std::max(R.X2, RX2); R.Y2 = std::max(R.Y2, RY2);
+                            R.Active = true;
+                            Merged = true;
+                            break;
+                        }
+                    }
+                    if (!Merged)
+                    {
+                        Rect NR;
+                        NR.X1 = RX1; NR.Y1 = RY1; NR.X2 = RX2; NR.Y2 = RY2;
+                        NR.Active = true;
+                        Rects.push_back(NR);
+                    }
+                }
+                X = RX2;
+            }
+        }
+    }
+
+    std::sort(Rects.begin(), Rects.end(), [](const Rect& A, const Rect& B) {
+        return A.Y1 < B.Y1 || (A.Y1 == B.Y1 && A.X1 < B.X1);
+    });
+
+    DecodedPcx Out;
+    Out.Width = Width;
+    Out.Height = Height;
+
+    for (auto& R : Rects)
+    {
+        int RW = R.X2 - R.X1 + 1, RH = R.Y2 - R.Y1 + 1;
+        if (RW < 10 || RH < 10) continue;
+        PcxRegion PR;
+        PR.X = R.X1; PR.Y = R.Y1; PR.W = RW; PR.H = RH;
+        bool InBottom = (R.Y1 >= Height - 160);
+        bool IsRight = (R.X1 >= Width * 2 / 3);
+        if (InBottom)
+        {
+            if (RW < 60 && RH < 60)
+                Out.Regions.CmdButtons.push_back(PR);
+            else if (IsRight)
+                Out.Regions.CmdButtons.push_back(PR);
+            else if (RW > 80 && RH > 80)
+                Out.Regions.Portrait.push_back(PR);
+            else if (RW > 80)
+                Out.Regions.Info.push_back(PR);
+            else
+                Out.Regions.Minimap.push_back(PR);
+        }
+        else
+        {
+            if (RW > 100)
+                Out.Regions.Resources.push_back(PR);
+        }
+    }
+
+    Out.Rgba.resize(static_cast<size_t>(Width) * static_cast<size_t>(Height) * 4);
+    for (int I = 0; I < Width * Height; I++)
+    {
+        uint8_t Idx = Pixels[I];
+        bool Transparent = IsRedPixel[I] || Idx == 0;
+        Out.Rgba[I * 4 + 0] = PalStart[Idx * 3 + 0];
+        Out.Rgba[I * 4 + 1] = PalStart[Idx * 3 + 1];
+        Out.Rgba[I * 4 + 2] = PalStart[Idx * 3 + 2];
+        Out.Rgba[I * 4 + 3] = Transparent ? 0 : 255;
+    }
+
+    return Out;
+}
+
+} // namespace Resource::Graphics
+
+// === Consolidated UIAssetImageHelpers ===
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "third_party/stb_image_resize.h"
+
+namespace Resource::Graphics
+{
+
+ImageOpaqueBounds ComputeOpaqueBounds(const uint8_t* Rgba, int Width, int Height)
+{
+    if (!Rgba || Width <= 0 || Height <= 0)
+        return {};
+
+    int MinX = Width;
+    int MinY = Height;
+    int MaxX = -1;
+    int MaxY = -1;
+    for (int Y = 0; Y < Height; ++Y)
+    {
+        for (int X = 0; X < Width; ++X)
+        {
+            const size_t Offset = ((size_t)Y * (size_t)Width + (size_t)X) * 4u;
+            if (Rgba[Offset + 3] == 0)
+                continue;
+
+            MinX = std::min(MinX, X);
+            MinY = std::min(MinY, Y);
+            MaxX = std::max(MaxX, X);
+            MaxY = std::max(MaxY, Y);
+        }
+    }
+
+    if (MaxX < MinX || MaxY < MinY)
+        return {};
+
+    return { MinX, MinY, MaxX - MinX + 1, MaxY - MinY + 1 };
+}
+
+std::optional<ColorPalette> LoadPcxPalette(const std::vector<uint8_t>& Data)
+{
+    if (Data.size() < 769)
+        return std::nullopt;
+
+    const uint8_t* PaletteData = nullptr;
+    for (size_t Offset = Data.size() - 769; Offset + 769 <= Data.size(); ++Offset)
+    {
+        if (Data[Offset] == 0x0C)
+        {
+            PaletteData = Data.data() + Offset + 1;
+            break;
+        }
+    }
+    if (!PaletteData)
+        return std::nullopt;
+
+    ColorPalette Palette = {};
+    for (int I = 0; I < 256; ++I)
+    {
+        Palette.Colors[I].R = PaletteData[I * 3 + 0];
+        Palette.Colors[I].G = PaletteData[I * 3 + 1];
+        Palette.Colors[I].B = PaletteData[I * 3 + 2];
+        Palette.Colors[I].A = 255;
+    }
+    return Palette;
+}
+
+void ApplyTransparentBlack(std::vector<uint8_t>& Rgba)
+{
+    for (size_t I = 0; I + 3 < Rgba.size(); I += 4)
+    {
+        if (Rgba[I + 3] == 0)
+            continue;
+        if (Rgba[I + 0] <= 8 && Rgba[I + 1] <= 8 && Rgba[I + 2] <= 8)
+            Rgba[I + 3] = 0;
+    }
+}
+
+void ConvertOpaquePixelsToWhiteMask(std::vector<uint8_t>& Rgba)
+{
+    for (size_t Pixel = 0; Pixel + 3 < Rgba.size(); Pixel += 4)
+    {
+        if (Rgba[Pixel + 3] == 0)
+            continue;
+        Rgba[Pixel + 0] = 255;
+        Rgba[Pixel + 1] = 255;
+        Rgba[Pixel + 2] = 255;
+    }
+}
+
+std::optional<DecodedRgbaImage> ResizeRgbaImage(const DecodedRgbaImage& Source,
+                                                int TargetWidth,
+                                                int TargetHeight)
+{
+    if (Source.Width <= 0 || Source.Height <= 0 ||
+        TargetWidth <= 0 || TargetHeight <= 0 ||
+        Source.Rgba.empty())
+    {
+        return std::nullopt;
+    }
+
+    DecodedRgbaImage Resized = {};
+    Resized.Width = TargetWidth;
+    Resized.Height = TargetHeight;
+    Resized.Rgba.resize((size_t)TargetWidth * (size_t)TargetHeight * 4u);
+    if (!stbir_resize_uint8(Source.Rgba.data(),
+                            Source.Width, Source.Height, 0,
+                            Resized.Rgba.data(),
+                            TargetWidth, TargetHeight, 0,
+                            4))
+    {
+        return std::nullopt;
+    }
+    return Resized;
+}
+
+void AlphaBlendInto(std::vector<uint8_t>& Dest,
+                    int DestWidth,
+                    int DestHeight,
+                    const DecodedRgbaImage& Source,
+                    int DestX,
+                    int DestY)
+{
+    if (DestWidth <= 0 || DestHeight <= 0 || Source.Width <= 0 || Source.Height <= 0)
+        return;
+
+    for (int Y = 0; Y < Source.Height; ++Y)
+    {
+        const int OutY = DestY + Y;
+        if (OutY < 0 || OutY >= DestHeight)
+            continue;
+
+        for (int X = 0; X < Source.Width; ++X)
+        {
+            const int OutX = DestX + X;
+            if (OutX < 0 || OutX >= DestWidth)
+                continue;
+
+            const size_t SrcOffset = ((size_t)Y * (size_t)Source.Width + (size_t)X) * 4u;
+            const uint8_t SrcA = Source.Rgba[SrcOffset + 3];
+            if (SrcA == 0)
+                continue;
+
+            const size_t DstOffset = ((size_t)OutY * (size_t)DestWidth + (size_t)OutX) * 4u;
+            if (SrcA == 255)
+            {
+                Dest[DstOffset + 0] = Source.Rgba[SrcOffset + 0];
+                Dest[DstOffset + 1] = Source.Rgba[SrcOffset + 1];
+                Dest[DstOffset + 2] = Source.Rgba[SrcOffset + 2];
+                Dest[DstOffset + 3] = 255;
+                continue;
+            }
+
+            const float SrcAlpha = (float)SrcA / 255.0f;
+            const float DstAlpha = (float)Dest[DstOffset + 3] / 255.0f;
+            const float OutAlpha = SrcAlpha + DstAlpha * (1.0f - SrcAlpha);
+            if (OutAlpha <= 0.0f)
+                continue;
+
+            const auto BlendChannel = [&](size_t Channel) -> uint8_t
+            {
+                const float SrcValue = (float)Source.Rgba[SrcOffset + Channel] / 255.0f;
+                const float DstValue = (float)Dest[DstOffset + Channel] / 255.0f;
+                const float OutValue =
+                    (SrcValue * SrcAlpha + DstValue * DstAlpha * (1.0f - SrcAlpha)) / OutAlpha;
+                return (uint8_t)std::clamp((int)std::lround(OutValue * 255.0f), 0, 255);
+            };
+
+            Dest[DstOffset + 0] = BlendChannel(0);
+            Dest[DstOffset + 1] = BlendChannel(1);
+            Dest[DstOffset + 2] = BlendChannel(2);
+            Dest[DstOffset + 3] = (uint8_t)std::clamp((int)std::lround(OutAlpha * 255.0f), 0, 255);
+        }
+    }
 }
 
 } // namespace Resource::Graphics

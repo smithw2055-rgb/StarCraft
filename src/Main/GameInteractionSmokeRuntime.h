@@ -13,7 +13,7 @@
 #include "Main/CampaignRuntime.h"
 #include "Main/GameCommandDispatchRuntime.h"
 #include "Main/GameSession.h"
-#include "Main/GuiRuntime.h"
+#include "Main/GameGuiPresentation.h"
 
 #if ENABLE_GUI_UI
 #include "third_party/sokol/sokol_app.h"

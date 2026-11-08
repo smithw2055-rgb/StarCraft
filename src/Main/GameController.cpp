@@ -1,20 +1,20 @@
 #include "Main/GameController.h"
+#include "Game/Campaign/CampaignMissionCatalog.h"
+#include "Main/GameGuiPresentation.h"
+#include "Main/GameLoop/HudResourceSync.h"
+#include "Render/Draw2D.h"
+#include "Render/Renderer.h"
 
 #include "Core/Platform/Platform.h"
 #include "Core/Utils/InputDebug.h"
 #include "Core/Utils/Logger.h"
 #include "Game/Components.h"
 #include "Game/Races/RaceDef.h"
-#include "Main/GameClientLifecycle.h"
 #include "Main/GameEcsSessionBootstrap.h"
-#include "Main/GameGlueMenuActionRuntime.h"
-#include "Main/GameGuiBootstrap.h"
 #include "Main/GameMapBootstrap.h"
 #include "Main/GameResourceBootstrap.h"
-#include "Main/GameRuntimeBootstrap.h"
 #include "Main/GameRuntimeFrame.h"
 #include "Main/GameSessionOperations.h"
-#include "Main/GameStartRuntime.h"
 #include "UI/HudLayout.h"
 
 #include <cstdint>
@@ -29,6 +29,103 @@ namespace Game::Client::GameLoop
 
 namespace
 {
+    bool InitializeClientShellRuntime()
+    {
+        Core::Platform::Initialize();
+        if (!Render::Initialize())
+        {
+            std::cerr << "Renderer init failed" << std::endl;
+            return false;
+        }
+        if (!Render::g_Draw2D.Init())
+        {
+            std::cerr << "Draw2D init failed" << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    void ShutdownClientShellRuntime(ClientRuntime& Client, UI::Hud& Hud)
+    {
+        Hud.Shutdown();
+        Render::g_Draw2D.Shutdown();
+        Client.ShutdownResources();
+        Render::Shutdown();
+        Core::Platform::Shutdown();
+    }
+
+    template <typename QuitT, typename SetMapPathT, typename StartGameT>
+    void HandleGlueMenuAction(
+        const std::string& Action,
+        CampaignRuntime& Campaign,
+        QuitT&& Quit,
+        SetMapPathT&& SetMapPath,
+        StartGameT&& StartGame)
+    {
+        if (Action == "exit")
+        {
+            Quit();
+        }
+        else if (Game::Campaign::IsCampaignMissionAction(Action))
+        {
+            const Game::Campaign::CampaignMissionRef Mission = Game::Campaign::ResolveCampaignMission(Action);
+            if (Mission.Valid)
+            {
+                Campaign.SetProgressTarget(Mission.Expansion, Mission.Race, Mission.Mission);
+                SetMapPath(Mission.Path);
+                StartGame();
+            }
+        }
+        else if (Action == "start_original" || Action == "start_expansion" ||
+                 Action == "start_custom_game")
+        {
+            std::cout << "StarCraft: menu action '" << Action
+                      << "' has no campaign map path; using default map resolver" << std::endl;
+            Campaign.ClearProgressTarget();
+            StartGame();
+        }
+    }
+
+    template <typename InitGameSystemsT>
+    void StartGameFromMainMenu(AppRuntime& App,
+                               GameMenuRuntime& Menu,
+                               CampaignRuntime& Campaign,
+                               GameSession& Session,
+                               InitGameSystemsT&& InitGameSystems)
+    {
+        if (App.State != GameState::MainMenu)
+            return;
+
+        std::cout << "StarCraft: Starting game..." << std::endl;
+        Menu.CloseAndResume();
+        Campaign.SetScenarioPaused(false);
+
+        InitGameSystems();
+        if (!Session.IsEcsInitialized())
+        {
+            std::cerr << "Game init failed!" << std::endl;
+            return;
+        }
+
+        App.State = GameState::InGame;
+        Render::ResetStateCache();
+        std::cout << "StarCraft: Game started" << std::endl;
+    }
+
+    template <typename InitializeEcsT>
+    void InitializeGameplayRuntime(AppRuntime& App,
+                                   UI::Hud& Hud,
+                                   Game::Client::ClientRuntime& Client,
+                                   int LocalPlayerID,
+                                   InitializeEcsT&& InitializeEcs)
+    {
+        Hud.Init(Client.GetUIAssets(), Client.GetSpriteAssets());
+        ResetPlayerResourceState();
+        InitializeEcs();
+        SyncHudFromPlayerResources(Hud, LocalPlayerID);
+        App.Initialized = true;
+    }
+
     bool ShouldDevStartInGame(const AppRuntime& App, bool DirectStartEnabled)
     {
         if (DirectStartEnabled)
