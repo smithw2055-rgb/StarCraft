@@ -1,3 +1,4 @@
+#include <filesystem>
 #include "Game/Systems/AnimationSystem.h"
 #include "Game/Systems/DeclarativeAnimationPlayer.h"
 #include "Game/SimulationContext.h"
@@ -340,6 +341,9 @@ void AnimationSystem::EnsureIScriptLoaded()
     if (sTriedLoadIScript)
         return;
     sTriedLoadIScript = true;
+    std::error_code Ec1, Ec2;
+    if (!std::filesystem::exists(sIScriptPath, Ec1) || !std::filesystem::exists(sImagesDatPath, Ec2))
+        return;
     sIScriptDB.Load(sIScriptPath, sImagesDatPath);
 }
 

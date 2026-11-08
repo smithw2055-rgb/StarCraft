@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <queue>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -111,6 +112,7 @@ struct NavigationServerTelemetry
     uint64_t FlowFieldsGenerated = 0;
     uint64_t AvoidanceStepsComputed = 0;
     uint64_t AgentStepsEvaluated = 0;
+    uint64_t FlowFieldCacheHits = 0;
 };
 
 // ============================================================================
@@ -141,6 +143,7 @@ public:
         mRamp.assign(Total, 0u);
         mRegionIDs.assign(Total, -1);
         mRegionCount = 0;
+        mFlowFieldCache.clear();
         RebuildClearanceField();
     }
 
@@ -175,6 +178,7 @@ public:
             return;
         mBlocked[CellIndex(X, Y)] = Blocked ? 1u : 0u;
         mClearanceDirty = true;
+        mFlowFieldCache.clear();
     }
 
     bool IsCellBlocked(int32_t X, int32_t Y) const noexcept
@@ -191,6 +195,7 @@ public:
         const size_t Idx = CellIndex(X, Y);
         mElevation[Idx] = ElevationLevel;
         mRamp[Idx] = IsRamp ? 1u : 0u;
+        mFlowFieldCache.clear();
     }
 
     uint8_t GetCellElevation(int32_t X, int32_t Y) const noexcept
@@ -765,6 +770,54 @@ public:
             CurrentWorldPos.Y + Agent.DesiredVelocity.Y * DeltaSeconds};
     }
 
+
+    // Phase 68 Crowd FlowField Cache:
+    // Caches computed FlowField2D instances by (Goal.X, Goal.Y, FootprintSize) so
+    // multi-unit waves and armies reuse a single Dijkstra integration pass in O(1).
+    static constexpr uint64_t MakeFlowCacheKey(GridCoord2D Goal, uint8_t FootprintSize) noexcept
+    {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(Goal.X)) << 32) |
+               (static_cast<uint64_t>(static_cast<uint32_t>(Goal.Y) & 0xFFFFFFu) << 8) |
+               static_cast<uint64_t>(FootprintSize);
+    }
+
+    void InvalidateFlowFieldCache() noexcept
+    {
+        mFlowFieldCache.clear();
+    }
+
+    const FlowField2D* GetOrBuildCachedFlowField(GridCoord2D Goal, uint8_t FootprintSize = 1)
+    {
+        static constexpr size_t kMaxCachedFlowFields = 128;
+        const uint8_t ReqClearance = std::max<uint8_t>(1u, FootprintSize);
+        const uint64_t Key = MakeFlowCacheKey(Goal, ReqClearance);
+        auto It = mFlowFieldCache.find(Key);
+        if (It != mFlowFieldCache.end())
+        {
+            ++mTelemetry.FlowFieldCacheHits;
+            return &It->second;
+        }
+        FlowField2D Field;
+        if (!BuildFlowField(Goal, ReqClearance, Field))
+            return nullptr;
+        if (mFlowFieldCache.size() >= kMaxCachedFlowFields)
+            mFlowFieldCache.clear();
+        auto [InsertedIt, _] = mFlowFieldCache.emplace(Key, std::move(Field));
+        return &InsertedIt->second;
+    }
+
+    Core::Math::Vec2 SampleCachedFlowField(
+        GridCoord2D Goal,
+        uint8_t FootprintSize,
+        Core::Math::Vec2 CurrentWorldPos)
+    {
+        const FlowField2D* Field = GetOrBuildCachedFlowField(Goal, FootprintSize);
+        if (!Field)
+            return {0.0f, 0.0f};
+        const GridCoord2D Cell = WorldToCell(CurrentWorldPos);
+        return Field->SampleFlow(Cell.X, Cell.Y);
+    }
+
     const NavigationServerTelemetry& GetTelemetry() const noexcept { return mTelemetry; }
 
 private:
@@ -783,6 +836,7 @@ private:
     std::vector<uint8_t> mElevation;
     std::vector<uint8_t> mRamp;
     std::vector<int32_t> mRegionIDs;
+    std::unordered_map<uint64_t, FlowField2D> mFlowFieldCache;
     NavigationServerTelemetry mTelemetry{};
 };
 

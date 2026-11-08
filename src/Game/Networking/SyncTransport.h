@@ -15,6 +15,7 @@
 #include <thread>
 #include <atomic>
 #include <cstring>
+#include "Engine/Net/NetworkTransportServer.h"
 
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
@@ -260,6 +261,34 @@ public:
     void SetOnMessage(MessageHandler H) { mOnMessage = std::move(H); }
     void SetOnConnect(ConnectionHandler H) { mOnConnect = std::move(H); }
 
+    // Phase 69 Engine INetworkTransport Convergence
+    void BindEngineTransport(Engine::Net::INetworkTransport* Transport) noexcept
+    {
+        mBoundEngineTransport = Transport;
+    }
+
+    Engine::Net::INetworkTransport* GetBoundEngineTransport() const noexcept
+    {
+        return mBoundEngineTransport;
+    }
+
+    bool SendPayloadViaEngineTransport(
+        uint8_t TargetPeerID,
+        uint32_t Tick,
+        const std::vector<uint8_t>& Payload)
+    {
+        if (!mBoundEngineTransport)
+            return false;
+        Engine::Net::NetEnvelope Env{};
+        Env.Header.Type = Engine::Net::NetPacketType::FrameCommand;
+        Env.Header.SenderPlayerID = mBoundEngineTransport->GetLocalPeerID();
+        Env.Header.PayloadBytes = static_cast<uint16_t>(Payload.size());
+        Env.Header.TargetTick = Tick;
+        Env.Payload = Payload;
+        mBoundEngineTransport->SendToPeer(TargetPeerID, Env);
+        return true;
+    }
+
 private:
     void ListenLoop()
     {
@@ -307,6 +336,7 @@ private:
 
     MessageHandler mOnMessage;
     ConnectionHandler mOnConnect;
+    Engine::Net::INetworkTransport* mBoundEngineTransport = nullptr;
 };
 
 } // namespace Game::Networking

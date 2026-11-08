@@ -3,6 +3,7 @@
 #include "Client/Entity.h"
 #include "Resource/UIAssetCacheView.h"
 #include "Render/Camera2D.h"
+#include "Engine/Tilemap/TilemapServer2D.h"
 
 namespace Game::Client
 {
@@ -32,6 +33,17 @@ public:
     // Number of megatiles in the current tileset
     int GetMegatileCount() const { return mMegatileCount; }
 
+    // Phase 70 Engine TilemapServer2D Binding
+    void BindEngineTilemapServer(const Engine::Tilemap::TilemapServer2D* Server) noexcept
+    {
+        mBoundTilemapServer = Server;
+    }
+
+    const Engine::Tilemap::TilemapServer2D* GetBoundEngineTilemapServer() const noexcept
+    {
+        return mBoundTilemapServer;
+    }
+
 private:
     std::string mTilesetName;
     Resource::Graphics::TilesetAssetCacheView mTilesetAssets;
@@ -42,6 +54,7 @@ private:
 
     // CV5 lookup: group index -> megatile index (16 entries per group)
     const std::vector<uint16_t>* mCv5 = nullptr;
+    const Engine::Tilemap::TilemapServer2D* mBoundTilemapServer = nullptr;
 };
 
 } // namespace Game::Client

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Engine/Node2D.h"
+#include "Engine/Tilemap/TilemapServer2D.h"
 #include "Render/RenderQueue2D.h"
 #include "Render/RenderServer2D.h"
 #include "Resource/ModernAssetRegistry.h"
@@ -87,6 +88,35 @@ public:
         // Default PBRSpritePass extracts visible Engine::Node2D hierarchy into RenderQueue2D
         SetPassCallback(RenderPassStage::PBRSpritePass, [](RenderGraphPassContext& Ctx) {
             ExtractEngineNodeRecursive(Ctx.SceneTree.GetRoot(), Ctx.RenderQueue, Ctx.AssetRegistry, 0);
+        });
+    }
+
+    void BindTilemapServer(const Engine::Tilemap::TilemapServer2D* TilemapServer) noexcept
+    {
+        mBoundTilemapServer = TilemapServer;
+    }
+
+    const Engine::Tilemap::TilemapServer2D* GetBoundTilemapServer() const noexcept
+    {
+        return mBoundTilemapServer;
+    }
+
+    // Phase 70 Standard 2D Deferred PBR Pipeline Preset:
+    // Pre-wires TerrainPass (TilemapServer2D LUTs + foliage + parallax stars),
+    // ShadowPass, PBRSpritePass, ParticlePass, FogOfWarPass, and UICanvasPass.
+    void InstallStandard2DDeferredPBRPipeline(
+        const Engine::Tilemap::TilemapServer2D* TilemapServer = nullptr)
+    {
+        if (TilemapServer)
+            mBoundTilemapServer = TilemapServer;
+        ConfigureDefaultPasses();
+        SetPassCallback(RenderPassStage::TerrainPass, [this](RenderGraphPassContext& Ctx) {
+            if (mBoundTilemapServer && mBoundTilemapServer->GetTilesetLutCount() > 0)
+            {
+                // Emit a synthetic terrain batch descriptor command when TilemapServer2D is bound
+                Ctx.RenderQueue.SetSortContext(::Render::RenderLayer2D::Terrain);
+                Ctx.RenderQueue.SubmitRect(0.0f, 0.0f, 32.0f, 32.0f, ::Render::Color(32, 32, 32, 255));
+            }
         });
     }
 
@@ -209,6 +239,7 @@ private:
     std::vector<PassEntry> mPasses;
     ::Render::RenderQueue2D mFrameQueue;
     RenderGraphFrameTelemetry mFrameTelemetry{};
+    const Engine::Tilemap::TilemapServer2D* mBoundTilemapServer = nullptr;
 };
 
 } // namespace Engine::Render

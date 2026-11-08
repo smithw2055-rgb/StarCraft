@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include "Engine/Net/DeterministicSessionServer.h"
 
 namespace Game::Replay
 {
@@ -427,5 +428,74 @@ private:
     std::vector<ReplayAction> mActions;
     std::vector<uint8_t> mMapData;
 };
+
+
+// ============================================================================
+// Phase 69 Engine Deterministic Replay Bridge:
+// Trivially-copyable command wire representation allowing Game::Replay actions
+// to be exported/imported directly through Engine::Net::DeterministicSessionServer.
+// ============================================================================
+struct ReplayWireCommand
+{
+    uint32_t Frame = 0;
+    uint8_t PlayerID = 0;
+    uint8_t ActionType = 0;
+    uint16_t Param1 = 0;
+    uint16_t Param2 = 0;
+    uint16_t Param3 = 0;
+    uint8_t Param4 = 0;
+    uint8_t SelectedCount = 0;
+    uint16_t FirstSelectedEntity = 0;
+};
+
+using EngineReplaySessionServer = Engine::Net::DeterministicSessionServer<ReplayWireCommand>;
+
+inline size_t ExportActionsToEngineSession(
+    const std::vector<ReplayAction>& Actions,
+    EngineReplaySessionServer& OutSession)
+{
+    OutSession.ResetSession();
+    for (const auto& Act : Actions)
+    {
+        ReplayWireCommand Cmd{};
+        Cmd.Frame = Act.Frame;
+        Cmd.PlayerID = Act.PlayerID;
+        Cmd.ActionType = Act.ActionType;
+        Cmd.Param1 = Act.Param1;
+        Cmd.Param2 = Act.Param2;
+        Cmd.Param3 = Act.Param3;
+        Cmd.Param4 = Act.Param4;
+        Cmd.SelectedCount = static_cast<uint8_t>(std::min<size_t>(255u, Act.SelectedEntities.size()));
+        Cmd.FirstSelectedEntity = Act.SelectedEntities.empty() ? 0u : Act.SelectedEntities[0];
+        OutSession.ScheduleCommand(Act.Frame, Act.PlayerID, Cmd);
+    }
+    return Actions.size();
+}
+
+inline std::vector<ReplayAction> ImportActionsFromEngineSession(
+    const EngineReplaySessionServer& Session,
+    uint32_t MaxTickInclusive)
+{
+    std::vector<ReplayAction> Out;
+    for (uint32_t Tick = 0; Tick <= MaxTickInclusive; ++Tick)
+    {
+        const auto Entries = Session.GetCommandsForTick(Tick);
+        for (const auto& Entry : Entries)
+        {
+            ReplayAction Act{};
+            Act.Frame = Entry.Tick;
+            Act.PlayerID = Entry.PlayerID;
+            Act.ActionType = Entry.Command.ActionType;
+            Act.Param1 = Entry.Command.Param1;
+            Act.Param2 = Entry.Command.Param2;
+            Act.Param3 = Entry.Command.Param3;
+            Act.Param4 = Entry.Command.Param4;
+            if (Entry.Command.SelectedCount > 0)
+                Act.SelectedEntities.push_back(Entry.Command.FirstSelectedEntity);
+            Out.push_back(std::move(Act));
+        }
+    }
+    return Out;
+}
 
 } // namespace Game::Replay

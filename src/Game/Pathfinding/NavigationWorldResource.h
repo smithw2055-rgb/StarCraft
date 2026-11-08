@@ -84,6 +84,14 @@ struct NavigationWorldResource
             Agent, CurrentWorldPos, MaxSpeedPxPerSec, DeltaSeconds, Neighbors);
     }
 
+    Core::Math::Vec2 SampleCrowdFlowDirection(
+        Engine::Navigation::GridCoord2D GoalTile,
+        Core::Math::Vec2 CurrentWorldPos,
+        uint8_t FootprintClearance = 1)
+    {
+        return NavServer.SampleCachedFlowField(GoalTile, FootprintClearance, CurrentWorldPos);
+    }
+
     static const Game::Map::GameMap* ResolveMap(
         const Core::ECS::EntityManager& EM,
         const Game::Map::GameMap* FallbackMap = nullptr)
